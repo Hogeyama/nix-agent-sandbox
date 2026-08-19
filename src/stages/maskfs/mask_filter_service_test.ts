@@ -183,7 +183,7 @@ async function runCapturing(
         Effect.gen(function* () {
           const svc = yield* MaskFilterService;
           const secrets = yield* svc.resolveSecrets(
-            [{ source: "env:TEST_SECRET" }],
+            { s1: { from: "env:TEST_SECRET" } },
             host,
           );
           return yield* svc.prepareMaskFilter(

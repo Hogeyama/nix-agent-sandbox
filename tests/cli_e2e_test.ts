@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 /**
  * CLI E2E tests
@@ -24,7 +24,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditLog } from "../src/audit/store.ts";
 import { initConfig } from "../src/config/init.ts";
+import { useRepoSchemaAsset } from "../src/config/schema_asset_testing.ts";
 import { HostExecBroker } from "../src/hostexec/broker.ts";
+import { buildInterceptArtifactsForDev } from "../src/hostexec/intercept_dev_build.ts";
 import {
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
@@ -32,6 +34,7 @@ import {
   writeHostExecPendingEntry,
   writeHostExecSessionRegistry,
 } from "../src/hostexec/registry.ts";
+import { documentWithScopes } from "../src/network/authz/testing.ts";
 import { SessionBroker, sendBrokerRequest } from "../src/network/broker.ts";
 import {
   type AuthorizeRequest,
@@ -45,6 +48,20 @@ import {
   resolveNetworkRuntimePaths,
   writeSessionRegistry,
 } from "../src/network/registry.ts";
+
+// `runNas` は子プロセスとして nas を起動し、NAS_ASSET_DIR を継承させる。
+// インストール済みの nas を指したままだと、リポジトリの Schema.pkl が一切
+// 評価されないまま緑になる。
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  await buildInterceptArtifactsForDev();
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
 
 // ============================================================
 // Shared helpers
@@ -944,7 +961,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         env,
       });
 
-      expect(result.code).toEqual(0);
+      expect(result.code, result.stderr).toEqual(0);
       expect(result.stdout.includes(`PWD=${projectDir}`)).toEqual(true);
       expect(result.stdout.includes("ARGS=hello world")).toEqual(true);
       expect(result.stdout.includes("MY_VAR=from-config")).toEqual(true);
@@ -963,7 +980,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         env,
       });
 
-      expect(result.code).toEqual(0);
+      expect(result.code, result.stderr).toEqual(0);
       const content = await readFile(outputPath, "utf8");
       expect(content.trim()).toEqual("written-by-fake-codex");
     });
@@ -998,9 +1015,8 @@ async function withBrokerFixture(
   const broker = new SessionBroker({
     paths,
     sessionId,
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: options.timeoutSeconds ?? 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   await broker.start(socketPath);
@@ -1036,8 +1052,10 @@ async function authorizeThroughBroker(
     sessionId,
     target: { host, port },
     method: "CONNECT",
+    transport: "http",
     requestKind: "connect",
     observedAt: new Date().toISOString(),
+    bodyTruth: {},
   };
   return await sendBrokerRequest<DecisionResponse>(socketPath, request);
 }
@@ -1076,8 +1094,13 @@ test("CLI E2E: network pending lists queued approvals", async () => {
     );
 
     expect(result.code).toEqual(0);
+    // The listing names the rule the confirmation came from — here the
+    // pseudo ID of a target no scope claimed — because that ID is half of
+    // what an approval is remembered against.
     expect(result.stdout).toMatch(
-      new RegExp(`${sessionId} req_pending api\\.openai\\.com:443 pending`),
+      new RegExp(
+        `${sessionId} req_pending api\\.openai\\.com:443 \\$fallback pending`,
+      ),
     );
 
     await sendBrokerRequest(socketPath, {

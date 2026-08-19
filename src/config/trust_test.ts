@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 /**
  * Repo-local config trust gate tests.
@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
 import { findExistingConfig, loadConfig } from "./load.ts";
 import { getGlobalConfigDir } from "./paths.ts";
+import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
 import {
   ConfigUntrustedError,
   computeConfigTrustHash,
@@ -22,6 +23,16 @@ import {
   recordConfigTrust,
   removeConfigTrust,
 } from "./trust.ts";
+
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
 
 const BYPASS = "NAS_CONFIG_TRUST_ALL";
 

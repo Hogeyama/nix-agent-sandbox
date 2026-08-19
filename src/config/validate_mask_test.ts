@@ -31,6 +31,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     display: DEFAULT_DISPLAY_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     hook: DEFAULT_HOOK_CONFIG,
     ...overrides,
   };
@@ -49,7 +50,6 @@ describe("validateConfig: mask", () => {
     const config = makeConfig(
       makeProfile({
         mask: {
-          values: [{ source: "env:MY_SECRET" }, { source: "dotenv:.env#KEY" }],
           writePolicy: "readonly",
           maskfs: true,
           proxy: true,
@@ -60,11 +60,11 @@ describe("validateConfig: mask", () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
-  test("accepts lines: source", () => {
+  test("accepts a lines: secret", () => {
     const config = makeConfig(
       makeProfile({
+        secrets: { workspace: { from: "lines:/home/dev/secrets.txt" } },
         mask: {
-          values: [{ source: "lines:/home/u/.secrets/tokens.txt" }],
           writePolicy: "readonly",
           maskfs: true,
           proxy: true,
@@ -75,11 +75,11 @@ describe("validateConfig: mask", () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
-  test("rejects unsupported source scheme", () => {
+  test("rejects a secret source with an unsupported scheme", () => {
     const config = makeConfig(
       makeProfile({
+        secrets: { workspace: { from: "http://example.com/token" } },
         mask: {
-          values: [{ source: "literal:passw0rd" }],
           writePolicy: "readonly",
           maskfs: true,
           proxy: true,
@@ -88,14 +88,16 @@ describe("validateConfig: mask", () => {
       }),
     );
     expect(() => validateConfig(config)).toThrow(ConfigValidationError);
-    expect(() => validateConfig(config)).toThrow(/mask\.values\[0\]\.source/);
+    expect(() => validateConfig(config)).toThrow(
+      /secrets\["workspace"\]\.from/,
+    );
   });
 
-  test("rejects empty source", () => {
+  test("rejects an empty secret source", () => {
     const config = makeConfig(
       makeProfile({
+        secrets: { workspace: { from: "" } },
         mask: {
-          values: [{ source: "" }],
           writePolicy: "passthrough",
           maskfs: true,
           proxy: true,
@@ -103,7 +105,7 @@ describe("validateConfig: mask", () => {
         },
       }),
     );
-    expect(() => validateConfig(config)).toThrow(ConfigValidationError);
+    expect(() => validateConfig(config)).toThrow(/must be a non-empty string/);
   });
 
   test("mask omitted is fine", () => {
@@ -111,11 +113,46 @@ describe("validateConfig: mask", () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
+  test("a scope that masks is refused when proxy masking is off", () => {
+    const config = makeConfig(
+      makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          scopes: {
+            api: { targets: ["api.example.com"], fallback: "allow" },
+          },
+        },
+        mask: {
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: false,
+          filter: false,
+        },
+      }),
+    );
+    expect(() => validateConfig(config)).toThrow(
+      /mask\.proxy = false を選べません/,
+    );
+  });
+
+  test("omitting mask leaves proxy masking on, so a masking scope is fine", () => {
+    const config = makeConfig(
+      makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          scopes: {
+            api: { targets: ["api.example.com"], fallback: "allow" },
+          },
+        },
+      }),
+    );
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
   test("rejects non-boolean maskfs / proxy flags", () => {
     const config = makeConfig(
       makeProfile({
         mask: {
-          values: [{ source: "env:MY_SECRET" }],
           writePolicy: "readonly",
           maskfs: "yes" as any,
           proxy: 1 as any,

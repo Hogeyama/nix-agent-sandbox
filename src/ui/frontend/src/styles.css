@@ -1468,6 +1468,71 @@ body::after {
   overflow-y: auto;
 }
 
+/* -- Acceptance-condition violations an approval would cover -- *
+ * One block per violation, because one violation is one thing the
+ * approval remembers. The value leads: it is what the operator is
+ * being asked about, and it is half of what the approval is keyed by. */
+.card-violations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.card-violation {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.card-violation-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 5px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.card-violation-value {
+  color: var(--amber-hi);
+  word-break: break-all;
+}
+.card-violation-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.card-violation-at {
+  margin-left: auto;
+  color: var(--muted);
+  word-break: break-all;
+}
+.card-violation-pointer {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--cream-dim);
+  word-break: break-all;
+}
+
+/* -- Headers an approval would inject (names only, never values) -- */
+.card-inject {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--cream-dim);
+}
+.card-inject-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber-hi);
+}
+.card-inject-header {
+  word-break: break-all;
+}
+
 .scope-row {
   display: flex;
   gap: 4px;

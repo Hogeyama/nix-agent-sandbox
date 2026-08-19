@@ -15,6 +15,9 @@ import {
   waitForRecordedFilterPids,
 } from "./post_eof_filter_test_support.ts";
 
+const TRUE_PATH = Bun.which("true") ?? "/bin/true";
+const FALSE_PATH = Bun.which("false") ?? "/bin/false";
+
 interface GatewayHarness {
   readonly gateway: Socket;
   readonly client: Socket;
@@ -962,7 +965,7 @@ test("runGatewayExecution fails a mask-filter stdin write closed by the filter",
     const run = runGatewayExecution({
       ...startOptions(harness.client),
       maskFilter: {
-        binaryPath: "/bin/true",
+        binaryPath: TRUE_PATH,
         secretsFramePath: "/tmp/no-secrets-frame",
       },
     });
@@ -998,7 +1001,7 @@ test("runGatewayExecution fails fast when a filter exits during a silent command
     const run = runGatewayExecution({
       ...startOptions(harness.client),
       maskFilter: {
-        binaryPath: "/bin/false",
+        binaryPath: FALSE_PATH,
         secretsFramePath: "/tmp/no-secrets-frame",
       },
     });

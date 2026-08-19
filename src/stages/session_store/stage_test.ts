@@ -196,6 +196,7 @@ function createTestInput(opts: {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
   };
   const config: Config = {
     default: "test-profile",

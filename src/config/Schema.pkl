@@ -80,7 +80,11 @@ class Profile {
   /// ホストへのコマンド移譲設定。`null` で無効。
   hostexec: HostExecConfig? = null
 
-  /// ワークスペース文字列マスク。`null` で無効。
+  /// 秘密の名前付きレジストリ。マスク・拒否・注入はすべてこの名前を通して
+  /// 行う。名前を持たない値はマスクにも `forbid` にも掛からない。
+  secrets: Mapping<String, SecretConfig> = new {}
+
+  /// 秘密のマスクをどの層に適用するか。`null` で全層無効。
   mask: MaskConfig? = null
 }
 
@@ -162,64 +166,378 @@ class ProxyConfig {
   forwardPorts: Listing<Int> = new {}
 }
 
-class ReviewRule {
-  /// HTTP メソッド（大文字小文字無視）。省略時は全メソッドにマッチ。
-  method: String?
-  /// ホストパターン。"*.example.com" 等のワイルドカード対応。省略時は全ホストにマッチ。
-  host: String?
-  /// パスプレフィックス。省略時は全パスにマッチ。
-  pathPrefix: String?
-  /// マッチ時のアクション。
-  action: "allow"|"review"|"deny" = "review"
-  /// マッチ時に audit ログを記録するか。省略時は true。
-  audit: Boolean = true
+/// 秘密ごとの扱い。
+/// - `inject`: `inject` ブロックからの参照を許す。ボディ・URL・クライアント由来の
+///   ヘッダーに現れた場合の扱いは `mask` と同じ。
+/// - `mask`: 出現箇所を `****` に置換して送出する。
+/// - `forbid`: 出現したら拒否する。値そのものは記録しない。
+/// - `ignore`: 手を触れない。
+typealias SecretDisposition = "inject"|"mask"|"forbid"|"ignore"
+
+/// `aggregate` は同一の結果の連続を集約して記録する。
+typealias AuditMode = "always"|"aggregate"|"off"
+
+/// 検査の実行資源の上限。既定値は同時に固定の天井でもあり、設定は下げる方向に
+/// しか変えられない。`network.defaults` → スコープ → ルールの 3 段で継承する。
+class Limits {
+  /// 検査するボディの最大バイト数。
+  maxBodyBytes: Int = 33554432
+
+  /// JSON ツリーの最大の深さ。
+  maxDepth: Int = 64
+
+  /// JSON ツリーの最大ノード数。検査が始まる前に一度だけ検査する天井であり、
+  /// 超えたボディは中身を一切検査せずに拒否される。
+  maxNodes: Int = 200000
+
+  /// セレクタ走査の状態展開の上限。1 リクエストのボディ検査が行うすべての走査で
+  /// 共有する 1 つの許容量であり、走査ごとでもセレクタごとでもない。
+  maxSelectorExpansions: Int = 1000000
 }
 
-class CredentialValSpec {
-  /// ヘッダー値（固定値）。`valCmd` と排他。
-  val: String?
+/// 許可されたリクエストに付けるヘッダー。拒否したリクエストには付けない。
+class Inject {
+  /// ヘッダー名。
+  name: String
 
-  /// ヘッダー値をコマンド出力から取得する。`val` と排他。
-  valCmd: String?
+  /// `literal:<value>` / `secret:<name>` / `template:<text>`。
+  /// `template:` の中の `${<name>}` は secrets レジストリの名前だけを参照できる。
+  /// 参照先はそのスコープまたはルールで `inject` として扱われている必要がある。
+  value: String
 }
 
-class CredentialRule {
-  /// ホストパターン。"*.example.com" 等のワイルドカード対応。
-  host: String
+/// 受理条件。ルールが引き受けたうえで、リクエストが満たすべき条件を述べる。
+///
+/// `match` との使い分け: 必ず満たしてほしい条件は `expect` に書く。どのルールが
+/// 担当かを分ける条件だけを `match` に書く。条件を `match` に置くと、条件を外れた
+/// リクエストはそのルールに引き受けられず、同一スコープ内のより広いルールに拾われる。
+abstract class Expect {
+  /// 受理条件の種別。各サブクラスが固定値を与えるので書き換えない。
+  kind: String
 
-  /// パスプレフィックス。省略時は全パスにマッチ。
-  pathPrefix: String?
+  /// 違反の帰結。`allow` は違反を記録して通過させるので `audit = "always"` を要する。
+  ///
+  /// `review` は違反ごとに承認を求める。承認の単位は (ルール ID, この受理条件,
+  /// 違反した値) なので、同じ値の再確認はセッション中 1 度で済む。走査が予算を
+  /// 使い切ったときと、所見の保持上限を超えたときの違反は、どの値が違反したかを
+  /// 言えないので承認に変換できず、`review` でも拒否になる。
+  onViolation: "deny"|"review"|"allow" = "deny"
+}
 
-  /// HTTP メソッド（大文字小文字無視）。省略時は全メソッドにマッチ。
-  method: String?
+/// ボディが存在しないことを要求する。
+///
+/// `match.body { format = "none" }` との使い分け: ボディの有無で引き受けるルールを
+/// 分けたいなら `match` に置く。そのルールが引き受けたうえでボディの存在を拒否として
+/// 扱いたいなら `EmptyBody` に置く。前者は他の候補へ選択が進み、後者は `onViolation`
+/// の帰結で終わる。
+class EmptyBody extends Expect {
+  kind = "emptyBody"
+}
 
-  /// 注入するヘッダー名。"Authorization" 等。
-  header: String
+/// JSON のルートの型を要求する。
+class JsonRoot extends Expect {
+  kind = "jsonRoot"
+  rootType: "object"|"array"
+}
 
-  /// ヘッダー値の指定。`val`（固定値）または `valCmd`（コマンド出力）のいずれか一方を設定する。
-  value: CredentialValSpec
+/// セレクタが選ぶノードが、既知のタグを持つオブジェクトであることを要求する。
+///
+/// 対象がオブジェクトでない、`discriminator` が自身の文字列プロパティとして
+/// 存在しない、その値が `allowed` に無い、のいずれも違反になる。セレクタが
+/// 0 ノードに一致する場合は違反ではない。
+class UnionShape extends Expect {
+  kind = "unionShape"
+
+  /// 検査対象を選ぶセレクタ。制限付き JSON Pointer パターン。リテラルは `~0` と
+  /// `~1` で escape し、`*` は 1 要素に、`**` は 0 個以上の子孫に一致する。
+  at: String
+
+  /// 対象から外す部分木。一致した部分木は走査ごと切り落とされる。
+  exclude: Listing<String> = new {}
+
+  /// タグを運ぶプロパティ名。
+  discriminator: String
+
+  /// 許すタグ。
+  allowed: Listing<String>
+}
+
+/// ボディの解釈方法。
+///
+/// - `"none"`: ボディが存在し、その長さが 0 である。
+/// - `"json"`: ボディを JSON として解析できる。ルートの型は問わない。
+/// - `"opaque"`: ボディが存在する。内容は解析しない。
+///
+/// 受理集合の広さは `条件なし ⊃ "opaque" ⊃ "json"` / `"opaque" ⊃ "none"` であり、
+/// `"json"` と `"none"` は交差しない。
+class BodyMatch {
+  format: "none"|"json"|"opaque"
+
+  /// JSON Pointer と値の完全一致。値の形は設定検査で確認する。
+  equals: Mapping<String, Any> = new {}
+
+  /// JSON Pointer と許す値の集合。値の形は設定検査で確認する。
+  oneOf: Mapping<String, Listing<Any>> = new {}
+}
+
+/// そのルールがリクエストを引き受けるかどうかを決める条件。
+class Match {
+  /// 省略時は全メソッドに一致する。
+  methods: Listing<String>?
+
+  /// パスパターンの集合。1 つでも一致すれば構文部分が一致したと見なす。
+  ///
+  /// パターンは `/` 区切りのセグメント列であり、リテラル・`*` (任意の 1
+  /// セグメント)・`{name}` (任意の 1 セグメントを capture)・`**` (0 個以上の
+  /// セグメント、末尾にのみ置ける) の 4 種だけを持つ。正規表現は無い。パスの
+  /// 正規化も行わない。クエリ文字列は選択に一切参加しない。
+  paths: Listing<String>
+
+  /// パスパターンの capture に対する制約。文字列集合による列挙のみ。
+  captures: Mapping<String, Listing<String>> = new {}
+
+  /// ボディ条件。省略するとボディを見ない。
+  body: BodyMatch?
+}
+
+class Rule {
+  match: Match
+
+  /// match が真になったときの帰結。
+  onMatch: "allow"|"review"|"deny"
+
+  /// match のボディ条件が判定不能だったときの帰結。判定不能に到達した時点で
+  /// 候補の評価は打ち切られる。
+  onIndeterminate: "review"|"deny" = "deny"
+
+  /// 受理条件。すべての要素が成り立つことを要求する連言であり、短絡しない。
+  /// 帰結は違反した要素の `onViolation` のうち最も厳しいものになる。
+  expect: Listing<Expect> = new {}
+
+  limits: Limits?
+
+  /// 秘密ごとの扱い。スコープの値を上書きする。
+  secrets: Mapping<String, SecretDisposition>?
+
+  /// このルールで許可されたリクエストに注入するヘッダー。スコープの `inject` と
+  /// ヘッダー名で突き合わせ、同名はこちらを採用する。
+  inject: Listing<Inject> = new {}
+
+  audit: AuditMode?
+
+  /// 特異度で比較できない重なりを明示的に解決する。同一スコープ内のルールのキーを
+  /// 指し、そのルールに対してだけ「より特異である」と宣言する。
+  overrides: Listing<String> = new {}
+}
+
+/// ターゲットの集合と、その集合に対する既定の閉じ方・予算・秘密の扱い・ルール群。
+/// ID の名前空間も兼ねる。同一ホストを 2 つのスコープに分割することはできない。
+class Scope {
+  /// ターゲットのパターン。`"api.github.com"` / `"*.gcr.io"` / `"example.com:8443"`。
+  targets: Listing<String>
+
+  /// このスコープのどのルールも引き受けなかったリクエストの帰結。
+  /// 構造上つねに最後に評価されるので、ルールの追加位置を気にする必要はない。
+  fallback: "allow"|"review"|"deny" = "deny"
+
+  /// HTTP handshake の認可後に WebSocket への Upgrade を許すか。
+  /// message ごとの review は行わず、mask/forbid は補助的に行う。
+  webSocket: "allow"|"deny" = "deny"
+
+  limits: Limits?
+
+  /// 秘密ごとの扱い。`network.defaults.secrets` を上書きする。
+  secrets: Mapping<String, SecretDisposition>?
+
+  /// このスコープで許可されたリクエストに注入するヘッダー。
+  inject: Listing<Inject> = new {}
+
+  audit: AuditMode?
+
+  /// ルール。キーが `<スコープ名>.<キー>` という実 ID の後半になる。
+  /// キーは `[a-z][a-z0-9._-]{0,63}` に従う。
+  ///
+  /// Mapping の宣言順は、特異度で決着しない候補どうしのタイブレークとしてのみ
+  /// 意味を持つ。選択の主軸は特異度である。
+  rules: Mapping<String, Rule> = new {}
+}
+
+class NetworkDefaults {
+  limits: Limits?
+
+  /// 秘密ごとの扱いの既定。キー `"*"` はその段の既定を表し、個別の名前が勝つ。
+  /// 初期値は `["*"] = "mask"` であり、`mask.proxy = false` を選ぶ設定では
+  /// `["*"] = "ignore"` を明示する必要がある。
+  secrets: Mapping<String, SecretDisposition> = new { ["*"] = "mask" }
+
+  audit: AuditMode?
 }
 
 class NetworkConfig {
-  /// ネットワークアクセス制御ルール。上から順に評価し、最初にマッチしたルールの
-  /// action を適用する。どのルールにもマッチしない場合は暗黙 deny。
-  reviewRules: Listing<ReviewRule> = new {}
+  /// スコープ。キーがルール ID の名前空間になる。
+  ///
+  /// リクエストのターゲットから 1 つのスコープを選ぶ。選択はターゲットパターンの
+  /// 特異度で決まるので、宣言の位置は関係しない。
+  scopes: Mapping<String, Scope> = new {}
 
-  /// ホスト別認証情報。allow 判定されたリクエストにヘッダーを注入する。
-  /// アクセス許可は reviewRules で別途設定が必要。
-  credentials: Listing<CredentialRule> = new {}
+  /// どのスコープにも属さないターゲットの帰結。スコープ内で誰も引き受けなかった
+  /// リクエストはここではなく、そのスコープの `fallback` に落ちる。
+  fallback: "review"|"deny" = "deny"
+
+  defaults: NetworkDefaults = new {}
 
   proxy: ProxyConfig = new {}
 
   /// review ルールで pending に回されたリクエストの待機秒数。タイムアウト時は deny。
   pendingTimeoutSeconds: Int = 300
 
-  /// 承認の既定スコープ。
-  pendingDefaultScope: "once"|"host-port"|"host" = "host-port"
-
   /// pending 発生時の通知 backend。
   pendingNotify: "auto"|"desktop"|"off" = "auto"
 }
+
+// ---------------------------------------------------------------------------
+// 組み込みプリセット
+//
+// プロバイダごとの「これだけ通せばエージェントが動く」スコープを名前付きで提供
+// する。Schema.pkl は nas が毎回配布物で上書きするので、ユーザーがプリセット
+// 本体を書き換えることはできない。
+//
+// 参照は amend ブロックの中からになるが、そこではレシーバが Mapping になり
+// 無修飾の名前解決がモジュールまで遡らないため、**`module.` を付ける**こと。
+//
+//     scopes {
+//       ["anthropic"] = module.presets.anthropic.v1
+//     }
+//
+// エンドポイントを足したいときは、別スコープを作らずに同じスコープを amend する。
+// 「プリセットより前に置く」という手順は要らない。終端 deny は fallback になった
+// ので、後ろに足しても食われない。
+//
+//     scopes {
+//       ["anthropic"] = (module.presets.anthropic.v1) {
+//         rules {
+//           ["company-bootstrap"] {
+//             match { methods { "GET" }; paths { "/company/bootstrap" } }
+//             onMatch = "allow"
+//             expect { new EmptyBody {} }
+//           }
+//         }
+//       }
+//     }
+//
+// プリセットの受理条件は緩められない。`expect` は Listing なので amend は要素を
+// 追加するだけで、既にある UnionShape の `allowed` を書き換える手段がない。
+// プリセットのバージョンは不変であり、API の変更は v2 を生む。
+// ---------------------------------------------------------------------------
+
+/// `anthropic@1` が許可する content block のタグ集合。
+const local anthropicContentTags: Listing<String> = new {
+  "text"
+  "image"
+  "document"
+  "thinking"
+  "redacted_thinking"
+  "tool_use"
+  "tool_result"
+  "server_tool_use"
+  "web_search_tool_result"
+  "code_execution_tool_result"
+  "mcp_tool_use"
+  "mcp_tool_result"
+  "search_result"
+  "container_upload"
+}
+
+/// content block の型検査。
+///
+/// `/**/content/*` は `tools[].input_schema.properties.content` にも届いて
+/// しまうので、そこだけ部分木ごと落とす。位置を数え上げる代わりに検査しない
+/// 領域を名指しするので、上流が content block の新しい入れ子位置を追加しても
+/// 網から漏れない。
+///
+/// タグ集合の違反が `review` なのは、プリセットの受理条件を設定で緩められない
+/// からである。上流が content block を 1 つ追加したときに `deny` だとセッションが
+/// 止まり、利用者には nas のリリースを待つ以外の手が無い。`review` なら未知の
+/// タグそのものが承認 UI に出て、押せばそのセッションの残りは同じ確認が出ない。
+///
+/// ルートの型は `deny` のままにする。`/v1/messages` のボディがオブジェクトで
+/// ないのは上流の追加ではなく壊れたリクエストであり、承認すべき値も無い。
+/// これは走査が予算を使い切ったときの帰結も決める: 検査未完了はルールが宣言する
+/// 中で最も厳しい帰結を取るので、`deny` が 1 つあることで予算切れが人に訊かずに
+/// 止まる。
+const local anthropicContentBlocks: Listing<Expect> = new {
+  new UnionShape {
+    at = "/**/content/*"
+    exclude { "/tools/**" }
+    discriminator = "type"
+    allowed = anthropicContentTags
+    onViolation = "review"
+  }
+  new UnionShape {
+    at = "/system/*"
+    discriminator = "type"
+    allowed = anthropicContentTags
+    onViolation = "review"
+  }
+  new JsonRoot { rootType = "object" }
+}
+
+class AnthropicPresets {
+  /// Claude Code が `api.anthropic.com` に対して必要とするエンドポイントだけを
+  /// 通し、それ以外は `fallback` の deny に落とす。
+  ///
+  /// ルール ID はスコープのキーから導かれるので、同じプリセットを 2 つのホストに
+  /// 当てるときはスコープを 2 つ作れば ID が衝突しない。互換のあるゲートウェイを
+  /// 使う場合は `targets` を amend で差し替える。
+  v1: Scope = new {
+    targets { "api.anthropic.com" }
+    fallback = "deny"
+
+    rules {
+      ["messages"] {
+        match {
+          methods { "POST" }
+          paths { "/v1/messages"; "/v1/messages/count_tokens" }
+          // UnionShape / JsonRoot を置くルールは format = "json" を要する。
+          body { format = "json" }
+        }
+        onMatch = "allow"
+        // ボディが壊れていて解析できないときの帰結。
+        onIndeterminate = "deny"
+        expect = anthropicContentBlocks
+      }
+
+      // ボディの不在は「引き受けの条件」ではなく「引き受けたうえでの受理条件」
+      // なので match.body ではなく expect に置く。match に置くと、ボディ付きの
+      // リクエストはこのルールに引き受けられず fallback に落ちるので、監査には
+      // 「bootstrap ルールの EmptyBody 違反」ではなく「fallback で deny」としか
+      // 残らない。
+      ["bootstrap"] {
+        match {
+          methods { "GET" }
+          paths {
+            "/api/claude_cli/bootstrap"
+            "/api/claude_code_penguin_mode"
+            "/api/claude_code/policy_limits"
+            "/api/claude_code/settings"
+            "/mcp-registry/v0/servers"
+            "/v1/code/triggers"
+            "/v1/mcp_servers"
+          }
+        }
+        onMatch = "allow"
+        expect { new EmptyBody {} }
+      }
+    }
+  }
+}
+
+class Presets {
+  anthropic: AnthropicPresets = new {}
+}
+
+/// 組み込みプリセットの名前空間。`hidden` なので設定の出力には現れない。
+hidden presets: Presets = new {}
 
 // ---------------------------------------------------------------------------
 // DBus
@@ -315,21 +633,31 @@ class EnvConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Mask (workspace string masking)
+// Secrets
 // ---------------------------------------------------------------------------
 
-/// マスク対象の秘密値の取得元。
-/// 対応形式: `env:VAR` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account` / `lines:/path`
-/// `lines:` はファイルの各行を個別のシークレットとして扱う (空行は無視)。
-/// リテラル値は意図的に非対応 (config.pkl が git にコミットされると履歴経由で漏れるため)。
-class MaskValueConfig {
-  source: String
+class SecretConfig {
+  /// 取得元。
+  /// `env:VAR` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account` /
+  /// `lines:/path` / `cmd:<command>`。
+  ///
+  /// `lines:` はファイルの各行を個別の値として扱う (空行は無視)。複数の値に
+  /// 展開される秘密は注入には使えない。
+  /// `cmd:` は出力の 1 行目を値とする。
+  ///
+  /// リテラル値は意図的に非対応 (config.pkl が git にコミットされると履歴経由で
+  /// 漏れるため)。
+  from: String
+
+  /// secret が取得できない場合にエラーにするか。
+  required: Boolean = true
 }
 
-class MaskConfig {
-  /// マスク対象の秘密値のリスト。空なら maskfs は起動しない。
-  values: Listing<MaskValueConfig> = new {}
+// ---------------------------------------------------------------------------
+// Mask (どの層で秘密を伏せるか)
+// ---------------------------------------------------------------------------
 
+class MaskConfig {
   /// 秘密値を含むファイルへの書き込みの扱い。
   /// `"readonly"`: write/truncate/unlink/rename を EROFS で拒否 (ホストの実体を保護)
   /// `"passthrough"`: 無加工で通す (agent が読んだ *** をそのまま書き戻すと実体が壊れるリスクを許容)
@@ -342,12 +670,21 @@ class MaskConfig {
 
   /// mitmproxy によるリクエストマスク (ボディ・URL・ヘッダーの秘密値置換) を
   /// 有効にするか。network proxy が有効なセッションでのみ効果がある。
+  ///
+  /// 個々の秘密をどう扱うかは `network` のスコープとルールが決める。ここは
+  /// 層ごとの開閉だけを持つ。`false` にする設定では、`mask` または `forbid` を
+  /// 持つスコープが 1 つでもあると設定エラーになる。既定の
+  /// `network.defaults.secrets` が `["*"] = "mask"` なので、プロキシでの
+  /// マスクを行わないなら `["*"] = "ignore"` を明示すること。
   proxy: Boolean = true
 
   /// コマンドの stdout/stderr に含まれるシークレットをマスクする bash wrapper フィルタ。
   /// /tmp/nas-bash-override/bash を process substitution ラッパーに置き換え、
   /// 全コマンド出力を nas-mask-filter 経由でマスクする。
   filter: Boolean = true
+
+  /// maskfs と filter が対象にする秘密の名前。`null` で `secrets` の全件。
+  apply: Listing<String>? = null
 }
 
 // ---------------------------------------------------------------------------
@@ -399,14 +736,6 @@ class HostExecMatchConfig {
   /// argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。
   /// 省略時はその argv0 の全コマンドにマッチ。
   argRegex: String? = null
-}
-
-class SecretConfig {
-  /// secret の取得元。`env:VAR_NAME` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account`。
-  from: String
-
-  /// secret が取得できない場合にエラーにするか。
-  required: Boolean
 }
 
 class HostExecRule {

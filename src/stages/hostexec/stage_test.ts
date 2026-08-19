@@ -40,11 +40,11 @@ function makeProfile(): Profile {
     display: DEFAULT_DISPLAY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     network: {
-      reviewRules: [],
-      credentials: [],
+      scopes: {},
+      fallback: "deny",
+      defaults: {},
       proxy: { forwardPorts: [] },
       pendingTimeoutSeconds: 300,
-      pendingDefaultScope: "host-port",
       pendingNotify: "off",
     },
     dbus: {
@@ -60,6 +60,7 @@ function makeProfile(): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     hostexec: {
       prompt: {
         enable: true,
@@ -598,10 +599,10 @@ test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line 
 // below for the I/O-resolving half of this behavior)
 // ============================================================
 
-test("HostExecStage plan: sets maskFilterIntent when mask.filter enabled and values non-empty", async () => {
+test("HostExecStage plan: sets maskFilterIntent when mask.filter has a secret to apply", async () => {
   const profile = makeProfile();
+  profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
   profile.mask = {
-    values: [{ source: "env:TEST_SECRET" }],
     writePolicy: "readonly",
     maskfs: false,
     proxy: false,
@@ -644,7 +645,6 @@ test("HostExecStage plan: sets maskFilterIntent when mask.filter enabled and val
 test("HostExecStage plan: omits maskFilterIntent when mask.filter disabled", async () => {
   const profile = makeProfile();
   profile.mask = {
-    values: [{ source: "env:TEST_SECRET" }],
     writePolicy: "readonly",
     maskfs: false,
     proxy: false,
@@ -686,7 +686,6 @@ test("HostExecStage plan: omits maskFilterIntent when mask config is absent", as
 test("HostExecStage plan: omits maskFilterIntent when mask.values is empty", async () => {
   const profile = makeProfile();
   profile.mask = {
-    values: [],
     writePolicy: "readonly",
     maskfs: false,
     proxy: false,
@@ -711,8 +710,8 @@ test("HostExecStage plan: omits maskFilterIntent when mask.values is empty", asy
 
 test("HostExecStage: run fails closed when mask.filter is enabled but the filter binary is not found", async () => {
   const profile = makeProfile();
+  profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
   profile.mask = {
-    values: [{ source: "env:TEST_SECRET" }],
     writePolicy: "readonly",
     maskfs: false,
     proxy: false,

@@ -34,7 +34,7 @@ import { NewSessionDialog } from "./dialogs/NewSessionDialog";
 import {
   createPendingActionHandlers,
   DEFAULT_HOSTEXEC_SCOPE,
-  DEFAULT_NETWORK_SCOPE,
+  networkScopeFor,
 } from "./handlers/createPendingActionHandlers";
 import { selectPendingTarget } from "./handlers/selectedPendingKey";
 import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
@@ -152,11 +152,13 @@ export function App() {
     onApproveSelected: () => {
       const target = resolvePendingTarget();
       if (target === null) return;
-      const fallback =
+      const selected = pendingAction.scopeFor(target.row.key);
+      // Network grains come from the entry itself, so the keyboard path
+      // clamps the selection exactly like the buttons do.
+      const scope =
         target.kind === "network"
-          ? DEFAULT_NETWORK_SCOPE
-          : DEFAULT_HOSTEXEC_SCOPE;
-      const scope = pendingAction.scopeFor(target.row.key) ?? fallback;
+          ? networkScopeFor(target.row, selected)
+          : (selected ?? DEFAULT_HOSTEXEC_SCOPE);
       void pendingHandlers.onApprove(target.row, scope);
     },
     onDenySelected: () => {

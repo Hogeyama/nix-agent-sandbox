@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 /**
  * Integration tests: Pkl 設定の --project-dir 評価テスト
@@ -9,8 +9,10 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { generateAnthropicV1Fixture } from "../../scripts/gen_authz_fixture.ts";
 import { resolveAsset } from "../lib/asset.ts";
 import { loadConfig } from "./load.ts";
+import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
 
 /** pkl コマンドが利用可能か確認する */
 async function pklAvailable(): Promise<boolean> {
@@ -34,6 +36,16 @@ async function pklAvailable(): Promise<boolean> {
 }
 
 const hasPkl = await pklAvailable();
+
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
 
 /** バンドルされた Schema.pkl のテキストを読み込む */
 async function readBundledSchema(): Promise<string> {
@@ -164,7 +176,13 @@ profiles {
   ["dev"] {
     agent = "claude"
     network {
-      reviewRules = new Listing { new ReviewRule { host = "api.github.com"; action = "allow" } }
+      scopes {
+        ["github"] {
+          targets { "api.github.com" }
+          fallback = "allow"
+          webSocket = "allow"
+        }
+      }
     }
   }
 }
@@ -185,9 +203,15 @@ profiles {
 
       const config = await loadConfig({ startDir: projectDir });
       expect(config.profiles.dev.agent).toEqual("copilot");
-      expect(config.profiles.dev.network.reviewRules).toEqual([
-        { host: "api.github.com", action: "allow", audit: true },
-      ]);
+      expect(config.profiles.dev.network.scopes).toEqual({
+        github: {
+          targets: ["api.github.com"],
+          fallback: "allow",
+          webSocket: "allow",
+          inject: [],
+          rules: {},
+        },
+      });
     } finally {
       if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = origXdg;
@@ -214,6 +238,203 @@ profiles {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// スコープとルールは Mapping なので、キーへの amend で要素を書ける。要素の型を
+// 書かなくても既定要素が決まることを固定する。型を明示した書き方しかテストして
+// いないと、型を省いた実設定が読めなくなっても気付けない。
+test.skipIf(!hasPkl)(
+  "pkl: scopes and rules load without an explicit element type",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      fallback = "review"
+      scopes {
+        ["github"] { targets { "api.github.com" }; fallback = "allow" }
+        ["httpbin"] {
+          targets { "httpbin.org" }
+          fallback = "allow"
+          rules {
+            ["post"] {
+              match { methods { "POST" }; paths { "/**" } }
+              onMatch = "review"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-bare-rule-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      const network = config.profiles.dev.network;
+      expect(network.fallback).toEqual("review");
+      expect(Object.keys(network.scopes)).toEqual(["github", "httpbin"]);
+      expect(network.scopes.github?.webSocket).toBe("deny");
+      expect(network.scopes.httpbin?.rules?.post).toEqual({
+        match: { paths: ["/**"], methods: ["POST"], captures: {} },
+        onMatch: "review",
+        onIndeterminate: "deny",
+        expect: [],
+        inject: [],
+        overrides: [],
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "pkl: acceptance conditions serialize with a discriminating kind",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          fallback = "deny"
+          rules {
+            ["settings"] {
+              match { methods { "GET" }; paths { "/v1/settings" } }
+              onMatch = "review"
+              expect { new EmptyBody {} }
+            }
+            ["messages"] {
+              match {
+                methods { "POST" }
+                paths { "/v1/messages" }
+                body { format = "json" }
+              }
+              onMatch = "allow"
+              expect {
+                new JsonRoot { rootType = "object" }
+                new UnionShape {
+                  at = "/messages/*/content/*"
+                  exclude { "/tools/**" }
+                  discriminator = "type"
+                  allowed { "text"; "image" }
+                  onViolation = "allow"
+                }
+              }
+              audit = "always"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-expect-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      const rules = config.profiles.dev.network.scopes.api?.rules;
+      // Pkl のサブクラスは JSON になると型を失うので、`kind` が受理条件の
+      // 種別を運ぶ。これが欠けると addon は何を検査すべきか分からない。
+      expect(rules?.settings?.expect).toEqual([
+        { kind: "emptyBody", onViolation: "deny" },
+      ]);
+      expect(rules?.messages?.expect).toEqual([
+        { kind: "jsonRoot", onViolation: "deny", rootType: "object" },
+        {
+          kind: "unionShape",
+          onViolation: "allow",
+          at: "/messages/*/content/*",
+          exclude: ["/tools/**"],
+          discriminator: "type",
+          allowed: ["text", "image"],
+        },
+      ]);
+      expect(rules?.messages?.match.body).toEqual({
+        format: "json",
+        equals: {},
+        oneOf: {},
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "pkl: the anthropic preset amends into a scope without displacing its rules",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        // ゲートウェイ経由でも、ホストマッチングを緩めずに宛先だけ差し替える。
+        ["gw"] = (module.presets.anthropic.v1) {
+          targets = new Listing { "gateway.example.com" }
+          rules {
+            ["company-bootstrap"] {
+              match { methods { "GET" }; paths { "/company/bootstrap" } }
+              onMatch = "allow"
+              expect { new EmptyBody {} }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-preset-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      const scope = config.profiles.dev.network.scopes.gw;
+
+      expect(scope?.targets).toEqual(["gateway.example.com"]);
+      // preset のルールは残り、追加したルールが末尾に来る。「プリセットより
+      // 前に置く」という手順が要らないのは終端 deny が fallback になったため。
+      expect(Object.keys(scope?.rules ?? {})).toEqual([
+        "messages",
+        "bootstrap",
+        "company-bootstrap",
+      ]);
+      expect(scope?.fallback).toEqual("deny");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+/**
+ * fixture の権威は Schema.pkl の `presets.anthropic.v1` にある。生成器と同じ
+ * 経路 (pkl 評価 → loadConfig → resolveAuthzConfig) を通した結果がコミット
+ * 済みの fixture と一致することを固定し、pkl 側だけ変えて fixture を更新し
+ * 忘れる乖離を落とす。ずれたら `bun run scripts/gen_authz_fixture.ts`。
+ */
+test.skipIf(!hasPkl)(
+  "pkl: the anthropic preset matches the committed cross-language fixture",
+  async () => {
+    const generated = await generateAnthropicV1Fixture();
+    const committed = JSON.parse(
+      await readFile(
+        new URL("../network/fixtures/authz/anthropic-v1.json", import.meta.url),
+        "utf8",
+      ),
+    );
+
+    expect(generated).toEqual(committed);
+  },
+);
 
 test.skipIf(!hasPkl)(
   "pkl: handles config and temp paths with spaces",
@@ -282,8 +503,13 @@ test.skipIf(!hasPkl)(
 profiles {
   ["dev"] {
     agent = "claude"
-    display {
-      sandbox = "wrong-enum"
+    network {
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          webSocket = "review"
+        }
+      }
     }
   }
 }

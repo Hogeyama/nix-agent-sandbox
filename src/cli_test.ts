@@ -43,6 +43,7 @@ const baseProfile: Profile = {
   hook: DEFAULT_HOOK_CONFIG,
   extraMounts: [],
   env: [],
+  secrets: {},
 };
 
 const baseConfig: Config = {
@@ -410,10 +411,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
 test("planProxy: network proxy cannot be opted out", () => {
   const profile: Profile = {
     ...baseProfile,
-    network: {
-      ...structuredClone(DEFAULT_NETWORK_CONFIG),
-      reviewRules: [],
-    },
+    network: structuredClone(DEFAULT_NETWORK_CONFIG),
   };
   const container: PipelineState["container"] = {
     image: "nas-sandbox",
@@ -439,7 +437,7 @@ test("planProxy: network proxy cannot be opted out", () => {
 
   const result = planProxy(stageInput);
 
-  expect(result.reviewRules).toEqual([]);
+  expect(result.document.scopes).toEqual([]);
   expect(result.container.network).toEqual({
     name: "nas-session-net-sess_test123",
   });

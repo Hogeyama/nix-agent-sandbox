@@ -168,7 +168,7 @@ function runtimePaths(): NetworkRuntimePaths {
     brokersDir: `${root}/brokers`,
     caCertDir: `${root}/mitmproxy-ca`,
     addonScriptPath: `${root}/nas_addon.py`,
-    reviewRulesDir: `${root}/review-rules`,
+    authzDir: `${root}/authz`,
   };
 }
 
@@ -390,6 +390,10 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
     "regular@8080",
     "--set",
     "connection_strategy=lazy",
+    "--set",
+    "rawtcp=false",
+    "--set",
+    "websocket=true",
     "--set",
     "confdir=/nas-network/mitmproxy-ca",
     "--ssl-insecure",

@@ -8,7 +8,7 @@ import { Effect, Layer } from "effect";
  * Proxy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
-import type { Config, CredentialRule, Profile } from "../../config/types.ts";
+import type { Config, NetworkConfig, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -17,7 +17,6 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
-import type { ResolvedCredential } from "../../network/protocol.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type {
   ContainerPlan,
@@ -63,13 +62,13 @@ function makeProfile(
   const networkOverrides = overrides.network ?? {};
   const { network: _ignored, ...rest } = overrides;
   const network: Profile["network"] = {
-    reviewRules: networkOverrides.reviewRules ?? [],
-    credentials: networkOverrides.credentials ?? [],
+    scopes: networkOverrides.scopes ?? {},
+    fallback: networkOverrides.fallback ?? "deny",
+    defaults: networkOverrides.defaults ?? {},
     proxy: networkOverrides.proxy
       ? { forwardPorts: [...networkOverrides.proxy.forwardPorts] }
       : { forwardPorts: [] },
     pendingTimeoutSeconds: networkOverrides.pendingTimeoutSeconds ?? 300,
-    pendingDefaultScope: networkOverrides.pendingDefaultScope ?? "host-port",
     pendingNotify: networkOverrides.pendingNotify ?? "auto",
   };
   return {
@@ -87,6 +86,7 @@ function makeProfile(
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     ...rest,
   };
 }
@@ -124,6 +124,25 @@ function makeProbes(): ProbeResults {
 }
 
 const DISABLED_OBSERVABILITY: ObservabilityState = { enabled: false };
+
+const ALLOW_EXAMPLE: NetworkConfig["scopes"] = {
+  example: { targets: ["example.com"], fallback: "allow" },
+};
+
+/** 受理条件を持つスコープ。Schema.pkl の anthropic preset と同じ形。 */
+const POLICY_SCOPES: NetworkConfig["scopes"] = {
+  anthropic: {
+    targets: ["api.anthropic.com"],
+    fallback: "deny",
+    rules: {
+      settings: {
+        match: { methods: ["GET"], paths: ["/api/claude_code/settings"] },
+        onMatch: "allow",
+        expect: [{ kind: "emptyBody" }],
+      },
+    },
+  },
+};
 
 function makeInput(
   profile: Profile,
@@ -189,18 +208,19 @@ function runStageWithFakes(
   );
 }
 
-test("ProxyStage: always returns plan even when reviewRules and prompt are disabled", () => {
+test("ProxyStage: always returns plan even when no scope and prompt are disabled", () => {
   const profile = makeProfile();
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
   expect(result.sessionNetworkName).toEqual("nas-session-net-test-session-123");
-  expect(result.reviewRules).toEqual([]);
+  expect(result.document.scopes).toEqual([]);
+  expect(result.document.fallback).toEqual("deny");
   expect(result.forwardPorts).toEqual([]);
 });
 
-test("ProxyStage: returns plan when reviewRules is non-empty", () => {
+test("ProxyStage: returns plan when a scope is declared", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
@@ -210,19 +230,88 @@ test("ProxyStage: returns plan when reviewRules is non-empty", () => {
   );
 });
 
-test("ProxyStage: returns plan when reviewRules contains a review action", () => {
-  const profile = makeProfile({
-    network: { reviewRules: [{ action: "review" }] },
-  });
+test("ProxyStage: carries the network fallback into the plan document", () => {
+  const profile = makeProfile({ network: { fallback: "review" } });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
-  expect(result !== null).toEqual(true);
-  expect(result!.reviewRules).toEqual([{ action: "review" }]);
+  expect(result.document.fallback).toEqual("review");
+  expect(result.document.scopes).toEqual([]);
+});
+
+test("ProxyStage: resolves a rule into the versioned plan document", () => {
+  const profile = makeProfile({ network: { scopes: POLICY_SCOPES } });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.document.contractVersion).toBe(1);
+  const scope = result.document.scopes[0]!;
+  expect(scope.name).toEqual("anthropic");
+  expect(scope.fallback).toEqual("deny");
+  expect(scope.rules[0]).toMatchObject({
+    id: "anthropic.settings",
+    onMatch: "allow",
+    audit: "always",
+    expect: [{ kind: "emptyBody", onViolation: "deny" }],
+  });
+});
+
+test("ProxyStage: refuses to plan a config the resolver rejects", () => {
+  const profile = makeProfile({
+    network: {
+      scopes: {
+        first: { targets: ["api.example.com"], fallback: "allow" },
+        second: { targets: ["api.example.com"], fallback: "deny" },
+      },
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+  expect(() => planProxy({ ...shared, container, observability })).toThrow(
+    /ターゲット集合が一致します/,
+  );
+});
+test("ProxyStage: resolves scopes in target-specificity order", () => {
+  const profile = makeProfile({
+    network: {
+      fallback: "review",
+      scopes: {
+        wide: { targets: ["*.example.com"], fallback: "review" },
+        exact: {
+          targets: ["api.example.com"],
+          fallback: "deny",
+          rules: {
+            v1: {
+              match: { methods: ["POST"], paths: ["/v1/**"] },
+              onMatch: "allow",
+              audit: "off",
+            },
+          },
+        },
+      },
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  // 宣言順は wide が先だが、ドキュメントは特異度の降順で並ぶ。addon は
+  // 先頭から探して最初に一致したスコープを採るので、この順序が
+  // 「api.example.com は exact に属する」を保証している。
+  expect(result.document.scopes.map((scope) => scope.name)).toEqual([
+    "exact",
+    "wide",
+  ]);
+  expect(result.document.fallback).toEqual("review");
+  expect(result.document.scopes[0]!.rules[0]).toMatchObject({
+    id: "exact.v1",
+    onMatch: "allow",
+    audit: "off",
+  });
 });
 
 test("ProxyStage: sets proxy env vars", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -245,7 +334,7 @@ test("ProxyStage: sets proxy env vars", () => {
 
 test("ProxyStage: sets outputOverrides", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -266,7 +355,7 @@ test("ProxyStage: sets outputOverrides", () => {
 
 test("ProxyStage: planner sets networkName in outputOverrides", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -289,7 +378,7 @@ test("replaceNetwork: adds --network when not present", () => {
 
 test("ProxyStage: uses provided session token generator", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const generatedToken = "fixed-token-12345";
@@ -305,12 +394,7 @@ test("ProxyStage: uses provided session token generator", () => {
 
 test("ProxyStage: uses profile network settings", () => {
   const profile = makeProfile({
-    network: {
-      reviewRules: [
-        { host: "example.com", action: "allow" },
-        { action: "review" },
-      ],
-    },
+    network: { scopes: ALLOW_EXAMPLE, fallback: "review" },
   });
   const { shared, container, observability } = makeInput(profile);
 
@@ -330,7 +414,7 @@ test("ProxyStage: uses profile network settings", () => {
 
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile, {
     container: {
@@ -413,42 +497,45 @@ test("ProxyStage: forwardPorts-only enables proxy", () => {
   expect(result !== null).toEqual(true);
 });
 
-test("ProxyStage: forwardPorts does NOT inject host.docker.internal entries into reviewRules", () => {
+function targetSources(plan: {
+  document: { scopes: readonly { targets: readonly { source: string }[] }[] };
+}): string[] {
+  return plan.document.scopes.flatMap((scope) =>
+    scope.targets.map((target) => target.source),
+  );
+}
+
+test("ProxyStage: forwardPorts does NOT grant host.docker.internal a scope", () => {
   // Forward-ports flow through per-port UDS bind-mounts, so the local-proxy
-  // does not dial host.docker.internal:<port> via CONNECT. The reviewRules
-  // must therefore stay free of synthetic host.docker.internal entries —
-  // a stale entry would silently re-grant the host TCP escape route.
+  // does not dial host.docker.internal:<port> via CONNECT. The document
+  // must therefore stay free of synthetic host.docker.internal targets —
+  // a stale one would silently re-grant the host TCP escape route.
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:8080"),
-  ).toEqual(false);
-  expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:5432"),
-  ).toEqual(false);
+  expect(targetSources(result)).toEqual([]);
 });
 
-test("ProxyStage: forwardPorts preserves user-declared host.docker.internal reviewRules entries", () => {
-  // If a profile explicitly puts host.docker.internal:* in its reviewRules,
-  // it must not be stripped — that is user intent, distinct from the
-  // implicit injection driven by forwardPorts.
+test("ProxyStage: forwardPorts preserves a user-declared host.docker.internal target", () => {
+  // If a profile explicitly puts host.docker.internal:* in a scope, it must
+  // not be stripped — that is user intent, distinct from the implicit
+  // injection driven by forwardPorts.
   const profile = makeProfile({
     network: {
-      reviewRules: [{ host: "host.docker.internal:9999", action: "allow" }],
+      scopes: {
+        forwarded: {
+          targets: ["host.docker.internal:9999"],
+          fallback: "allow",
+        },
+      },
       proxy: { forwardPorts: [8080] },
     },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:9999"),
-  ).toEqual(true);
-  expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:8080"),
-  ).toEqual(false);
+  expect(targetSources(result)).toEqual(["host.docker.internal:9999"]);
 });
 
 test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
@@ -460,28 +547,23 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
   expect(result.envVars.NAS_FORWARD_PORTS).toEqual("8080,5432");
 });
 
-test("ProxyStage: forwardPorts leaves existing reviewRules untouched", () => {
-  // Profile-declared reviewRules entries pass through verbatim; forwardPorts
-  // no longer contributes synthetic host.docker.internal entries.
+test("ProxyStage: forwardPorts leaves the declared scopes untouched", () => {
+  // Profile-declared targets pass through verbatim; forwardPorts no longer
+  // contributes synthetic host.docker.internal entries.
   const profile = makeProfile({
     network: {
-      reviewRules: [{ host: "example.com", action: "allow" }],
+      scopes: ALLOW_EXAMPLE,
       proxy: { forwardPorts: [3000] },
     },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(result.reviewRules.some((r) => r.host === "example.com")).toEqual(
-    true,
-  );
-  expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:3000"),
-  ).toEqual(false);
+  expect(targetSources(result)).toEqual(["example.com"]);
 });
 
 test("ProxyStage: no NAS_FORWARD_PORTS when forwardPorts is empty", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -530,7 +612,7 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORT_SOCKET_DIR env", () => {
 
 test("ProxyStage: no forward-port mounts or socket-dir env when forwardPorts is empty", () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -607,9 +689,7 @@ test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
   expect(paths.addonScriptPath).toEqual(
     "/run/user/1000/nas/network/nas_addon.py",
   );
-  expect(paths.reviewRulesDir).toEqual(
-    "/run/user/1000/nas/network/review-rules",
-  );
+  expect(paths.authzDir).toEqual("/run/user/1000/nas/network/authz");
 });
 
 test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
@@ -699,7 +779,7 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
 
 test("createProxyStage().run(): calls services and returns merged output", async () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
+    network: { scopes: ALLOW_EXAMPLE },
   });
   const { shared, container, observability } = makeInput(profile);
 
@@ -783,6 +863,67 @@ test("createProxyStage().run(): calls services and returns merged output", async
   );
 });
 
+test("createProxyStage().run(): gives both runtime consumers the same resolved document", async () => {
+  const profile = makeProfile({ network: { scopes: POLICY_SCOPES } });
+  const { shared, container, observability } = makeInput(profile);
+  let writtenDocument: unknown;
+  let brokerDocument: unknown;
+
+  const layer = Layer.mergeAll(
+    makeCaServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      writeAuthzDocument: (_paths, _sessionId, document) =>
+        Effect.sync(() => {
+          writtenDocument = document;
+        }),
+    }),
+    makeProxyServiceFake(),
+    makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          brokerDocument = config.document;
+          return { close: () => Effect.void };
+        }),
+    }),
+    makeForwardPortRelayServiceFake(),
+  );
+
+  await Effect.runPromise(
+    createProxyStage(shared)
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  expect(writtenDocument).toMatchObject({ contractVersion: 1 });
+  expect(brokerDocument).toBe(writtenDocument);
+});
+
+test("createProxyStage().run(): takes the resolved document away when the session ends", async () => {
+  const profile = makeProfile({ network: { scopes: POLICY_SCOPES } });
+  const { shared, container, observability } = makeInput(profile);
+  const calls: string[] = [];
+
+  const layer = Layer.mergeAll(
+    makeCaServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      writeAuthzDocument: () => Effect.sync(() => void calls.push("write")),
+      removeAuthzDocument: (_paths, sessionId) =>
+        Effect.sync(() => void calls.push(`remove:${sessionId}`)),
+    }),
+    makeProxyServiceFake(),
+    makeSessionBrokerServiceFake(),
+    makeForwardPortRelayServiceFake(),
+  );
+
+  await Effect.runPromise(
+    createProxyStage(shared)
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  expect(calls).toEqual(["write", "remove:test-session-123"]);
+});
+
 // ---------------------------------------------------------------------------
 // observability slice → forwardPorts merge
 // ---------------------------------------------------------------------------
@@ -844,69 +985,67 @@ test("ProxyStage: empty profile.forwardPorts + observability enabled => only rec
 });
 
 // ---------------------------------------------------------------------------
-// Credential wiring tests
+// Secret registry wiring tests
 // ---------------------------------------------------------------------------
 
-test("planProxy: includes credentials in plan", () => {
-  const profile = makeProfile({
-    network: {
-      credentials: [
-        {
-          host: "github.com",
-          header: "Authorization",
-          value: { val: "token abc" },
-        },
-      ],
+test("planProxy: carries the whole secret registry, mask.proxy or not", () => {
+  const secrets = { "gh-token": { from: "cmd:gh auth token" } };
+  const withMasking = makeProfile({ secrets });
+  const withoutMasking = makeProfile({
+    secrets,
+    network: { defaults: { secrets: { "*": "ignore" } } },
+    mask: {
+      writePolicy: "readonly",
+      maskfs: false,
+      proxy: false,
+      filter: false,
     },
   });
-  const { shared, container, observability } = makeInput(profile);
-  const plan = planProxy({ ...shared, container, observability });
-  expect(plan.credentials).toEqual([
-    {
-      host: "github.com",
-      header: "Authorization",
-      value: { val: "token abc" },
-    },
-  ]);
+  const { shared, container, observability } = makeInput(withMasking);
+
+  const masking = planProxy({ ...shared, container, observability });
+  const unmasked = planProxy({
+    ...makeInput(withoutMasking).shared,
+    container,
+    observability,
+  });
+
+  // 注入はマスクを経由しないので、mask.proxy = false でもレジストリは要る。
+  expect(masking.secretRegistry).toEqual(secrets);
+  expect(unmasked.secretRegistry).toEqual(secrets);
+  expect(masking.proxyMasking).toEqual(true);
+  expect(unmasked.proxyMasking).toEqual(false);
 });
 
-test("planProxy: credentials is empty array when profile has none", () => {
-  const profile = makeProfile();
-  const { shared, container, observability } = makeInput(profile);
-  const plan = planProxy({ ...shared, container, observability });
-  expect(plan.credentials).toEqual([]);
-});
-
-test("runProxy: resolves credentials and passes to broker", async () => {
-  const capturedCredRuleSets: CredentialRule[][] = [];
+test("runProxy: resolves the registry and hands the values to the broker", async () => {
+  const capturedRegistries: unknown[] = [];
   const capturedBrokerConfigs: SessionBrokerConfig[] = [];
 
   const profile = makeProfile({
+    secrets: { "gh-token": { from: "env:GH_TOKEN" } },
     network: {
-      credentials: [
-        {
-          host: "github.com",
-          header: "Authorization",
-          value: { val: "token abc" },
+      scopes: {
+        github: {
+          targets: ["api.github.com"],
+          fallback: "allow",
+          secrets: { "gh-token": "inject" },
+          inject: [
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: `template:` の参照構文であってテンプレートリテラルではない
+            { name: "Authorization", value: "template:Bearer ${gh-token}" },
+          ],
         },
-      ],
+      },
     },
   });
   const { shared, container, observability } = makeInput(profile);
-
-  const resolvedCred: ResolvedCredential = {
-    host: "github.com",
-    header: "Authorization",
-    value: "token abc",
-  };
 
   const layer = Layer.mergeAll(
     makeCaServiceFake(),
     makeNetworkRuntimeServiceFake({
-      resolveCredentials: (creds) =>
+      resolveSecrets: (secrets) =>
         Effect.sync(() => {
-          capturedCredRuleSets.push(creds);
-          return [resolvedCred];
+          capturedRegistries.push(secrets);
+          return { "gh-token": ["token abc"] };
         }),
     }),
     makeProxyServiceFake({
@@ -924,7 +1063,7 @@ test("runProxy: resolves credentials and passes to broker", async () => {
   );
 
   const stage = createProxyStageWithOptions(shared, {
-    generateSessionToken: () => "test-token-creds",
+    generateSessionToken: () => "test-token-secrets",
   });
 
   await Effect.runPromise(
@@ -933,60 +1072,27 @@ test("runProxy: resolves credentials and passes to broker", async () => {
       .pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  expect(capturedCredRuleSets.length).toBe(1);
-  expect(capturedCredRuleSets[0]).toEqual([
-    {
-      host: "github.com",
-      header: "Authorization",
-      value: { val: "token abc" },
-    },
+  expect(capturedRegistries).toEqual([
+    { "gh-token": { from: "env:GH_TOKEN" } },
   ]);
-  expect(capturedBrokerConfigs.length).toBe(1);
-  expect(capturedBrokerConfigs[0]!.resolvedCredentials).toEqual([resolvedCred]);
+  expect(capturedBrokerConfigs[0]!.secretValues).toEqual({
+    "gh-token": ["token abc"],
+  });
+  expect(capturedBrokerConfigs[0]!.proxyMasking).toEqual(true);
 });
 
 // ---------------------------------------------------------------------------
 // Mask value wiring tests
 // ---------------------------------------------------------------------------
 
-test("ProxyStage: resolves mask values and passes them to broker", async () => {
+test("ProxyStage: mask.proxy = false still resolves secrets but stops masking", async () => {
   const profile = makeProfile({
-    network: { reviewRules: [{ action: "allow" as const }] },
-    mask: {
-      values: [{ source: "env:SECRET" }],
-      writePolicy: "readonly",
-      maskfs: true,
-      proxy: true,
-      filter: true,
+    secrets: { secret: { from: "env:SECRET" } },
+    network: {
+      fallback: "review" as const,
+      defaults: { secrets: { "*": "ignore" } },
     },
-  });
-  const captured: SessionBrokerConfig[] = [];
-  const resolveCalls: unknown[] = [];
-  await runStageWithFakes(profile, {
-    networkRuntime: makeNetworkRuntimeServiceFake({
-      resolveMaskValues: (values) =>
-        Effect.sync(() => {
-          resolveCalls.push(values);
-          return ["resolved-secret"];
-        }),
-    }),
-    sessionBroker: makeSessionBrokerServiceFake({
-      start: (config) =>
-        Effect.sync(() => {
-          captured.push(config);
-          return { close: () => Effect.void };
-        }),
-    }),
-  });
-  expect(resolveCalls).toEqual([[{ source: "env:SECRET" }]]);
-  expect(captured[0]!.maskValues).toEqual(["resolved-secret"]);
-});
-
-test("ProxyStage: mask.proxy=false skips mask value resolution", async () => {
-  const profile = makeProfile({
-    network: { reviewRules: [{ action: "allow" as const }] },
     mask: {
-      values: [{ source: "env:SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: false,
@@ -997,10 +1103,10 @@ test("ProxyStage: mask.proxy=false skips mask value resolution", async () => {
   let resolveCalled = false;
   await runStageWithFakes(profile, {
     networkRuntime: makeNetworkRuntimeServiceFake({
-      resolveMaskValues: () =>
+      resolveSecrets: () =>
         Effect.sync(() => {
           resolveCalled = true;
-          return [];
+          return { secret: ["resolved-secret"] };
         }),
     }),
     sessionBroker: makeSessionBrokerServiceFake({
@@ -1011,6 +1117,8 @@ test("ProxyStage: mask.proxy=false skips mask value resolution", async () => {
         }),
     }),
   });
-  expect(resolveCalled).toEqual(false);
-  expect(captured[0]!.maskValues).toEqual([]);
+  // 注入のために値そのものは要る。止まるのは置換と拒否だけである。
+  expect(resolveCalled).toEqual(true);
+  expect(captured[0]!.secretValues).toEqual({ secret: ["resolved-secret"] });
+  expect(captured[0]!.proxyMasking).toEqual(false);
 });

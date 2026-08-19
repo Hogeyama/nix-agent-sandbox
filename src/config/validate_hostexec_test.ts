@@ -43,6 +43,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     display: DEFAULT_DISPLAY_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     hook: DEFAULT_HOOK_CONFIG,
     ...overrides,
   };

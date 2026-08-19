@@ -156,7 +156,7 @@ function makeCtx(reader: UiHistoryReader): UiDataContext {
     brokersDir: "/tmp/network/brokers",
     caCertDir: "/tmp/network/mitmproxy-ca",
     addonScriptPath: "/tmp/network/nas_addon.py",
-    reviewRulesDir: "/tmp/network/review-rules",
+    authzDir: "/tmp/network/authz",
   };
   const hostExecPaths: HostExecRuntimePaths = {
     runtimeDir: "/tmp/hostexec",

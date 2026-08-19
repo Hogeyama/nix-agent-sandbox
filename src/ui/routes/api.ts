@@ -5,7 +5,7 @@
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 import type { HostExecPromptScope } from "../../config/types.ts";
 import { logInfo, logWarn } from "../../log.ts";
-import type { ApprovalScope } from "../../network/protocol.ts";
+import { APPROVAL_SCOPES, type ApprovalScope } from "../../network/protocol.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   acknowledgeSessionTurn,
@@ -36,11 +36,11 @@ import { json, Router } from "../router.ts";
 import { isSafeId } from "./validate_ids.ts";
 import { withErrorHandling } from "./with_error_handling.ts";
 
-const NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
-  "once",
-  "host-port",
-  "host",
-]);
+// 送られてきた値がスコープの綴りかどうかだけを見る。その確認で本当に選べる
+// 粒度かどうかは broker が pending エントリに載せた集合で決めるので、判定は
+// broker に残す。綴りの一覧はプロトコルから取る。ここに写しを置くと、粒度を
+// 足したときにカードには出るのに押すと 400 になる。
+const NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set(APPROVAL_SCOPES);
 const HOSTEXEC_SCOPES: ReadonlySet<HostExecPromptScope> = new Set([
   "once",
   "capability",

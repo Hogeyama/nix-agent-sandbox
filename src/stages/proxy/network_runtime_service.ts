@@ -7,13 +7,15 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { CredentialRule, MaskValueConfig } from "../../config/types.ts";
+import type { SecretConfig } from "../../config/types.ts";
 import { resolveAsset } from "../../lib/asset.ts";
-import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
-import type { ResolvedCredential } from "../../network/protocol.ts";
+import {
+  type ResolvedDocument,
+  withoutInjectLiterals,
+} from "../../network/authz/resolve.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import { resolveSecretRegistry } from "../../network/secrets.ts";
 import { FsService } from "../../services/fs.ts";
-import { ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // NetworkRuntimeService tag
@@ -33,21 +35,31 @@ export class NetworkRuntimeService extends Context.Tag(
     readonly copyAddonScript: (
       paths: NetworkRuntimePaths,
     ) => Effect.Effect<void>;
-    readonly writeReviewRules: (
+    readonly writeAuthzDocument: (
       paths: NetworkRuntimePaths,
       sessionId: string,
-      rules: import("../../config/types.ts").ReviewRule[],
+      document: ResolvedDocument,
+    ) => Effect.Effect<void>;
+    /** セッション終了時に解決済みドキュメントを消す。無ければ何もしない。 */
+    readonly removeAuthzDocument: (
+      paths: NetworkRuntimePaths,
+      sessionId: string,
     ) => Effect.Effect<void>;
     readonly computeAddonHash: () => Effect.Effect<string>;
-    readonly resolveCredentials: (
-      credentials: CredentialRule[],
-    ) => Effect.Effect<ResolvedCredential[]>;
-    readonly resolveMaskValues: (
-      values: MaskValueConfig[],
+    readonly resolveSecrets: (
+      secrets: Readonly<Record<string, SecretConfig>>,
       env: Record<string, string | undefined>,
-    ) => Effect.Effect<string[]>;
+    ) => Effect.Effect<Record<string, string[]>>;
   }
 >() {}
+
+/** セッションの解決済みドキュメントの置き場所。書く側と消す側で共有する。 */
+function authzDocumentPath(
+  paths: NetworkRuntimePaths,
+  sessionId: string,
+): string {
+  return `${paths.authzDir}/${sessionId}.json`;
+}
 
 // ---------------------------------------------------------------------------
 // Live implementation
@@ -56,12 +68,11 @@ export class NetworkRuntimeService extends Context.Tag(
 export const NetworkRuntimeServiceLive: Layer.Layer<
   NetworkRuntimeService,
   never,
-  FsService | ProcessService
+  FsService
 > = Layer.effect(
   NetworkRuntimeService,
   Effect.gen(function* () {
     const fs = yield* FsService;
-    const proc = yield* ProcessService;
 
     return NetworkRuntimeService.of({
       ensureRuntimeDirs: (paths) =>
@@ -71,7 +82,7 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           yield* fs.mkdir(paths.pendingDir, { recursive: true });
           yield* fs.mkdir(paths.brokersDir, { recursive: true });
           yield* fs.mkdir(paths.caCertDir, { recursive: true });
-          yield* fs.mkdir(paths.reviewRulesDir, { recursive: true });
+          yield* fs.mkdir(paths.authzDir, { recursive: true });
         }),
 
       gcStaleRuntime: (_paths) => Effect.void,
@@ -107,50 +118,31 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           return Buffer.from(new Uint8Array(digest)).toString("hex");
         }),
 
-      writeReviewRules: (paths, sessionId, rules) =>
+      writeAuthzDocument: (paths, sessionId, document) =>
         Effect.gen(function* () {
-          const rulesPath = `${paths.reviewRulesDir}/${sessionId}.json`;
-          yield* fs.writeFile(rulesPath, JSON.stringify(rules), {
-            mode: 0o644,
-          });
+          // 注入の地の文はファイルに載せない。addon は inject の形を検証する
+          // だけで中身を読まず、実際に注入されるヘッダーは broker が組み立てる。
+          yield* fs.writeFile(
+            authzDocumentPath(paths, sessionId),
+            JSON.stringify(withoutInjectLiterals(document)),
+            // このファイルはセッションの認可規則そのものである。ホストの他の
+            // 利用者に読ませる理由はないので、他のセッション固有のランタイム
+            // ファイルと同じ 0600 で置く。proxy コンテナは root で走るので
+            // 読める。
+            { mode: 0o600 },
+          );
         }),
 
-      resolveCredentials: (credentials) =>
-        Effect.gen(function* () {
-          const resolved: ResolvedCredential[] = [];
-          for (const [i, cred] of credentials.entries()) {
-            let value: string;
-            // Null values are caught during config validation (validateCredentials);
-            // by the time we reach here the val field is a valid string.
-            if ("val" in cred.value) {
-              value = cred.value.val;
-            } else {
-              const raw = yield* proc.exec(["sh", "-c", cred.value.valCmd]);
-              // Take the first line only: trim() removes leading/trailing
-              // whitespace (including newlines), then we take the first element
-              // after splitting on newlines to discard any extra output lines.
-              const output = raw.trim().split(/\r?\n/)[0];
-              if (!output) {
-                throw new Error(
-                  `network.credentials[${i}].valCmd returned empty output`,
-                );
-              }
-              value = output;
-            }
-            resolved.push({
-              host: cred.host,
-              pathPrefix: cred.pathPrefix,
-              method: cred.method,
-              header: cred.header.trim(),
-              value,
-            });
-          }
-          return resolved;
-        }),
+      removeAuthzDocument: (paths, sessionId) =>
+        // セッションが終わればこの規則は誰の役にも立たない。残しておくと、
+        // 次に同じ runtime dir を見た人が生きている設定と見分けられない。
+        fs
+          .rm(authzDocumentPath(paths, sessionId), { force: true })
+          .pipe(Effect.orDie),
 
-      resolveMaskValues: (values, env) =>
+      resolveSecrets: (secrets, env) =>
         Effect.tryPromise({
-          try: () => resolveMaskSecrets(values, env),
+          try: () => resolveSecretRegistry(secrets, env),
           catch: (e) => (e instanceof Error ? e : new Error(String(e))),
         }).pipe(Effect.orDie),
     });
@@ -169,19 +161,20 @@ export interface NetworkRuntimeServiceFakeConfig {
   readonly copyAddonScript?: (
     paths: NetworkRuntimePaths,
   ) => Effect.Effect<void>;
-  readonly writeReviewRules?: (
+  readonly writeAuthzDocument?: (
     paths: NetworkRuntimePaths,
     sessionId: string,
-    rules: import("../../config/types.ts").ReviewRule[],
+    document: ResolvedDocument,
+  ) => Effect.Effect<void>;
+  readonly removeAuthzDocument?: (
+    paths: NetworkRuntimePaths,
+    sessionId: string,
   ) => Effect.Effect<void>;
   readonly computeAddonHash?: () => Effect.Effect<string>;
-  readonly resolveCredentials?: (
-    credentials: CredentialRule[],
-  ) => Effect.Effect<ResolvedCredential[]>;
-  readonly resolveMaskValues?: (
-    values: MaskValueConfig[],
+  readonly resolveSecrets?: (
+    secrets: Readonly<Record<string, SecretConfig>>,
     env: Record<string, string | undefined>,
-  ) => Effect.Effect<string[]>;
+  ) => Effect.Effect<Record<string, string[]>>;
 }
 
 export function makeNetworkRuntimeServiceFake(
@@ -193,13 +186,11 @@ export function makeNetworkRuntimeServiceFake(
       ensureRuntimeDirs: overrides.ensureRuntimeDirs ?? (() => Effect.void),
       gcStaleRuntime: overrides.gcStaleRuntime ?? (() => Effect.void),
       copyAddonScript: overrides.copyAddonScript ?? (() => Effect.void),
-      writeReviewRules: overrides.writeReviewRules ?? (() => Effect.void),
+      writeAuthzDocument: overrides.writeAuthzDocument ?? (() => Effect.void),
+      removeAuthzDocument: overrides.removeAuthzDocument ?? (() => Effect.void),
       computeAddonHash:
         overrides.computeAddonHash ?? (() => Effect.succeed("fakehash")),
-      resolveCredentials:
-        overrides.resolveCredentials ?? (() => Effect.succeed([])),
-      resolveMaskValues:
-        overrides.resolveMaskValues ?? (() => Effect.succeed([])),
+      resolveSecrets: overrides.resolveSecrets ?? (() => Effect.succeed({})),
     }),
   );
 }

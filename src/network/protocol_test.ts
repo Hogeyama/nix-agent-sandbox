@@ -1,13 +1,343 @@
 import { expect, test } from "bun:test";
+import { documentWithScopes } from "./authz/testing.ts";
 import {
   decodeProxyAuthorization,
   denyReasonForTarget,
+  isApprovableFinding,
   matchesHostPattern,
   matchesPathPrefix,
   normalizeHost,
   normalizeTarget,
   parseAllowlistEntry,
+  type ViolationFinding,
+  validateAuthorizeRequest,
+  validateRequestPolicyOutcome,
 } from "./protocol.ts";
+
+const document = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "deny",
+    rules: {
+      bodyless: {
+        match: { methods: ["GET"], paths: ["/health"] },
+        onMatch: "allow",
+        expect: [{ kind: "emptyBody" }],
+      },
+      json: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/messages"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+      },
+    },
+  },
+});
+
+const validOutcome = {
+  version: 1,
+  type: "request_policy_outcome",
+  requestId: "req-json",
+  sessionId: "sess_test",
+  ruleId: "policy.json",
+  result: "pass",
+  reason: "recognized-json",
+};
+
+const validAuthorize = {
+  version: 1,
+  type: "authorize",
+  requestId: "req-authorize",
+  sessionId: "sess_test",
+  target: { host: "api.example.com", port: 443 },
+  method: "POST",
+  transport: "http",
+  requestKind: "forward",
+  observedAt: "2026-08-17T00:00:00.000Z",
+  bodyTruth: {
+    "policy.json": "true",
+  },
+  reviewContext: {
+    path: "/v1/messages",
+    contentType: "application/json",
+    bodySize: 2,
+  },
+};
+
+test("authorize validation accepts a bounded rule truth table", () => {
+  expect(
+    validateAuthorizeRequest(validAuthorize, "sess_test", document),
+  ).toBeNull();
+});
+
+for (const transport of [undefined, "ws", "WebSocket", true, null]) {
+  test(`authorize validation rejects invalid transport ${String(transport)}`, () => {
+    const message = { ...validAuthorize } as Record<string, unknown>;
+    if (transport === undefined) delete message.transport;
+    else message.transport = transport;
+
+    expect(
+      validateAuthorizeRequest(message, "sess_test", document),
+    ).not.toBeNull();
+  });
+}
+
+const invalidAuthorizeTruth = [
+  ["a missing truth table", { bodyTruth: undefined }],
+  ["a truth table array", { bodyTruth: [] }],
+  ["an unknown truth value", { bodyTruth: { "policy.json": "yes" } }],
+  ["an unknown rule ID", { bodyTruth: { "policy.unknown": "true" } }],
+  [
+    "more entries than the document has rules",
+    {
+      bodyTruth: {
+        "policy.json": "true",
+        "policy.bodyless": "true",
+        "policy.extra": "true",
+      },
+    },
+  ],
+] as const;
+
+for (const [name, overrides] of invalidAuthorizeTruth) {
+  test(`authorize validation rejects ${name}`, () => {
+    expect(
+      validateAuthorizeRequest(
+        { ...validAuthorize, ...overrides },
+        "sess_test",
+        document,
+      ),
+    ).not.toBeNull();
+  });
+}
+
+test("authorize validation rejects the removed bodyKind review field", () => {
+  expect(
+    validateAuthorizeRequest(
+      {
+        ...validAuthorize,
+        reviewContext: {
+          ...validAuthorize.reviewContext,
+          bodyKind: "json",
+        },
+      },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+const acceptedOutcomes = [
+  [
+    "a rule that passed its acceptance conditions",
+    "policy.json",
+    "pass",
+    "recognized-json",
+  ],
+  [
+    "a body rewritten by secret masking",
+    "policy.json",
+    "rewrite",
+    "masked-json",
+  ],
+  ["an empty body a rule required", "policy.bodyless", "pass", "empty-body"],
+  [
+    "a rule with nothing to inspect",
+    "policy.bodyless",
+    "pass",
+    "no-inspection",
+  ],
+  [
+    "violations the rule chose to record",
+    "policy.json",
+    "pass",
+    "violations-allowed",
+  ],
+  [
+    "a scope fallback that inspected nothing",
+    "policy.$fallback",
+    "pass",
+    "no-inspection",
+  ],
+  ["a body that could not be read", "policy.json", "block", "body-unavailable"],
+  [
+    "a body present where none was allowed",
+    "policy.bodyless",
+    "block",
+    "unexpected-body",
+  ],
+  ["a body that is not JSON", "policy.json", "block", "invalid-json"],
+  ["a shape the rule did not allow", "policy.json", "block", "schema-mismatch"],
+  [
+    "a forbidden secret in the request",
+    "policy.json",
+    "block",
+    "forbidden-secret",
+  ],
+  [
+    "an inspection that ran out of budget",
+    "policy.json",
+    "block",
+    "resource-limit",
+  ],
+  [
+    "masking that would collide two keys",
+    "policy.json",
+    "block",
+    "key-collision",
+  ],
+  [
+    "a masked body that would not serialize",
+    "policy.json",
+    "block",
+    "serialization-failed",
+  ],
+  ["an inspection that fell over", "policy.json", "block", "processing-failed"],
+  [
+    "a body that was masked while carrying an allowed violation",
+    "policy.json",
+    "rewrite",
+    "violations-allowed",
+  ],
+] as const;
+
+for (const [name, ruleId, result, reason] of acceptedOutcomes) {
+  test(`request policy outcome validation accepts ${name}`, () => {
+    expect(
+      validateRequestPolicyOutcome(
+        { ...validOutcome, ruleId, result, reason },
+        "sess_test",
+        document,
+      ),
+    ).toBeNull();
+  });
+}
+
+const invalidPolicyOutcomes = [
+  ["session mismatch", { sessionId: "sess_other" }],
+  ["malformed rule ID", { ruleId: "Policy JSON" }],
+  ["unknown rule ID", { ruleId: "policy.unknown" }],
+  ["a rule ID from another scope", { ruleId: "other.json" }],
+  ["ID-less rule cannot be addressed", { ruleId: "" }],
+  ["unknown result", { result: "allow" }],
+  ["unknown reason", { reason: "raw-error-detail" }],
+  [
+    "rewrite with a pass reason",
+    { result: "rewrite", reason: "recognized-json" },
+  ],
+  ["pass with a rewrite reason", { result: "pass", reason: "masked-json" }],
+  ["block with success reason", { result: "block", reason: "recognized-json" }],
+  ["pass with a block reason", { result: "pass", reason: "invalid-json" }],
+  ["unknown field", { target: "sensitive.example" }],
+] as const;
+
+for (const [name, overrides] of invalidPolicyOutcomes) {
+  test(`request policy outcome validation rejects ${name}`, () => {
+    expect(
+      validateRequestPolicyOutcome(
+        { ...validOutcome, ...overrides },
+        "sess_test",
+        document,
+      ),
+    ).not.toBeNull();
+  });
+}
+
+const validFinding: ViolationFinding = {
+  expect: 0,
+  expectKind: "unionShape",
+  at: "/**/content/*",
+  kind: "schema-mismatch",
+  pointer: "/messages/0/content/1",
+  value: "future_block",
+  excerpt: '{"type":"future_block"}',
+  count: 3,
+};
+
+test("request policy outcome validation accepts findings", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      { ...validOutcome, findings: [validFinding] },
+      "sess_test",
+      document,
+    ),
+  ).toBeNull();
+});
+
+// 所見の中身はボディ由来である。件数も 1 件あたりの長さも攻撃者が選べるので、
+// 承認 UI と監査ログとメモリがボディの大きさに引きずられないよう、broker は
+// addon の上限を信じずに自分で閉じる。
+const invalidFindings = [
+  ["a finding that is not an object", "not-an-object"],
+  ["an unknown field", { ...validFinding, secret: "leak" }],
+  ["a missing field", { ...validFinding, count: undefined }],
+  ["an unknown kind", { ...validFinding, kind: "something-else" }],
+  ["an unknown condition kind", { ...validFinding, expectKind: "graphql" }],
+  ["a condition position below -1", { ...validFinding, expect: -2 }],
+  ["a fractional condition position", { ...validFinding, expect: 0.5 }],
+  ["a count below one", { ...validFinding, count: 0 }],
+  ["a non-string pointer", { ...validFinding, pointer: null }],
+  ["an over-long value", { ...validFinding, value: "x".repeat(4096) }],
+  ["an over-long pointer", { ...validFinding, pointer: "/".repeat(4096) }],
+  ["an over-long excerpt", { ...validFinding, excerpt: "x".repeat(8192) }],
+  ["an over-long selector", { ...validFinding, at: "/x".repeat(4096) }],
+] as const;
+
+for (const [name, finding] of invalidFindings) {
+  test(`request policy outcome validation rejects ${name}`, () => {
+    expect(
+      validateRequestPolicyOutcome(
+        { ...validOutcome, findings: [finding] },
+        "sess_test",
+        document,
+      ),
+    ).not.toBeNull();
+  });
+}
+
+test("request policy outcome validation rejects too many findings", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      { ...validOutcome, findings: Array(2000).fill(validFinding) },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+test("request policy outcome validation rejects findings that are not a list", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      { ...validOutcome, findings: { "0": validFinding } },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+test("an incomplete inspection is not something an approval can cover", () => {
+  // 承認の同一性は (ルール ID, 受理条件の位置, 違反した値) なので、位置か値を
+  // 欠く記録は押せる対象にならない。
+  expect(isApprovableFinding({ ...validFinding, count: 1 })).toBe(true);
+  expect(
+    isApprovableFinding({
+      ...validFinding,
+      expect: -1,
+      expectKind: "",
+      kind: "inspection-incomplete",
+      value: null,
+    }),
+  ).toBe(false);
+  expect(
+    isApprovableFinding({
+      ...validFinding,
+      kind: "findings-truncated",
+      value: null,
+    }),
+  ).toBe(false);
+});
 
 test("decodeProxyAuthorization: decodes Basic credentials", () => {
   const header = `Basic ${btoa("sess_abc:tok_xyz")}`;

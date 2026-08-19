@@ -4,10 +4,28 @@ amends "modulepath:/global.pkl"
 // replace the line above with:
 //   amends "Schema.pkl"
 
-// Mask secrets from the agent (any file-read path shows same-length "*"):
+// Give a secret a name, then say where it may be hidden or sent:
 //   ["default"] {
-//     mask = new MaskConfig {
-//       values { new { source = "dotenv:.env#DB_PASSWORD" } }
+//     secrets {
+//       ["db-password"] { from = "dotenv:.env#DB_PASSWORD" }
+//     }
+//     // Hide it from the agent (any file-read path shows same-length "*"):
+//     mask = new MaskConfig {}
+//     // Reach one host, and send the secret only there:
+//     network {
+//       scopes {
+//         ["api"] {
+//           targets { "api.example.com:443" }
+//           fallback = "allow"
+//           secrets { ["db-password"] = "inject" }
+//           inject {
+//             new Inject {
+//               name = "Authorization"
+//               value = #"template:Bearer ${db-password}"#
+//             }
+//           }
+//         }
+//       }
 //     }
 //   }
 

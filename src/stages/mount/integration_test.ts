@@ -41,6 +41,7 @@ const baseProfile: Profile = {
   hook: DEFAULT_HOOK_CONFIG,
   extraMounts: [],
   env: [],
+  secrets: {},
 };
 
 const baseConfig: Config = {

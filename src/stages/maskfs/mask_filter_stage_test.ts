@@ -35,11 +35,11 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       aws: { mountConfig: false },
       gpg: { forwardAgent: false },
       network: {
-        reviewRules: [],
-        credentials: [],
+        scopes: {},
+        fallback: "deny",
+        defaults: {},
         proxy: { forwardPorts: [] },
         pendingTimeoutSeconds: 300,
-        pendingDefaultScope: "host-port",
         pendingNotify: "off",
       },
       dbus: {
@@ -55,6 +55,7 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       display: { sandbox: "none", size: "1920x1080" },
       extraMounts: [],
       env: [],
+      secrets: {},
       hook: { notify: "off" },
     },
     profileName: "test",
@@ -93,8 +94,8 @@ describe("createMaskFilterStage", () => {
 
   test("mask.filter=false → container passthrough", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -116,8 +117,8 @@ describe("createMaskFilterStage", () => {
 
   test("mask.filter=true → merges mounts and env into container", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -158,14 +159,16 @@ describe("createMaskFilterStage", () => {
     );
   });
 
-  test("mask.filter=true with empty values → container passthrough", async () => {
+  test("mask.filter=true with no secret to apply → container passthrough", async () => {
     const input = makeStageInput();
+    // レジストリに秘密はあるが、apply がどれも選ばないので伏せる対象が無い。
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
       filter: true,
+      apply: [],
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
@@ -183,8 +186,8 @@ describe("createMaskFilterStage", () => {
 
   test("socket dir is a sibling of the frame dir, not inside it", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -224,8 +227,8 @@ describe("createMaskFilterStage", () => {
         env: new Map([["XDG_RUNTIME_DIR", `/run/${"d".repeat(120)}`]]),
       },
     });
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -256,8 +259,8 @@ describe("createMaskFilterStage", () => {
 
   test("binary not found → fails", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,

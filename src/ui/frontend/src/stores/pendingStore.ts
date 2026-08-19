@@ -11,8 +11,10 @@ import { pendingRequestKey } from "./pendingRequestKey";
 import { shortenSessionId } from "./sessionId";
 import type {
   HostExecPendingItemLike,
+  InjectHeaderPreviewLike,
   NetworkPendingItemLike,
   ReviewContextLike,
+  ViolationFindingLike,
 } from "./types";
 
 export type NetworkPendingRow = {
@@ -32,7 +34,42 @@ export type NetworkPendingRow = {
   summary: string;
   createdAtMs: number | null; // null when ISO parse fails
   reviewContext: ReviewContextLike | null;
+  // Rule the confirmation came from, or null when the payload omits it.
+  // Presentation only; the backend decides what an approval covers.
+  ruleId: string | null;
+  // Grains this entry may be approved at, narrowest first. Never empty:
+  // an entry that advertises nothing usable is treated as `once` only.
+  approvalScopes: string[];
+  // Headers approving this request would add, by header name and by the
+  // names of the secrets the value is built from. Never a value: the
+  // wire payload does not carry one and this row must not invent one.
+  injectHeaders: { name: string; secrets: string[] }[];
+  // Violations approving this row would remember. Empty for a confirmation
+  // a rule raised on its own: those cover a request, not a set of values.
+  violations: NetworkViolationRow[];
 };
+
+export type NetworkViolationRow = {
+  at: string;
+  kind: string;
+  pointer: string;
+  value: string | null;
+  excerpt: string | null;
+  count: number;
+};
+
+// Grains the backend understands (`ApprovalScope` in
+// `src/network/protocol.ts`). Anything else in a payload is dropped rather
+// than rendered, so a chip can never offer a grain no one can act on.
+const KNOWN_APPROVAL_SCOPES = [
+  "once",
+  "rule",
+  "host-port",
+  "host",
+  "violation",
+];
+
+const NARROWEST_APPROVAL_SCOPE = "once";
 
 export type HostExecPendingRow = {
   // See `NetworkPendingRow.key`.
@@ -60,7 +97,53 @@ export function normalizeNetworkPending(
     summary: `${it.target.host}:${it.target.port}`,
     createdAtMs: parseIsoToMs(it.createdAt),
     reviewContext: it.reviewContext ?? null,
+    ruleId: it.ruleId ?? null,
+    approvalScopes: approvalScopesOf(it.approvalScopes),
+    injectHeaders: injectHeadersOf(it.injectHeaders),
+    violations: violationsOf(it.violations),
   }));
+}
+
+/**
+ * Normalize the violations a row may carry.
+ *
+ * Every field is optional on the wire, and a violation with nothing in it
+ * still says "one node broke this condition" — the count alone is
+ * meaningful — so nothing here drops a record for being sparse.
+ */
+function violationsOf(
+  violations: ViolationFindingLike[] | null | undefined,
+): NetworkViolationRow[] {
+  return (violations ?? []).map((violation) => ({
+    at: violation.at ?? "",
+    kind: violation.kind ?? "",
+    pointer: violation.pointer ?? "",
+    value: violation.value ?? null,
+    excerpt: violation.excerpt ?? null,
+    count: violation.count ?? 1,
+  }));
+}
+
+function injectHeadersOf(
+  headers: InjectHeaderPreviewLike[] | null | undefined,
+): { name: string; secrets: string[] }[] {
+  return (headers ?? []).map((header) => ({
+    name: header.name,
+    secrets: header.secrets ?? [],
+  }));
+}
+
+/**
+ * Keep only grains the backend would accept, and never end up with none.
+ *
+ * A payload that says nothing about grains is not an invitation to guess a
+ * wide one: `once` applies to the request on screen and to nothing else.
+ */
+function approvalScopesOf(scopes: string[] | null | undefined): string[] {
+  const known = (scopes ?? []).filter((scope) =>
+    KNOWN_APPROVAL_SCOPES.includes(scope),
+  );
+  return known.length > 0 ? known : [NARROWEST_APPROVAL_SCOPE];
 }
 
 export function normalizeHostExecPending(

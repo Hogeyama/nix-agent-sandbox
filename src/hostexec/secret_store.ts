@@ -73,6 +73,7 @@ export const SECRET_SOURCE_PREFIXES = [
   "dotenv:",
   "keyring:",
   "lines:",
+  "cmd:",
 ] as const;
 
 export async function resolveSecret(
@@ -119,7 +120,41 @@ export async function resolveSecret(
     const account = target.slice(slashIndex + 1);
     return await keyringResolver(service, account);
   }
+  if (source.startsWith("cmd:")) {
+    return await runSecretCommand(source.slice(4));
+  }
   throw new Error(`Unsupported secret source: ${source}`);
+}
+
+/**
+ * Run a command and take its first output line as the secret.
+ *
+ * A credential that only exists behind a helper (`gh auth token`, `aws ecr
+ * get-login-password`) has to be able to enter the registry, otherwise it
+ * cannot be given a name — and a value with no name is a value that masking
+ * and `forbid` cannot see.
+ *
+ * Only the first line is taken, so a helper that appends a warning or a
+ * trailing newline still yields the credential rather than the credential
+ * plus noise. Neither the command nor its output appears in the error: the
+ * command line is written by the config author and the output is the secret.
+ */
+async function runSecretCommand(command: string): Promise<string | null> {
+  if (command.trim() === "") {
+    throw new Error("cmd: secret source must name a command");
+  }
+  const child = Bun.spawn(["sh", "-c", command], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(child.stdout).text();
+  await new Response(child.stderr).text();
+  const status = await child.exited;
+  if (status !== 0) {
+    throw new Error(`cmd: secret source exited with status ${status}`);
+  }
+  const first = stdout.trim().split(/\r?\n/)[0];
+  return first === undefined || first === "" ? null : first;
 }
 
 const SENSITIVE_PREFIXES = [

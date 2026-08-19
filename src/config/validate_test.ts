@@ -9,7 +9,7 @@
  */
 
 import { expect, test } from "bun:test";
-import type { Config, Profile } from "./types.ts";
+import type { Config, NetworkConfig, Profile } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_CONFIG,
@@ -45,6 +45,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     display: DEFAULT_DISPLAY_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     hook: DEFAULT_HOOK_CONFIG,
     ...overrides,
   };
@@ -105,95 +106,291 @@ test("validate: no default is ok", () => {
 });
 
 // ---------------------------------------------------------------------------
-// reviewRules ホストパターン検証
+// ネットワーク認可
 // ---------------------------------------------------------------------------
 
-test("validate: reviewRules accepts valid host entries", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            reviewRules: [
-              { host: "github.com", action: "allow" },
-              { host: "*.anthropic.com", action: "review" },
-              { host: "example.com:443", action: "deny" },
-            ],
-          },
-        }),
-      },
-    }),
-  );
-  expect(config.profiles.test.network.reviewRules).toHaveLength(3);
+function withScopes(
+  scopes: NetworkConfig["scopes"],
+  overrides: Partial<Profile> = {},
+): Config {
+  return makeConfig({
+    profiles: {
+      test: makeProfile({
+        network: { ...DEFAULT_NETWORK_CONFIG, scopes },
+        ...overrides,
+      }),
+    },
+  });
+}
+
+test("validate: accepts scopes whose targets nest", () => {
+  const config = withScopes({
+    exact: { targets: ["api.example.com"], fallback: "allow" },
+    wide: { targets: ["*.example.com"], fallback: "review" },
+  });
+  expect(validateConfig(config)).toBe(config);
 });
 
-test("validate: reviewRules rejects wildcard in middle of host", () => {
+test("validate: rejects two scopes that claim the same host", () => {
   expect(() =>
     validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              reviewRules: [{ host: "git*hub.com", action: "allow" }],
+      withScopes({
+        first: { targets: ["api.example.com"], fallback: "allow" },
+        second: { targets: ["api.example.com"], fallback: "deny" },
+      }),
+    ),
+  ).toThrow(/ターゲット集合が一致します/);
+});
+
+test("validate: rejects a wildcard in the middle of a target", () => {
+  expect(() =>
+    validateConfig(withScopes({ bad: { targets: ["git*hub.com"] } })),
+  ).toThrow(/targets が不正です/);
+});
+
+test("validate: rejects a scope with no targets", () => {
+  expect(() => validateConfig(withScopes({ bad: { targets: [] } }))).toThrow(
+    /targets が空です/,
+  );
+});
+
+test("validate: rejects two rules whose accepted requests overlap unresolved", () => {
+  expect(() =>
+    validateConfig(
+      withScopes({
+        api: {
+          targets: ["api.example.com"],
+          rules: {
+            repos: {
+              match: { methods: ["GET", "POST"], paths: ["/repos/*"] },
+              onMatch: "allow",
             },
-          }),
+            pulls: {
+              match: { methods: ["GET"], paths: ["/*/pulls"] },
+              onMatch: "review",
+            },
+          },
         },
       }),
     ),
-  ).toThrow("contains wildcard");
+  ).toThrow(/受理集合が交差します/);
 });
 
-test("validate: reviewRules rejects trailing wildcard in host", () => {
+test("validate: accepts an overlap that overrides resolves", () => {
+  const config = withScopes({
+    api: {
+      targets: ["api.example.com"],
+      rules: {
+        repos: {
+          match: { methods: ["GET", "POST"], paths: ["/repos/*"] },
+          onMatch: "allow",
+          overrides: ["pulls"],
+        },
+        pulls: {
+          match: { methods: ["GET"], paths: ["/*/pulls"] },
+          onMatch: "review",
+        },
+      },
+    },
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: rejects a rule key outside the allowed syntax", () => {
   expect(() =>
     validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              reviewRules: [{ host: "github.*", action: "allow" }],
-            },
-          }),
+      withScopes({
+        api: {
+          targets: ["api.example.com"],
+          rules: {
+            "Bad Key": { match: { paths: ["/**"] }, onMatch: "allow" },
+          },
         },
       }),
     ),
-  ).toThrow("contains wildcard");
+  ).toThrow(/ルールのキー/);
 });
 
-test("validate: reviewRules accepts rule with no host (catch-all)", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            reviewRules: [{ action: "review" }],
+test("validate: rejects a body-shaped expect on a rule that never parses JSON", () => {
+  expect(() =>
+    validateConfig(
+      withScopes({
+        api: {
+          targets: ["api.example.com"],
+          rules: {
+            all: {
+              match: { paths: ["/**"] },
+              onMatch: "allow",
+              expect: [
+                {
+                  kind: "unionShape",
+                  at: "/content/*",
+                  discriminator: "type",
+                  allowed: ["text"],
+                },
+              ],
+            },
           },
-        }),
-      },
-    }),
-  );
-  expect(config.profiles.test.network.reviewRules).toHaveLength(1);
+        },
+      }),
+    ),
+  ).toThrow(/format = "json" を要します/);
 });
 
-test("validate: reviewRules accepts host:port entries", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            reviewRules: [{ host: "example.com:443", action: "allow" }],
+test("validate: rejects an inject that names no registered secret", () => {
+  expect(() =>
+    validateConfig(
+      withScopes({
+        api: {
+          targets: ["api.example.com"],
+          fallback: "allow",
+          secrets: { token: "inject" },
+          inject: [{ name: "Authorization", value: "secret:token" }],
+        },
+      }),
+    ),
+  ).toThrow(/secrets レジストリに存在しない名前/);
+});
+
+test("validate: rejects an inject whose secret is not dispositioned for injection", () => {
+  expect(() =>
+    validateConfig(
+      withScopes(
+        {
+          api: {
+            targets: ["api.example.com"],
+            fallback: "allow",
+            inject: [{ name: "Authorization", value: "secret:token" }],
           },
-        }),
+        },
+        { secrets: { token: { from: "env:TOKEN" } } },
+      ),
+    ),
+  ).toThrow(/"mask" です/);
+});
+
+test("validate: accepts an inject the scope dispositions for injection", () => {
+  const config = withScopes(
+    {
+      api: {
+        targets: ["api.example.com"],
+        fallback: "allow",
+        secrets: { token: "inject" },
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: `template:` の参照構文であってテンプレートリテラルではない
+        inject: [{ name: "Authorization", value: "template:Bearer ${token}" }],
       },
-    }),
+    },
+    { secrets: { token: { from: "env:TOKEN" } } },
   );
-  expect(config.profiles.test.network.reviewRules[0].host).toEqual(
-    "example.com:443",
-  );
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: rejects injecting a header that frames the connection", () => {
+  expect(() =>
+    validateConfig(
+      withScopes({
+        api: {
+          targets: ["api.example.com"],
+          fallback: "allow",
+          inject: [{ name: "Content-Length", value: "literal:0" }],
+        },
+      }),
+    ),
+  ).toThrow(/注入を禁じられたヘッダー/);
+});
+
+test("validate: rejects mask.proxy = false while a scope still masks", () => {
+  expect(() =>
+    validateConfig(
+      withScopes(
+        { api: { targets: ["api.example.com"], fallback: "allow" } },
+        {
+          mask: {
+            writePolicy: "readonly",
+            maskfs: false,
+            proxy: false,
+            filter: false,
+          },
+        },
+      ),
+    ),
+  ).toThrow(/mask\.proxy = false を選べません/);
+});
+
+test("validate: accepts mask.proxy = false once every secret is ignored", () => {
+  const config = makeConfig({
+    profiles: {
+      test: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          defaults: { secrets: { "*": "ignore" } },
+          scopes: { api: { targets: ["api.example.com"], fallback: "allow" } },
+        },
+        mask: {
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: false,
+          filter: false,
+        },
+      }),
+    },
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+test('validate: accepts onViolation = "review"', () => {
+  // 違反ごとの承認が動くようになったので、`review` は書ける。承認の単位は
+  // (ルール ID, 受理条件の位置, 違反した値) であり、broker が持つ。
+  const config = withScopes({
+    api: {
+      targets: ["api.example.com"],
+      rules: {
+        messages: {
+          match: { paths: ["/v1/messages"], body: { format: "json" } },
+          onMatch: "allow",
+          expect: [
+            { kind: "jsonRoot", rootType: "object", onViolation: "review" },
+          ],
+        },
+      },
+    },
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: rejects a limit above its ceiling", () => {
+  expect(() =>
+    validateConfig(
+      withScopes({
+        api: { targets: ["api.example.com"], limits: { maxNodes: 200_001 } },
+      }),
+    ),
+  ).toThrow(/天井/);
+});
+
+test("validate: rejects a secret source with no recognised prefix", () => {
+  expect(() =>
+    validateConfig(withScopes({}, { secrets: { token: { from: "hunter2" } } })),
+  ).toThrow(/must start with one of/);
+});
+
+test("validate: rejects mask.apply naming a secret that is not registered", () => {
+  expect(() =>
+    validateConfig(
+      withScopes(
+        {},
+        {
+          mask: {
+            writePolicy: "readonly",
+            maskfs: true,
+            proxy: true,
+            filter: false,
+            apply: ["absent"],
+          },
+        },
+      ),
+    ),
+  ).toThrow(/is not a name in secrets/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1077,10 +1274,10 @@ test("validate: multiple valid profiles all pass", () => {
 });
 
 // ---------------------------------------------------------------------------
-// credentials の検証
+// 注入するヘッダーの検証
 // ---------------------------------------------------------------------------
 
-test("validateConfig: credential with forbidden header rejects", () => {
+test("validateConfig: every connection-framing header is refused for injection", () => {
   const forbidden = [
     "Host",
     "Content-Length",
@@ -1094,72 +1291,63 @@ test("validateConfig: credential with forbidden header rejects", () => {
     "Upgrade",
   ];
   for (const header of forbidden) {
-    const profile = makeProfile({
-      network: {
-        ...DEFAULT_NETWORK_CONFIG,
-        credentials: [{ host: "example.com", header, value: { val: "x" } }],
-      },
-    });
     expect(() =>
-      validateConfig(makeConfig({ profiles: { test: profile } })),
-    ).toThrow(/forbidden.*header/i);
+      validateConfig(
+        withScopes({
+          api: {
+            targets: ["example.com"],
+            fallback: "allow",
+            inject: [{ name: header, value: "literal:x" }],
+          },
+        }),
+      ),
+    ).toThrow(/注入を禁じられたヘッダー/);
   }
 });
 
-test("validateConfig: credential with valid header passes", () => {
-  const profile = makeProfile({
-    network: {
-      ...DEFAULT_NETWORK_CONFIG,
-      credentials: [
-        {
-          host: "github.com",
-          header: "Authorization",
-          value: { val: "token abc" },
+test("validateConfig: a rule may inject its own header", () => {
+  const config = withScopes({
+    api: {
+      targets: ["github.com"],
+      rules: {
+        all: {
+          match: { paths: ["/**"] },
+          onMatch: "allow",
+          inject: [{ name: "Authorization", value: "literal:token abc" }],
         },
-      ],
+      },
     },
   });
-  expect(() =>
-    validateConfig(makeConfig({ profiles: { test: profile } })),
-  ).not.toThrow();
+  expect(() => validateConfig(config)).not.toThrow();
 });
 
-test("validateConfig: credential with invalid host pattern rejects", () => {
-  const profile = makeProfile({
-    network: {
-      ...DEFAULT_NETWORK_CONFIG,
-      credentials: [
-        { host: "foo.*.bar.com", header: "Authorization", value: { val: "x" } },
-      ],
-    },
-  });
+test("validateConfig: an inject value with no recognised prefix is refused", () => {
   expect(() =>
-    validateConfig(makeConfig({ profiles: { test: profile } })),
-  ).toThrow(/wildcard/i);
+    validateConfig(
+      withScopes({
+        api: {
+          targets: ["example.com"],
+          fallback: "allow",
+          inject: [{ name: "Authorization", value: "token abc" }],
+        },
+      }),
+    ),
+  ).toThrow(/literal: \/ secret: \/ template:/);
 });
 
-test("validateConfig: credential with empty header rejects", () => {
-  const profile = makeProfile({
-    network: {
-      ...DEFAULT_NETWORK_CONFIG,
-      credentials: [{ host: "example.com", header: "", value: { val: "x" } }],
-    },
-  });
-  expect(() =>
-    validateConfig(makeConfig({ profiles: { test: profile } })),
-  ).toThrow(/header.*empty/i);
-});
-
-test("validateConfig: credential with neither val nor valCmd rejects", () => {
-  const profile = makeProfile({
-    network: {
-      ...DEFAULT_NETWORK_CONFIG,
-      credentials: [
-        { host: "example.com", header: "Authorization", value: {} as any },
-      ],
-    },
-  });
-  expect(() =>
-    validateConfig(makeConfig({ profiles: { test: profile } })),
-  ).toThrow();
+test("validateConfig: the refusal never repeats the value it refused", () => {
+  try {
+    validateConfig(
+      withScopes({
+        api: {
+          targets: ["example.com"],
+          fallback: "allow",
+          inject: [{ name: "Authorization", value: "s3cret-token" }],
+        },
+      }),
+    );
+    throw new Error("expected a config error");
+  } catch (error) {
+    expect(String(error)).not.toContain("s3cret-token");
+  }
 });

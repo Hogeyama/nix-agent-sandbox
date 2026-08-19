@@ -245,3 +245,27 @@ test("resolveSecret: lines: reads a file and returns one string per non-empty li
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+// ---------------------------------------------------------------------------
+// resolveSecret: cmd:
+// ---------------------------------------------------------------------------
+
+test("resolveSecret: cmd: returns the first line of the command output", async () => {
+  const result = await resolveSecret("cmd:printf 'tok-1\\nnoise\\n'", {});
+
+  expect(result).toEqual("tok-1");
+});
+
+test("resolveSecret: cmd: reports a failing command instead of returning its output", async () => {
+  await expect(
+    resolveSecret("cmd:printf 'partial\\n'; exit 3", {}),
+  ).rejects.toThrow(/status 3/);
+});
+
+test("resolveSecret: cmd: treats no output as an unavailable secret", async () => {
+  expect(await resolveSecret("cmd:true", {})).toBeNull();
+});
+
+test("resolveSecret: cmd: rejects an empty command", async () => {
+  await expect(resolveSecret("cmd:   ", {})).rejects.toThrow(/name a command/);
+});

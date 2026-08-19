@@ -64,25 +64,23 @@ describe("maskText", () => {
 });
 
 describe("maskReviewContext", () => {
-  test("masks path and bodyPreview", () => {
+  test("masks the path", () => {
+    // パスはボディと違ってカードに丸ごと出るので、秘密がクエリに現れうる。
     const ctx = maskReviewContext(
       {
         path: "/upload?token=s3cret-value",
         contentType: "application/x-www-form-urlencoded",
-        bodyPreview: "data=s3cret-value",
         bodySize: 17,
       },
       ["s3cret-value"],
     );
     expect(ctx?.path).toEqual("/upload?token=****");
-    expect(ctx?.bodyPreview).toEqual("data=****");
   });
 
   test("returns ctx unchanged when no values", () => {
     const ctx = {
       path: "/p",
       contentType: null,
-      bodyPreview: "body",
       bodySize: 4,
     };
     expect(maskReviewContext(ctx, [])).toEqual(ctx);

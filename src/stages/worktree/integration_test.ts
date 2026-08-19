@@ -133,6 +133,7 @@ function createTestProfile(base: string): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
   };
 }
 

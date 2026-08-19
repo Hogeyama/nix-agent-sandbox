@@ -8,20 +8,17 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { ReviewRule } from "../../config/types.ts";
 import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../../log.ts";
+import type { ResolvedDocument } from "../../network/authz/resolve.ts";
 import { SessionBroker } from "../../network/broker.ts";
-import type {
-  ApprovalScope,
-  ResolvedCredential,
-} from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
   removePendingDir,
   removeSessionRegistry,
   writeSessionRegistry,
 } from "../../network/registry.ts";
+import type { SecretValues } from "../../network/secrets.ts";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,17 +30,16 @@ export interface SessionBrokerConfig {
   readonly socketPath: string;
   readonly profileName: string;
   readonly agent?: string;
-  readonly reviewRules: ReviewRule[];
+  readonly document: ResolvedDocument;
   readonly pendingTimeoutSeconds: number;
-  readonly pendingDefaultScope: ApprovalScope;
   readonly pendingNotify: ResolvedNotifyBackend;
   readonly uiEnabled?: boolean;
   readonly uiPort?: number;
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
   readonly tokenHash: string;
-  readonly resolvedCredentials?: ResolvedCredential[];
-  readonly maskValues?: string[];
+  readonly secretValues?: SecretValues;
+  readonly proxyMasking?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,16 +79,15 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
             const broker = new SessionBroker({
               paths: config.paths,
               sessionId: config.sessionId,
-              reviewRules: config.reviewRules,
+              document: config.document,
               pendingTimeoutSeconds: config.pendingTimeoutSeconds,
-              pendingDefaultScope: config.pendingDefaultScope,
               pendingNotify: config.pendingNotify,
               uiEnabled: config.uiEnabled,
               uiPort: config.uiPort,
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
-              resolvedCredentials: config.resolvedCredentials,
-              maskValues: config.maskValues,
+              secretValues: config.secretValues,
+              proxyMasking: config.proxyMasking,
             });
             await broker.start(config.socketPath);
             try {

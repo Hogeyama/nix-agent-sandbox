@@ -57,6 +57,7 @@ function makeProfile(
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
   };
 }
 

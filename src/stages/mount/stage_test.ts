@@ -74,6 +74,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     ...rest,
   };
 }
@@ -1228,7 +1229,6 @@ test("MountStage: mask with maskfs=false does not require maskedRoot (proxy-only
   const { input, mountProbes } = makeInput({
     profile: makeProfile({
       mask: {
-        values: [{ source: "lines:demo/secrets.txt" }],
         writePolicy: "readonly",
         maskfs: false,
         proxy: true,
@@ -1247,8 +1247,8 @@ test("MountStage: mask with maskfs=false does not require maskedRoot (proxy-only
 test("MountStage: mask with maskfs=true but maskedRoot unset throws ordering guard", () => {
   const { input, mountProbes } = makeInput({
     profile: makeProfile({
+      secrets: { workspace: { from: "env:TEST_SECRET" } },
       mask: {
-        values: [{ source: "lines:demo/secrets.txt" }],
         writePolicy: "readonly",
         maskfs: true,
         proxy: false,
@@ -1263,7 +1263,7 @@ test("MountStage: mask with maskfs=true but maskedRoot unset throws ordering gua
 });
 
 test("MountStage: maskedRoot set does not affect .nas/config.pkl RO mount source", () => {
-  // config.pkl は mask.values にリテラルを書けないため秘密値を含まず、
+  // config.pkl は secrets にリテラルを書けないため秘密値を含まず、
   // 実パスを RO で見せる方が改ざん防止として優先される。
   const maskedRoot = "/run/user/1000/nas/maskfs/sessions/s1/mnt";
   const configPath = `${TEST_WORK_DIR}/.nas/config.pkl`;

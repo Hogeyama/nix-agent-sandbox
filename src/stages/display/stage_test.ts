@@ -55,6 +55,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     ...overrides,
   };
 }

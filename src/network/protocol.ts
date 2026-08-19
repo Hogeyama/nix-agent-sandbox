@@ -1,8 +1,46 @@
 import { isIP } from "node:net";
+import type { ResolvedDocument } from "./authz/resolve.ts";
+import type { Truth } from "./authz/semantics.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
 
-export type ApprovalScope = "once" | "host-port" | "host";
+/**
+ * 承認をどこまで覚えるか。
+ *
+ * 2 種類の確認があり、粒度はそれぞれの同一性の上で意味を持つ。
+ *
+ * ルールが `review` を宣言したことから生じる確認では、同一性は
+ * (ルール ID, 判定の理由, ターゲット) であり、ここで選べるのはターゲット成分の
+ * 広さだけである。どの粒度を出すかはマッチしたルールの具体性から決まる
+ * (`src/network/broker.ts`)。
+ *
+ * - `once`: 何も覚えない。
+ * - `rule`: そのルールが有効な間ずっと。ターゲットをスコープが 1 つの
+ *   ホストとポートに固定しているときだけ選べる。
+ * - `host-port`: そのホストとポートに対して。
+ * - `host`: そのホストの全ポートに対して。
+ *
+ * 受理条件の違反から生じる確認では、同一性は
+ * (ルール ID, 受理条件の位置, 違反した値) でありターゲットを含まない。
+ * 選べるのは覚えるかどうかだけになる。
+ *
+ * - `violation`: 提示した違反をそのセッションの間ずっと。同じルールの別の値も、
+ *   別のルールの同じ値も覆わない。
+ *
+ * 型ではなくこの配列を正本にしてある。粒度を通す側 (HTTP ルートの検証、CLI の
+ * 選択肢) が独自の写しを持っていると、粒度を 1 つ足したときに片方だけ古いまま
+ * になり、承認 UI には出るのに押すと 400 になる。写しを作らずここから導く。
+ */
+export const APPROVAL_SCOPES = [
+  "once",
+  "rule",
+  "host-port",
+  "host",
+  "violation",
+] as const;
+
+export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
 export type RequestKind = "connect" | "forward";
+export type RequestTransport = "http" | "websocket";
 export type Decision = "allow" | "deny";
 
 export interface InjectHeader {
@@ -10,12 +48,17 @@ export interface InjectHeader {
   value: string;
 }
 
-export interface ResolvedCredential {
-  host: string;
-  pathPrefix?: string;
-  method?: string;
-  header: string;
-  value: string;
+/**
+ * 承認 UI に出す注入ヘッダーの姿。
+ *
+ * ヘッダー名と、その値が参照する秘密の名前だけを持つ。値を持つ
+ * `InjectHeader` とは別の型なので、人が見る面へ値の付いた方を載せようと
+ * すると型エラーになる。
+ */
+export interface InjectHeaderPreview {
+  name: string;
+  /** 参照する秘密の名前。`literal:` だけの値では空。 */
+  secrets: string[];
 }
 
 export interface SessionCredentials {
@@ -28,10 +71,16 @@ export interface NormalizedTarget {
   port: number;
 }
 
+/**
+ * 確認のカードに出す、リクエストについての事実。
+ *
+ * ボディの断片は載らない。100KB の会話の先頭 1024 バイトからは判断できず、
+ * 判断の材料になるもの — 受理条件が拒んだノード — は検査のあとに所見として
+ * 別に届く。
+ */
 export interface ReviewContext {
   path: string;
   contentType: string | null;
-  bodyPreview: string | null;
   bodySize: number;
 }
 
@@ -42,8 +91,11 @@ export interface AuthorizeRequest {
   sessionId: string;
   target: NormalizedTarget;
   method: string;
+  transport: RequestTransport;
   requestKind: RequestKind;
   observedAt: string;
+  /** 候補ルールごとに、そのルール自身の予算で評価したボディ条件の真偽。 */
+  bodyTruth: Readonly<Record<string, Truth>>;
   reviewContext?: ReviewContext;
 }
 
@@ -54,11 +106,530 @@ export interface DecisionResponse {
   decision: Decision;
   scope?: ApprovalScope;
   reason: string;
+  /** Authoritative ID of the resolved rule that allowed this request. */
+  ruleId?: string;
   message?: string;
   injectHeaders?: InjectHeader[];
   /** allow のとき、プロキシがリクエストから ****
    * へ置換すべき秘密値 (nas_addon.py が消費)。 */
   maskValues?: string[];
+  /** allow のとき、出現したらリクエストを拒否すべき秘密値。 */
+  forbidValues?: string[];
+}
+
+export const REQUEST_POLICY_SUCCESS_REASONS = [
+  /** 受理条件を持たないルールなので、ボディを検査していない。 */
+  "no-inspection",
+  /** EmptyBody が満たされた。 */
+  "empty-body",
+  /** JSON を解析し、受理条件をすべて満たした。 */
+  "recognized-json",
+  /** 違反はあったが、すべて onViolation = "allow" だった。 */
+  "violations-allowed",
+  /** 違反を人が承認した、または承認済みの集合にあった。 */
+  "violations-approved",
+  /** 秘密をマスクしてボディを書き換えた。 */
+  "masked-json",
+] as const;
+
+/**
+ * 所見の種別。
+ *
+ * - `schema-mismatch`: 受理条件が要求する形になっていない。
+ * - `unexpected-body`: `EmptyBody` に対してボディが存在した。
+ * - `body-unavailable`: `EmptyBody` に対してボディを読めなかった。
+ * - `inspection-incomplete`: セレクタの走査が予算を使い切り、部分木を
+ *   検査しないまま終わった。何が違反したかを言えないので承認できない。
+ * - `findings-truncated`: 保持上限に達し、記述しなかった違反がある。
+ *   識別子も値も持たないので承認できない。
+ */
+export const VIOLATION_FINDING_KINDS = [
+  "schema-mismatch",
+  "unexpected-body",
+  "body-unavailable",
+  "inspection-incomplete",
+  "findings-truncated",
+] as const;
+
+export type ViolationFindingKind = (typeof VIOLATION_FINDING_KINDS)[number];
+
+/** 承認の単位を成せる所見の種別。残りは記述を欠くので押せる対象にならない。 */
+const APPROVABLE_FINDING_KINDS: readonly ViolationFindingKind[] = [
+  "schema-mismatch",
+  "unexpected-body",
+  "body-unavailable",
+];
+
+/**
+ * 受理条件の違反 1 件。
+ *
+ * ボディ由来のフィールド (`pointer` / `value` / `excerpt`) は addon が
+ * マスクしてから載せる。承認 UI と監査ログに出ていく記録なので、生の秘密が
+ * 載っていてはならない。
+ */
+export interface ViolationFinding {
+  /**
+   * 違反した受理条件の `expect` 内の位置。承認の同一性の一部である。
+   * 受理条件に紐づかない記録 (`inspection-incomplete`) は -1。
+   */
+  expect: number;
+  /** 受理条件の種別。位置の代わりに UI が出す。紐づかない記録では空。 */
+  expectKind: string;
+  /** `UnionShape` のセレクタ。UI が「どこを見た条件か」を出すのに使う。 */
+  at: string;
+  kind: ViolationFindingKind;
+  /** マスク済みの JSON Pointer。値を持たない受理条件では空。 */
+  pointer: string;
+  /** マスク済みの違反した値。承認の同一性の一部。値がない条件では null。 */
+  value: string | null;
+  /** マスク済みの、そのノードだけの抜粋。 */
+  excerpt: string | null;
+  /** 同じ (受理条件, 値) の違反の件数。 */
+  count: number;
+}
+
+/**
+ * その所見が承認の単位を成すか。
+ *
+ * 承認の同一性は (ルール ID, 受理条件の位置, 違反した値) なので、位置か値の
+ * どちらかを欠く記録は押せる対象にならない。走査が完了しなかった記録と、
+ * 保持上限で畳まれた記録がそれである。押せないものを承認 UI に出すと、押した
+ * 人が通したつもりのリクエストが通らないままになる。
+ */
+export function isApprovableFinding(finding: ViolationFinding): boolean {
+  return (
+    finding.expect >= 0 &&
+    APPROVABLE_FINDING_KINDS.some((kind) => kind === finding.kind)
+  );
+}
+
+export const REQUEST_POLICY_BLOCK_REASONS = [
+  /** 違反を人が拒否した、または承認に変換できなかった。 */
+  "violations-denied",
+  "body-unavailable",
+  "unexpected-body",
+  "invalid-json",
+  "schema-mismatch",
+  "forbidden-secret",
+  "resource-limit",
+  "key-collision",
+  "serialization-failed",
+  "processing-failed",
+] as const;
+
+export type RequestPolicyReason =
+  | (typeof REQUEST_POLICY_SUCCESS_REASONS)[number]
+  | (typeof REQUEST_POLICY_BLOCK_REASONS)[number];
+
+export interface RequestPolicyOutcomeRequest {
+  version: 1;
+  type: "request_policy_outcome";
+  requestId: string;
+  sessionId: string;
+  ruleId: string;
+  result: "pass" | "rewrite" | "block";
+  reason: RequestPolicyReason;
+  /**
+   * 検査が見つけた違反。違反が無ければ空。
+   *
+   * 帰結は `result` と `reason` で閉じているので、これは記録のためにある。
+   * どの受理条件がどの値で落ちたかは理由の語彙では言えず、監査ログに残らないと
+   * 「schema-mismatch で 403」以上のことが後から分からない。
+   */
+  findings?: ViolationFinding[];
+}
+
+export interface RequestPolicyOutcomeResponse {
+  version: 1;
+  type: "request_policy_outcome_recorded";
+  requestId: string;
+}
+
+/**
+ * `onViolation = "review"` の違反について broker に帰結を訊く。
+ *
+ * 検査は addon が行い、承認済みの集合は broker が持つ。承認結果を解決済み
+ * ドキュメントに書き戻して addon に押し返すことはしないので、addon は違反の
+ * たびにここへ来て、broker がキャッシュから即答するか、人に確認する。
+ *
+ * ターゲットとメソッドと `reviewContext` は、承認 UI のカードに出すために
+ * 運ぶ。承認の同一性はターゲットを含まないので、これらはカードの見た目にしか
+ * 効かない。承認が及ぶ範囲を広げることはできない。
+ */
+export interface RequestPolicyReviewRequest {
+  version: 1;
+  type: "request_policy_review";
+  requestId: string;
+  sessionId: string;
+  ruleId: string;
+  target: NormalizedTarget;
+  method: string;
+  findings: ViolationFinding[];
+  reviewContext?: ReviewContext;
+}
+
+const REQUEST_POLICY_REVIEW_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "ruleId",
+  "target",
+  "method",
+  "findings",
+  "reviewContext",
+]);
+const HTTP_METHOD = /^[A-Za-z]{1,16}$/;
+const AUTHORIZE_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "target",
+  "method",
+  "transport",
+  "requestKind",
+  "observedAt",
+  "bodyTruth",
+  "reviewContext",
+]);
+const REQUEST_KINDS = ["connect", "forward"] as const;
+const REQUEST_TRANSPORTS = ["http", "websocket"] as const;
+const TRUTH_VALUES = ["true", "false", "indeterminate"] as const;
+
+export function validateAuthorizeRequest(
+  value: unknown,
+  expectedSessionId: string,
+  document: ResolvedDocument,
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid authorize request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "authorize" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid authorize request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "authorize session mismatch";
+  }
+  if (Object.keys(message).some((field) => !AUTHORIZE_FIELDS.has(field))) {
+    return "invalid authorize request";
+  }
+  if (!isNormalizedTarget(message.target)) return "invalid authorize target";
+  if (typeof message.method !== "string" || !HTTP_METHOD.test(message.method)) {
+    return "invalid authorize method";
+  }
+  if (!isListedValue(message.transport, REQUEST_TRANSPORTS)) {
+    return "invalid authorize transport";
+  }
+  if (!isListedValue(message.requestKind, REQUEST_KINDS)) {
+    return "invalid authorize request kind";
+  }
+  if (typeof message.observedAt !== "string") {
+    return "invalid authorize observation time";
+  }
+  if (
+    message.reviewContext !== undefined &&
+    !isReviewContext(message.reviewContext)
+  ) {
+    return "invalid authorize review context";
+  }
+  if (
+    typeof message.bodyTruth !== "object" ||
+    message.bodyTruth === null ||
+    Array.isArray(message.bodyTruth)
+  ) {
+    return "invalid authorize body truth table";
+  }
+  const entries = Object.entries(message.bodyTruth);
+  const ruleCount = document.scopes.reduce(
+    (count, scope) => count + scope.rules.length,
+    0,
+  );
+  if (entries.length > ruleCount) return "too many authorize body truths";
+  for (const [ruleId, truth] of entries) {
+    if (!documentHasConcreteRuleId(document, ruleId)) {
+      return "unknown authorize body truth rule ID";
+    }
+    if (!isListedValue(truth, TRUTH_VALUES)) {
+      return "invalid authorize body truth value";
+    }
+  }
+  return null;
+}
+
+export function validateRequestPolicyReview(
+  value: unknown,
+  expectedSessionId: string,
+  document: ResolvedDocument,
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid request-policy review request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "request_policy_review" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid request-policy review request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "request-policy review session mismatch";
+  }
+  if (
+    Object.keys(message).some(
+      (field) => !REQUEST_POLICY_REVIEW_FIELDS.has(field),
+    )
+  ) {
+    return "invalid request-policy review request";
+  }
+  if (
+    typeof message.ruleId !== "string" ||
+    !SAFE_RULE_ID.test(message.ruleId) ||
+    !documentHasRuleId(document, message.ruleId)
+  ) {
+    return "invalid request-policy review rule ID";
+  }
+  if (!isNormalizedTarget(message.target)) {
+    return "invalid request-policy review target";
+  }
+  if (typeof message.method !== "string" || !HTTP_METHOD.test(message.method)) {
+    return "invalid request-policy review method";
+  }
+  if (
+    message.reviewContext !== undefined &&
+    !isReviewContext(message.reviewContext)
+  ) {
+    return "invalid request-policy review context";
+  }
+  const findingsError = validateViolationFindings(message.findings);
+  if (findingsError) return findingsError;
+  if ((message.findings as unknown[]).length === 0) {
+    // 違反が無いのに帰結を訊くことはない。空を承認に変えると、押した人が
+    // 何も見ていない承認が 1 つ生まれる。
+    return "request-policy review carries no violation";
+  }
+  return null;
+}
+
+/**
+ * カードに出す事実の形。
+ *
+ * broker はこれを人が読む面へ写す前にマスクを掛けるので、`path` が文字列で
+ * ないだけでマスクが例外を投げ、メッセージを 1 通投げただけで broker を
+ * 落とせてしまう。他のフィールドと同じく形を先に確かめる。
+ */
+function isReviewContext(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const context = value as Record<string, unknown>;
+  return (
+    Object.keys(context).every((field) => REVIEW_CONTEXT_FIELDS.has(field)) &&
+    typeof context.path === "string" &&
+    (context.contentType === null || typeof context.contentType === "string") &&
+    Number.isSafeInteger(context.bodySize) &&
+    (context.bodySize as number) >= 0
+  );
+}
+
+const REVIEW_CONTEXT_FIELDS = new Set(["path", "contentType", "bodySize"]);
+
+function isNormalizedTarget(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const target = value as Record<string, unknown>;
+  return (
+    Object.keys(target).length === 2 &&
+    typeof target.host === "string" &&
+    target.host.length > 0 &&
+    target.host.length <= 253 &&
+    Number.isSafeInteger(target.port) &&
+    (target.port as number) > 0 &&
+    (target.port as number) <= 65535
+  );
+}
+
+const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "ruleId",
+  "result",
+  "reason",
+  "findings",
+]);
+
+/**
+ * 1 通のメッセージが運べる所見の件数。
+ *
+ * addon 側の上限は「受理条件ごとに 64 件 + 打ち切りの記録」なので、受理条件を
+ * 15 本置いても届かない。broker がこれを持つのは、addon の上限を信じずに
+ * 自分の側でメモリを閉じるためである。
+ */
+const MAX_FINDINGS = 1024;
+/** マスク済みの値の長さ。addon は 276 文字で畳むので、その倍を天井にする。 */
+const MAX_FINDING_VALUE_CHARS = 552;
+const MAX_FINDING_POINTER_CHARS = 1024;
+const MAX_FINDING_EXCERPT_CHARS = 2048;
+const MAX_FINDING_SELECTOR_CHARS = 512;
+const FINDING_FIELDS = new Set([
+  "expect",
+  "expectKind",
+  "at",
+  "kind",
+  "pointer",
+  "value",
+  "excerpt",
+  "count",
+]);
+const EXPECT_KINDS = ["", "emptyBody", "jsonRoot", "unionShape"] as const;
+
+function isBoundedString(value: unknown, max: number): boolean {
+  return typeof value === "string" && value.length <= max;
+}
+
+function isBoundedNullableString(value: unknown, max: number): boolean {
+  return value === null || isBoundedString(value, max);
+}
+
+/**
+ * 所見の列を検証する。
+ *
+ * 所見は addon がボディから組み立てたもので、値もポインタも抜粋も
+ * 攻撃者が選んだ文字列に由来する。長さと件数をここで閉じないと、承認 UI と
+ * 監査ログとメモリがボディの大きさに引きずられる。
+ */
+export function validateViolationFindings(value: unknown): string | null {
+  if (!Array.isArray(value)) return "invalid violation findings";
+  if (value.length > MAX_FINDINGS) return "too many violation findings";
+  for (const finding of value) {
+    if (
+      typeof finding !== "object" ||
+      finding === null ||
+      Array.isArray(finding)
+    ) {
+      return "invalid violation finding";
+    }
+    const record = finding as Record<string, unknown>;
+    if (Object.keys(record).some((field) => !FINDING_FIELDS.has(field))) {
+      return "invalid violation finding";
+    }
+    if (
+      !Number.isSafeInteger(record.expect) ||
+      (record.expect as number) < -1 ||
+      !isListedValue(record.expectKind, EXPECT_KINDS) ||
+      !isBoundedString(record.at, MAX_FINDING_SELECTOR_CHARS) ||
+      !isListedValue(record.kind, VIOLATION_FINDING_KINDS) ||
+      !isBoundedString(record.pointer, MAX_FINDING_POINTER_CHARS) ||
+      !isBoundedNullableString(record.value, MAX_FINDING_VALUE_CHARS) ||
+      !isBoundedNullableString(record.excerpt, MAX_FINDING_EXCERPT_CHARS) ||
+      !Number.isSafeInteger(record.count) ||
+      (record.count as number) < 1
+    ) {
+      return "invalid violation finding";
+    }
+  }
+  return null;
+}
+/** ルールの実 ID は `<スコープ名>.<キー>`。擬似 ID は `$fallback` で終わる。 */
+const SAFE_RULE_ID = /^[a-z][a-z0-9._-]{0,63}(?:\.\$fallback)?$/;
+const REQUEST_POLICY_RESULTS = ["pass", "rewrite", "block"] as const;
+
+/** 解決済みドキュメントに存在するルール ID か。 */
+export function documentHasRuleId(
+  document: ResolvedDocument,
+  ruleId: string,
+): boolean {
+  return document.scopes.some(
+    (scope) =>
+      scope.fallbackRuleId === ruleId ||
+      scope.rules.some((rule) => rule.id === ruleId),
+  );
+}
+
+function documentHasConcreteRuleId(
+  document: ResolvedDocument,
+  ruleId: string,
+): boolean {
+  return document.scopes.some((scope) =>
+    scope.rules.some((rule) => rule.id === ruleId),
+  );
+}
+
+export function validateRequestPolicyOutcome(
+  value: unknown,
+  expectedSessionId: string,
+  document: ResolvedDocument,
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid request-policy outcome request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "request_policy_outcome" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid request-policy outcome request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "request-policy outcome session mismatch";
+  }
+  if (
+    Object.keys(message).some(
+      (field) => !REQUEST_POLICY_OUTCOME_FIELDS.has(field),
+    )
+  ) {
+    return "invalid request-policy outcome request";
+  }
+  if (
+    typeof message.ruleId !== "string" ||
+    !SAFE_RULE_ID.test(message.ruleId)
+  ) {
+    return "invalid request-policy outcome rule ID";
+  }
+  if (!documentHasRuleId(document, message.ruleId)) {
+    return "unknown request-policy outcome rule ID";
+  }
+  if (!isListedValue(message.result, REQUEST_POLICY_RESULTS)) {
+    return "invalid request-policy outcome result";
+  }
+  if (
+    !isListedValue(message.reason, [
+      ...REQUEST_POLICY_SUCCESS_REASONS,
+      ...REQUEST_POLICY_BLOCK_REASONS,
+    ] as const)
+  ) {
+    return "invalid request-policy outcome reason";
+  }
+  if (message.findings !== undefined) {
+    const findingsError = validateViolationFindings(message.findings);
+    if (findingsError) return findingsError;
+  }
+
+  // 結果と理由の組み合わせを閉じる。ボディ検査を通したという報告に拒否の理由が
+  // 付いていたら、addon と broker のどちらかが壊れている。
+  const reason = message.reason;
+  const consistent =
+    message.result === "block"
+      ? isListedValue(reason, REQUEST_POLICY_BLOCK_REASONS)
+      : message.result === "rewrite"
+        ? reason === "masked-json" ||
+          reason === "violations-allowed" ||
+          reason === "violations-approved"
+        : isListedValue(reason, REQUEST_POLICY_SUCCESS_REASONS) &&
+          reason !== "masked-json";
+  return consistent
+    ? null
+    : "invalid request-policy outcome result/reason pairing";
 }
 
 export interface PendingEntry {
@@ -72,6 +643,20 @@ export interface PendingEntry {
   createdAt: string;
   updatedAt: string;
   reviewContext?: ReviewContext;
+  /** この確認を起こしたルール。承認の同一性の片割れであり、擬似 ID もありうる。 */
+  ruleId: string;
+  /** この確認で選べる粒度。ルールの具体性から導出される。 */
+  approvalScopes: ApprovalScope[];
+  /** 承認したときに注入されるヘッダー。名前だけで、値は載らない。 */
+  injectHeaders: InjectHeaderPreview[];
+  /**
+   * 受理条件の違反から生じた確認で、承認が覆う違反。
+   *
+   * この確認で押せる対象そのものである。ボディの先頭を切り出した preview では
+   * 100KB のリクエストの違反箇所は見えないので、承認者が見るのはこちらになる。
+   * ルールの `review` から生じた確認には無い。
+   */
+  violations?: ViolationFinding[];
 }
 
 export interface SessionRegistryEntry {
@@ -244,14 +829,6 @@ export function targetKey(target: NormalizedTarget): string {
   return `${target.host}:${target.port}`;
 }
 
-export function targetKeyForScope(
-  target: NormalizedTarget,
-  scope: ApprovalScope,
-): string {
-  if (scope === "host") return target.host;
-  return targetKey(target);
-}
-
 export function matchesPathPrefix(path: string, prefix: string): boolean {
   if (!path.startsWith(prefix)) return false;
   if (path.length === prefix.length) return true;
@@ -322,4 +899,11 @@ function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function isListedValue<const T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+): value is T[number] {
+  return typeof value === "string" && allowed.some((item) => item === value);
 }
