@@ -650,14 +650,14 @@ async function cleanupProtocolResources(
   }
 }
 
-async function waitForPendingItem(fixture: AddonFixture) {
+async function waitForPendingItem(fixture: AddonFixture, what = "handshake") {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     const pending = (await fixture.broker.listPending())[0];
     if (pending) return pending;
     await Bun.sleep(25);
   }
-  throw new Error("timed out waiting for pending WebSocket handshake");
+  throw new Error(`timed out waiting for pending ${what}`);
 }
 
 async function waitForContainerLog(
@@ -1008,7 +1008,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
         `${fixture.sessionId}:${fixture.token}`,
       );
-      const pending = await waitForPendingItem(fixture);
+      const pending = await waitForPendingItem(fixture, "WebSocket handshake");
       expect(await fixture.broker.listPending()).toHaveLength(1);
       await sendBrokerRequest(
         brokerSocketPath(fixture.paths, fixture.sessionId),
@@ -1689,20 +1689,27 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         },
       ];
 
-      // どの allow ルールにも当たらない経路。broker 側の default-deny が
-      // 認可の時点で落とすので、ポリシーは一度も走らない。
+      // どの allow ルールにも当たらない経路。preset の fallback は review な
+      // ので、認可の時点で人に回り、押されるまで応答は保留される。deny を押せば
+      // 403 で閉じ、リクエストポリシーは一度も走らない。
+      //
+      // 確認の同一性は (ルール ID, 判定の理由, ターゲット) であってパスを含まない
+      // ので、1 度目の deny 以降は同じホストの未一致パスが直近の拒否として即座に
+      // 閉じる。最初の 1 件に秘密を含むパスを置くのは、この経路だけが未一致の
+      // パスを broker へ渡して pending として保存するからで、そこで秘密が
+      // 素のまま残らないことを確かめる。
       const authorizationDenials = [
+        {
+          name: "unknown secret-bearing route",
+          path: "/unknown/SECRET123?token=SECRET123",
+          method: "GET",
+        },
         {
           name: "unsupported method on a known route",
           path: "/api/claude_code/metrics",
           method: "POST",
         },
         { name: "file upload", path: "/v1/files", method: "POST", body: "{}" },
-        {
-          name: "unknown secret-bearing route",
-          path: "/unknown/SECRET123?token=SECRET123",
-          method: "GET",
-        },
       ];
 
       let seenOutcomes = 0;
@@ -1732,13 +1739,34 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         expect(proxyLogs, testCase.name).not.toContain("SECRET123");
       }
 
+      let deniedOnce = false;
       for (const testCase of authorizationDenials) {
-        const response = await sendProxyRequest(
+        const responsePromise = sendProxyRequest(
           proxyPort,
           `http://api.anthropic.com${testCase.path}`,
           `${sessionId}:${token}`,
           { method: testCase.method, body: testCase.body },
         );
+        if (!deniedOnce) {
+          const pending = await waitForPendingItem(
+            fixture,
+            "scope fallback review",
+          );
+          expect(pending, testCase.name).toMatchObject({
+            ruleId: "anthropic.$fallback",
+            state: "pending",
+          });
+          expect(JSON.stringify(pending), testCase.name).not.toContain(
+            "SECRET123",
+          );
+          expect(pending.reviewContext?.path, testCase.name).toContain("****");
+          await sendBrokerRequest(
+            brokerSocketPath(fixture.paths, fixture.sessionId),
+            { type: "deny", requestId: pending.requestId },
+          );
+          deniedOnce = true;
+        }
+        const response = await responsePromise;
         const outcomes = await readPolicyOutcomes(fixture.auditDir);
         const proxyLogs = await dockerLogs(containerName);
 

@@ -99,7 +99,7 @@ test.skipIf(!hasPkl)(
 );
 
 test.skipIf(!hasPkl)(
-  "repository default Claude profile masks through the fail-closed Anthropic preset",
+  "repository default Claude profile masks through the Anthropic preset",
   async () => {
     const repoRoot = path.resolve(import.meta.dir, "../..");
     const config = await loadConfig({ startDir: repoRoot });
@@ -140,6 +140,9 @@ test.skipIf(!hasPkl)(
       secrets: { "*": "mask" },
     });
 
+    // preset が並べていないエンドポイントは deny ではなく確認に回る。上流が
+    // エンドポイントを増やしたときにセッションが止まらないようにするためで、
+    // 帰結は preset の `fallback = "review"` から来ている。
     expect(
       decide(
         resolved.document!,
@@ -151,7 +154,7 @@ test.skipIf(!hasPkl)(
         },
       ),
     ).toMatchObject({
-      action: "deny",
+      action: "review",
       ruleId: "anthropic.$fallback",
       reason: "scope-fallback",
     });

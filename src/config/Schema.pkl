@@ -427,6 +427,8 @@ class NetworkConfig {
 //
 // プリセットの受理条件は緩められない。`expect` は Listing なので amend は要素を
 // 追加するだけで、既にある UnionShape の `allowed` を書き換える手段がない。
+// 一方 `fallback` はふつうのフィールドなので、閉じ方を厳しくしたい構成は
+// `fallback = "deny"` を amend で被せられる。
 // プリセットのバージョンは不変であり、API の変更は v2 を生む。
 // ---------------------------------------------------------------------------
 
@@ -484,14 +486,27 @@ const local anthropicContentBlocks: Listing<Expect> = new {
 
 class AnthropicPresets {
   /// Claude Code が `api.anthropic.com` に対して必要とするエンドポイントだけを
-  /// 通し、それ以外は `fallback` の deny に落とす。
+  /// 通し、それ以外は `fallback` の review に落とす。
+  ///
+  /// `fallback` が `deny` ではなく `review` なのは、未知のタグを `review` に
+  /// している理由と同じである。プリセットが並べたパスの集合は上流が増やせるので、
+  /// Claude Code が新しいエンドポイントを叩き始めた瞬間に `deny` だとセッションが
+  /// 止まり、利用者には nas のリリースを待つ以外の手が無い。`review` ならその
+  /// パスが承認 UI に出て、押せば先へ進める。
+  ///
+  /// 代わりに、承認の粒度は「そのリクエストだけ」か「そのホストに対する
+  /// fallback ぜんぶ」の二択になる。承認の同一性はルール ID (`<スコープ>.$fallback`)
+  /// と判定の理由とターゲットで決まり、パスは入らないからである。`once` 以外を
+  /// 押すと、そのセッションの残りは未知のエンドポイントが何も訊かずに通る。
+  /// それを許さない構成では `fallback = "deny"` を amend で戻す (`fallback` は
+  /// ふつうのフィールドなので上書きできる。書き換えられないのは `expect` だけ)。
   ///
   /// ルール ID はスコープのキーから導かれるので、同じプリセットを 2 つのホストに
   /// 当てるときはスコープを 2 つ作れば ID が衝突しない。互換のあるゲートウェイを
   /// 使う場合は `targets` を amend で差し替える。
   v1: Scope = new {
     targets { "api.anthropic.com" }
-    fallback = "deny"
+    fallback = "review"
 
     rules {
       ["messages"] {

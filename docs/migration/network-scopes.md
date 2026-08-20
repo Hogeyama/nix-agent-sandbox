@@ -182,9 +182,13 @@ network {
 ```
 
 The preset allows the Claude Code endpoints it knows, validates message body
-shape, and denies unmatched Anthropic endpoints through its scope fallback.
-Amend the same scope to add a compatible endpoint rather than creating a
-second scope with the same target.
+shape, and sends unmatched Anthropic endpoints to review through its scope
+fallback, so an endpoint the upstream added later stops for approval instead of
+failing the session. Amend the same scope to add a compatible endpoint rather
+than creating a second scope with the same target. Approval for a fallback
+review is keyed by the pseudo rule ID and the target, not by the path, so any
+scope other than `once` opens every unmatched endpoint on that host for the
+rest of the session; amend `fallback = "deny"` back if that is unacceptable.
 
 ## Approval Behavior
 

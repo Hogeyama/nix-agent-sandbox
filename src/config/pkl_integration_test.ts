@@ -408,7 +408,7 @@ profiles {
         "bootstrap",
         "company-bootstrap",
       ]);
-      expect(scope?.fallback).toEqual("deny");
+      expect(scope?.fallback).toEqual("review");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
