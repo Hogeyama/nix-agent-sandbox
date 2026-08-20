@@ -6,6 +6,7 @@ Proxy-Authorization, queries the per-session broker UDS for authorization
 decisions, and inspects request bodies against the rule the broker named.
 """
 
+import asyncio
 import base64
 import hashlib
 import itertools
@@ -13,7 +14,6 @@ import json
 import math
 import os
 import re
-import socket
 import sys
 import time
 import urllib.parse
@@ -94,6 +94,13 @@ SETTLED_UNANSWERED = "unanswered"
 
 # Block reason for a review nobody answered. See `SETTLED_UNANSWERED`.
 REASON_REVIEW_UNANSWERED = "review-unanswered"
+
+# The reason the broker gives when its own card deadline runs out. The message
+# it arrives in is shaped like a denial — `decision: "deny"` — because that is
+# how the broker refuses a request it cannot pass. It is not a denial: nobody
+# looked at the card. Reading the reason is the only way to tell the two
+# apart, since the decision field says the same thing either way.
+BROKER_PROMPT_TIMEOUT_REASON = "prompt-timeout"
 
 FINDING_SCHEMA_MISMATCH = "schema-mismatch"
 FINDING_UNEXPECTED_BODY = "unexpected-body"
@@ -708,26 +715,103 @@ def _decode_proxy_auth(header: Optional[str]) -> Optional[tuple[str, str]]:
         return None
 
 
-def _query_broker(socket_path: str, request: dict) -> dict:
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+# Reaching the broker is bounded on its own, and short. The broker either has
+# a listener on that path or it does not; the only thing a wait here buys is
+# room for the accept backlog to drain, which is why the number is seconds and
+# not the minutes the answer itself may take.
+BROKER_CONNECT_TIMEOUT_SECONDS = 10.0
+
+# How long to wait for an answer the broker computes on its own. Every query
+# except the two below is of that kind, and none of them touches a person.
+BROKER_REPLY_TIMEOUT_SECONDS = 10.0
+
+# How long to wait for an answer that may have to go past a person first —
+# the authorization query and the violation review, both of which can put a
+# card in front of somebody and wait for a press. Waiting this long is only
+# affordable because the wait is awaited rather than blocking; see
+# `_query_broker`.
+#
+# This is NOT the deadline for that person. The broker owns that deadline: it
+# arms a timer for `pendingTimeoutSeconds` when it opens the card and answers
+# `prompt-timeout` when the timer wins, so a query that waits here always gets
+# an answer — one that is shaped like a denial and is not one, which
+# `_settle_violation_review` has to take apart. This ceiling only catches a
+# broker that is alive, holding the connection open, and never going to answer
+# at all. It has to sit above any
+# deadline a person could be given, because whatever this ceiling cuts short
+# is reported as `review-unanswered` — and a request refused while the card is
+# still on screen, waiting for somebody who is about to press approve, is the
+# proxy answering a question the person was never given time to answer.
+BROKER_HUMAN_REPLY_TIMEOUT_SECONDS = 3600.0
+
+# Ceiling on one broker reply, in bytes. `asyncio`'s stream reader needs a
+# number here and defaults to 64 KiB, which a decision can exceed on its own:
+# it carries every mask value, forbid value and inject header the rule
+# resolved to, and a secret sourced from a file contributes one value per
+# line. Passing the default through would turn a large-but-legitimate
+# decision into a refusal for every request in that session, so the number is
+# set where no real reply reaches it and it serves only as a backstop against
+# a peer that never sends a newline.
+BROKER_REPLY_LIMIT_BYTES = 8 * 1024 * 1024
+
+
+async def _query_broker(
+    socket_path: str,
+    request: dict,
+    reply_timeout: Optional[float] = None,
+) -> dict:
+    """Ask the broker one question and return its answer.
+
+    Awaited rather than blocking. A query that may have to go past a person
+    can be outstanding for as long as the card is on screen, and mitmproxy
+    runs every addon hook on one event loop: blocking that loop would stop
+    every other flow through the proxy — including flows belonging to other
+    sessions, since the proxy container is shared — for the whole time
+    somebody takes to answer.
+
+    `reply_timeout` bounds the wait for the reply only, and defaults to
+    `BROKER_REPLY_TIMEOUT_SECONDS` — read here rather than bound as the
+    default argument, so the ceiling stays one name a test can move. Reaching
+    the socket is bounded separately and tightly: the broker either has a
+    listener on that path or it does not, and no amount of waiting changes
+    which.
+    """
+    writer = None
     try:
-        sock.settimeout(10.0)
-        sock.connect(socket_path)
-        line = json.dumps(request) + "\n"
-        sock.sendall(line.encode())
-        data = b""
-        while b"\n" not in data:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(
+                socket_path, limit=BROKER_REPLY_LIMIT_BYTES
+            ),
+            timeout=BROKER_CONNECT_TIMEOUT_SECONDS,
+        )
+        writer.write((json.dumps(request) + "\n").encode())
+        await writer.drain()
+        data = await asyncio.wait_for(
+            reader.readline(),
+            timeout=(
+                BROKER_REPLY_TIMEOUT_SECONDS
+                if reply_timeout is None
+                else reply_timeout
+            ),
+        )
         if not data:
             return {"decision": "deny", "reason": "empty-broker-response"}
         return json.loads(data.decode().strip())
+    except asyncio.TimeoutError:
+        # `str(TimeoutError())` is empty, so letting this fall through to the
+        # clause below produces a reason that stops at the colon. This reason
+        # reaches the audit log and the 403 body, where "the wait ran out" is
+        # the one thing worth being able to read.
+        return {"decision": "deny", "reason": "broker-unavailable: timed out"}
     except Exception as e:
         return {"decision": "deny", "reason": f"broker-unavailable: {e}"}
     finally:
-        sock.close()
+        if writer is not None:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
 
 
 REQUEST_POLICY_AUDIT_UNAVAILABLE = (
@@ -770,7 +854,7 @@ def _request_policy_outcome_message(
     }
 
 
-def _report_request_policy_outcome(
+async def _report_request_policy_outcome(
     socket_path: str,
     request_id: str,
     session_id: str,
@@ -787,9 +871,12 @@ def _report_request_policy_outcome(
     `_expect_finding`. An acknowledgement failure prints one constant line and
     never changes the computed result."""
     try:
-        response = _query_broker(socket_path, _request_policy_outcome_message(
-            request_id, session_id, rule_id, result, reason, findings,
-        ))
+        response = await _query_broker(
+            socket_path,
+            _request_policy_outcome_message(
+                request_id, session_id, rule_id, result, reason, findings,
+            ),
+        )
         if not (
             response.get("version") == 1
             and response.get("type") == "request_policy_outcome_recorded"
@@ -800,7 +887,7 @@ def _report_request_policy_outcome(
         print(REQUEST_POLICY_AUDIT_UNAVAILABLE, file=sys.stderr)
 
 
-def _settle_violation_review(
+async def _settle_violation_review(
     socket_path: str,
     request_id: str,
     session_id: str,
@@ -827,18 +914,22 @@ def _settle_violation_review(
     changes what the record says: a refusal is a decision somebody made and
     the rest is the absence of one, and the reason travels to the audit log.
 
-    This blocks the proxy while it waits, the same way the authorization query
-    does, and gives up on the same 10 second ceiling. A person who takes
-    longer does not lose the approval: the broker keeps the card, and the
-    press lands in the approved set, so the next request carrying the same
-    violation passes without asking. With the conversation history resent
-    every turn, that next request is usually seconds away — but this request
-    is already refused by then, and calling that refusal a denial would put a
-    decision in the log that the person never made."""
-    response = _query_broker(socket_path, _violation_review_message(
-        request_id, session_id, rule_id, host, port, method,
-        review_context, findings,
-    ))
+    This holds the request, not the proxy: the wait is awaited, so other flows
+    keep moving while the card is open. It lasts as long as the broker is
+    willing to hold that card. The deadline a person gets is the broker's
+    `pendingTimeoutSeconds`, and giving up before it would refuse the request
+    while the card is still on screen — recording that nobody answered a
+    question the person had not yet been given time to answer.
+    `BROKER_HUMAN_REPLY_TIMEOUT_SECONDS` sits above any such deadline and only
+    catches a broker that will never answer at all."""
+    response = await _query_broker(
+        socket_path,
+        _violation_review_message(
+            request_id, session_id, rule_id, host, port, method,
+            review_context, findings,
+        ),
+        reply_timeout=BROKER_HUMAN_REPLY_TIMEOUT_SECONDS,
+    )
     # A decision is only an answer to this question if it says so field for
     # field. `_query_broker` turns a failed query into a deny-shaped value of
     # its own making, and a reply naming another request says nothing about
@@ -853,6 +944,16 @@ def _settle_violation_review(
     if decision == "allow":
         return SETTLED_ALLOW
     if decision == "deny":
+        # One of these denials is not a decision. When the broker's card
+        # deadline runs out it refuses the request with `prompt-timeout`, and
+        # that arrives in the same shape as a person pressing Deny. Waiting
+        # long enough to receive it is the point of the ceiling above — the
+        # addon used to give up first and never see it — so the reason has to
+        # be read here or the wait turns every unanswered card into a human
+        # denial in the audit log, which is exactly what naming
+        # `review-unanswered` was for.
+        if response.get("reason") == BROKER_PROMPT_TIMEOUT_REASON:
+            return SETTLED_UNANSWERED
         return SETTLED_DENY
     return SETTLED_UNANSWERED
 
@@ -2205,7 +2306,10 @@ class NasAddon:
     def tcp_start(self, flow) -> None:
         flow.kill()
 
-    def request(self, flow: http.HTTPFlow) -> None:
+    async def request(self, flow: http.HTTPFlow) -> None:
+        # Awaited, not blocking: the broker query below can be outstanding for
+        # as long as a confirmation card is on screen, and mitmproxy runs all
+        # hooks on one event loop shared by every flow and every session.
         # Try request header first (HTTP forward proxy),
         # fall back to stored CONNECT creds (HTTPS after MitM).
         proxy_auth = flow.request.headers.get("proxy-authorization", "")
@@ -2331,7 +2435,13 @@ class NasAddon:
             review_context,
         )
 
-        decision = _query_broker(broker_socket, authorize_req)
+        # The broker may have to ask a person before it can answer, so this
+        # query gets the ceiling that outlasts a person, not the short one.
+        decision = await _query_broker(
+            broker_socket,
+            authorize_req,
+            reply_timeout=BROKER_HUMAN_REPLY_TIMEOUT_SECONDS,
+        )
 
         if decision.get("decision") != "allow":
             message = decision.get("message", decision.get("reason", "denied"))
@@ -2394,7 +2504,7 @@ class NasAddon:
                 # The rule asked for a person on these violations. The answer
                 # decides the outcome, so it has to arrive before the body
                 # does — and before any credential is injected below.
-                settled = _settle_violation_review(
+                settled = await _settle_violation_review(
                     broker_socket, request_id, session_id, rule_id,
                     host, port, method, review_context, findings,
                 )
@@ -2416,7 +2526,7 @@ class NasAddon:
             if result == "rewrite" and rewritten is not None:
                 flow.request.content = rewritten
 
-            _report_request_policy_outcome(
+            await _report_request_policy_outcome(
                 broker_socket,
                 request_id,
                 session_id,

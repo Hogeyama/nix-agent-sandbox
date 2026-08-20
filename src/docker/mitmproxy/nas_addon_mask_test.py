@@ -5,13 +5,17 @@ Direct invocation:
     PYTHONPATH=testdata/mitmproxy_stub python3 nas_addon_mask_test.py
 """
 
+import asyncio
 import base64
 import contextlib
 import copy
 import io
 import json
 import os
+import socket
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -1400,7 +1404,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "requestId": "req-safe",
             },
         ) as query:
-            nas_addon._report_request_policy_outcome(
+            asyncio.run(nas_addon._report_request_policy_outcome(
                 "/safe/broker.sock",
                 "req-safe",
                 "sess-safe",
@@ -1408,7 +1412,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "block",
                 "schema-mismatch",
                 [_finding(value="future")],
-            )
+            ))
 
         query.assert_called_once_with(
             "/safe/broker.sock",
@@ -1431,7 +1435,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
             "_query_broker",
             side_effect=RuntimeError("SECRET123 /raw/private-path"),
         ), redirect_stderr(stderr):
-            nas_addon._report_request_policy_outcome(
+            asyncio.run(nas_addon._report_request_policy_outcome(
                 "/safe/broker.sock",
                 "req-safe",
                 "sess-safe",
@@ -1439,7 +1443,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "block",
                 "unexpected-body",
                 [],
-            )
+            ))
 
         self.assertEqual(
             stderr.getvalue(),
@@ -1456,7 +1460,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "reason": "broker-unavailable: SECRET123 /raw/private-path",
             },
         ), redirect_stderr(stderr):
-            nas_addon._report_request_policy_outcome(
+            asyncio.run(nas_addon._report_request_policy_outcome(
                 "/safe/broker.sock",
                 "req-safe",
                 "sess-safe",
@@ -1464,7 +1468,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "pass",
                 "empty-body",
                 [],
-            )
+            ))
 
         self.assertEqual(
             stderr.getvalue(),
@@ -3498,7 +3502,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         addon = addon or nas_addon.NasAddon()
         messages = []
 
-        def query_broker(_socket_path, request):
+        async def query_broker(_socket_path, request, reply_timeout=None):
             messages.append(json.loads(json.dumps(request)))
             if request["type"] == "authorize":
                 decision = {
@@ -3555,7 +3559,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 FakeResponse(status, body, response_headers)
             ),
         ), redirect_stderr(stderr):
-            addon.request(flow)
+            asyncio.run(addon.request(flow))
 
         return flow, messages, stderr.getvalue()
 
@@ -3996,7 +4000,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 FakeResponse(status, body, response_headers)
             ),
         ), redirect_stderr(stderr):
-            nas_addon.NasAddon().request(flow)
+            asyncio.run(nas_addon.NasAddon().request(flow))
 
         self.assertEqual(flow.response.status_code, 407)
         self.assertIn("method=OTHER", stderr.getvalue())
@@ -4158,6 +4162,30 @@ class RequestPolicyFlowTest(unittest.TestCase):
             ["review-unanswered"],
         )
 
+    def test_the_card_deadline_running_out_is_not_recorded_as_a_denial(self):
+        # broker の `pendingTimeoutSeconds` が切れたときの答えは deny の形を
+        # しているが、誰もカードを見ていない。監査ログにこれを
+        # `violations-denied` と書くと、人が下していない判断が人の判断として
+        # 残る。
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future"}]}',
+            review_response={
+                "version": 1,
+                "type": "decision",
+                "requestId": "req-test",
+                "decision": "deny",
+                "reason": "prompt-timeout",
+            },
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(
+            [m["reason"] for m in self._outcomes(messages)],
+            ["review-unanswered"],
+        )
+
     def test_a_query_that_never_reached_the_broker_is_unanswered(self):
         # `_query_broker` は落ちた問い合わせを自分で deny 形の値に変える。
         # それは broker の答えではないので、人の拒否と同じ語で呼ばない。
@@ -4255,7 +4283,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
     def test_outcome_failure_does_not_change_the_computed_result(self):
         document = _flow_document([_messages_rule()])
 
-        def failing_broker(_socket_path, request):
+        async def failing_broker(_socket_path, request, reply_timeout=None):
             if request["type"] == "authorize":
                 return {
                     "decision": "allow",
@@ -4289,7 +4317,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 FakeResponse(status, body, response_headers)
             ),
         ), redirect_stderr(stderr):
-            nas_addon.NasAddon().request(flow)
+            asyncio.run(nas_addon.NasAddon().request(flow))
 
         # 監査が届かなくても、計算済みの rewrite はそのまま通す。
         self.assertIsNone(flow.response)
@@ -4554,6 +4582,258 @@ class WebSocketLifecycleTest(unittest.TestCase):
         self.assertNotIn(flow.id, addon._websocket_states)
         self.assertIn("reason=processing-failed", stderr.getvalue())
         self.assertNotIn("SECRET123", stderr.getvalue())
+
+
+class BrokerReplyCeilingTest(unittest.TestCase):
+    """`_query_broker` の待ち時間の上限。
+
+    ここだけは `_query_broker` を差し替えずに本物の UDS を張る。差し替えて
+    しまうと待ち時間そのものがテストの外に出てしまい、「人が押すのを待てる
+    か」という当のふるまいを誰も確かめない。
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.socket_path = os.path.join(self._tmpdir.name, "broker.sock")
+        self._done = threading.Event()
+
+    def _serve(self, reply, delay):
+        """`delay` 秒待ってから `reply` を 1 度返す UDS を立てる。
+
+        `reply` が None なら、接続を握ったまま何も返さない — 生きてはいるが
+        答えない broker である。接続を閉じてしまうと recv が空を返し、上限では
+        なく `empty-broker-response` の経路で終わってしまう。
+        """
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(self.socket_path)
+        server.listen(1)
+        self.addCleanup(server.close)
+
+        def run():
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                conn.recv(65536)
+                time.sleep(delay)
+                if reply is None:
+                    self._done.wait(5.0)
+                    return
+                try:
+                    conn.sendall((json.dumps(reply) + "\n").encode())
+                except OSError:
+                    # addon が先に諦めて切った。上限が効いたということなので、
+                    # ここは黙って畳む。
+                    pass
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+        def stop():
+            self._done.set()
+            thread.join(5.0)
+
+        self.addCleanup(stop)
+
+    def _decision(self):
+        return {
+            "version": 1,
+            "type": "decision",
+            "requestId": "req-test",
+            "decision": "allow",
+            "reason": "approved-by-user",
+        }
+
+    def _settle(self):
+        return asyncio.run(nas_addon._settle_violation_review(
+            self.socket_path,
+            "req-test",
+            "sess-test",
+            "api.messages",
+            "api.example.com",
+            443,
+            "POST",
+            {},
+            [],
+        ))
+
+    def test_a_query_that_needs_no_person_gives_up_on_the_short_ceiling(self):
+        # 人を経由しない問い合わせは broker が計算するだけなので、答えが
+        # 来ないなら待っても来ない。
+        self._serve(self._decision(), delay=1.0)
+
+        with patch.object(nas_addon, "BROKER_REPLY_TIMEOUT_SECONDS", 0.05):
+            response = asyncio.run(nas_addon._query_broker(
+                self.socket_path, {"type": "authorize"}
+            ))
+
+        self.assertEqual(response.get("decision"), "deny")
+        self.assertTrue(
+            response.get("reason", "").startswith("broker-unavailable:"),
+            response,
+        )
+
+    def test_a_review_waits_past_the_short_ceiling_for_a_person(self):
+        # これが壊れると、カードが画面に出ている間に 403 が返り、監査ログには
+        # 誰も下していない `review-unanswered` が残る。
+        self._serve(self._decision(), delay=0.3)
+
+        with patch.object(
+            nas_addon, "BROKER_REPLY_TIMEOUT_SECONDS", 0.05
+        ), patch.object(
+            nas_addon, "BROKER_HUMAN_REPLY_TIMEOUT_SECONDS", 10.0
+        ):
+            settled = self._settle()
+
+        self.assertEqual(settled, nas_addon.SETTLED_ALLOW)
+
+    def test_a_broker_that_never_answers_still_ends_the_wait(self):
+        # 上限は人の締切ではなく、答える気のない broker への backstop である。
+        # 無いとプロキシが永久に止まる。
+        self._serve(None, delay=0.0)
+
+        with patch.object(
+            nas_addon, "BROKER_HUMAN_REPLY_TIMEOUT_SECONDS", 0.1
+        ):
+            settled = self._settle()
+
+        self.assertEqual(settled, nas_addon.SETTLED_UNANSWERED)
+
+    def test_the_brokers_own_card_deadline_is_not_a_denial(self):
+        # broker はカードの締切が切れると `prompt-timeout` で deny 形の答えを
+        # 返す。上限を伸ばしてこれを受け取れるようにした結果、読み分けないと
+        # 誰も見ていないカードが監査ログ上で人の拒否になる。
+        self._serve({
+            "version": 1,
+            "type": "decision",
+            "requestId": "req-test",
+            "decision": "deny",
+            "reason": "prompt-timeout",
+        }, delay=0.0)
+
+        self.assertEqual(self._settle(), nas_addon.SETTLED_UNANSWERED)
+
+    def test_a_person_pressing_deny_is_still_a_denial(self):
+        # 読み分けが広すぎると、こちらまで「答えが無かった」に落ちる。
+        self._serve({
+            "version": 1,
+            "type": "decision",
+            "requestId": "req-test",
+            "decision": "deny",
+            "reason": "denied-by-user",
+        }, delay=0.0)
+
+        self.assertEqual(self._settle(), nas_addon.SETTLED_DENY)
+
+    def test_a_reply_past_the_stream_readers_default_limit_is_read(self):
+        # `asyncio` の既定は 64 KiB で、超えると readline が例外を出す。決定は
+        # ルールが解決した mask / forbid / inject を全部載せるので、これに届く
+        # ことがある。届いた瞬間そのセッションの全リクエストが 403 になる。
+        filler = "x" * 70000
+        self._serve({
+            "version": 1,
+            "type": "decision",
+            "requestId": "req-test",
+            "decision": "allow",
+            "reason": "approved",
+            "maskValues": [filler],
+        }, delay=0.0)
+
+        self.assertEqual(self._settle(), nas_addon.SETTLED_ALLOW)
+
+    def test_a_wait_that_runs_out_says_so(self):
+        # `str(TimeoutError())` は空なので、名前を付けないと理由が
+        # コロンで終わる。この文字列は監査ログと 403 の本文に出ていく。
+        self._serve(None, delay=0.0)
+
+        with patch.object(
+            nas_addon, "BROKER_REPLY_TIMEOUT_SECONDS", 0.05
+        ):
+            response = asyncio.run(nas_addon._query_broker(
+                self.socket_path, {"type": "authorize"}
+            ))
+
+        self.assertEqual(
+            response.get("reason"), "broker-unavailable: timed out"
+        )
+
+    def test_the_request_hook_is_a_coroutine(self):
+        # 同期フックに戻すと、下の「他の通信を止めない」性質が黙って消える。
+        # mitmproxy はフックを 1 本のイベントループで回すので、同期のまま
+        # 人を待つと待っている間プロキシ全体が止まる。
+        self.assertTrue(
+            asyncio.iscoroutinefunction(nas_addon.NasAddon.request)
+        )
+
+    def test_a_held_query_does_not_stall_another_one(self):
+        # 確認カードが 1 枚開いている間、プロキシを通る他の通信は進めなければ
+        # ならない。プロキシコンテナはセッション間で共有なので、止まるのは
+        # 同じセッションの通信だけではない。
+        #
+        # 先にこれを見る。ブロッキング実装に戻ると下のシナリオはイベント
+        # ループごと止まってハングし、失敗として読めなくなる。
+        self.assertTrue(asyncio.iscoroutinefunction(nas_addon._query_broker))
+
+        async def scenario():
+            held = asyncio.Event()
+            answered = []
+
+            async def handle(reader, writer):
+                request = json.loads((await reader.readline()).decode())
+                if request["requestId"] == "req-held":
+                    await held.wait()
+                writer.write((json.dumps({
+                    "version": 1,
+                    "type": "decision",
+                    "requestId": request["requestId"],
+                    "decision": "allow",
+                    "reason": "approved",
+                }) + "\n").encode())
+                await writer.drain()
+                writer.close()
+
+            server = await asyncio.start_unix_server(
+                handle, self.socket_path
+            )
+            try:
+                async def query(request_id):
+                    result = await nas_addon._query_broker(
+                        self.socket_path,
+                        {
+                            "type": "request_policy_review",
+                            "requestId": request_id,
+                        },
+                        reply_timeout=10.0,
+                    )
+                    answered.append(request_id)
+                    return result
+
+                held_task = asyncio.create_task(query("req-held"))
+                free = await query("req-free")
+                held.set()
+                await held_task
+            finally:
+                server.close()
+                await server.wait_closed()
+            return answered, free
+
+        answered, free = asyncio.run(scenario())
+        self.assertEqual(answered, ["req-free", "req-held"])
+        self.assertEqual(free.get("decision"), "allow")
+
+    def test_the_human_ceiling_outlasts_the_broker_prompt_deadline(self):
+        # addon の上限が broker の既定の締切より短いと、押す手が間に合っても
+        # 間に合わなかったことになる。既定は 300 秒 (`src/config/types.ts`)。
+        self.assertGreater(
+            nas_addon.BROKER_HUMAN_REPLY_TIMEOUT_SECONDS,
+            300.0,
+        )
+        self.assertGreater(
+            nas_addon.BROKER_HUMAN_REPLY_TIMEOUT_SECONDS,
+            nas_addon.BROKER_REPLY_TIMEOUT_SECONDS,
+        )
 
 
 if __name__ == "__main__":
