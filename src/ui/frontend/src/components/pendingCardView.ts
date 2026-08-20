@@ -48,3 +48,50 @@ export function sessionLabel(row: {
 }): string {
   return row.sessionName ?? row.sessionShortId;
 }
+
+// Why a network confirmation is on screen, in the words of the decision that
+// produced it. The keys are the backend's `DecisionReason`
+// (`src/network/authz/resolve.ts`); `websocket-denied` is absent because it
+// only ever denies, so it never raises a card.
+//
+// The rule id alone does not answer this question. `anthropic.messages`
+// asking to be reviewed and `anthropic.$fallback` catching a path no rule
+// claimed are different situations with different fixes — one is the rule
+// working as configured, the other is a gap in the configuration — and
+// telling them apart by reading the spelling of a pseudo id is not something
+// to ask of the person holding the button.
+const ASK_REASONS: Record<string, { label: string; hint: string }> = {
+  rule: {
+    label: "the matched rule asks for review",
+    hint: "A rule matched this request and its action for a match is review. Nothing is wrong: the configuration says requests like this one get confirmed.",
+  },
+  indeterminate: {
+    label: "the rule could not be decided on this body",
+    hint: "A rule matched the method and path, but whether its body condition holds could not be settled on this request — an unreadable, oversized, or unparseable body — and its action for that case is review. Evaluation stopped there: no wider rule was tried.",
+  },
+  "scope-fallback": {
+    label: "no rule in this scope matched",
+    hint: "This host has a scope, but none of the rules in it matched this method and path, so the scope's fallback decided — and it is review. A rule that was meant to cover this endpoint either does not match it or is not there.",
+  },
+  "network-fallback": {
+    label: "no scope covers this host",
+    hint: "No scope claims this host, so the document's own fallback decided — and it is review. Nothing has been configured about this host at all.",
+  },
+};
+
+/**
+ * Describe why a pending network card is asking, or `null` when the card
+ * does not say.
+ *
+ * A reason the frontend does not know is passed through as its own label
+ * rather than dropped: the vocabulary is the backend's, and a version that
+ * added a reason is better served by showing the raw slug than by showing
+ * nothing. Violation cards carry no reason — the violations they list are the
+ * reason — so `null` in, `null` out.
+ */
+export function askReasonView(
+  reason: string | null,
+): { label: string; hint: string } | null {
+  if (!reason) return null;
+  return ASK_REASONS[reason] ?? { label: reason, hint: "" };
+}

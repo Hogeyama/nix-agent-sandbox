@@ -40,10 +40,14 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
           const reviewInfo = item.reviewContext
             ? ` [${item.method} ${item.reviewContext.path}] body=${item.reviewContext.bodySize}B`
             : "";
+          // なぜ訊かれているか。ルール ID の隣に置く。`$fallback` の擬似 ID
+          // だけでは、ルールが review を宣言したのか、どのルールも引き受け
+          // なかったのかを綴りから読むことになる。
+          const askInfo = item.askReason ? ` (${item.askReason})` : "";
           return {
             sessionId: item.sessionId,
             requestId: item.requestId,
-            displayLine: `${item.sessionId} ${item.requestId} ${target}${reviewInfo} ${item.ruleId} ${item.state} ${item.createdAt}`,
+            displayLine: `${item.sessionId} ${item.requestId} ${target}${reviewInfo} ${item.ruleId}${askInfo} ${item.state} ${item.createdAt}`,
             structured: {
               sessionId: item.sessionId,
               requestId: item.requestId,
@@ -54,7 +58,9 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
               method: item.method,
               reviewContext: item.reviewContext ?? null,
               ruleId: item.ruleId,
+              askReason: item.askReason ?? null,
               approvalScopes: item.approvalScopes,
+              violations: item.violations ?? null,
             },
           };
         });

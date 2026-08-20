@@ -1373,6 +1373,8 @@ function toViolationPendingEntry(
     updatedAt: new Date().toISOString(),
     reviewContext: maskedReviewContext,
     ruleId: group.ruleId,
+    // `askReason` は載せない。この確認の理由は判定の理由ではなく、下に並ぶ
+    // 違反そのものである。
     approvalScopes: [...group.allowedScopes],
     // この確認が通しても資格情報は増えない。注入するかどうかは authorize が
     // 既に決めていて、ここでの答えは違反を通すかどうかだけである。
@@ -1398,6 +1400,10 @@ function toPendingEntry(
     updatedAt: new Date().toISOString(),
     reviewContext: maskedReviewContext,
     ruleId: group.ruleId,
+    // この確認が出た理由。承認の同一性に入っているものをそのまま出す
+    // (`pendingGroupKey` / `approvalKeys` が同じ値を鍵に使う) ので、カードは
+    // 押した答えが何に対して覚えられるかを言えるようになる。
+    askReason: group.reason,
     // 承認 UI に出すのと同じ集合を載せる。押せるものと通るものを一致させる
     // ために、broker はこの集合の外の粒度を受け付けない。
     approvalScopes: [...group.allowedScopes],

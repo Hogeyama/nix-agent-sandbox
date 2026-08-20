@@ -45,6 +45,7 @@ function makeNetworkRow(
     createdAtMs: 0,
     reviewContext: null,
     ruleId: "api.ask",
+    askReason: "rule",
     approvalScopes: ["once", "host-port", "host"],
     injectHeaders: [],
     violations: [],

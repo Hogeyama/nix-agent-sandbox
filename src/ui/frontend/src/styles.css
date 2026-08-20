@@ -1468,6 +1468,25 @@ body::after {
   overflow-y: auto;
 }
 
+/* -- Why the confirmation is being asked -- *
+ * One line, above the request details: the reason comes before the
+ * evidence. The `title` attribute carries the longer explanation. */
+.card-ask-reason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--cream-dim);
+}
+.card-ask-reason-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber-hi);
+}
+
 /* -- Acceptance-condition violations an approval would cover -- *
  * One block per violation, because one violation is one thing the
  * approval remembers. The value leads: it is what the operator is

@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import type { ResolvedDocument } from "./authz/resolve.ts";
+import type { DecisionReason, ResolvedDocument } from "./authz/resolve.ts";
 import type { Truth } from "./authz/semantics.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
 
@@ -655,6 +655,20 @@ export interface PendingEntry {
   reviewContext?: ReviewContext;
   /** この確認を起こしたルール。承認の同一性の片割れであり、擬似 ID もありうる。 */
   ruleId: string;
+  /**
+   * なぜこの確認が出ているか。判定が下った理由をそのまま運ぶ。
+   *
+   * ルール自身が `review` を宣言したせいで訊かれているのか、どのルールも
+   * 引き受けなかったせいで訊かれているのかは、押す人にとって別の問いである。
+   * ルール ID だけでは見分けられない — `$fallback` という擬似 ID の綴りを
+   * 読み解けと言うに等しい。理由は承認の同一性の一部でもある
+   * (`src/network/broker.ts` の `approvalKeys`) ので、同じルールでも理由が
+   * 違えば別の確認になる。カードはその区別を出せなければならない。
+   *
+   * 受理条件の違反から生じた確認には無い。そちらの理由は `violations` が
+   * 述べているもので、判定の理由ではない。
+   */
+  askReason?: DecisionReason;
   /** この確認で選べる粒度。ルールの具体性から導出される。 */
   approvalScopes: ApprovalScope[];
   /** 承認したときに注入されるヘッダー。名前だけで、値は載らない。 */

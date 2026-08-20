@@ -37,6 +37,10 @@ export type NetworkPendingRow = {
   // Rule the confirmation came from, or null when the payload omits it.
   // Presentation only; the backend decides what an approval covers.
   ruleId: string | null;
+  // Why this confirmation is being asked, or null when the payload does not
+  // say — violation cards never do. Passed through verbatim: the vocabulary
+  // belongs to the backend and the view resolves it to a sentence.
+  askReason: string | null;
   // Grains this entry may be approved at, narrowest first. Never empty:
   // an entry that advertises nothing usable is treated as `once` only.
   approvalScopes: string[];
@@ -98,6 +102,7 @@ export function normalizeNetworkPending(
     createdAtMs: parseIsoToMs(it.createdAt),
     reviewContext: it.reviewContext ?? null,
     ruleId: it.ruleId ?? null,
+    askReason: it.askReason ?? null,
     approvalScopes: approvalScopesOf(it.approvalScopes),
     injectHeaders: injectHeadersOf(it.injectHeaders),
     violations: violationsOf(it.violations),

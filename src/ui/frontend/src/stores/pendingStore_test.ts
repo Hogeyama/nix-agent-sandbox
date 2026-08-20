@@ -65,6 +65,25 @@ describe("normalizeNetworkPending", () => {
     expect(rows[0]?.approvalScopes).toEqual(["once", "rule"]);
   });
 
+  test("carries why the confirmation is being asked", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({
+        ruleId: "anthropic.$fallback",
+        askReason: "scope-fallback",
+      }),
+    ]);
+    expect(rows[0]?.askReason).toBe("scope-fallback");
+  });
+
+  test("no reason when the payload omits it", () => {
+    // 違反から生じた確認は理由を持たない。並んでいる違反が理由そのもので、
+    // 判定の理由ではない。
+    const rows = normalizeNetworkPending([
+      makeNetwork({ askReason: undefined }),
+    ]);
+    expect(rows[0]?.askReason).toBeNull();
+  });
+
   test("an entry that offers no scopes falls back to the narrowest one", () => {
     // A payload without the field can only be trusted for this one
     // request; guessing a wider grain would remember an approval the

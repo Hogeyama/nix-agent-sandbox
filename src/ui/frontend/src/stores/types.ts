@@ -48,6 +48,11 @@ export type NetworkPendingItemLike = {
   // Rule that raised the confirmation, or a `$fallback` pseudo ID. Together
   // with the target it is the identity of the approval the buttons produce.
   ruleId?: string | null;
+  // Why the confirmation is being asked: the reason the authorization
+  // decision carried (`rule`, `indeterminate`, `scope-fallback`,
+  // `network-fallback`). Absent on confirmations raised by a body
+  // inspection, where `violations` is the reason itself.
+  askReason?: string | null;
   // Grains this confirmation may be approved at, narrowest first. The
   // backend derives them from how specific the matched rule is and refuses
   // anything outside the list.

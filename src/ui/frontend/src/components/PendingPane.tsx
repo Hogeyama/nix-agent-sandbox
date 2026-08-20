@@ -9,7 +9,11 @@ import type {
   NetworkPendingRow,
 } from "../stores/pendingStore";
 import { formatAuditEntry, summaryFor } from "./auditEntryView";
-import { formatRelativeTime, sessionLabel } from "./pendingCardView";
+import {
+  askReasonView,
+  formatRelativeTime,
+  sessionLabel,
+} from "./pendingCardView";
 
 // Network scope chips. The label is what the user reads; the hint is the
 // `title` tooltip. Which of these a card shows comes from the entry's
@@ -157,6 +161,17 @@ export function PendingPane(props: Props) {
                     <span class="verb">{row.verb}</span>
                     {row.summary}
                   </p>
+                  {/* Why this card exists. Without it the only account the
+                      card gives of itself is a rule id, and a `$fallback`
+                      pseudo id is not an account. */}
+                  <Show when={askReasonView(row.askReason)}>
+                    {(reason) => (
+                      <p class="card-ask-reason" title={reason().hint}>
+                        <span class="card-ask-reason-label">why</span>
+                        {reason().label}
+                      </p>
+                    )}
+                  </Show>
                   <Show when={row.reviewContext}>
                     {(ctx) => (
                       <div class="card-review-context">

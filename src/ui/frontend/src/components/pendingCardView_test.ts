@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { formatRelativeTime, sessionLabel } from "./pendingCardView";
+import {
+  askReasonView,
+  formatRelativeTime,
+  sessionLabel,
+} from "./pendingCardView";
 
 describe("formatRelativeTime", () => {
   test("targetMs = null returns the em dash placeholder", () => {
@@ -66,5 +70,44 @@ describe("sessionLabel", () => {
     expect(
       sessionLabel({ sessionShortId: "s_7a3f12", sessionName: null }),
     ).toBe("s_7a3f12");
+  });
+});
+
+describe("askReasonView", () => {
+  test("a rule that asks to be reviewed reads as the rule's own doing", () => {
+    const view = askReasonView("rule");
+    expect(view?.label).toBe("the matched rule asks for review");
+    expect(view?.hint).toContain("review");
+  });
+
+  test("a scope fallback says no rule took the request", () => {
+    // これがルール自身の review と同じ文になってはならない。前者は設定の
+    // とおりで、後者は設定の穴である。
+    const view = askReasonView("scope-fallback");
+    expect(view?.label).toBe("no rule in this scope matched");
+    expect(view?.label).not.toBe(askReasonView("rule")?.label);
+  });
+
+  test("every known reason has its own label", () => {
+    const labels = [
+      "rule",
+      "indeterminate",
+      "scope-fallback",
+      "network-fallback",
+    ].map((reason) => askReasonView(reason)?.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.every((label) => typeof label === "string")).toBe(true);
+  });
+
+  test("a reason the frontend does not know shows as itself", () => {
+    expect(askReasonView("reason-from-a-newer-backend")).toEqual({
+      label: "reason-from-a-newer-backend",
+      hint: "",
+    });
+  });
+
+  test("no reason (a violation card) shows nothing", () => {
+    expect(askReasonView(null)).toBeNull();
+    expect(askReasonView("")).toBeNull();
   });
 });

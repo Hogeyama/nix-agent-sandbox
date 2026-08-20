@@ -430,6 +430,8 @@ test("SessionBroker: a violation is confirmed with the finding on the card", asy
     // 100KB のリクエストの違反箇所は見えない。
     expect(pending.items[0].violations).toEqual([finding("future_block")]);
     expect(pending.items[0].ruleId).toEqual("policy.json");
+    // 判定の理由は載らない。この確認の理由は上に並んでいる違反である。
+    expect(pending.items[0].askReason).toBeUndefined();
     // ターゲットは同一性に入らないので、広さを選ぶ粒度は出さない。
     expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
     // この答えが通しても資格情報は増えない。
@@ -2166,6 +2168,9 @@ test("SessionBroker: the offered granularity follows the scope's target", async 
     // thing twice. The only real question left is how long it lasts.
     expect(grainOf("req_pinned")).toMatchObject({
       ruleId: "pinned.ask",
+      // 押す人には、ルール自身が review を宣言したのか、どのルールも
+      // 引き受けなかったのかが見えなければならない。
+      askReason: "rule",
       approvalScopes: ["once", "rule"],
     });
     // A wildcard scope does not say which host the rule ran against, so the
@@ -2177,6 +2182,7 @@ test("SessionBroker: the offered granularity follows the scope's target", async 
     // Nothing claimed this target at all.
     expect(grainOf("req_unscoped")).toMatchObject({
       ruleId: "$fallback",
+      askReason: "network-fallback",
       approvalScopes: ["once", "host-port", "host"],
     });
 
