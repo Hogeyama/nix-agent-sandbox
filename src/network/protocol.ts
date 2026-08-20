@@ -204,8 +204,18 @@ export function isApprovableFinding(finding: ViolationFinding): boolean {
 }
 
 export const REQUEST_POLICY_BLOCK_REASONS = [
-  /** 違反を人が拒否した、または承認に変換できなかった。 */
+  /** 違反を人が拒否した、または broker が承認に変換できないと答えた。 */
   "violations-denied",
+  /**
+   * `review` の違反に誰も答えなかった。broker へ届かなかった、答えが契約の形を
+   * していなかった、あるいは人が押すのが addon の待ち時間に間に合わなかった。
+   *
+   * 拒否と同じ語で呼ばない。リクエストの帰結はどちらも 403 だが、記録の意味は
+   * 別である。押すのが 1 秒遅れた人は何も拒否していないし、届かなかった
+   * broker も何も判断していない。それを `violations-denied` と書くと、
+   * 監査ログの上では人が下していない判断が人の判断として残る。
+   */
+  "review-unanswered",
   "body-unavailable",
   "unexpected-body",
   "invalid-json",

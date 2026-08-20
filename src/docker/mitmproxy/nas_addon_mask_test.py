@@ -3482,6 +3482,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         client_id="client-test",
         mask_values=("SECRET123",),
         review_decision="allow",
+        review_response=None,
     ):
         """rule_id は broker が返す答え。addon の選択と食い違えば止まる。"""
         request_headers = list(headers or [])
@@ -3514,6 +3515,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
                     ]
                 return decision
             if request["type"] == "request_policy_review":
+                # review_response は「契約の形をしていない答え」を作るための
+                # 逃げ道である。決めた答えは review_decision で足りる。
+                if review_response is not None:
+                    return review_response
                 return {
                     "version": 1,
                     "type": "decision",
@@ -4137,9 +4142,9 @@ class RequestPolicyFlowTest(unittest.TestCase):
             [("block", "violations-denied")],
         )
 
-    def test_an_unanswerable_review_blocks(self):
+    def test_an_unanswered_review_blocks_but_is_not_a_denial(self):
         # broker が答えられないなら、そのリクエストは受理できると示されて
-        # いない。`_query_broker` は落ちた問い合わせを deny に変える。
+        # いない。ただし誰も拒否していないので、拒否として記録もしない。
         flow, messages, _stderr = self._run(
             document=_flow_document([self._review_rule()]),
             rule_id="api.messages",
@@ -4150,7 +4155,49 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(flow.response.status_code, 403)
         self.assertEqual(
             [m["reason"] for m in self._outcomes(messages)],
-            ["violations-denied"],
+            ["review-unanswered"],
+        )
+
+    def test_a_query_that_never_reached_the_broker_is_unanswered(self):
+        # `_query_broker` は落ちた問い合わせを自分で deny 形の値に変える。
+        # それは broker の答えではないので、人の拒否と同じ語で呼ばない。
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future"}]}',
+            review_response={
+                "decision": "deny",
+                "reason": "broker-unavailable: [Errno 2] no socket",
+            },
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(
+            [m["reason"] for m in self._outcomes(messages)],
+            ["review-unanswered"],
+        )
+
+    def test_an_allow_for_another_request_does_not_pass_this_one(self):
+        # 別のリクエストに対する承認はこのリクエストについて何も言っていない。
+        # 名前が合わない答えは答えではなく、ボディは前へ進まない。
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future"}]}',
+            review_response={
+                "version": 1,
+                "type": "decision",
+                "requestId": "req-somebody-else",
+                "decision": "allow",
+                "reason": "approved-by-user",
+            },
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(
+            [m["reason"] for m in self._outcomes(messages)],
+            ["review-unanswered"],
         )
 
     def test_a_body_that_satisfies_the_rule_asks_nobody(self):

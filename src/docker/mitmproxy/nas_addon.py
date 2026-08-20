@@ -83,6 +83,18 @@ FINDING_POINTER_MAX_CHARS = 1024
 # the broker: whoever settles the review replaces it with what happened.
 REASON_VIOLATIONS_REVIEW = "violations-review"
 
+# What a review settled on. A refusal and an unanswered question both end the
+# request, but they are not the same event: one is a decision somebody made
+# and the other is the absence of one. The audit log and the block log line
+# carry the reason, so the two have to be told apart here or the record will
+# read as a human denial when nobody denied anything.
+SETTLED_ALLOW = "allow"
+SETTLED_DENY = "deny"
+SETTLED_UNANSWERED = "unanswered"
+
+# Block reason for a review nobody answered. See `SETTLED_UNANSWERED`.
+REASON_REVIEW_UNANSWERED = "review-unanswered"
+
 FINDING_SCHEMA_MISMATCH = "schema-mismatch"
 FINDING_UNEXPECTED_BODY = "unexpected-body"
 FINDING_BODY_UNAVAILABLE = "body-unavailable"
@@ -798,26 +810,51 @@ def _settle_violation_review(
     method: str,
     review_context: dict,
     findings: list[dict],
-) -> bool:
+) -> str:
     """Ask the broker whether these violations may pass.
 
     The broker holds the approvals, not the addon: it answers from the set of
     violations already approved this session, or it puts a card in front of a
-    person and waits. Anything other than a clear allow — a broker that is
-    gone, a malformed answer, a person who said no — leaves the request
+    person and waits. Anything other than a clear allow leaves the request
     refused, because the request has not been shown to be acceptable.
+
+    Returns which of the three things happened. `SETTLED_ALLOW` and
+    `SETTLED_DENY` are answers the broker gave about this request, naming it;
+    `SETTLED_UNANSWERED` is everything else — a socket that was not there, a
+    reply that does not have the shape of a decision, a reply that answers
+    some other request, or the wait running out. Only the first one lets the
+    body through, so the distinction changes nothing about the outcome. It
+    changes what the record says: a refusal is a decision somebody made and
+    the rest is the absence of one, and the reason travels to the audit log.
 
     This blocks the proxy while it waits, the same way the authorization query
     does, and gives up on the same 10 second ceiling. A person who takes
     longer does not lose the approval: the broker keeps the card, and the
     press lands in the approved set, so the next request carrying the same
     violation passes without asking. With the conversation history resent
-    every turn, that next request is usually seconds away."""
+    every turn, that next request is usually seconds away — but this request
+    is already refused by then, and calling that refusal a denial would put a
+    decision in the log that the person never made."""
     response = _query_broker(socket_path, _violation_review_message(
         request_id, session_id, rule_id, host, port, method,
         review_context, findings,
     ))
-    return response.get("decision") == "allow"
+    # A decision is only an answer to this question if it says so field for
+    # field. `_query_broker` turns a failed query into a deny-shaped value of
+    # its own making, and a reply naming another request says nothing about
+    # this one, so neither may pass for something the broker decided here.
+    if not (
+        response.get("version") == 1
+        and response.get("type") == "decision"
+        and response.get("requestId") == request_id
+    ):
+        return SETTLED_UNANSWERED
+    decision = response.get("decision")
+    if decision == "allow":
+        return SETTLED_ALLOW
+    if decision == "deny":
+        return SETTLED_DENY
+    return SETTLED_UNANSWERED
 
 
 def _violation_review_message(
@@ -2357,15 +2394,24 @@ class NasAddon:
                 # The rule asked for a person on these violations. The answer
                 # decides the outcome, so it has to arrive before the body
                 # does — and before any credential is injected below.
-                if _settle_violation_review(
+                settled = _settle_violation_review(
                     broker_socket, request_id, session_id, rule_id,
                     host, port, method, review_context, findings,
-                ):
+                )
+                if settled == SETTLED_ALLOW:
                     result = "rewrite" if rewritten is not None else "pass"
                     reason = "violations-approved"
                 else:
+                    # Both refusals stop here, and each is reported as what it
+                    # was. Whoever reads the record later needs to know
+                    # whether to look for the person who said no or for the
+                    # answer that never arrived.
                     result, rewritten, reason = (
-                        "block", None, "violations-denied",
+                        "block",
+                        None,
+                        "violations-denied"
+                        if settled == SETTLED_DENY
+                        else REASON_REVIEW_UNANSWERED,
                     )
             if result == "rewrite" and rewritten is not None:
                 flow.request.content = rewritten
