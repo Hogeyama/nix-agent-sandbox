@@ -271,6 +271,10 @@
             pkgs.pnpm
             pkgs.chromium
             pkgs.dtach
+            # display.sandbox: xpra が生成した cookie の読み出しに使う。
+            # xpra 本体は opt-in なのでホスト提供に任せるが、xauth は
+            # closure が小さく、無いと DisplayStage が起動時に落ちる。
+            pkgs.xauth
             pkgs.zig
             pkgs.fuse3
             pkgs.pkg-config

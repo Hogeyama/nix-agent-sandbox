@@ -26,6 +26,13 @@ import { ProcessService, type SpawnHandle } from "../../services/process.ts";
 
 export interface DisplayStartPlan {
   readonly xpraBinaryPath: string;
+  /**
+   * xauth バイナリの絶対パス。cookie の読み出しに使う。PATH 越しに
+   * "xauth" を spawn すると、PATH に無い環境で「リトライし続けて
+   * timeout」という遅くて分かりにくい失敗になるため、planDisplay が
+   * 解決済みのパスを渡す。
+   */
+  readonly xauthBinaryPath: string;
   readonly sessionDir: string;
   readonly xauthorityPath: string;
   /**
@@ -164,6 +171,7 @@ export function extractCookieFromXauthList(
  * 空出力を返す間はリトライする。
  */
 async function readXpraCookieWithRetry(
+  xauthBinaryPath: string,
   path: string,
   displayNumber: number,
   timeoutMs: number,
@@ -173,7 +181,7 @@ async function readXpraCookieWithRetry(
   let lastError: unknown = null;
   while (Date.now() < deadline) {
     try {
-      const proc = Bun.spawn(["xauth", "-f", path, "list"], {
+      const proc = Bun.spawn([xauthBinaryPath, "-f", path, "list"], {
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -344,6 +352,7 @@ export const DisplayServiceLive: Layer.Layer<
           const cookie = yield* Effect.tryPromise({
             try: () =>
               readXpraCookieWithRetry(
+                plan.xauthBinaryPath,
                 plan.xpraInternalXauthPath,
                 plan.displayNumber,
                 plan.timeoutMs,

@@ -78,6 +78,14 @@ export interface MountProbes {
   gitWorktreeMainRoot: string | null;
   /** xpra バイナリのパス (PATH 探索の結果)。見つからなければ null */
   xpraBinPath: string | null;
+  /**
+   * xauth バイナリのパス (PATH 探索の結果)。見つからなければ null。
+   *
+   * xpra 起動後に cookie を読み出すのに必須。無いまま起動すると
+   * readXpraCookieWithRetry が spawn 失敗をリトライし続けて timeout を
+   * 使い切るので、planDisplay で事前に弾く。
+   */
+  xauthBinPath: string | null;
   /** /tmp/.X11-unix/X* で既に使用されている display 番号 */
   takenX11Displays: ReadonlySet<number>;
   /** /tmp/.X11-unix が read-only か (WSL 等で ro マウントされている場合 true) */
@@ -168,13 +176,13 @@ export async function resolveMountProbes(
   const localConfigPaths = await resolveLocalConfigPaths(workDir);
 
   // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
-  const [xpraBinPath, takenX11Displays, x11UnixDirReadOnly] = await Promise.all(
-    [
+  const [xpraBinPath, xauthBinPath, takenX11Displays, x11UnixDirReadOnly] =
+    await Promise.all([
       resolveBinaryPath("xpra"),
+      resolveBinaryPath("xauth"),
       resolveTakenX11Displays(),
       resolveX11UnixDirReadOnly(),
-    ],
-  );
+    ]);
 
   return {
     agentProbes,
@@ -192,6 +200,7 @@ export async function resolveMountProbes(
     resolvedEnvEntries,
     gitWorktreeMainRoot,
     xpraBinPath,
+    xauthBinPath,
     takenX11Displays,
     x11UnixDirReadOnly,
     localConfigPaths,

@@ -88,6 +88,15 @@ export function planDisplay(
     };
   }
 
+  if (!mountProbes.xauthBinPath) {
+    return {
+      kind: "error",
+      message:
+        "[nas] xauth not found on PATH. display.sandbox: xpra needs it to read " +
+        "the X11 cookie xpra generates (e.g. Debian: xauth, Nix: pkgs.xauth).",
+    };
+  }
+
   const displayNumber = pickFreeDisplayNumber(mountProbes.takenX11Displays);
   if (displayNumber === null) {
     return {
@@ -115,6 +124,7 @@ export function planDisplay(
     plan: {
       startPlan: {
         xpraBinaryPath: mountProbes.xpraBinPath,
+        xauthBinaryPath: mountProbes.xauthBinPath,
         sessionDir,
         xauthorityPath,
         xpraInternalXauthPath,

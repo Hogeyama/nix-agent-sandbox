@@ -114,6 +114,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     resolvedEnvEntries: [],
     gitWorktreeMainRoot: null,
     xpraBinPath: "/usr/bin/xpra",
+    xauthBinPath: "/usr/bin/xauth",
     takenX11Displays: new Set<number>(),
     x11UnixDirReadOnly: false,
     localConfigPaths: [],
@@ -151,6 +152,18 @@ test("planDisplay: errors when xpra is not on PATH", () => {
   expect(result.kind).toEqual("error");
   if (result.kind === "error") {
     expect(result.message).toContain("xpra not found");
+  }
+});
+
+test("planDisplay: errors when xauth is not on PATH", () => {
+  const input = makeStageInput(
+    makeProfile({ display: { sandbox: "xpra", size: "1920x1080" } }),
+  );
+  const probes = makeMountProbes({ xauthBinPath: null });
+  const result = planDisplay(input, probes);
+  expect(result.kind).toEqual("error");
+  if (result.kind === "error") {
+    expect(result.message).toContain("xauth not found");
   }
 });
 
