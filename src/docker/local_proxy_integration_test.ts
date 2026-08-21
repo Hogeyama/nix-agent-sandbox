@@ -221,6 +221,90 @@ test("local-proxy: CONNECT tunnel forwards with Proxy-Authorization", async () =
   }
 });
 
+test("local-proxy: established CONNECT teardown stays silent", async () => {
+  const upstreamPort = 19903;
+  const proxyPort = 18090;
+  const listener = net.createServer((socket) => {
+    socket.once("data", () => {
+      socket.write("HTTP/1.1 200 OK\r\n\r\n");
+      socket.once("end", () => socket.resetAndDestroy());
+    });
+  });
+  await new Promise<void>((resolve) => {
+    listener.listen(upstreamPort, "127.0.0.1", resolve);
+  });
+
+  const process = await startLocalProxy(
+    `http://sess_abc:token123@127.0.0.1:${upstreamPort}`,
+    proxyPort,
+    { NAS_FORWARD_PORTS: "" },
+  );
+  const afterHandshake: Buffer[] = [];
+
+  try {
+    const client = await new Promise<net.Socket>((resolve, reject) => {
+      const socket = net.createConnection(
+        { host: "127.0.0.1", port: proxyPort },
+        () => resolve(socket),
+      );
+      socket.once("error", reject);
+    });
+    client.write(
+      "CONNECT target.example.com:443 HTTP/1.1\r\n" +
+        "Host: target.example.com:443\r\n\r\n",
+    );
+    const response = await new Promise<string>((resolve) => {
+      client.once("data", (data) => resolve(data.toString()));
+    });
+    expect(response).toContain("200");
+
+    client.on("data", (data) => afterHandshake.push(data));
+    client.end();
+    await new Promise<void>((resolve) => client.once("close", resolve));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    await killProcess(process);
+    await new Promise<void>((resolve) => listener.close(() => resolve()));
+  }
+
+  const stderr = await new Response(process.stderr).text();
+  expect(stderr).toEqual("");
+  expect(Buffer.concat(afterHandshake).toString()).toEqual("");
+});
+
+test("local-proxy: CONNECT setup failure returns 502", async () => {
+  const proxyPort = 18091;
+  const process = await startLocalProxy(
+    "http://sess_abc:token123@127.0.0.1:19904",
+    proxyPort,
+    { NAS_FORWARD_PORTS: "" },
+  );
+
+  try {
+    const client = await new Promise<net.Socket>((resolve, reject) => {
+      const socket = net.createConnection(
+        { host: "127.0.0.1", port: proxyPort },
+        () => resolve(socket),
+      );
+      socket.once("error", reject);
+    });
+    client.write(
+      "CONNECT target.example.com:443 HTTP/1.1\r\n" +
+        "Host: target.example.com:443\r\n\r\n",
+    );
+    const response = await new Promise<string>((resolve) => {
+      client.once("data", (data) => resolve(data.toString()));
+    });
+    expect(response).toContain("502 Bad Gateway");
+    client.destroy();
+  } finally {
+    await killProcess(process);
+  }
+
+  const stderr = await new Response(process.stderr).text();
+  expect(stderr).toContain("CONNECT upstream error");
+});
+
 /**
  * Spawn local-proxy.mjs wired up for forward-port testing.
  *

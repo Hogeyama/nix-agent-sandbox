@@ -77,6 +77,7 @@ server.on("connect", (clientReq, clientSocket, head) => {
   });
 
   let responseBuffer = Buffer.alloc(0);
+  let tunnelEstablished = false;
 
   const onData = (chunk) => {
     responseBuffer = Buffer.concat([responseBuffer, chunk]);
@@ -90,6 +91,7 @@ server.on("connect", (clientReq, clientSocket, head) => {
     const statusCode = parseInt(statusLine.split(" ")[1], 10);
 
     if (statusCode === 200) {
+      tunnelEstablished = true;
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head && head.length > 0) {
         upstreamSocket.write(head);
@@ -109,6 +111,10 @@ server.on("connect", (clientReq, clientSocket, head) => {
   upstreamSocket.on("data", onData);
 
   upstreamSocket.on("error", (err) => {
+    if (tunnelEstablished) {
+      clientSocket.destroy();
+      return;
+    }
     console.error(`[local-proxy] CONNECT upstream error: ${err.message}`);
     clientSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
     clientSocket.end();
