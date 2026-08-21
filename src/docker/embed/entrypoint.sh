@@ -109,6 +109,9 @@ if [ -f "$NAS_PROXY_CERT" ] && command -v openssl &>/dev/null; then
     -certpbe PBE-SHA1-3DES \
     -macalg sha1 2>/dev/null
   if [ -f "$JVM_TRUSTSTORE" ]; then
+    # openssl pkcs12 -export は 0600 で書き、ここは setpriv 降格前の root。
+    # 中身は公開 CA 証明書だけなので、エージェントユーザーが読めるようにする。
+    chmod 644 "$JVM_TRUSTSTORE"
     export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=$JVM_TRUSTSTORE -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
     nas_debug "[nas] JVM trust store configured for proxy CA"
   fi
