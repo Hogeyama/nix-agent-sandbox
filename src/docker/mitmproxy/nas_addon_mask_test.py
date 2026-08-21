@@ -273,6 +273,10 @@ class FakeResponse:
     def __init__(self, status_code, content, headers=None):
         self.status_code = status_code
         self.content = content
+        # 実物では responseheaders 時点でサーバー応答のボディは未読
+        # (raw_content is None)。content を渡す fake はローカル生成応答
+        # (Response.make 相当) を模す。
+        self.raw_content = content
         self.headers = headers or {}
 
 
@@ -312,6 +316,42 @@ class TcpLifecycleTest(unittest.TestCase):
         addon.tcp_start(flow)
 
         self.assertTrue(flow.killed)
+
+
+class ResponseStreamingTest(unittest.TestCase):
+    def setUp(self):
+        self.addon = nas_addon.NasAddon()
+
+    def test_streams_a_server_response(self):
+        flow = FakeFlow(FakeRequest())
+        flow.response = FakeResponse(200, None)
+
+        self.addon.responseheaders(flow)
+
+        self.assertTrue(flow.response.stream)
+
+    def test_does_not_stream_a_locally_synthesized_response(self):
+        # request フックが Response.make で作る block ページは
+        # responseheaders 時点でボディ確定済み (raw_content is not None)。
+        flow = FakeFlow(FakeRequest())
+        flow.response = FakeResponse(403, b"blocked")
+
+        self.addon.responseheaders(flow)
+
+        self.assertFalse(getattr(flow.response, "stream", False))
+
+    def test_does_not_stream_a_websocket_upgrade(self):
+        flow = FakeFlow(FakeRequest())
+        flow.response = FakeResponse(101, None)
+
+        self.addon.responseheaders(flow)
+
+        self.assertFalse(getattr(flow.response, "stream", False))
+
+    def test_tolerates_a_missing_response(self):
+        flow = FakeFlow(FakeRequest())
+
+        self.addon.responseheaders(flow)  # raises nothing
 
 
 class ApplyRequestMaskingTest(unittest.TestCase):

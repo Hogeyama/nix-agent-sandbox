@@ -2618,6 +2618,26 @@ class NasAddon:
         )
         flow.kill()
 
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        # Stream server response bodies to the client as they arrive.
+        # Nothing on the response side is inspected — every policy decision,
+        # body rule and mask runs in `request` before the server is contacted
+        # — while mitmproxy's default buffering hands the client its first
+        # byte only after the proxy holds the whole body, which trips short
+        # client read timeouts on large downloads (gradle wrapper: 10s).
+        response = getattr(flow, "response", None)
+        if response is None:
+            return
+        if getattr(response, "status_code", None) == 101:
+            # A WebSocket upgrade has no HTTP body; its frames must keep
+            # going through the websocket_message hook, which masks content.
+            return
+        if getattr(response, "raw_content", None) is not None:
+            # A body already present at header time was synthesized locally
+            # (block pages from `request`), not read from a server.
+            return
+        response.stream = True
+
     def response(self, flow: http.HTTPFlow) -> None:
         response = getattr(flow, "response", None)
         if (
