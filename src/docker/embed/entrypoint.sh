@@ -101,7 +101,12 @@ if [ -f "$NAS_PROXY_CERT" ]; then
 fi
 JVM_TRUSTSTORE="/tmp/nas-proxy-truststore.p12"
 if [ -f "$NAS_PROXY_CERT" ] && command -v openssl &>/dev/null; then
+  # -jdktrust (OpenSSL 3.2+) が無いと、証明書だけの PKCS12 を Java は
+  # 「0 エントリ」として読む (Oracle 独自の trustedKeyUsage 属性が必須)。
+  # 未対応の openssl ではこのコマンドが失敗してファイルが残らず、下の
+  # -f ガードで JAVA_TOOL_OPTIONS ごとスキップされる。
   openssl pkcs12 -export -nokeys \
+    -jdktrust anyExtendedKeyUsage \
     -in "$NAS_PROXY_CERT" \
     -out "$JVM_TRUSTSTORE" \
     -passout pass:changeit \
@@ -163,7 +168,7 @@ WORKSPACE="${WORKSPACE:?WORKSPACE must be set}"
 
 USER_SETUP_START="$(nas_measure_start)"
 if [ "$NAS_UID" != "0" ]; then
-  # 同じ UID/GID を持つ既存エントリを削除 (ubuntu:24.04 のデフォルト ubuntu ユーザー等)
+  # 同じ UID/GID を持つ既存エントリを削除 (ubuntu イメージのデフォルト ubuntu ユーザー等)
   EXISTING_USER=$(awk -F: -v uid="$NAS_UID" '$3 == uid {print $1}' /etc/passwd)
   if [ -n "$EXISTING_USER" ] && [ "$EXISTING_USER" != "$NAS_USER" ]; then
     sed -i "/^${EXISTING_USER}:/d" /etc/passwd

@@ -1,4 +1,6 @@
-FROM ubuntu:24.04
+# 26.04 以上が必要: JVM が信頼済み証明書として認識する PKCS12 truststore の
+# 生成 (entrypoint.sh の openssl pkcs12 -jdktrust) に OpenSSL 3.2+ が要る。
+FROM ubuntu:26.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl ca-certificates bash docker.io docker-compose-v2 \
@@ -17,7 +19,7 @@ ENV LANG=en_US.UTF-8 \
 # Bun (local-proxy 実行用。Node.js より起動が高速)
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
-# ubuntu:24.04 のデフォルト ubuntu ユーザー (UID 1000) を削除。
+# ubuntu イメージのデフォルト ubuntu ユーザー (UID 1000) を削除。
 # ホストユーザーが UID 1000 の場合に entrypoint でのユーザー作成と衝突するため。
 RUN userdel -r ubuntu 2>/dev/null && groupdel ubuntu 2>/dev/null || true
 
