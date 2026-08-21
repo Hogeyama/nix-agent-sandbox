@@ -54,7 +54,7 @@ async function startLocalProxy(
   upstreamUrl: string,
   port: number,
   envOverrides: Record<string, string | undefined> = {},
-): Promise<ReturnType<typeof Bun.spawn>> {
+): Promise<Bun.ReadableSubprocess> {
   const proc = Bun.spawn(["bun", "run", PROXY_SCRIPT], {
     stdout: "pipe",
     stderr: "pipe",
