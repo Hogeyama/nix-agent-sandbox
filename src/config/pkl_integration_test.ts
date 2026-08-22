@@ -150,6 +150,14 @@ profiles {
     await setupNasDir(tmpDir, configPkl);
     const config = await loadConfig({ startDir: tmpDir });
     expect(config.profiles.dev.agent).toEqual("claude");
+    expect(config.profiles.dev.network).toMatchObject({
+      requestBodyAudit: {
+        enable: false,
+        retentionSeconds: 604_800,
+        maxBodyBytes: 8_388_608,
+        maxTotalBytes: 268_435_456,
+      },
+    });
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

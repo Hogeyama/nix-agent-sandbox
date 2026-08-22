@@ -6,8 +6,10 @@ import * as path from "node:path";
 import {
   _closeAuditDb,
   appendAuditLog,
+  getRequestBody,
   queryAuditLogs,
   resolveAuditDir,
+  storeRequestBody,
 } from "./store.ts";
 import type { AuditLogEntry } from "./types.ts";
 
@@ -119,6 +121,60 @@ test("appendAuditLog: stores body diagnostics as nullable JSON metadata", async 
           .query("SELECT body_diagnostic FROM audit_log WHERE request_id = ?")
           .get("req-without-diagnostic"),
       ).toEqual({ body_diagnostic: null });
+    } finally {
+      db.close();
+    }
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("appendAuditLog: stores request body status as metadata without body bytes", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-status-"));
+  try {
+    await appendAuditLog(
+      makeEntry({
+        requestId: "req-with-body-status",
+        requestBodyAuditStatus: {
+          state: "attached",
+          byteLength: 7,
+          sha256: `sha256:${"a".repeat(64)}`,
+        },
+      }),
+      dir,
+    );
+    await appendAuditLog(
+      makeEntry({ requestId: "req-without-body-status" }),
+      dir,
+    );
+
+    const entries = await queryAuditLogs({}, dir);
+    expect(
+      entries.find((entry) => entry.requestId === "req-with-body-status")
+        ?.requestBodyAuditStatus,
+    ).toEqual({
+      state: "attached",
+      byteLength: 7,
+      sha256: `sha256:${"a".repeat(64)}`,
+    });
+    expect(
+      entries.find((entry) => entry.requestId === "req-without-body-status")
+        ?.requestBodyAuditStatus,
+    ).toBeUndefined();
+
+    _closeAuditDb(dir);
+    const db = new Database(path.join(dir, "audit.db"));
+    try {
+      const stored = db
+        .query("SELECT body_audit_status FROM audit_log WHERE request_id = ?")
+        .get("req-with-body-status") as { body_audit_status: string };
+      expect(JSON.parse(stored.body_audit_status)).toEqual({
+        state: "attached",
+        byteLength: 7,
+        sha256: `sha256:${"a".repeat(64)}`,
+      });
+      expect(stored.body_audit_status).not.toContain("body bytes");
     } finally {
       db.close();
     }
@@ -518,6 +574,301 @@ test("queryAuditLogs: compound filter with sessionIds and domain", async () => {
     expect(results[0].sessionId).toEqual("sess-a");
     expect(results[0].domain).toEqual("network");
   } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+function requestBodySha256(body: Uint8Array): string {
+  const digest = new Bun.CryptoHasher("sha256").update(body).digest("hex");
+  return `sha256:${digest}`;
+}
+
+test("request body store: round-trips exact NUL and non-UTF-8 bytes outside audit rows", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-"));
+  try {
+    const body = Uint8Array.from([0x00, 0xff, 0xc3, 0x28, 0x00, 0x7f]);
+    const sha256 = requestBodySha256(body);
+    const status = await storeRequestBody(
+      {
+        sessionId: "sess-body",
+        requestId: "req-body",
+        capturedAt: "2099-01-01T00:00:00.000Z",
+        contentType: "application/octet-stream",
+        contentEncoding: "gzip",
+        byteLength: body.byteLength,
+        sha256,
+        body,
+      },
+      { retentionSeconds: 60, maxTotalBytes: 1024 },
+      dir,
+    );
+
+    expect(status).toEqual({
+      state: "attached",
+      byteLength: body.byteLength,
+      sha256,
+    });
+    expect(await getRequestBody("sess-body", "req-body", dir)).toEqual({
+      sessionId: "sess-body",
+      requestId: "req-body",
+      capturedAt: "2099-01-01T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:01:00.000Z",
+      contentType: "application/octet-stream",
+      contentEncoding: "gzip",
+      byteLength: body.byteLength,
+      sha256,
+      body,
+    });
+
+    await appendAuditLog(makeEntry({ sessionId: "sess-body" }), dir);
+    const [auditEntry] = await queryAuditLogs({}, dir);
+    expect(auditEntry).not.toHaveProperty("body");
+
+    _closeAuditDb(dir);
+    const db = new Database(path.join(dir, "audit.db"));
+    try {
+      const columns = db.query("PRAGMA table_info(request_body)").all();
+      expect(columns).toHaveLength(9);
+      expect(
+        columns.map((column) => (column as { name: string }).name),
+      ).toEqual([
+        "session_id",
+        "request_id",
+        "captured_at",
+        "expires_at",
+        "content_type",
+        "content_encoding",
+        "byte_length",
+        "sha256",
+        "body",
+      ]);
+    } finally {
+      db.close();
+    }
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("request body store: duplicate key is idempotent only for the same digest and length", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-idempotent-"));
+  try {
+    const original = Uint8Array.from([1, 2, 3]);
+    const common = {
+      sessionId: "sess-idempotent",
+      requestId: "req-idempotent",
+      capturedAt: "2099-01-01T00:00:00.000Z",
+      contentType: null,
+      contentEncoding: null,
+    };
+    const originalMetadata = {
+      byteLength: original.byteLength,
+      sha256: requestBodySha256(original),
+    };
+    const originalStatus = { state: "attached" as const, ...originalMetadata };
+
+    expect(
+      await storeRequestBody(
+        {
+          ...common,
+          ...originalMetadata,
+          body: original,
+        },
+        { retentionSeconds: 60, maxTotalBytes: 3 },
+        dir,
+      ),
+    ).toEqual(originalStatus);
+    expect(
+      await storeRequestBody(
+        {
+          ...common,
+          ...originalMetadata,
+          capturedAt: "2099-01-02T00:00:00.000Z",
+          body: original,
+        },
+        { retentionSeconds: 60, maxTotalBytes: 3 },
+        dir,
+      ),
+    ).toEqual(originalStatus);
+
+    const replacement = Uint8Array.from([9, 8, 7]);
+    expect(
+      await storeRequestBody(
+        {
+          ...common,
+          byteLength: replacement.byteLength,
+          sha256: requestBodySha256(replacement),
+          body: replacement,
+        },
+        { retentionSeconds: 60, maxTotalBytes: 1024 },
+        dir,
+      ),
+    ).toEqual({ state: "unavailable", code: "invalid-capture" });
+
+    expect(
+      (await getRequestBody("sess-idempotent", "req-idempotent", dir))?.body,
+    ).toEqual(original);
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("request body store: rejects invalid length or digest without inserting", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-invalid-"));
+  try {
+    const body = Uint8Array.from([0, 1, 2, 3]);
+    const base = {
+      sessionId: "sess-invalid",
+      capturedAt: "2099-01-01T00:00:00.000Z",
+      contentType: null,
+      contentEncoding: null,
+      body,
+    };
+
+    expect(
+      await storeRequestBody(
+        {
+          ...base,
+          requestId: "bad-length",
+          byteLength: body.byteLength + 1,
+          sha256: requestBodySha256(body),
+        },
+        { retentionSeconds: 60, maxTotalBytes: 1024 },
+        dir,
+      ),
+    ).toEqual({ state: "unavailable", code: "invalid-capture" });
+    expect(
+      await storeRequestBody(
+        {
+          ...base,
+          requestId: "bad-digest",
+          byteLength: body.byteLength,
+          sha256: `sha256:${"0".repeat(64)}`,
+        },
+        { retentionSeconds: 60, maxTotalBytes: 1024 },
+        dir,
+      ),
+    ).toEqual({ state: "unavailable", code: "invalid-capture" });
+    expect(await getRequestBody("sess-invalid", "bad-length", dir)).toBeNull();
+    expect(await getRequestBody("sess-invalid", "bad-digest", dir)).toBeNull();
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("request body store: prunes expired rows before reads and inserts", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-expiry-"));
+  try {
+    const expired = Uint8Array.from([1, 2, 3, 4]);
+    await storeRequestBody(
+      {
+        sessionId: "sess-expired-read",
+        requestId: "req-expired-read",
+        capturedAt: "2000-01-01T00:00:00.000Z",
+        contentType: null,
+        contentEncoding: null,
+        byteLength: expired.byteLength,
+        sha256: requestBodySha256(expired),
+        body: expired,
+      },
+      { retentionSeconds: 1, maxTotalBytes: expired.byteLength },
+      dir,
+    );
+    expect(
+      await getRequestBody("sess-expired-read", "req-expired-read", dir),
+    ).toBeNull();
+
+    await storeRequestBody(
+      {
+        sessionId: "sess-expired-insert",
+        requestId: "req-expired-insert",
+        capturedAt: "2000-01-01T00:00:00.000Z",
+        contentType: null,
+        contentEncoding: null,
+        byteLength: expired.byteLength,
+        sha256: requestBodySha256(expired),
+        body: expired,
+      },
+      { retentionSeconds: 1, maxTotalBytes: expired.byteLength },
+      dir,
+    );
+    const fresh = Uint8Array.from([5, 6, 7, 8]);
+    expect(
+      await storeRequestBody(
+        {
+          sessionId: "sess-fresh",
+          requestId: "req-fresh",
+          capturedAt: "2099-01-01T00:00:00.000Z",
+          contentType: null,
+          contentEncoding: null,
+          byteLength: fresh.byteLength,
+          sha256: requestBodySha256(fresh),
+          body: fresh,
+        },
+        { retentionSeconds: 1, maxTotalBytes: fresh.byteLength },
+        dir,
+      ),
+    ).toEqual({
+      state: "attached",
+      byteLength: fresh.byteLength,
+      sha256: requestBodySha256(fresh),
+    });
+    expect(
+      await getRequestBody("sess-expired-insert", "req-expired-insert", dir),
+    ).toBeNull();
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("request body store: capacity rejects only the new body without truncation or eviction", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-capacity-"));
+  try {
+    const first = Uint8Array.from([0, 1, 2, 3]);
+    const second = Uint8Array.from([4, 5, 6]);
+    const limits = { retentionSeconds: 60, maxTotalBytes: 6 };
+
+    await storeRequestBody(
+      {
+        sessionId: "sess-capacity",
+        requestId: "req-first",
+        capturedAt: "2099-01-01T00:00:00.000Z",
+        contentType: null,
+        contentEncoding: null,
+        byteLength: first.byteLength,
+        sha256: requestBodySha256(first),
+        body: first,
+      },
+      limits,
+      dir,
+    );
+    expect(
+      await storeRequestBody(
+        {
+          sessionId: "sess-capacity",
+          requestId: "req-second",
+          capturedAt: "2099-01-01T00:00:00.000Z",
+          contentType: null,
+          contentEncoding: null,
+          byteLength: second.byteLength,
+          sha256: requestBodySha256(second),
+          body: second,
+        },
+        limits,
+        dir,
+      ),
+    ).toEqual({ state: "unavailable", code: "capacity" });
+
+    expect(
+      (await getRequestBody("sess-capacity", "req-first", dir))?.body,
+    ).toEqual(first);
+    expect(await getRequestBody("sess-capacity", "req-second", dir)).toBeNull();
+  } finally {
+    _closeAuditDb(dir);
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });

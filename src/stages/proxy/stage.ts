@@ -11,7 +11,10 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import type { SecretConfig } from "../../config/types.ts";
+import type {
+  RequestBodyAuditConfig,
+  SecretConfig,
+} from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import {
   type ResolvedDocument,
@@ -81,6 +84,7 @@ export interface ProxyPlan {
   readonly brokerSocket: string;
   readonly token: string;
   readonly document: ResolvedDocument;
+  readonly requestBodyAudit: RequestBodyAuditConfig;
   readonly pendingTimeoutSeconds: number;
   readonly pendingNotify: import("../../lib/notify_utils.ts").ResolvedNotifyBackend;
   readonly uiEnabled: boolean;
@@ -242,6 +246,7 @@ export function planProxy(
     brokerSocket,
     token,
     document,
+    requestBodyAudit: { ...input.profile.network.requestBodyAudit },
     pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
     pendingNotify: resolveNotifyBackend(input.profile.network.pendingNotify),
     uiEnabled: input.config.ui.enable,
@@ -396,6 +401,7 @@ function runProxy(
         profileName: plan.profileName,
         agent: plan.agent,
         document: plan.document,
+        requestBodyAudit: plan.requestBodyAudit,
         pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
         pendingNotify: plan.pendingNotify,
         uiEnabled: plan.uiEnabled,

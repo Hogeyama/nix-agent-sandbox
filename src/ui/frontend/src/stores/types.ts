@@ -51,6 +51,21 @@ export type BodyDiagnostic =
   | { code: "empty-json-body" }
   | { code: "non-scalar-at-pointer"; pointer: string };
 
+// Metadata-only result of the opt-in raw request body audit. The raw bytes
+// never travel in pending or audit-list payloads.
+export type RequestBodyAuditStatus =
+  | { state: "disabled" | "not-applicable" }
+  | { state: "attached"; byteLength: number; sha256: string }
+  | {
+      state: "unavailable";
+      code:
+        | "body-unreadable"
+        | "body-too-large"
+        | "capacity"
+        | "invalid-capture"
+        | "store-failed";
+    };
+
 export type NetworkPendingItemLike = {
   requestId: string;
   sessionId: string;
@@ -67,6 +82,7 @@ export type NetworkPendingItemLike = {
   // inspection, where `violations` is the reason itself.
   askReason?: string | null;
   bodyDiagnostic?: BodyDiagnostic | null;
+  requestBodyAuditStatus?: RequestBodyAuditStatus | null;
   // Grains this confirmation may be approved at, narrowest first. The
   // backend derives them from how specific the matched rule is and refuses
   // anything outside the list.
@@ -137,6 +153,7 @@ export type AuditLogEntryLike = {
   target?: string | null;
   command?: string | null;
   bodyDiagnostic?: BodyDiagnostic | null;
+  requestBodyAuditStatus?: RequestBodyAuditStatus | null;
 };
 
 export type SessionTurn = "user-turn" | "ack-turn" | "agent-turn" | "done";

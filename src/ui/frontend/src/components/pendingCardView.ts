@@ -8,7 +8,23 @@
  * drive re-renders by ticking a clock signal.
  */
 
-import type { BodyDiagnostic } from "../stores/types";
+import type { BodyDiagnostic, RequestBodyAuditStatus } from "../stores/types";
+
+/** Format metadata about whether exact raw request bytes were retained. */
+export function formatRequestBodyAuditStatus(
+  status: RequestBodyAuditStatus,
+): string {
+  switch (status.state) {
+    case "disabled":
+      return "raw audit: disabled";
+    case "not-applicable":
+      return "raw audit: not applicable";
+    case "attached":
+      return `raw audit: saved (${status.byteLength} bytes, ${status.sha256})`;
+    case "unavailable":
+      return `raw audit: unavailable (${status.code})`;
+  }
+}
 
 /**
  * Format the broker-selected indeterminate cause using only its closed,

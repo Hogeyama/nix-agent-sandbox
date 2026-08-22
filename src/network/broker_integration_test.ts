@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { queryAuditLogs } from "../audit/store.ts";
+import { getRequestBody, queryAuditLogs } from "../audit/store.ts";
 import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 import type { ResolvedDocument } from "./authz/resolve.ts";
 import { documentWithScopes, resolvedDocument } from "./authz/testing.ts";
@@ -49,6 +49,107 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
     expect(logs[0].phase).toEqual("authorization");
     expect(logs[0].target).toEqual("example.com:443");
     expect(logs[0].requestId).toEqual("req_1");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: retains an enabled raw body but exposes metadata only", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-body-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-body-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_body",
+    document: POST_REVIEW_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+    requestBodyAudit: {
+      enable: true,
+      retentionSeconds: 3600,
+      maxBodyBytes: 1024,
+      maxTotalBytes: 4096,
+    },
+  });
+  const socketPath = `${paths.brokersDir}/sess_body/sock`;
+  const body = new TextEncoder().encode('{"token":"raw-secret-marker"}');
+  const sha256 = `sha256:${new Bun.CryptoHasher("sha256")
+    .update(body)
+    .digest("hex")}`;
+  await broker.start(socketPath);
+  try {
+    const message = post(
+      "sess_body",
+      "req_body",
+      "/v1/messages",
+      "api.openai.com",
+      443,
+      "openai.post",
+    );
+    message.requestBodyCapture = {
+      state: "attached",
+      encoding: "base64",
+      byteLength: body.byteLength,
+      sha256,
+      contentType: "application/json",
+      contentEncoding: null,
+      data: Buffer.from(body).toString("base64"),
+    };
+    const decisionPromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      message,
+    );
+
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0]?.requestBodyAuditStatus).toEqual({
+      state: "attached",
+      byteLength: body.byteLength,
+      sha256,
+    });
+    expect(JSON.stringify(pending)).not.toContain("raw-secret-marker");
+    expect(JSON.stringify(pending)).not.toContain(
+      message.requestBodyCapture.data,
+    );
+
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_body",
+      scope: "once",
+    });
+    expect((await decisionPromise).decision).toBe("allow");
+
+    const contradictory = authorize(
+      "sess_body",
+      "req_disabled_capture",
+      "127.0.0.1",
+      443,
+    );
+    expect(
+      (await sendBrokerRequest<DecisionResponse>(socketPath, contradictory))
+        .decision,
+    ).toBe("deny");
+
+    const entries = await queryAuditLogs({ domain: "network" }, auditDir);
+    const entry = entries.find((item) => item.requestId === "req_body")!;
+    expect(entry.requestBodyAuditStatus).toEqual({
+      state: "attached",
+      byteLength: body.byteLength,
+      sha256,
+    });
+    expect(JSON.stringify(entry)).not.toContain("raw-secret-marker");
+    expect(JSON.stringify(entry)).not.toContain(
+      message.requestBodyCapture.data,
+    );
+    expect(
+      (await getRequestBody("sess_body", "req_body", auditDir))?.body,
+    ).toEqual(body);
+    expect(
+      entries.find((item) => item.requestId === "req_disabled_capture")
+        ?.requestBodyAuditStatus,
+    ).toEqual({ state: "unavailable", code: "invalid-capture" });
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -669,6 +770,7 @@ test("SessionBroker: approving a rule does not approve its violations", async ()
       observedAt: new Date().toISOString(),
       bodyTruth: { "policy.json": "true" },
       bodyDiagnostics: {},
+      requestBodyCapture: { state: "disabled" },
       reviewContext: {
         path: "/v1/messages",
         contentType: "application/json",
@@ -1667,6 +1769,7 @@ function authorize(
     observedAt: new Date().toISOString(),
     bodyTruth: ruleId ? { [ruleId]: "true" } : {},
     bodyDiagnostics: {},
+    requestBodyCapture: { state: "disabled" },
   };
 }
 

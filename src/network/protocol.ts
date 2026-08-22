@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import type { RequestBodyAuditConfig } from "../config/types.ts";
 import type { DecisionReason, ResolvedDocument } from "./authz/resolve.ts";
 import type { Truth } from "./authz/semantics.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
@@ -42,6 +43,39 @@ export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
 export type RequestKind = "connect" | "forward";
 export type RequestTransport = "http" | "websocket";
 export type Decision = "allow" | "deny";
+
+/** Exact pre-policy request bytes offered by the proxy addon for retention. */
+export type RequestBodyCapture =
+  | { state: "disabled" }
+  | { state: "not-applicable" }
+  | {
+      state: "unavailable";
+      code: "body-unreadable" | "body-too-large" | "invalid-capture";
+    }
+  | {
+      state: "attached";
+      encoding: "base64";
+      byteLength: number;
+      sha256: string;
+      contentType: string | null;
+      contentEncoding: string | null;
+      data: string;
+    };
+
+/** Metadata-only result of retaining a request body on the host. */
+export type RequestBodyAuditStatus =
+  | { state: "disabled" }
+  | { state: "not-applicable" }
+  | { state: "attached"; byteLength: number; sha256: string }
+  | {
+      state: "unavailable";
+      code:
+        | "body-unreadable"
+        | "body-too-large"
+        | "capacity"
+        | "invalid-capture"
+        | "store-failed";
+    };
 
 export interface InjectHeader {
   name: string;
@@ -109,6 +143,8 @@ export interface AuthorizeRequest {
   bodyTruth: Readonly<Record<string, Truth>>;
   /** 候補ルールごとの `indeterminate` の原因。 */
   bodyDiagnostics: Readonly<Record<string, BodyDiagnostic>>;
+  /** 監査保存用の raw body。承認・監査一覧へは metadata だけを写す。 */
+  requestBodyCapture: RequestBodyCapture;
   reviewContext?: ReviewContext;
 }
 
@@ -315,6 +351,7 @@ const AUTHORIZE_FIELDS = new Set([
   "observedAt",
   "bodyTruth",
   "bodyDiagnostics",
+  "requestBodyCapture",
   "reviewContext",
 ]);
 const REQUEST_KINDS = ["connect", "forward"] as const;
@@ -362,6 +399,8 @@ export function validateAuthorizeRequest(
   ) {
     return "invalid authorize review context";
   }
+  const captureError = validateRequestBodyCapture(message.requestBodyCapture);
+  if (captureError) return captureError;
   if (
     typeof message.bodyTruth !== "object" ||
     message.bodyTruth === null ||
@@ -415,6 +454,100 @@ export function validateAuthorizeRequest(
     }
   }
   return null;
+}
+
+const REQUEST_BODY_SHA256 = /^sha256:[0-9a-f]{64}$/;
+const CANONICAL_BASE64 =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+export function validateRequestBodyCapture(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid authorize request body capture";
+  }
+  const capture = value as Record<string, unknown>;
+  switch (capture.state) {
+    case "disabled":
+    case "not-applicable":
+      return hasExactFields(capture, ["state"])
+        ? null
+        : "invalid authorize request body capture";
+    case "unavailable":
+      return hasExactFields(capture, ["state", "code"]) &&
+        isListedValue(capture.code, [
+          "body-unreadable",
+          "body-too-large",
+          "invalid-capture",
+        ] as const)
+        ? null
+        : "invalid authorize request body capture";
+    case "attached":
+      return hasExactFields(capture, [
+        "state",
+        "encoding",
+        "byteLength",
+        "sha256",
+        "contentType",
+        "contentEncoding",
+        "data",
+      ]) &&
+        capture.encoding === "base64" &&
+        Number.isSafeInteger(capture.byteLength) &&
+        (capture.byteLength as number) >= 0 &&
+        typeof capture.sha256 === "string" &&
+        REQUEST_BODY_SHA256.test(capture.sha256) &&
+        (capture.contentType === null ||
+          typeof capture.contentType === "string") &&
+        (capture.contentEncoding === null ||
+          typeof capture.contentEncoding === "string") &&
+        typeof capture.data === "string" &&
+        isCanonicalBase64(capture.data)
+        ? null
+        : "invalid authorize request body capture";
+    default:
+      return "invalid authorize request body capture";
+  }
+}
+
+function isCanonicalBase64(value: string): boolean {
+  return (
+    CANONICAL_BASE64.test(value) &&
+    Buffer.from(value, "base64").toString("base64") === value
+  );
+}
+
+export function validateRequestBodyAuditStatus(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid request body audit status";
+  }
+  const status = value as Record<string, unknown>;
+  switch (status.state) {
+    case "disabled":
+    case "not-applicable":
+      return hasExactFields(status, ["state"])
+        ? null
+        : "invalid request body audit status";
+    case "attached":
+      return hasExactFields(status, ["state", "byteLength", "sha256"]) &&
+        Number.isSafeInteger(status.byteLength) &&
+        (status.byteLength as number) >= 0 &&
+        typeof status.sha256 === "string" &&
+        REQUEST_BODY_SHA256.test(status.sha256)
+        ? null
+        : "invalid request body audit status";
+    case "unavailable":
+      return hasExactFields(status, ["state", "code"]) &&
+        isListedValue(status.code, [
+          "body-unreadable",
+          "body-too-large",
+          "capacity",
+          "invalid-capture",
+          "store-failed",
+        ] as const)
+        ? null
+        : "invalid request body audit status";
+    default:
+      return "invalid request body audit status";
+  }
 }
 
 function isBodyDiagnostic(value: unknown): value is BodyDiagnostic {
@@ -755,6 +888,8 @@ export interface PendingEntry {
   askReason?: DecisionReason;
   /** 選択されたルールが `indeterminate` になった原因。 */
   bodyDiagnostic?: BodyDiagnostic;
+  /** raw body 自体を含まない、監査保存の状態。 */
+  requestBodyAuditStatus?: RequestBodyAuditStatus;
   /** この確認で選べる粒度。ルールの具体性から導出される。 */
   approvalScopes: ApprovalScope[];
   /** 承認したときに注入されるヘッダー。名前だけで、値は載らない。 */
@@ -775,6 +910,7 @@ export interface SessionRegistryEntry {
   tokenHash: string;
   brokerSocket: string;
   profileName: string;
+  requestBodyAudit: RequestBodyAuditConfig;
   createdAt: string;
   pid: number;
   agent?: string;

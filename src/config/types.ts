@@ -45,6 +45,14 @@ export interface ProxyConfig {
   forwardPorts: number[];
 }
 
+/** masking 前の exact request body を host audit DB に保存する設定。 */
+export interface RequestBodyAuditConfig {
+  enable: boolean;
+  retentionSeconds: number;
+  maxBodyBytes: number;
+  maxTotalBytes: number;
+}
+
 /** Secret 設定 */
 export type SecretSource = string;
 
@@ -127,6 +135,7 @@ export type NetworkPromptNotify = "auto" | "desktop" | "off";
 
 export interface NetworkConfig extends AuthzNetworkConfig {
   proxy: ProxyConfig;
+  requestBodyAudit: RequestBodyAuditConfig;
   pendingTimeoutSeconds: number;
   pendingNotify: NetworkPromptNotify;
 }
@@ -286,11 +295,19 @@ export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
   forwardPorts: [],
 };
 
+export const DEFAULT_REQUEST_BODY_AUDIT_CONFIG: RequestBodyAuditConfig = {
+  enable: false,
+  retentionSeconds: 604_800,
+  maxBodyBytes: 8_388_608,
+  maxTotalBytes: 268_435_456,
+};
+
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   scopes: {},
   fallback: "deny",
   defaults: {},
   proxy: DEFAULT_PROXY_CONFIG,
+  requestBodyAudit: DEFAULT_REQUEST_BODY_AUDIT_CONFIG,
   pendingTimeoutSeconds: 300,
   pendingNotify: "auto",
 };

@@ -40,7 +40,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     gcloud: DEFAULT_GCLOUD_CONFIG,
     aws: DEFAULT_AWS_CONFIG,
     gpg: DEFAULT_GPG_CONFIG,
-    network: DEFAULT_NETWORK_CONFIG,
+    network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: DEFAULT_DBUS_CONFIG,
     display: DEFAULT_DISPLAY_CONFIG,
     extraMounts: [],
@@ -60,6 +60,24 @@ function makeConfig(
     profiles: { test: makeProfile() },
     ...overrides,
   };
+}
+
+const REQUEST_BODY_AUDIT_DEFAULTS = {
+  enable: false,
+  retentionSeconds: 604_800,
+  maxBodyBytes: 8_388_608,
+  maxTotalBytes: 268_435_456,
+};
+
+function withRequestBodyAudit(
+  overrides: Partial<typeof REQUEST_BODY_AUDIT_DEFAULTS> = {},
+): Config {
+  const config = makeConfig();
+  config.profiles.test!.network.requestBodyAudit = {
+    ...REQUEST_BODY_AUDIT_DEFAULTS,
+    ...overrides,
+  };
+  return config;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +121,54 @@ test("validate: default profile not in profiles throws", () => {
 test("validate: no default is ok", () => {
   const config = validateConfig(makeConfig());
   expect(config.default).toEqual(undefined);
+});
+
+// ---------------------------------------------------------------------------
+// request body audit
+// ---------------------------------------------------------------------------
+
+test("network requestBodyAudit defaults are opt-in and bounded", () => {
+  expect(DEFAULT_NETWORK_CONFIG).toMatchObject({
+    requestBodyAudit: REQUEST_BODY_AUDIT_DEFAULTS,
+  });
+});
+
+test("validate: accepts bounded requestBodyAudit settings", () => {
+  const config = withRequestBodyAudit();
+  expect(validateConfig(config)).toBe(config);
+});
+
+for (const field of [
+  "retentionSeconds",
+  "maxBodyBytes",
+  "maxTotalBytes",
+] as const) {
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    test(`validate: requestBodyAudit.${field} rejects ${invalid}`, () => {
+      expect(() =>
+        validateConfig(withRequestBodyAudit({ [field]: invalid })),
+      ).toThrow(`requestBodyAudit.${field} must be a positive safe integer`);
+    });
+  }
+}
+
+test("validate: requestBodyAudit.maxBodyBytes rejects values above 32 MiB", () => {
+  expect(() =>
+    validateConfig(withRequestBodyAudit({ maxBodyBytes: 33_554_433 })),
+  ).toThrow("requestBodyAudit.maxBodyBytes must be at most 33554432");
+});
+
+test("validate: requestBodyAudit.maxTotalBytes covers one maximum body", () => {
+  expect(() =>
+    validateConfig(
+      withRequestBodyAudit({
+        maxBodyBytes: 8_388_608,
+        maxTotalBytes: 8_388_607,
+      }),
+    ),
+  ).toThrow(
+    "requestBodyAudit.maxTotalBytes must be greater than or equal to requestBodyAudit.maxBodyBytes",
+  );
 });
 
 // ---------------------------------------------------------------------------

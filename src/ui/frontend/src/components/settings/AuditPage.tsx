@@ -44,7 +44,10 @@ import type { getAuditLogs } from "../../api/client";
 import type { AuditPageStore } from "../../stores/auditPageStore";
 import type { AuditLogEntryLike } from "../../stores/types";
 import { formatAuditEntry } from "../auditEntryView";
-import { formatBodyDiagnostic } from "../pendingCardView";
+import {
+  formatBodyDiagnostic,
+  formatRequestBodyAuditStatus,
+} from "../pendingCardView";
 import {
   type AuditDisplayFilter,
   applyDisplayFilter,
@@ -272,6 +275,13 @@ export function AuditPage(props: AuditPageProps) {
                       {(diagnostic) => (
                         <div class="audit-cell-diagnostic">
                           {formatBodyDiagnostic(diagnostic())}
+                        </div>
+                      )}
+                    </Show>
+                    <Show when={row.requestBodyAuditStatus}>
+                      {(status) => (
+                        <div class="audit-cell-diagnostic">
+                          {formatRequestBodyAuditStatus(status())}
                         </div>
                       )}
                     </Show>

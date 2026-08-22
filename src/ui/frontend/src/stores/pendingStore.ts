@@ -14,6 +14,7 @@ import type {
   HostExecPendingItemLike,
   InjectHeaderPreviewLike,
   NetworkPendingItemLike,
+  RequestBodyAuditStatus,
   ReviewContextLike,
   ViolationFindingLike,
 } from "./types";
@@ -45,6 +46,9 @@ export type NetworkPendingRow = {
   // Exact closed cause for the selected indeterminate rule. Null for all
   // other confirmations and for older daemon payloads.
   bodyDiagnostic?: BodyDiagnostic | null;
+  // Metadata only. Exact bytes are fetched separately and never belong in
+  // the pending store.
+  requestBodyAuditStatus?: RequestBodyAuditStatus | null;
   // Grains this entry may be approved at, narrowest first. Never empty:
   // an entry that advertises nothing usable is treated as `once` only.
   approvalScopes: string[];
@@ -108,6 +112,7 @@ export function normalizeNetworkPending(
     ruleId: it.ruleId ?? null,
     askReason: it.askReason ?? null,
     bodyDiagnostic: it.bodyDiagnostic ?? null,
+    requestBodyAuditStatus: it.requestBodyAuditStatus ?? null,
     approvalScopes: approvalScopesOf(it.approvalScopes),
     injectHeaders: injectHeadersOf(it.injectHeaders),
     violations: violationsOf(it.violations),

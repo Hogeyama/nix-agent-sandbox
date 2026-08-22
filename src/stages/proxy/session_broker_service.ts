@@ -8,6 +8,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
+import type { RequestBodyAuditConfig } from "../../config/types.ts";
 import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import type { ResolvedDocument } from "../../network/authz/resolve.ts";
@@ -31,6 +32,7 @@ export interface SessionBrokerConfig {
   readonly profileName: string;
   readonly agent?: string;
   readonly document: ResolvedDocument;
+  readonly requestBodyAudit: RequestBodyAuditConfig;
   readonly pendingTimeoutSeconds: number;
   readonly pendingNotify: ResolvedNotifyBackend;
   readonly uiEnabled?: boolean;
@@ -88,6 +90,7 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
               auditDir: config.auditDir,
               secretValues: config.secretValues,
               proxyMasking: config.proxyMasking,
+              requestBodyAudit: config.requestBodyAudit,
             });
             await broker.start(config.socketPath);
             try {
@@ -97,6 +100,7 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
                 tokenHash: config.tokenHash,
                 brokerSocket: config.socketPath,
                 profileName: config.profileName,
+                requestBodyAudit: config.requestBodyAudit,
                 createdAt: new Date().toISOString(),
                 pid: process.pid,
                 agent: config.agent,

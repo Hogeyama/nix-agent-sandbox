@@ -1,7 +1,11 @@
 import { mkdir, rm, rmdir } from "node:fs/promises";
 import * as path from "node:path";
-import { appendAuditLog } from "../audit/store.ts";
+import { appendAuditLog, storeRequestBody } from "../audit/store.ts";
 import type { AuditLogEntry, AuditViolation } from "../audit/types.ts";
+import {
+  DEFAULT_REQUEST_BODY_AUDIT_CONFIG,
+  type RequestBodyAuditConfig,
+} from "../config/types.ts";
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
 import {
   connectUnix,
@@ -41,6 +45,7 @@ import {
   isApprovableFinding,
   type NormalizedTarget,
   type PendingEntry,
+  type RequestBodyAuditStatus,
   type RequestPolicyOutcomeRequest,
   type RequestPolicyOutcomeResponse,
   type RequestPolicyReviewRequest,
@@ -91,6 +96,8 @@ interface BrokerOptions {
    * マスクを経由しないので効き続ける。
    */
   proxyMasking?: boolean;
+  /** Opt-in retention limits. Direct callers default to disabled. */
+  requestBodyAudit?: RequestBodyAuditConfig;
 }
 
 interface PendingWaiter {
@@ -122,8 +129,13 @@ interface AuthorizePendingGroup extends PendingGroupBase {
   reason: DecisionReason;
   /** 承認されたら注入されるヘッダー。名前だけで、値は持たない。 */
   injectHeaders: readonly InjectHeaderPreview[];
-  requests: Map<string, AuthorizeRequest>;
+  requests: Map<string, PendingAuthorizeRequest>;
   decisions: Map<string, AuthzDecision>;
+}
+
+interface PendingAuthorizeRequest extends AuthorizeRequest {
+  /** Metadata retained after the raw capture has been discarded from memory. */
+  requestBodyAuditStatus: RequestBodyAuditStatus;
 }
 
 /**
@@ -179,6 +191,7 @@ export class SessionBroker {
   private readonly auditDir?: string;
   private readonly secretValues: SecretValues;
   private readonly proxyMasking: boolean;
+  private readonly requestBodyAudit: RequestBodyAuditConfig;
   private readonly maskPatterns: string[];
   private socketPath: string | null = null;
   private server: Server | null = null;
@@ -223,6 +236,8 @@ export class SessionBroker {
     this.auditDir = options.auditDir;
     this.secretValues = options.secretValues ?? {};
     this.proxyMasking = options.proxyMasking !== false;
+    this.requestBodyAudit =
+      options.requestBodyAudit ?? DEFAULT_REQUEST_BODY_AUDIT_CONFIG;
     // pending エントリに残す reviewContext は、どのスコープの帰結かが決まる前に
     // 作られる。どの秘密がどう扱われるかに関わらず、レジストリにある値はすべて
     // 伏せる。
@@ -294,11 +309,11 @@ export class SessionBroker {
 
   private async handleConnection(socket: Socket): Promise<void> {
     try {
-      const line = await readJsonLine(socket);
+      let line = await readJsonLine(socket, 48 * 1024 * 1024);
       if (!line) return;
-      const response = await this.handleMessage(
-        JSON.parse(line) as BrokerMessage,
-      );
+      const message = JSON.parse(line) as BrokerMessage;
+      line = null;
+      const response = await this.handleMessage(message);
       try {
         await writeJsonLine(socket, response);
       } catch (e) {
@@ -306,12 +321,12 @@ export class SessionBroker {
         if (code === "EPIPE" || code === "ECONNRESET") return;
         throw e;
       }
-    } catch (e) {
+    } catch {
       // この呼び出しは待たれていない (`void this.handleConnection`) ので、
       // ここで捕まえないと 1 通の壊れたメッセージが unhandled rejection に
       // なり、セッションのネットワークごと broker が落ちる。答えを返さずに
       // 切るので、問うた側には空応答が見え、fail-closed のまま拒否になる。
-      logInfo(`[nas] NetworkBroker: dropping malformed request: ${e}`);
+      logInfo("[nas] NetworkBroker: dropping malformed request");
     } finally {
       socket.destroy();
     }
@@ -618,13 +633,24 @@ export class SessionBroker {
     // credential pathPrefix via decorateAllow) must run against the real
     // path. Masking is applied only when building the entry persisted via
     // toPendingEntry, further down.
+    const requestBodyAuditStatus = await this.captureRequestBody(message);
+    message.requestBodyCapture = { state: "disabled" };
     const targetStr = `${message.target.host}:${message.target.port}`;
 
     // deny-by-default targets (localhost, loopback, RFC1918, link-local, ULA)
     // are always blocked regardless of the authorization document.
     const denyReason = denyReasonForTarget(message.target);
     if (denyReason) {
-      await this.recordAudit(message.requestId, "deny", denyReason, targetStr);
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        denyReason,
+        targetStr,
+        undefined,
+        undefined,
+        undefined,
+        requestBodyAuditStatus,
+      );
       return denyDecision(message.requestId, denyReason);
     }
 
@@ -650,6 +676,7 @@ export class SessionBroker {
           undefined,
           decided.ruleId,
           selectedBodyDiagnostic(message, decided),
+          requestBodyAuditStatus,
         );
       }
       return denyDecision(message.requestId, decided.reason);
@@ -669,6 +696,7 @@ export class SessionBroker {
           headerNames,
           decided.ruleId,
           selectedBodyDiagnostic(message, decided),
+          requestBodyAuditStatus,
         );
       }
       return decision;
@@ -692,6 +720,7 @@ export class SessionBroker {
           undefined,
           decided.ruleId,
           selectedBodyDiagnostic(message, decided),
+          requestBodyAuditStatus,
         );
       }
       return denyDecision(message.requestId, "denied-by-user");
@@ -712,6 +741,7 @@ export class SessionBroker {
           headerNames,
           decided.ruleId,
           selectedBodyDiagnostic(message, decided),
+          requestBodyAuditStatus,
         );
       }
       return decision;
@@ -733,6 +763,7 @@ export class SessionBroker {
           undefined,
           decided.ruleId,
           selectedBodyDiagnostic(message, decided),
+          requestBodyAuditStatus,
         );
       }
       return denyDecision(message.requestId, "recent-deny");
@@ -742,10 +773,18 @@ export class SessionBroker {
     const group =
       open?.kind === "authorize"
         ? open
-        : await this.createPendingGroup(groupKey, message, decided);
+        : await this.createPendingGroup(
+            groupKey,
+            message,
+            decided,
+            requestBodyAuditStatus,
+          );
 
     if (!group.requests.has(message.requestId)) {
-      group.requests.set(message.requestId, message);
+      group.requests.set(
+        message.requestId,
+        pendingAuthorizeRequest(message, requestBodyAuditStatus),
+      );
       group.decisions.set(message.requestId, decided);
       this.requestIndex.set(message.requestId, groupKey);
       await writePendingEntry(
@@ -754,6 +793,7 @@ export class SessionBroker {
           message,
           group,
           this.maskedReviewContext(message.reviewContext),
+          requestBodyAuditStatus,
         ),
       );
     }
@@ -770,6 +810,7 @@ export class SessionBroker {
     groupKey: string,
     message: AuthorizeRequest,
     decided: AuthzDecision,
+    requestBodyAuditStatus: RequestBodyAuditStatus,
   ): Promise<AuthorizePendingGroup> {
     const createdAt = new Date().toISOString();
     const notificationAbort = new AbortController();
@@ -787,7 +828,12 @@ export class SessionBroker {
       reason: decided.reason,
       createdAt,
       target: message.target,
-      requests: new Map([[message.requestId, message]]),
+      requests: new Map([
+        [
+          message.requestId,
+          pendingAuthorizeRequest(message, requestBodyAuditStatus),
+        ],
+      ]),
       decisions: new Map([[message.requestId, decided]]),
       waiters: new Map(),
       timer,
@@ -803,6 +849,7 @@ export class SessionBroker {
         message,
         group,
         this.maskedReviewContext(message.reviewContext),
+        requestBodyAuditStatus,
       ),
     );
     const notificationTask = notifyPendingRequest({
@@ -941,6 +988,7 @@ export class SessionBroker {
         decision.injectHeaders?.map((header) => header.name),
         decided?.ruleId,
         selectedBodyDiagnostic(request, decided),
+        request.requestBodyAuditStatus,
       );
     }
     waiter?.resolve(decision);
@@ -1015,6 +1063,7 @@ export class SessionBroker {
           decision.injectHeaders?.map((h) => h.name),
           decided?.ruleId,
           selectedBodyDiagnostic(request, decided),
+          request.requestBodyAuditStatus,
         );
       }
       group.waiters.get(requestId)?.resolve(decision);
@@ -1181,6 +1230,7 @@ export class SessionBroker {
     injectedHeaders?: string[],
     ruleId?: string,
     bodyDiagnostic?: BodyDiagnostic,
+    requestBodyAuditStatus?: RequestBodyAuditStatus,
   ): Promise<void> {
     if (!this.auditDir) return;
     const entry: AuditLogEntry = {
@@ -1196,8 +1246,51 @@ export class SessionBroker {
       target,
       injectedHeaders,
       bodyDiagnostic,
+      requestBodyAuditStatus,
     };
     await appendAuditLog(entry, this.auditDir);
+  }
+
+  private async captureRequestBody(
+    message: AuthorizeRequest,
+  ): Promise<RequestBodyAuditStatus> {
+    if (!this.requestBodyAudit.enable) return { state: "disabled" };
+
+    const capture = message.requestBodyCapture;
+    if (capture.state === "disabled") {
+      return { state: "unavailable", code: "invalid-capture" };
+    }
+    if (capture.state !== "attached") return capture;
+    if (capture.byteLength > this.requestBodyAudit.maxBodyBytes) {
+      return { state: "unavailable", code: "body-too-large" };
+    }
+
+    const body = Uint8Array.from(Buffer.from(capture.data, "base64"));
+    if (body.byteLength > this.requestBodyAudit.maxBodyBytes) {
+      return { state: "unavailable", code: "body-too-large" };
+    }
+
+    try {
+      return await storeRequestBody(
+        {
+          sessionId: this.sessionId,
+          requestId: message.requestId,
+          capturedAt: message.observedAt,
+          contentType: capture.contentType,
+          contentEncoding: capture.contentEncoding,
+          byteLength: capture.byteLength,
+          sha256: capture.sha256,
+          body,
+        },
+        {
+          retentionSeconds: this.requestBodyAudit.retentionSeconds,
+          maxTotalBytes: this.requestBodyAudit.maxTotalBytes,
+        },
+        this.auditDir,
+      );
+    } catch {
+      return { state: "unavailable", code: "store-failed" };
+    }
   }
 
   /**
@@ -1476,6 +1569,7 @@ function toPendingEntry(
   message: AuthorizeRequest,
   group: AuthorizePendingGroup,
   maskedReviewContext: ReviewContext | undefined,
+  requestBodyAuditStatus: RequestBodyAuditStatus,
 ): PendingEntry {
   return {
     version: 1,
@@ -1494,10 +1588,22 @@ function toPendingEntry(
     // 押した答えが何に対して覚えられるかを言えるようになる。
     askReason: group.reason,
     bodyDiagnostic: selectedBodyDiagnostic(message, group),
+    requestBodyAuditStatus,
     // 承認 UI に出すのと同じ集合を載せる。押せるものと通るものを一致させる
     // ために、broker はこの集合の外の粒度を受け付けない。
     approvalScopes: [...group.allowedScopes],
     injectHeaders: [...group.injectHeaders],
+  };
+}
+
+function pendingAuthorizeRequest(
+  message: AuthorizeRequest,
+  requestBodyAuditStatus: RequestBodyAuditStatus,
+): PendingAuthorizeRequest {
+  return {
+    ...message,
+    requestBodyCapture: { state: "disabled" },
+    requestBodyAuditStatus,
   };
 }
 

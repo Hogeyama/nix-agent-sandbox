@@ -28,6 +28,12 @@ test("SessionBrokerService: writes the session registry entry", async () => {
       profileName: "test",
       agent: "claude",
       document,
+      requestBodyAudit: {
+        enable: true,
+        retentionSeconds: 86_400,
+        maxBodyBytes: 4_194_304,
+        maxTotalBytes: 67_108_864,
+      },
       pendingTimeoutSeconds: 30,
       pendingNotify: "off",
       tokenHash: "hash",
@@ -42,6 +48,7 @@ test("SessionBrokerService: writes the session registry entry", async () => {
     try {
       const entry = await readSessionRegistry(paths, sessionId);
       expect(entry?.agent).toBe("claude");
+      expect(entry?.requestBodyAudit).toEqual(config.requestBodyAudit);
       expect(entry).not.toHaveProperty("resolvedReviewRules");
       expect(entry).not.toHaveProperty("reviewRules");
     } finally {

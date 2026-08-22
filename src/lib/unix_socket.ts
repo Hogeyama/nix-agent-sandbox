@@ -31,15 +31,26 @@ export function connectUnix(socketPath: string): Promise<Socket> {
   });
 }
 
-export async function readJsonLine(socket: Socket): Promise<string | null> {
+export async function readJsonLine(
+  socket: Socket,
+  maxBytes?: number,
+): Promise<string | null> {
   return new Promise((resolve, reject) => {
     let text = "";
+    let bytesBeforeNewline = 0;
     const cleanup = () => {
       socket.off("data", onData);
       socket.off("end", onEnd);
       socket.off("error", onError);
     };
     const onData = (chunk: Buffer) => {
+      const newlineIndex = chunk.indexOf(0x0a);
+      bytesBeforeNewline += newlineIndex === -1 ? chunk.length : newlineIndex;
+      if (maxBytes !== undefined && bytesBeforeNewline > maxBytes) {
+        cleanup();
+        reject(new Error("JSON line exceeds byte limit"));
+        return;
+      }
       text += chunk.toString();
       const nl = text.indexOf("\n");
       if (nl !== -1) {

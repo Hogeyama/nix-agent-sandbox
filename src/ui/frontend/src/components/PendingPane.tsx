@@ -13,6 +13,7 @@ import {
   askReasonView,
   formatBodyDiagnostic,
   formatRelativeTime,
+  formatRequestBodyAuditStatus,
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
@@ -188,6 +189,13 @@ export function PendingPane(props: Props) {
                       <p class="card-ask-reason">
                         <span class="card-ask-reason-label">body</span>
                         {formatBodyDiagnostic(diagnostic())}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={row.requestBodyAuditStatus}>
+                    {(status) => (
+                      <p class="card-ask-reason">
+                        {formatRequestBodyAuditStatus(status())}
                       </p>
                     )}
                   </Show>
@@ -408,6 +416,13 @@ export function PendingPane(props: Props) {
                     {(diagnostic) => (
                       <span class="audit-detail">
                         {formatBodyDiagnostic(diagnostic())}
+                      </span>
+                    )}
+                  </Show>
+                  <Show when={row.requestBodyAuditStatus}>
+                    {(status) => (
+                      <span class="audit-detail">
+                        {formatRequestBodyAuditStatus(status())}
                       </span>
                     )}
                   </Show>

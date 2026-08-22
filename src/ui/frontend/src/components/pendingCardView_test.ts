@@ -3,9 +3,46 @@ import {
   askReasonView,
   formatBodyDiagnostic,
   formatRelativeTime,
+  formatRequestBodyAuditStatus,
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
+
+describe("formatRequestBodyAuditStatus", () => {
+  test("describes disabled capture", () => {
+    expect(formatRequestBodyAuditStatus({ state: "disabled" })).toBe(
+      "raw audit: disabled",
+    );
+  });
+
+  test("describes a request without a body", () => {
+    expect(formatRequestBodyAuditStatus({ state: "not-applicable" })).toBe(
+      "raw audit: not applicable",
+    );
+  });
+
+  test("describes saved bytes with their digest", () => {
+    expect(
+      formatRequestBodyAuditStatus({
+        state: "attached",
+        byteLength: 12,
+        sha256: "sha256:0123456789abcdef",
+      }),
+    ).toBe("raw audit: saved (12 bytes, sha256:0123456789abcdef)");
+  });
+
+  test.each([
+    "body-unreadable",
+    "body-too-large",
+    "capacity",
+    "invalid-capture",
+    "store-failed",
+  ] as const)("describes unavailable capture: %s", (code) => {
+    expect(formatRequestBodyAuditStatus({ state: "unavailable", code })).toBe(
+      `raw audit: unavailable (${code})`,
+    );
+  });
+});
 
 describe("formatBodyDiagnostic", () => {
   test("describes an unreadable body without exposing an exception", () => {

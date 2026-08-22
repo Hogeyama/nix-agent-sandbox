@@ -997,6 +997,7 @@ def _authorize_message(
     transport: str,
     body_truth: dict[str, str],
     review_context: dict,
+    request_body_capture: dict,
     body_diagnostics: Optional[dict[str, dict]] = None,
 ) -> dict:
     """Build the authorization message shared with the broker validator."""
@@ -1015,6 +1016,7 @@ def _authorize_message(
         "bodyTruth": body_truth,
         "bodyDiagnostics": body_diagnostics or {},
         "reviewContext": review_context,
+        "requestBodyCapture": request_body_capture,
     }
 
 
@@ -1730,6 +1732,85 @@ def _request_carries_body(request) -> bool:
     whatever the headers claim."""
     headers = request.headers
     return "content-length" in headers or "transfer-encoding" in headers
+
+
+_REQUEST_BODY_AUDIT_KEYS = frozenset((
+    "enable",
+    "retentionSeconds",
+    "maxBodyBytes",
+    "maxTotalBytes",
+))
+_MAX_SAFE_INTEGER = 9_007_199_254_740_991
+
+
+def _request_body_capture(
+    request_body: Optional[bytes], request, config: object
+) -> dict:
+    """Build the bounded pre-policy body capture sent on `authorize`.
+
+    A disabled capture stops before touching the body or either encoder. The
+    registry is host-written, but malformed or partially written capture
+    settings still degrade to a closed metadata-only state rather than
+    breaking request authorization or creating an unbounded message.
+    """
+    if isinstance(config, dict) and config.get("enable") is False:
+        return {"state": "disabled"}
+    if not (
+        isinstance(config, dict)
+        and config.keys() == _REQUEST_BODY_AUDIT_KEYS
+        and config.get("enable") is True
+    ):
+        return {"state": "unavailable", "code": "invalid-capture"}
+
+    retention_seconds = config.get("retentionSeconds")
+    max_body_bytes = config.get("maxBodyBytes")
+    max_total_bytes = config.get("maxTotalBytes")
+    if not all(
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 < value <= _MAX_SAFE_INTEGER
+        for value in (retention_seconds, max_body_bytes, max_total_bytes)
+    ) or not (
+        max_body_bytes <= _LIMIT_CEILINGS["maxBodyBytes"]
+        and max_total_bytes >= max_body_bytes
+    ):
+        return {"state": "unavailable", "code": "invalid-capture"}
+
+    if request_body is None:
+        return {"state": "unavailable", "code": "body-unreadable"}
+    if not isinstance(request_body, bytes):
+        return {"state": "unavailable", "code": "invalid-capture"}
+    try:
+        carries_body = _request_carries_body(request)
+    except Exception:
+        return {"state": "unavailable", "code": "invalid-capture"}
+    if not request_body and not carries_body:
+        return {"state": "not-applicable"}
+    if len(request_body) > max_body_bytes:
+        return {"state": "unavailable", "code": "body-too-large"}
+
+    try:
+        content_type = request.headers.get("content-type")
+        content_encoding = request.headers.get("content-encoding")
+        if not all(
+            value is None or isinstance(value, str)
+            for value in (content_type, content_encoding)
+        ):
+            raise ValueError("invalid capture metadata")
+        digest = hashlib.sha256(request_body).hexdigest()
+        data = base64.b64encode(request_body).decode("ascii")
+    except Exception:
+        return {"state": "unavailable", "code": "invalid-capture"}
+
+    return {
+        "state": "attached",
+        "encoding": "base64",
+        "byteLength": len(request_body),
+        "sha256": f"sha256:{digest}",
+        "contentType": content_type,
+        "contentEncoding": content_encoding,
+        "data": data,
+    }
 
 
 def _request_transport(request) -> str:
@@ -2462,6 +2543,9 @@ class NasAddon:
             request_body = flow.request.content
         except ValueError:
             request_body = None
+        request_body_capture = _request_body_capture(
+            request_body, flow.request, registry.get("requestBodyAudit")
+        )
         (
             body_kind,
             parsed_body,
@@ -2508,7 +2592,7 @@ class NasAddon:
 
         authorize_req = _authorize_message(
             request_id, session_id, host, port, method, transport, body_truth,
-            review_context, body_diagnostics,
+            review_context, request_body_capture, body_diagnostics,
         )
 
         # The broker may have to ask a person before it can answer, so this

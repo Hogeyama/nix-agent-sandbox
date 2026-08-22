@@ -11,6 +11,8 @@ import {
   parseAllowlistEntry,
   type ViolationFinding,
   validateAuthorizeRequest,
+  validateRequestBodyAuditStatus,
+  validateRequestBodyCapture,
   validateRequestPolicyOutcome,
 } from "./protocol.ts";
 
@@ -60,12 +62,100 @@ const validAuthorize = {
     "policy.json": "true",
   },
   bodyDiagnostics: {},
+  requestBodyCapture: { state: "disabled" },
   reviewContext: {
     path: "/v1/messages",
     contentType: "application/json",
     bodySize: 2,
   },
 };
+
+const attachedCapture = {
+  state: "attached",
+  encoding: "base64",
+  byteLength: 2,
+  sha256:
+    "sha256:2689367b205c16ce32ed4200942b8b1e9b9c9b83b0c44298fc1c149afbf4c899",
+  contentType: "application/json",
+  contentEncoding: null,
+  data: "e30=",
+} as const;
+
+test("request body capture validation accepts every closed variant", () => {
+  expect(validateRequestBodyCapture({ state: "disabled" })).toBeNull();
+  expect(validateRequestBodyCapture({ state: "not-applicable" })).toBeNull();
+  expect(
+    validateRequestBodyCapture({
+      state: "unavailable",
+      code: "body-unreadable",
+    }),
+  ).toBeNull();
+  expect(
+    validateRequestBodyCapture({
+      state: "unavailable",
+      code: "body-too-large",
+    }),
+  ).toBeNull();
+  expect(
+    validateRequestBodyCapture({
+      state: "unavailable",
+      code: "invalid-capture",
+    }),
+  ).toBeNull();
+  expect(validateRequestBodyCapture(attachedCapture)).toBeNull();
+});
+
+test("request body capture validation rejects malformed and open variants", () => {
+  for (const capture of [
+    undefined,
+    { state: "disabled", data: "secret" },
+    { state: "unavailable", code: "capacity" },
+    { ...attachedCapture, encoding: "utf8" },
+    { ...attachedCapture, byteLength: -1 },
+    { ...attachedCapture, sha256: "2689" },
+    { ...attachedCapture, contentType: 1 },
+    { ...attachedCapture, data: "not base64!" },
+    { ...attachedCapture, byteLength: 1, data: "Zh==" },
+  ]) {
+    expect(validateRequestBodyCapture(capture)).not.toBeNull();
+  }
+});
+
+test("request body audit status validation accepts every closed variant", () => {
+  for (const status of [
+    { state: "disabled" },
+    { state: "not-applicable" },
+    {
+      state: "attached",
+      byteLength: 2,
+      sha256:
+        "sha256:2689367b205c16ce32ed4200942b8b1e9b9c9b83b0c44298fc1c149afbf4c899",
+    },
+    { state: "unavailable", code: "body-unreadable" },
+    { state: "unavailable", code: "body-too-large" },
+    { state: "unavailable", code: "capacity" },
+    { state: "unavailable", code: "invalid-capture" },
+    { state: "unavailable", code: "store-failed" },
+  ]) {
+    expect(validateRequestBodyAuditStatus(status)).toBeNull();
+  }
+});
+
+test("request body audit status validation rejects malformed and open variants", () => {
+  for (const status of [
+    undefined,
+    { state: "disabled", code: "store-failed" },
+    { state: "attached", byteLength: 2 },
+    {
+      state: "attached",
+      byteLength: -1,
+      sha256: `sha256:${"0".repeat(64)}`,
+    },
+    { state: "unavailable", code: "unknown" },
+  ]) {
+    expect(validateRequestBodyAuditStatus(status)).not.toBeNull();
+  }
+});
 
 test("authorize validation accepts a bounded rule truth table", () => {
   expect(

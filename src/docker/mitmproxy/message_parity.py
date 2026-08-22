@@ -54,6 +54,7 @@ def main() -> int:
         "authorize": nas_addon._authorize_message(
             "req-parity", "sess_parity", "api.anthropic.com", 443,
             "POST", "http", body_truth, review_context,
+            {"state": "disabled"},
         ),
         "review": nas_addon._violation_review_message(
             "req-parity", "sess_parity", rule["id"],

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { DEFAULT_REQUEST_BODY_AUDIT_CONFIG } from "../../config/types.ts";
 import type { WorkspaceState } from "../../pipeline/state.ts";
 import type { StageInput } from "../../pipeline/types.ts";
 import type { MountProbes } from "../mount/mount_probes.ts";
@@ -39,6 +40,7 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
         fallback: "deny",
         defaults: {},
         proxy: { forwardPorts: [] },
+        requestBodyAudit: structuredClone(DEFAULT_REQUEST_BODY_AUDIT_CONFIG),
         pendingTimeoutSeconds: 300,
         pendingNotify: "off",
       },
