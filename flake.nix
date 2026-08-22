@@ -16,9 +16,18 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, bun2nix, nix-bundle-elf, ... }:
+    let
+      # diffity (nilbuild/diffity) は npm 配布のみで flake を持たない。
+      # nas の成果物ではなく「上流の再パッケージ」なので packages には出さず、
+      # overlay として公開する。利用側は自分の nixpkgs に載せて pkgs.diffity と
+      # して使う。
+      overlays.diffity = final: _prev: {
+        diffity = final.callPackage ./nix/diffity { };
+      };
+    in
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = nixpkgs.legacyPackages.${system}.extend overlays.diffity;
         b2n = bun2nix.packages.${system}.default;
         bundle-script = nix-bundle-elf.lib.${system}.bundle-script;
 
@@ -287,6 +296,9 @@
             pklNative
             # 静的に検出できる規約は prompt ではなく ast-grep ルールに落とす。
             pkgs.ast-grep
+            # skills/ の diffity-* が呼ぶ差分ビューア。npm -g ではなく
+            # flake 側で固定して、シェルに入れば必ず同じ版が使えるようにする。
+            pkgs.diffity
           ];
           shellHook = ''
             # ast-grep は Zig を組み込みでサポートしないため、tree-sitter の
@@ -313,5 +325,6 @@
             fi
           '';
         };
-      });
+      })
+    // { inherit overlays; };
 }

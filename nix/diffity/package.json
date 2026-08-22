@@ -1,0 +1,9 @@
+{
+  "name": "diffity-nix",
+  "version": "0.9.5",
+  "private": true,
+  "description": "Nix packaging shim: pins the published diffity CLI and its runtime deps.",
+  "dependencies": {
+    "diffity": "0.9.5"
+  }
+}
