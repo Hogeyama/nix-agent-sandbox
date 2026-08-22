@@ -56,14 +56,26 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
   }
 });
 
-test("SessionBroker: retains an enabled raw body but exposes metadata only", async () => {
+test("SessionBroker: raw-body audit survives normal audit off with metadata only", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-body-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-body-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_body",
-    document: POST_REVIEW_DOCUMENT,
+    document: documentWithScopes({
+      openai: {
+        targets: ["*.openai.com"],
+        fallback: "allow",
+        audit: "off",
+        rules: {
+          post: {
+            match: { methods: ["POST"], paths: ["/**"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
     auditDir,
@@ -134,6 +146,7 @@ test("SessionBroker: retains an enabled raw body but exposes metadata only", asy
 
     const entries = await queryAuditLogs({ domain: "network" }, auditDir);
     const entry = entries.find((item) => item.requestId === "req_body")!;
+    expect(entry.phase).toBe("authorization");
     expect(entry.requestBodyAuditStatus).toEqual({
       state: "attached",
       byteLength: body.byteLength,

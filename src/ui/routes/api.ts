@@ -18,6 +18,7 @@ import {
   getHostExecPending,
   getNasContainers,
   getNetworkPending,
+  getNetworkRequestBody,
   getSessions,
   getTerminalSessions,
   renameSession,
@@ -162,6 +163,26 @@ export function createApiRoutes(ctx: UiDataContext): Router {
   });
 
   // --- Network ---
+
+  api.get("/network/body/:sessionId/:requestId", ({ params }) =>
+    withErrorHandling(async () => {
+      if (!isSafeId(params.sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isSafeId(params.requestId)) {
+        return json({ error: "Invalid requestId format" }, 400);
+      }
+      const item = await getNetworkRequestBody(
+        ctx,
+        params.sessionId,
+        params.requestId,
+      );
+      if (item === null) {
+        return json({ error: "Request body not found" }, 404);
+      }
+      return json({ item });
+    }),
+  );
 
   api.get("/network/pending", () =>
     withErrorHandling(async () => {

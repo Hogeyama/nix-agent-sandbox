@@ -1,4 +1,5 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
+import type { getRequestBody } from "../api/client";
 import {
   DEFAULT_HOSTEXEC_SCOPE,
   networkScopeFor,
@@ -17,6 +18,7 @@ import {
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
+import { RequestBodyPanel } from "./RequestBodyPanel";
 
 // Network scope chips. The label is what the user reads; the hint is the
 // `title` tooltip. Which of these a card shows comes from the entry's
@@ -78,6 +80,7 @@ type Props = {
   // Audit log feed accessor. The store owns the recent-50 trim; the
   // accordion only reads the rows here and renders them newest-first.
   auditEntries: () => AuditLogEntryRow[];
+  fetchRequestBody: typeof getRequestBody;
 };
 
 // One-second tick is fine: the relative-time strings only change at
@@ -198,6 +201,13 @@ export function PendingPane(props: Props) {
                         {formatRequestBodyAuditStatus(status())}
                       </p>
                     )}
+                  </Show>
+                  <Show when={row.requestBodyAuditStatus?.state === "attached"}>
+                    <RequestBodyPanel
+                      sessionId={row.sessionId}
+                      requestId={row.id}
+                      fetchRequestBody={props.fetchRequestBody}
+                    />
                   </Show>
                   <Show when={row.reviewContext}>
                     {(ctx) => (
@@ -425,6 +435,13 @@ export function PendingPane(props: Props) {
                         {formatRequestBodyAuditStatus(status())}
                       </span>
                     )}
+                  </Show>
+                  <Show when={row.requestBodyAuditStatus?.state === "attached"}>
+                    <RequestBodyPanel
+                      sessionId={row.sessionId}
+                      requestId={row.requestId}
+                      fetchRequestBody={props.fetchRequestBody}
+                    />
                   </Show>
                 </div>
               )}

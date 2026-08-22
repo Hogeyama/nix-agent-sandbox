@@ -1487,6 +1487,52 @@ body::after {
   color: var(--amber-hi);
 }
 
+.request-body-panel {
+  margin: 0 0 10px;
+}
+.request-body-load {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--cream-dim);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.request-body-load:disabled {
+  color: var(--muted-2);
+  cursor: wait;
+}
+.request-body-error {
+  margin-left: 8px;
+  color: var(--rose);
+  font-size: 10px;
+}
+.request-body-result {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.request-body-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 10px;
+}
+.request-body-content {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  color: var(--cream);
+  font: inherit;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* -- Acceptance-condition violations an approval would cover -- *
  * One block per violation, because one violation is one thing the
  * approval remembers. The value leads: it is what the operator is

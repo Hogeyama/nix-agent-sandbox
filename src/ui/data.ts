@@ -213,6 +213,44 @@ export async function denyNetwork(
   await networkClient.deny(ctx.networkPaths, sessionId, requestId, scope);
 }
 
+export interface NetworkRequestBodyItem {
+  sessionId: string;
+  requestId: string;
+  capturedAt: string;
+  expiresAt: string;
+  contentType: string | null;
+  contentEncoding: string | null;
+  byteLength: number;
+  sha256: string;
+  encoding: "base64";
+  data: string;
+}
+
+export async function getNetworkRequestBody(
+  ctx: UiDataContext,
+  sessionId: string,
+  requestId: string,
+): Promise<NetworkRequestBodyItem | null> {
+  const stored = await auditClient.getRequestBody(
+    ctx.auditDir,
+    sessionId,
+    requestId,
+  );
+  if (stored === null) return null;
+  return {
+    sessionId: stored.sessionId,
+    requestId: stored.requestId,
+    capturedAt: stored.capturedAt,
+    expiresAt: stored.expiresAt,
+    contentType: stored.contentType,
+    contentEncoding: stored.contentEncoding,
+    byteLength: stored.byteLength,
+    sha256: stored.sha256,
+    encoding: "base64",
+    data: Buffer.from(stored.body).toString("base64"),
+  };
+}
+
 // --- HostExec ---
 
 const hostexecClient = makeHostExecApprovalClient();

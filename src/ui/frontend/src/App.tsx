@@ -388,6 +388,7 @@ export function App() {
           onApprove={pendingHandlers.onApprove}
           onDeny={pendingHandlers.onDeny}
           auditEntries={audit.entries}
+          fetchRequestBody={client.getRequestBody}
         />
       </main>
       {/* SettingsShell stays mounted alongside the workspace and toggles
@@ -405,6 +406,7 @@ export function App() {
         auditActiveIds={activeIds}
         auditPageStore={auditPageStore}
         fetchAuditLogs={client.getAuditLogs}
+        fetchRequestBody={client.getRequestBody}
         ui={ui}
       />
       {/* HistoryShell is mounted only while a history route is active,

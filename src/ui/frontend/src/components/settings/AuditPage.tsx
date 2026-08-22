@@ -40,7 +40,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
-import type { getAuditLogs } from "../../api/client";
+import type { getAuditLogs, getRequestBody } from "../../api/client";
 import type { AuditPageStore } from "../../stores/auditPageStore";
 import type { AuditLogEntryLike } from "../../stores/types";
 import { formatAuditEntry } from "../auditEntryView";
@@ -48,6 +48,7 @@ import {
   formatBodyDiagnostic,
   formatRequestBodyAuditStatus,
 } from "../pendingCardView";
+import { RequestBodyPanel } from "../RequestBodyPanel";
 import {
   type AuditDisplayFilter,
   applyDisplayFilter,
@@ -68,6 +69,7 @@ export interface AuditPageProps {
   store: AuditPageStore;
   /** Injected for testability; defaults to the real client. */
   fetchAuditLogs: typeof getAuditLogs;
+  fetchRequestBody: typeof getRequestBody;
 }
 
 /**
@@ -284,6 +286,15 @@ export function AuditPage(props: AuditPageProps) {
                           {formatRequestBodyAuditStatus(status())}
                         </div>
                       )}
+                    </Show>
+                    <Show
+                      when={row.requestBodyAuditStatus?.state === "attached"}
+                    >
+                      <RequestBodyPanel
+                        sessionId={row.sessionId}
+                        requestId={row.requestId}
+                        fetchRequestBody={props.fetchRequestBody}
+                      />
                     </Show>
                   </td>
                 </tr>

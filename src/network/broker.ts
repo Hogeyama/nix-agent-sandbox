@@ -664,7 +664,7 @@ export class SessionBroker {
       toAuthzRequest(message),
       (rule) => message.bodyTruth[rule.id] ?? "indeterminate",
     );
-    const shouldAudit = decided.audit !== "off";
+    const shouldAudit = decided.audit !== "off" || this.requestBodyAudit.enable;
 
     if (decided.action === "deny") {
       if (shouldAudit) {
@@ -979,7 +979,10 @@ export class SessionBroker {
       outcome === "allow"
         ? this.decorateAllow(baseWithId, decided)
         : baseWithId;
-    if ((decided?.audit ?? this.document.defaults.audit) !== "off") {
+    if (
+      (decided?.audit ?? this.document.defaults.audit) !== "off" ||
+      this.requestBodyAudit.enable
+    ) {
       await this.recordAudit(
         requestId,
         outcome,
@@ -1054,7 +1057,10 @@ export class SessionBroker {
         outcome === "allow"
           ? this.decorateAllow(baseWithId, decided)
           : baseWithId;
-      if ((decided?.audit ?? this.document.defaults.audit) !== "off") {
+      if (
+        (decided?.audit ?? this.document.defaults.audit) !== "off" ||
+        this.requestBodyAudit.enable
+      ) {
         await this.recordAudit(
           requestId,
           outcome,
@@ -1232,7 +1238,7 @@ export class SessionBroker {
     bodyDiagnostic?: BodyDiagnostic,
     requestBodyAuditStatus?: RequestBodyAuditStatus,
   ): Promise<void> {
-    if (!this.auditDir) return;
+    if (!this.auditDir && !this.requestBodyAudit.enable) return;
     const entry: AuditLogEntry = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
