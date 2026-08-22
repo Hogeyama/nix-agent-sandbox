@@ -36,17 +36,47 @@ export function formatRelativeTime(
 }
 
 /**
- * Pick the human-friendly label for the chip on a pending card.
+ * Build the session identity shown on a pending card.
  *
- * Prefers `sessionName` when present so users see the session they
- * named (e.g. `"feature-auth"`); falls back to the short id derived
- * from the raw session id (e.g. `"s_7a3f12"`) when no name is set.
+ * The name is resolved by `App` from the sessions store. Pending rows do not
+ * own a copy of it, so renames are reflected from the single source of truth.
  */
-export function sessionLabel(row: {
-  sessionShortId: string;
-  sessionName: string | null;
-}): string {
-  return row.sessionName ?? row.sessionShortId;
+export function sessionLabel(
+  row: { sessionShortId: string },
+  sessionName: string | null | undefined,
+): string {
+  return sessionName
+    ? `${sessionName} · ${row.sessionShortId}`
+    : row.sessionShortId;
+}
+
+/**
+ * State the settlement unit and future lifetime of a network decision.
+ *
+ * `violations` is used only to keep the violation wording grammatically
+ * precise. The broker remains the authority for which scopes a row offers.
+ */
+export function networkApprovalEffect(
+  row: { violations: readonly unknown[] },
+  scope: string,
+): string {
+  switch (scope) {
+    case "rule":
+      return "Answers the current group and future matching requests in this session for the same rule and fixed target.";
+    case "host-port":
+      return "Answers the current group and future matching requests in this session for the same rule, host, and port.";
+    case "host":
+      return "Answers the current group and future matching requests in this session for the same rule and host, on any port.";
+    case "violation": {
+      const identity =
+        row.violations.length === 1
+          ? "violation identity"
+          : "violation identities";
+      return `Answers the current group and future matching requests in this session for the same rule and ${identity} shown here.`;
+    }
+    default:
+      return "Answers this request only. It is not remembered for future requests.";
+  }
 }
 
 // Why a network confirmation is on screen, in the words of the decision that

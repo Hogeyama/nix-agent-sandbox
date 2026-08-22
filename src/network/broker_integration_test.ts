@@ -452,6 +452,51 @@ test("SessionBroker: a violation is confirmed with the finding on the card", asy
   });
 });
 
+test("SessionBroker: once settles only the selected request in a violation group", async () => {
+  await withReviewBroker(async ({ socketPath, auditDir }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-violation-once-a", [finding("future_block")]),
+    );
+    const second = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-violation-once-b", [finding("future_block")]),
+    );
+    await waitForPending(socketPath, 2);
+
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-violation-once-a",
+      scope: "once",
+    });
+    expect(await first).toMatchObject({ decision: "allow" });
+    expect(
+      await Promise.race([
+        second.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+      ]),
+    ).toBe(false);
+    expect(
+      (await waitForPending(socketPath)).items.map((item) => item.requestId),
+    ).toEqual(["req-violation-once-b"]);
+    expect(
+      (await queryAuditLogs({ domain: "network" }, auditDir)).map(
+        (entry) => entry.requestId,
+      ),
+    ).toEqual(["req-violation-once-a"]);
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-violation-once-b",
+      scope: "once",
+    });
+    expect(await second).toMatchObject({
+      decision: "deny",
+      reason: "denied-by-user",
+    });
+  });
+});
+
 test("SessionBroker: a finding is masked again with the whole registry", async () => {
   // addon がマスクに使うのは、そのルールで `mask` と宣言された秘密だけである。
   // `ignore` の秘密が違反ノードの中にいれば addon のマスクは通り抜けるので、
@@ -1189,7 +1234,7 @@ test("SessionBroker: pending request resumes after approve", async () => {
   }
 });
 
-test("SessionBroker: each rule's waiters keep their own credentials and audit behavior", async () => {
+test("SessionBroker: once settles only the selected request in a grouped rule", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grouped-"));
   const auditDir = await mkdtemp(
     path.join(tmpdir(), "nas-broker-grouped-audit-"),
@@ -1304,8 +1349,8 @@ test("SessionBroker: each rule's waiters keep their own credentials and audit be
       "req_grouped_c",
     ]);
 
-    // Both /path-a requests are the same rule against the same target, so
-    // one press answers for both — and for neither of the other rules'.
+    // Both /path-a requests are in the same internal group, but `once`
+    // answers only the request whose card was selected.
     expect(
       await sendBrokerRequest(socketPath, {
         type: "approve",
@@ -1317,37 +1362,48 @@ test("SessionBroker: each rule's waiters keep their own credentials and audit be
       requestId: "req_grouped_a1",
       decision: "approve",
     });
-    for (const decision of [await firstA, await secondA]) {
-      expect(decision).toMatchObject({
-        decision: "allow",
-        ruleId: "api.path-a",
-        injectHeaders: [{ name: "X-Path-A", value: "credential-a" }],
-      });
-    }
+    expect(await firstA).toMatchObject({
+      decision: "allow",
+      ruleId: "api.path-a",
+      injectHeaders: [{ name: "X-Path-A", value: "credential-a" }],
+    });
+    expect(
+      await Promise.race([
+        secondA.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+      ]),
+    ).toBe(false);
 
-    // The card that was answered showed the /path-a requests and the header
-    // api.path-a injects. The other rules' requests were not on it, so they
-    // are still waiting and nothing has been let through in their name.
-    // Their entries are removed while `approve` is being answered, so this
-    // is the settled list rather than a snapshot taken mid-flight.
+    // Only the selected pending file and audit row are removed/written.
     const stillPending = await sendBrokerRequest<{
       type: "pending";
       items: PendingEntry[];
     }>(socketPath, { type: "list_pending" });
     expect(stillPending.items.map((item) => item.requestId).sort()).toEqual([
+      "req_grouped_a2",
       "req_grouped_b",
       "req_grouped_c",
     ]);
     const afterA = await authorizationLogs();
-    expect(afterA.map((entry) => entry.requestId).sort()).toEqual([
-      "req_grouped_a1",
-      "req_grouped_a2",
-    ]);
+    expect(afterA.map((entry) => entry.requestId)).toEqual(["req_grouped_a1"]);
     for (const entry of afterA) {
       expect(entry.injectedHeaders).toEqual(["X-Path-A"]);
     }
 
-    // Each of the others still needs its own press, and gets its own
+    // The sibling can be decided independently.
+    expect(
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: "req_grouped_a2",
+        scope: "once",
+      }),
+    ).toEqual({ type: "ack", requestId: "req_grouped_a2", decision: "deny" });
+    expect(await secondA).toMatchObject({
+      decision: "deny",
+      reason: "denied-by-user",
+    });
+
+    // Each of the other rules still needs its own press, and gets its own
     // credential when it is answered.
     expect(
       await sendBrokerRequest(socketPath, {
@@ -1382,7 +1438,7 @@ test("SessionBroker: each rule's waiters keep their own credentials and audit be
       finalLogs.map((entry) => [entry.requestId, entry.injectedHeaders]).sort(),
     ).toEqual([
       ["req_grouped_a1", ["X-Path-A"]],
-      ["req_grouped_a2", ["X-Path-A"]],
+      ["req_grouped_a2", undefined],
       ["req_grouped_b", ["X-Path-B"]],
     ]);
   } finally {

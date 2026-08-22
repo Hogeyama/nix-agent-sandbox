@@ -240,6 +240,8 @@ export function App() {
   );
   const pendingFor = (sessionId: string) =>
     pendingByKey().get(sessionId) ?? { network: 0, hostexec: 0 };
+  const sessionNameFor = (sessionId: string) =>
+    sessions.rows().find((row) => row.id === sessionId)?.name;
 
   // Favicon badge: re-rendered only when the aggregate lamp transitions
   // (a `createMemo` with the default `===` equality dedupes per-row
@@ -376,6 +378,7 @@ export function App() {
         <PendingPane
           network={pending.network}
           hostexec={pending.hostexec}
+          sessionNameFor={sessionNameFor}
           collapsed={ui.rightCollapsed}
           onToggleCollapse={ui.toggleRightCollapsed}
           scopeFor={pendingAction.scopeFor}

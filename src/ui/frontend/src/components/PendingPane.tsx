@@ -12,6 +12,7 @@ import { formatAuditEntry, summaryFor } from "./auditEntryView";
 import {
   askReasonView,
   formatRelativeTime,
+  networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
 
@@ -54,6 +55,7 @@ const HOSTEXEC_SCOPES = ["once", "capability"] as const;
 type Props = {
   network: () => NetworkPendingRow[];
   hostexec: () => HostExecPendingRow[];
+  sessionNameFor: (sessionId: string) => string | undefined;
   collapsed: () => boolean;
   onToggleCollapse: () => void;
   // Per-card state accessors. The store owns the underlying signals;
@@ -140,7 +142,9 @@ export function PendingPane(props: Props) {
               return (
                 <article class="card" data-pending-key={row.key} tabindex="-1">
                   <div class="card-head">
-                    <span class="chip">{sessionLabel(row)}</span>
+                    <span class="chip">
+                      {sessionLabel(row, props.sessionNameFor(row.sessionId))}
+                    </span>
                     {/* The rule that raised the confirmation is half of what
                         the decision is remembered against, so name it. */}
                     <Show when={row.ruleId}>
@@ -262,6 +266,10 @@ export function PendingPane(props: Props) {
                       )}
                     </For>
                   </div>
+                  <p class="card-ask-reason">
+                    <span class="card-ask-reason-label">This action</span>
+                    {networkApprovalEffect(row, scope())}
+                  </p>
                   <div class="action-row">
                     <button
                       type="button"
@@ -306,7 +314,9 @@ export function PendingPane(props: Props) {
               return (
                 <article class="card" data-pending-key={row.key} tabindex="-1">
                   <div class="card-head">
-                    <span class="chip">{sessionLabel(row)}</span>
+                    <span class="chip">
+                      {sessionLabel(row, props.sessionNameFor(row.sessionId))}
+                    </span>
                     <span class="card-time">
                       {formatRelativeTime(row.createdAtMs, now())}
                     </span>

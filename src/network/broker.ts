@@ -839,11 +839,16 @@ export class SessionBroker {
     }
     const selectedScope = scope ?? DEFAULT_APPROVAL_SCOPE;
     this.remember(group, selectedScope, "approve");
-    await this.resolveGroup(
-      group.groupKey,
-      allowDecision(requestId, "approved-by-user", selectedScope),
-      "allow",
+    const decision = allowDecision(
+      requestId,
+      "approved-by-user",
+      selectedScope,
     );
+    if (selectedScope === "once") {
+      await this.resolveRequest(requestId, decision, "allow");
+    } else {
+      await this.resolveGroup(group.groupKey, decision, "allow");
+    }
     return { type: "ack", requestId, decision: "approve" };
   }
 
@@ -869,13 +874,87 @@ export class SessionBroker {
     if (scope !== undefined) {
       this.remember(group, scope, "deny");
     }
-    await this.resolveGroup(
-      group.groupKey,
-      denyDecision(requestId, "denied-by-user", scope),
-      "deny",
-      scope === undefined,
-    );
+    const decision = denyDecision(requestId, "denied-by-user", scope);
+    if (scope === "once") {
+      await this.resolveRequest(requestId, decision, "deny");
+    } else {
+      await this.resolveGroup(
+        group.groupKey,
+        decision,
+        "deny",
+        scope === undefined,
+      );
+    }
     return { type: "ack", requestId, decision: "deny" };
+  }
+
+  private async resolveRequest(
+    requestId: string,
+    baseDecision: DecisionResponse,
+    outcome: "allow" | "deny",
+  ): Promise<void> {
+    const group = this.findGroupByRequestId(requestId);
+    if (!group) return;
+
+    const waiter = group.waiters.get(requestId);
+    if (group.kind === "violation") {
+      const request = group.requests.get(requestId);
+      if (!request) return;
+      await this.detachRequest(group, requestId);
+      await removePendingEntry(this.paths, this.sessionId, requestId);
+      const rule = this.findRuleById(group.ruleId);
+      if ((rule?.audit ?? this.document.defaults.audit) !== "off") {
+        await this.recordViolationAudit(
+          request,
+          outcome,
+          baseDecision.reason,
+          targetKey(request.target),
+          group.findings,
+        );
+      }
+      waiter?.resolve({ ...baseDecision, requestId });
+      return;
+    }
+
+    const request = group.requests.get(requestId);
+    if (!request) return;
+    const decided = group.decisions.get(requestId);
+    await this.detachRequest(group, requestId);
+    await removePendingEntry(this.paths, this.sessionId, requestId);
+    const baseWithId: DecisionResponse = { ...baseDecision, requestId };
+    const decision =
+      outcome === "allow"
+        ? this.decorateAllow(baseWithId, decided)
+        : baseWithId;
+    if ((decided?.audit ?? this.document.defaults.audit) !== "off") {
+      await this.recordAudit(
+        requestId,
+        outcome,
+        baseDecision.reason,
+        targetKey(request.target),
+        decision.injectHeaders?.map((header) => header.name),
+        decided?.ruleId,
+      );
+    }
+    waiter?.resolve(decision);
+  }
+
+  private async detachRequest(
+    group: PendingGroup,
+    requestId: string,
+  ): Promise<void> {
+    this.requestIndex.delete(requestId);
+    group.requests.delete(requestId);
+    group.waiters.delete(requestId);
+    if (group.kind === "authorize") {
+      group.decisions.delete(requestId);
+    }
+    if (group.requests.size > 0) return;
+
+    clearTimeout(group.timer);
+    this.groups.delete(group.groupKey);
+    group.notificationAbort.abort();
+    await closeNotification();
   }
 
   private async resolveGroup(

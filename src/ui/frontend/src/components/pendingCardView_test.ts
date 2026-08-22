@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   askReasonView,
   formatRelativeTime,
+  networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
 
@@ -60,16 +61,50 @@ describe("formatRelativeTime", () => {
 });
 
 describe("sessionLabel", () => {
-  test("returns sessionName when set", () => {
-    expect(
-      sessionLabel({ sessionShortId: "s_7a3f12", sessionName: "feature-auth" }),
-    ).toBe("feature-auth");
+  test("shows a session name together with the short id", () => {
+    expect(sessionLabel({ sessionShortId: "s_7a3f12" }, "feature-auth")).toBe(
+      "feature-auth · s_7a3f12",
+    );
   });
 
-  test("falls back to sessionShortId when sessionName is null", () => {
-    expect(
-      sessionLabel({ sessionShortId: "s_7a3f12", sessionName: null }),
-    ).toBe("s_7a3f12");
+  test("falls back to the short id when the session has no name", () => {
+    expect(sessionLabel({ sessionShortId: "s_7a3f12" }, undefined)).toBe(
+      "s_7a3f12",
+    );
+  });
+});
+
+describe("networkApprovalEffect", () => {
+  const row = { violations: [{}, {}] };
+
+  test("once covers only this request and creates no future memory", () => {
+    expect(networkApprovalEffect(row, "once")).toBe(
+      "Answers this request only. It is not remembered for future requests.",
+    );
+  });
+
+  test("rule covers the current group and future same-rule fixed-target requests", () => {
+    expect(networkApprovalEffect(row, "rule")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule and fixed target.",
+    );
+  });
+
+  test("host-port covers the current group and future same-rule host-port requests", () => {
+    expect(networkApprovalEffect(row, "host-port")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule, host, and port.",
+    );
+  });
+
+  test("host covers the current group and future same-rule host requests on every port", () => {
+    expect(networkApprovalEffect(row, "host")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule and host, on any port.",
+    );
+  });
+
+  test("violation covers the current group and the shown violation identities", () => {
+    expect(networkApprovalEffect(row, "violation")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule and violation identities shown here.",
+    );
   });
 });
 
