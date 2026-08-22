@@ -96,7 +96,7 @@ session chip をクリックすると、その session の terminal へ切り替
 
 | 表示 | 実際の効果 |
 |---|---|
-| `once` | 将来の cache には保存しない。ただし同時待機中の同一 group 全件を解決する |
+| `once` | **現状は bug**: 将来の cache には保存しないが、同時待機中の同一 group 全件を解決してしまう |
 | `this rule` | 現 session 中、同じ rule、同じ確認理由、同じ host:port |
 | `host:port` | 現 session 中、同じ rule、同じ確認理由、同じ host:port |
 | `host` | 現 session 中、同じ rule、同じ確認理由、同じ host の全 port |
@@ -110,7 +110,7 @@ session chip をクリックすると、その session の terminal へ切り替
 
 network broker は、同じ rule、reason、target に対する同時 request を group 化する。UI には request ごとのカードが複数出るが、そのうち一枚を `once` で承認すると group 全件が通る。
 
-現在の tooltip の `Applies to this request only.` は正確ではない。実態は「この時点で同じ確認 group に待機している全 request を解決し、将来分は記憶しない」である。
+`once` の意味は押した 1 request だけである。現在の tooltip の `Applies to this request only.` が正しく、broker の group 全件解決が誤っている。表示を現状に合わせて広げるのではなく、broker を request 単位で解決するよう直す。group の残りは pending のままにする。
 
 #### Network Deny
 
@@ -122,7 +122,7 @@ Network では選択 scope が Deny にも適用される。`host` を選んで 
 
 | 表示 | 実際の効果 |
 |---|---|
-| `once` | 将来には保存しないが、同一 capability で同時待機中の全件を解決する |
+| `once` | **現状は bug**: 将来には保存しないが、同一 capability で同時待機中の全件を解決してしまう |
 | `capability` | 現 session 中、完全一致する実行 capability を承認する |
 | Deny | 選択 scope を無視し、現在の group だけ拒否する |
 
@@ -138,6 +138,8 @@ Network では選択 scope が Deny にも適用される。`host` を選んで 
 secret の実値は入らない。実行ファイルの変更は cache 確認より前に別途検査される。
 
 scope 選択が Approve と Deny の共通 UI に見えることが問題である。`capability` を選択して Deny しても capability-wide deny にはならない。
+
+hostexec でも `once` は押した 1 request だけを意味する。network と同様に、同じ group の残りを解決してはならない。
 
 さらに hostexec の設定には `prompt.defaultScope = once | capability` があるが、UI は設定を受け取らず常に `capability` を初期選択して明示送信する。設定で `once` にしても UI 操作では無視される。
 
@@ -311,7 +313,7 @@ backend は許可可能な scope 名だけを送り、意味は frontend 側で�
 
 ### A. 既存データで表示の嘘を先に直す
 
-session name は既存 sessions store と pending row の frontend join だけで表示できる。scope説明も既存情報で正せる範囲はtooltipから常時表示へ移す。group件数、正確な原因、raw bodyは存在しないのでこの案だけでは完結しないが、backend基盤を待たずに最初のユーザー価値を出せる。
+session name は既存 sessions store と pending row の frontend join だけで表示できる。scope説明も既存情報で正せる範囲はtooltipから常時表示へ移す。先に network/hostexec の `once` を 1 request だけ解決する semantic へ直す。正確な原因と raw body は存在しないのでこの案だけでは完結しないが、backend基盤を待たずに最初のユーザー価値を出せる。
 
 今回の第一段階として採用する。
 
@@ -328,12 +330,12 @@ WHY
 JSON parse failed at byte 1834
 
 THIS ACTION WILL
-Allow 3 currently waiting requests.
+Allow this request only.
 Remember nothing for future requests.
 
 [body evidence v]
 
-[Allow these 3 once]        [Deny these 3]
+[Allow once]        [Deny once]
 ```
 
 永続 scope なら、選択中操作の効果を動的に表示する。
@@ -349,7 +351,7 @@ hostexec では scope selector を Deny と共有せず、次を独立 action �
 
 - `Approve once`
 - `Approve this capability for this session`
-- `Deny this pending group`
+- `Deny once`
 
 ### C. Session 別 Approval Inbox へ全面再設計
 
@@ -361,8 +363,9 @@ session ごとに group 化し、detail drawer で body/capability/audit を表�
 
 - session name + short ID を frontend で join
 - frontendで分かる範囲のscope説明をtooltipから常時表示へ移す
-- network brokerから現在のgroupと将来cacheの説明に必要な最小metadataだけを渡し、同じ変更でcardへ表示する
-- `once` を current pending group、future cacheなしと正しく表示する
+- network/hostexec broker の `once` を requestId 1 件だけ解決するよう修正し、同じ group の残りを pending に保つ
+- network broker の既存 `approvalScopes` から将来 cache の単位を説明し、同じ変更で card へ常時表示する
+- `once` を current request only、future cacheなしと表示する
 
 session chipのterminal選択、通知deep link、hostexec Deny/defaultScope/capability、shortcutは調査結果として残すが、このP0へは含めない。
 
