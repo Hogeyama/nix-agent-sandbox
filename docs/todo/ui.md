@@ -2,394 +2,276 @@
 
 ## 結論
 
-承認プロンプトの課題は、単なる情報量不足ではない。UI 上の表現と実際の承認効果が一致していない箇所があり、特に `once`、hostexec の scope、キーボードショートカットは誤操作につながりうる。
+当初の主要課題は実装済みである。
 
-推奨する方向は、重要な判断材料と選択中操作の効果をカード上で常時説明し、詳細だけを展開する evidence-first な承認カードである。
+1. network / hostexec の `once` は、押した request 1 件だけを解決する
+2. pending card は session name と short ID を表示する
+3. network card は、選択中 scope の効果と lifetime を本文に表示する
+4. `onIndeterminate` は closed diagnostic で実際の原因を表示する
+5. opt-in 時は masking 前の exact request body を host SQLite に保存し、
+   pending と audit から遅延取得できる
+6. 240px の pending pane でも長い session name、rule ID、SHA-256、body、
+   Content-Type が横にはみ出さない
 
-## この調査の扱い
+残る承認 UI の主要な不一致は hostexec である。scope selector は Approve にだけ
+効くが Deny と共有して見え、UI の初期値は設定の `prompt.defaultScope` ではなく
+常に `capability` である。次に変更するなら、この一件だけを独立して扱う。
 
-この文書は発見事項を残す調査記録であり、書かれた項目をすべて同じ実装へ入れる計画ではない。今回の再実施では次の順に扱う。
+## 現在の表示と挙動
 
-1. session name と短縮 ID を表示する。
-2. network の各 scope が現在の待機 request と将来 request のどこまでに効くかを常時表示する。
-3. `onIndeterminate` の実際の原因を表示する。
-4. opt-in 時に exact raw body を retention・容量上限付きで保存し、承認時と事後 audit から参照できるようにする。
+### Session identity
 
-通知 deep link、hostexec capability の完全表示、shortcut 操作、古い TODO、ローカル build の問題も有効な調査結果として残す。ただし、上の四項目を実装するために必要でなければ同じ変更へは入れない。Session 別 inbox、CLI を含む汎用 approval contract、画面全体の再設計は今回の対象外とする。
+`App` が sessions store と pending row を `sessionId` で join し、network と
+hostexec の両カードに次を表示する。
 
-保存失敗時に承認自体を禁止するか、既定の retention・容量値、SQLite table の分け方、addon と broker の body transport は、この調査だけでは確定しない。これらは認可挙動やresource消費を変えるため、比較と実測なしに spec へ固定しない。
+```text
+<session name> · <short ID>
+```
 
-## 現在の表示
+name を解決できない場合は short ID だけを表示する。pending payload と
+pending store は session name を所有しない。session chip は現在クリック操作を
+持たず、terminal への切り替えは行わない。
 
-### Network
+### Network card
 
 現在のカードには次が表示される。
 
-- セッション短縮 ID
-- ルール ID
-- 経過時間
+- session name と short ID
+- rule ID と経過時間
 - HTTP method と host:port
-- 確認理由
-  - matched rule が review
-  - body condition が indeterminate
-  - scope fallback
-  - network fallback
+- review になった理由
+- `onIndeterminate` の body diagnostic
 - path、Content-Type、body size
 - request-policy violation の pointer、value、excerpt
 - 注入予定の header 名と secret 名
+- raw-body audit の保存状態と、保存済み body の遅延表示
 - broker が提示した scope
+- 選択中 scope が現在の group と将来 request のどこまでに効くか
 - Allow / Deny
 
-scope の意味はマウス hover 時の `title` にしかない。幅 340px の pane では、長い理由、path、違反内容がかなり縦に伸びる。
+scope の意味は tooltip だけでなくカード本文に常時表示する。意味の文章は
+frontend にハードコードされているため、broker の semantic を変更するときは
+同じ変更で表示とテストも更新する必要がある。
 
-### Hostexec
+### Network scope
 
-表示されるのは次だけである。
+すべて現在の session 内だけで有効で、別 session や次回起動には持ち越さない。
 
-- セッション短縮 ID
+| 表示 | 現在の request への効果 | 将来 request への効果 |
+|---|---|---|
+| `once` | 押した request 1 件だけを解決し、同じ group の sibling は pending のまま | 記憶しない |
+| `this rule` | 現在の group 全件を解決 | 同じ rule、reason、固定 host:port |
+| `host:port` | 現在の group 全件を解決 | 同じ rule、reason、host、port |
+| `host` | 現在の group 全件を解決 | 同じ rule、reason、host の全 port |
+| `these values` | 同じ violation identity で待つ group 全件を解決 | 同じ rule、expect 位置、違反値 |
+
+`this rule` は、authorization scope が target を exact host:port に固定するときだけ
+提示される。そのため現在の cache key でも target は固定される。
+
+Network の Allow と明示 scope 付き Deny は同じ単位を使う。UI は常に scope を
+明示するため、scope を省略する legacy / CLI Deny の 30 秒 negative cache は
+UI 操作では使われない。
+
+### Hostexec card
+
+現在表示するのは次である。
+
+- session name と short ID
 - command
 - executable integrity warning
-- `once` / `capability`
+- `once` / `capability` selector
 - Approve / Deny
 
-wire 上には存在する `ruleId` と `cwd` が frontend の正規化時に捨てられている。環境変数 binding や inheritEnv など、`capability` を構成する情報も表示されない。
+wire の pending entry にある `ruleId` と `cwd` は frontend の正規化時に捨てて
+おり、表示しない。capability を構成する env binding と `inheritEnv` も表示しない。
+
+現在の操作 semantic は次のとおりである。
+
+| 操作 | 効果 |
+|---|---|
+| Approve + `once` | 押した request 1 件だけを解決し、将来には記憶しない |
+| Approve + `capability` | 現在の同一 capability group を解決し、session 中の完全一致 capability を承認する |
+| Deny | selector を無視し、押した request 1 件だけを拒否する |
+
+capability identity には rule ID、正規化 argv0、全引数、cwd、env binding の
+key/source、`inheritEnv` mode/keys が入る。secret の実値は入らない。
+
+UI は未選択時に常に `capability` を選び、その値を明示送信する。したがって
+backend が scope 省略時に使う `prompt.defaultScope` は、現在の UI 操作には
+反映されない。
 
 ### Audit
 
-Pending pane の recent audit には次しか出ない。
+Pending pane の recent audit は次を表示する。
 
 - timestamp
 - domain / decision
 - target または command
+- body diagnostic（存在する場合）
+- raw-body audit status（存在する場合）
+- 保存済み raw body の遅延表示
 
-Settings の Audit ページでも session ID が増える程度で、reason、rule、scope、request path、body 診断などは表示されない。
+Settings/Audit はこれらに session ID と filter / pagination を加える。
 
-## セッションが分からない原因
+backend の audit row が持つ `reason`、`ruleId`、`scope`、request-policy の
+method / route、violation detail などは、現在の frontend row または表示で
+すべては利用していない。これは raw-body viewer の未実装ではなく、audit 表示の
+別の情報設計課題である。
 
-Pending SSE payload には session name がなく、`pendingStore` は常に `sessionName: null` を設定している。
+## `onIndeterminate` diagnostic
 
-一方、左 pane の sessions store には同じ session ID に対応する次の情報がすでにある。
+addon は rule ごとの truth と、truth が `indeterminate` の rule に対応する
+closed diagnostic を authorize request に載せる。broker は実際に選択した
+rule の diagnostic だけを pending と authorization audit に保存する。
 
-- session name
-- container name
-- directory
-- profile
-- worktree
-- agent
+現在の型は次である。
 
-App は両 store を結合せず、そのまま PendingPane へ渡している。第一段階は backend 変更不要で、frontend の純粋な join で解決できる。
-
-推奨表示:
-
-```text
-auth-refactor · aaaabb
-profile: codex · ~/repo/nas
+```ts
+type BodyDiagnostic =
+  | { code: "body-unreadable" }
+  | { code: "body-too-large"; byteLength: number; maxBodyBytes: number }
+  | { code: "invalid-json" }
+  | { code: "empty-json-body" }
+  | { code: "non-scalar-at-pointer"; pointer: string };
 ```
 
-session chip をクリックすると、その session の terminal へ切り替える。該当 session が終了している場合だけ短縮 ID へ fallback する。
+duplicate JSON member と `NaN` / `Infinity` は `invalid-json` に正規化する。
+parser の例外文、body の断片、解析位置は送らない。JSON Pointer が存在しない
+場合は `false` であり、non-scalar を指した場合だけ `indeterminate` になる。
 
-## scope が実際に許可する単位
+protocol は受信した `indeterminate` entry に diagnostic があることを検証する。
+ただし、body truth entry 自体が欠落した場合は broker の評価 fallback が
+`indeterminate` を返す一方、対応する diagnostic は存在しない。この addon / broker
+不整合時にも原因を必ず表示する必要があるなら、別の fail-closed contract 修正として
+扱う。通常の addon が生成する message の原因表示は実装済みである。
 
-すべて現在の broker/session のメモリ内だけで有効で、別 session や次回起動には持ち越されない。
+## Raw request body audit
 
-### Network
+### Configuration
 
-| 表示 | 実際の効果 |
-|---|---|
-| `once` | **現状は bug**: 将来の cache には保存しないが、同時待機中の同一 group 全件を解決してしまう |
-| `this rule` | 現 session 中、同じ rule、同じ確認理由、同じ host:port |
-| `host:port` | 現 session 中、同じ rule、同じ確認理由、同じ host:port |
-| `host` | 現 session 中、同じ rule、同じ確認理由、同じ host の全 port |
-| `these values` | 現 session 中、同じ rule、同じ expect 位置、同じ違反値 |
-
-`this rule` は名前から想像するより狭く、target も固定される。完全一致 host+port を持つ scope にしか提示されないためである。
-
-確認理由も cache key に含まれる。正常に読めた body を承認しても、同じ rule の `indeterminate` body までは承認されない。この分離は安全上正しい。
-
-#### `once` の重大な食い違い
-
-network broker は、同じ rule、reason、target に対する同時 request を group 化する。UI には request ごとのカードが複数出るが、そのうち一枚を `once` で承認すると group 全件が通る。
-
-`once` の意味は押した 1 request だけである。現在の tooltip の `Applies to this request only.` が正しく、broker の group 全件解決が誤っている。表示を現状に合わせて広げるのではなく、broker を request 単位で解決するよう直す。group の残りは pending のままにする。
-
-#### Network Deny
-
-Network では選択 scope が Deny にも適用される。`host` を選んで Deny すると、同じ rule/reason/host の後続 request も拒否される。
-
-ただし UI が明示的に `once` を送った場合、broker の 30 秒 negative cache は使われない。CLI の scope 省略 Deny とは挙動が異なる。
-
-### Hostexec
-
-| 表示 | 実際の効果 |
-|---|---|
-| `once` | **現状は bug**: 将来には保存しないが、同一 capability で同時待機中の全件を解決してしまう |
-| `capability` | 現 session 中、完全一致する実行 capability を承認する |
-| Deny | 選択 scope を無視し、現在の group だけ拒否する |
-
-`capability` の同一性には次が入る。
-
-- rule ID
-- 正規化された argv0
-- 全引数
-- cwd
-- env binding の key/source
-- inheritEnv mode/keys
-
-secret の実値は入らない。実行ファイルの変更は cache 確認より前に別途検査される。
-
-scope 選択が Approve と Deny の共通 UI に見えることが問題である。`capability` を選択して Deny しても capability-wide deny にはならない。
-
-hostexec でも `once` は押した 1 request だけを意味する。network と同様に、同じ group の残りを解決してはならない。
-
-さらに hostexec の設定には `prompt.defaultScope = once | capability` があるが、UI は設定を受け取らず常に `capability` を初期選択して明示送信する。設定で `once` にしても UI 操作では無視される。
-
-## `onIndeterminate` の原因
-
-現在 addon から broker へ送られるのは、rule ごとの三値だけである。
-
-```text
-true | false | indeterminate
-```
-
-raw body や原因コードは送られない。
-
-`indeterminate` になりうる主な原因:
-
-- Content-Encoding 展開などに失敗し、`flow.request.content` が取得不能
-- body が rule の `maxBodyBytes` を超えた
-- JSON として不正
-- duplicate member を含む JSON
-- `NaN` 等の非標準 JSON 定数
-- JavaScript の安全整数範囲外
-- JSON を要求しているが body が空
-- equals/oneOf 対象の JSON Pointer が object/array を指しており scalar 比較できない
-- addon と broker の不整合で body truth entry が欠落
-
-body 自体が存在しない場合と JSON Pointer が存在しない場合は通常 `false` で、`indeterminate` ではない。
-
-現在 UI の説明は unreadable、oversized、unparseable と候補を並べるだけで、実際の原因は addon と broker の境界で失われている。
-
-## body を audit DB へ保存する
-
-後から「あの承認は問題なかったか」を再検証できることを優先し、policy が実際に評価した masking 前の request body bytes を raw のまま audit DB へ保存する。preview や hash だけでは、承認時に見落とした内容を事後検証できないため不十分である。
-
-raw body には API key、token、agent との会話、source code、PII、upload 内容、request-policy による masking 前の secret が入りうる。このため、保存しないのではなく保存場所・寿命・アクセス境界を厳格にする。
-
-- body は host 側 audit DB の BLOB にだけ保存する
-- container/agent に audit DB、body、取得 API を露出しない
-- policy が評価した `flow.request.content` の exact bytes を保存する
-- pending card から body を開けると表示する前に保存を完了する
-- 保存失敗時は原因を `unavailable` として表示し、保存済みと誤認させない
-- body を無言で truncate しない。上限超過時は保存不能を明示する
-- retention 期限と総容量上限の両方で回収する
-- DB、WAL、SHM を明示的に `0600` へ締める
-
-retention だけでは、期限内に巨大 body が集中したときのディスク枯渇を防げない。そのため個別 body 上限と DB 全体の容量上限も必要になる。期限切れ body は先に削除する。それでも容量を確保できない場合に未期限の body を削除するか、新しい保存を拒否するかは未決定であり、pending evidence の寿命を増やす前に単純な「保存不能」案を比較する。
-
-raw body 保存は top-level config で切り替えられるようにする。既存利用者が意図せず secret を永続化しないよう既定値は無効とし、有効時だけ review 対象の body を addon から broker へ送る。
-
-設定形状の候補:
+raw body 保存は profile の `network.requestBodyAudit` で切り替える。
 
 ```pkl
-audit {
-  requestBodies {
-    enable = false
-    retentionSeconds = 7 * 24 * 60 * 60
-    maxBodyBytes = 33554432
-    maxTotalBytes = 1073741824
-  }
+requestBodyAudit {
+  enable = false
+  retentionSeconds = 604800
+  maxBodyBytes = 8388608
+  maxTotalBytes = 268435456
 }
 ```
 
-`enable = false` は確定要件である。既定 retention、個別上限、総容量は上の例をそのまま採用せず、既存の body budget と実際の保存・transport costを確認して決める。
+- 既定は無効で、無効時は body bytes を encode、送信、保存しない
+- `maxBodyBytes` の hard ceiling は 32 MiB
+- `maxTotalBytes >= maxBodyBytes` を検証する
+- 保存失敗は認可の Allow / Deny を変更しない
 
-承認カードは `raw audit: saved / disabled / unavailable` を常時表示する。保存自体が無効な場合は、監査 body が残らないことを明示したうえで従来どおり承認できる。保存が有効なのに body が上限超過、DB 書き込み失敗、容量確保失敗などで保存できなかった場合に Approve を無効化するかは未決定とする。これは audit 表示ではなく認可 semantic の変更だからである。
+### Capture and transport
 
-raw body と併せて、検索・表示用の診断 metadata も保存する。
+有効時は review request だけでなく、すべての network `authorize` で capture を
+作る。masking、rewriting、credential injection より前の
+`flow.request.content` を使用する。
+
+capture は既存 version 1 の one-line JSON に一度だけ載せる。body は base64、
+byte length、SHA-256、Content-Type、Content-Encoding として送る。broker の
+request line 上限は 48 MiB である。binary framing、複数 frame、half-close を
+伴う新 protocol は採用していない。
+
+### Persistence and capacity
+
+exact bytes は host の既存 `audit.db` 内にある独立 `request_body` tableへ保存する。
+主キーは `(session_id, request_id)` である。通常の audit / pending query は BLOB
+列を SELECT せず、detail query だけが一件の BLOB を読む。
+
+insert transaction は次の順で処理する。
+
+1. 期限切れ row を削除する
+2. 同一主キーの idempotency を digest と length で確認する
+3. 未期限切れ body の総 byte length を計算する
+4. 上限内なら新規 BLOB を保存する
+
+容量を超える場合は既存の未期限切れ body を削除せず、新規 body だけを
+`unavailable/capacity` とする。truncate や eviction は行わない。
+
+保存結果は raw bytes を含まない次の metadata として pending と audit に残す。
 
 ```ts
-type RawBodyEvidenceMetadataCandidate = {
-  bytes: Uint8Array;
-  byteLength: number;
-  sha256: string;
-  contentType: string | null;
-  contentEncoding: string | null;
-  capturedAt: string;
-  expiresAt: string;
-};
+type RequestBodyAuditStatus =
+  | { state: "disabled" | "not-applicable" }
+  | { state: "attached"; byteLength: number; sha256: string }
+  | {
+      state: "unavailable";
+      code:
+        | "body-unreadable"
+        | "body-too-large"
+        | "capacity"
+        | "invalid-capture"
+        | "store-failed";
+    };
 ```
 
-`onIndeterminate` の原因を検索・表示するための情報:
+raw-body audit が有効なら、通常の rule audit が `off` でも metadata-only の
+authorization audit row を残す。これにより retained body が audit list から
+参照不能になることを防ぐ。
 
-```ts
-type IndeterminateDetailCandidate = {
-  code:
-    | "body-unavailable"
-    | "body-too-large"
-    | "invalid-json"
-    | "duplicate-member"
-    | "unsafe-number"
-    | "empty-json"
-    | "expected-scalar"
-    | "truth-missing";
-  pointer?: string;
-  observedType?: string;
-  observedBytes?: number;
-  limitBytes?: number;
-  parseOffset?: number;
-};
+### Retrieval boundary
 
-```
+UI は `GET /api/network/body/:sessionId/:requestId` を明示的に呼んだときだけ
+body を取得する。未保存・期限切れは 404、保存済みは metadata と base64 data を
+返す。lossless UTF-8 は text、それ以外は base64 と明記して表示する。
 
-データ経路の候補:
+body は SSE、pending JSON、audit list JSON、log、notification に含めず、
+container / agent に取得 API や audit DB を公開しない。panel の `Hide raw body` は
+保持した表示データを component state から外し、再度開くと再取得する。
 
-```text
-mitmproxy addon
-  -> policy が評価した exact body bytes と原因コードを送る
-  -> broker protocol でサイズと型を厳格に検証
-  -> host 側 audit DB へ raw BLOB を永続化
-  -> session ID と request ID に対応する保存状態と診断 metadata を pending UI へ渡す
-  -> audit log の session ID と request ID から同じ evidence を参照する
-```
+audit directory は `0700` に揃える。DB / WAL / SHM を明示的に `0600` へ chmod
+する変更は現在入れていない。これは今回の完成条件へ戻さず、別途明示的な指示が
+ある場合だけ扱う。
 
-SQLite では通常の audit 一覧 query が BLOB を読まないことを必須にする。BLOB を既存 `audit_log` へ置くか別 tableへ置くか、decision 後に `audit_id` を書くか `(session_id, request_id)` で参照し続けるかは、最小の lifecycle を比較して決める。detail endpoint が明示的に要求したときだけ body を読む。
+## 残タスク
 
-### Body transport の比較
+### 次に実装する候補: hostexec action 表示だけを整合させる
 
-#### 既存 NDJSON に bounded base64 field を追加する
+実装するなら一つの小さい変更として、次を同時に満たす。
 
-既存の one request / one response を維持できる。decode 後の bytes は exact だが、wire と一時 memory は約 1/3 増える。採用する場合は `readJsonLine` の request byte 上限を先に設け、設定可能な body 上限を含めても安全なことを実測する。
+- Deny が selector に依存しないことをボタン配置と文言で示す
+- `prompt.defaultScope` を UI に反映するか、UI 固有の既定値であることを仕様化する
+- capability 承認前に、少なくとも rule / cwd と capability の主要構成を確認できる
 
-#### bounded header と binary body を追加する
+hostexec broker の capability key や Deny semantic 自体は変更しない。
 
-base64 の膨張はないが、protocol discriminator、fragment、余剰 byte、half-close、承認待ち中の disconnect を新たに扱う。前回の実装ではこの lifecycle が多数の修正を生んだため、NDJSON案がresource上成立しないと測定できた場合だけ選ぶ。
+### 保留
 
-#### container から audit DB またはhost fileへ直接書く
+- notification deep link から対象 session / card への遷移
+- keyboard shortcut の `Approve (once)` 表記と選択中 scope の不一致
+- expired と never-saved を区別する body detail error
+- audit の reason / rule / scope / route / violation detail 表示
+- DB / WAL / SHM の明示的な mode 強制
+- session 別 Approval Inbox
+- UI / CLI 共通の汎用 approval-effect contract
+- pending pane 全体や audit page の大規模再設計
 
-host-only audit境界を壊すため採用しない。
+`docs/todo/network-approval-scope.md` は古い cache-key 説明を含むため、参照時は
+現コードを正とし、別の docs-only cleanup で更新または削除する。
 
-追加で必要な制約:
+## 対象外として維持するもの
 
-- retention と総容量上限の設定
-- DB/WAL/SHM を明示的に `0600`
-- UI では折りたたみ表示
-- raw 表示と copy 時の警告
-- container/agent 側へ body を返さない
-- expired body は metadata を残し、body が retention により削除済みだと明示する
+- raw-body 保存失敗時に Approve を禁止する semantic 変更
+- binary body framing
+- pending evidence lifecycle manager
+- network / hostexec 共通の汎用 effect model
+- container から audit DB または host file への直接書き込み
 
-現行 audit には body 以外にも不足がある。
+これらは今回の UI 要件に不要であり、実測または新しい要件なしには再導入しない。
 
-- network の承認 scope が記録されていない
-- authorization の method/path/content-type/body-size がない
-- hostexec の rule/cwd/scope がない
-- 同時 group の件数がない
-- UI は backend が持つ reason/rule 等も捨てている
+## 検証記録
 
-## 追加で見つかった問題
+2026-08-23 に現在の tree で再実行した結果:
 
-### 通知 deep link が機能していない（後続）
+- `bun test src/network/broker_integration_test.ts`: 69 pass
+- `bun test src/hostexec/broker_integration_test.ts`: 49 pass
+- `bun test src/audit/store_integration_test.ts`: 25 pass
+- `bun test src/ui/routes/api_integration_test.ts`: 37 pass
+- `bun test src/ui/frontend/src`: 836 pass
 
-desktop notification の URL には `type/sessionId/requestId` が付与されるが、frontend は query parameter を読まない。通知をクリックしても対象 session/card へ移動しない。
-
-### ショートカット表記が危険（scope表示の後続）
-
-設定画面では `Ctrl+Shift+A` が `Approve (once)` となっているが、実際には選択中 scope を使用するため `host` や `capability` を承認できる。
-
-カードに focus がなければ、先頭 network、次に先頭 hostexec を暗黙選択する。
-
-### scope 説明が frontend にハードコードされている（今回）
-
-backend は許可可能な scope 名だけを送り、意味は frontend 側で再構成している。このため protocol と表示が容易にずれる。
-
-### 古い TODO が現状と矛盾する（後続）
-
-`docs/todo/network-approval-scope.md` は「cache key が target だけ」「未着手」としているが、現コードはすでに rule、reason、target へ変更済みである。更新または削除対象。
-
-### ローカル UI が古くなりうる（調査手順）
-
-`src/ui/dist` は gitignored で、直接 `bun run main.ts ui` すると以前の build が表示される場合がある。Nix package では事前 build されるため release 問題ではないが、開発時の確認を誤らせる。
-
-## 解決案
-
-### A. 既存データで表示の嘘を先に直す
-
-session name は既存 sessions store と pending row の frontend join だけで表示できる。scope説明も既存情報で正せる範囲はtooltipから常時表示へ移す。先に network/hostexec の `once` を 1 request だけ解決する semantic へ直す。正確な原因と raw body は存在しないのでこの案だけでは完結しないが、backend基盤を待たずに最初のユーザー価値を出せる。
-
-今回の第一段階として採用する。
-
-### B. Evidence-first な承認カード
-
-最終的な表示案。重要情報を inline 表示し、詳細だけ展開する。ただし、すべてを支える共通contractを先に作らず、下の表示に必要なdataを一項目ずつend-to-endで追加する。
-
-```text
-auth-refactor · aaaabb               12s ago
-POST api.example.com:443
-/api/messages · application/json · 82 KiB
-
-WHY
-JSON parse failed at byte 1834
-
-THIS ACTION WILL
-Allow this request only.
-Remember nothing for future requests.
-
-[body evidence v]
-
-[Allow once]        [Deny once]
-```
-
-永続 scope なら、選択中操作の効果を動的に表示する。
-
-```text
-Allow future requests in this session
-matching rule api.messages
-for api.example.com:443
-when the review reason is indeterminate
-```
-
-hostexec では scope selector を Deny と共有せず、次を独立 action にする。
-
-- `Approve once`
-- `Approve this capability for this session`
-- `Deny once`
-
-### C. Session 別 Approval Inbox へ全面再設計
-
-session ごとに group 化し、detail drawer で body/capability/audit を表示する。大量 pending には強いが変更範囲が大きく、今回の対象外とする。
-
-## 推奨実装順
-
-### P0: UI が嘘をつかない状態にする
-
-- session name + short ID を frontend で join
-- frontendで分かる範囲のscope説明をtooltipから常時表示へ移す
-- network/hostexec broker の `once` を requestId 1 件だけ解決するよう修正し、同じ group の残りを pending に保つ
-- network broker の既存 `approvalScopes` から将来 cache の単位を説明し、同じ変更で card へ常時表示する
-- `once` を current request only、future cacheなしと表示する
-
-session chipのterminal選択、通知deep link、hostexec Deny/defaultScope/capability、shortcutは調査結果として残すが、このP0へは含めない。
-
-### P1: indeterminate と audit の説明能力を追加
-
-- addon で正確な `indeterminateDetail` を生成
-- 選択されたruleのdetailだけをbrokerからpending cardとauditへ渡す
-- このcause表示をend-to-endで完成させてからraw body保存へ進む
-- policy が評価した raw body bytes をbrokerへ渡し、host側audit DBへ保存する
-- pending cardとaudit detailからbodyを遅延取得する
-- DB/WAL/SHM permission、retention、容量上限を明示する
-- body transportはbounded NDJSON案を先に測定し、成立しない証拠がある場合だけbinary案へ進む
-
-### P2: 意味の一元化
-
-UI と CLI を同時移行する汎用 `ApprovalImpact` contract は今回作らない。P0でnetwork cardに必要なmetadataを限定して追加し、他consumerで同じ問題が現れてから別途一元化を検討する。
-
-## 調査時の検証
-
-関連する既存テストを実行した。
-
-- network broker: 3 pass
-- hostexec broker: 2 pass
-- pending/card frontend: 48 pass
-- failure: 0
-
-同一 group の複数 request が一回の操作で解決されること、scope の提示条件、hostexec の `defaultScope` 挙動をテストで裏取りした。
+すべて failure 0。これらは関連する focused suite の記録であり、repository 全体の
+`bun test` を実行したという意味ではない。
