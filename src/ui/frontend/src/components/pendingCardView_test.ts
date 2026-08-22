@@ -1,10 +1,54 @@
 import { describe, expect, test } from "bun:test";
 import {
   askReasonView,
+  formatBodyDiagnostic,
   formatRelativeTime,
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
+
+describe("formatBodyDiagnostic", () => {
+  test("describes an unreadable body without exposing an exception", () => {
+    expect(formatBodyDiagnostic({ code: "body-unreadable" })).toBe(
+      "Request body could not be read.",
+    );
+  });
+
+  test("describes the exact body-size limit", () => {
+    expect(
+      formatBodyDiagnostic({
+        code: "body-too-large",
+        byteLength: 9_000_000,
+        maxBodyBytes: 8_388_608,
+      }),
+    ).toBe(
+      "Body was 9000000 bytes; the body evaluation limit was 8388608 bytes.",
+    );
+  });
+
+  test("describes invalid JSON without parser output or body text", () => {
+    expect(formatBodyDiagnostic({ code: "invalid-json" })).toBe(
+      "Request body was not valid JSON.",
+    );
+  });
+
+  test("distinguishes an empty JSON body", () => {
+    expect(formatBodyDiagnostic({ code: "empty-json-body" })).toBe(
+      "Request body was empty, but this rule requires JSON.",
+    );
+  });
+
+  test("names only the safe pointer for a non-scalar value", () => {
+    expect(
+      formatBodyDiagnostic({
+        code: "non-scalar-at-pointer",
+        pointer: "/messages/0/content",
+      }),
+    ).toBe(
+      "JSON pointer /messages/0/content resolved to an object/array, not a scalar.",
+    );
+  });
+});
 
 describe("formatRelativeTime", () => {
   test("targetMs = null returns the em dash placeholder", () => {

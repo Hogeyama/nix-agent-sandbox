@@ -84,6 +84,31 @@ describe("normalizeNetworkPending", () => {
     expect(rows[0]?.askReason).toBeNull();
   });
 
+  test("carries the selected indeterminate body diagnostic", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({
+        askReason: "indeterminate",
+        bodyDiagnostic: {
+          code: "body-too-large",
+          byteLength: 9_000_000,
+          maxBodyBytes: 8_388_608,
+        },
+      }),
+    ]);
+    expect(rows[0]?.bodyDiagnostic).toEqual({
+      code: "body-too-large",
+      byteLength: 9_000_000,
+      maxBodyBytes: 8_388_608,
+    });
+  });
+
+  test("normalizes an omitted body diagnostic to null", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({ bodyDiagnostic: undefined }),
+    ]);
+    expect(rows[0]?.bodyDiagnostic).toBeNull();
+  });
+
   test("an entry that offers no scopes falls back to the narrowest one", () => {
     // A payload without the field can only be trusted for this one
     // request; guessing a wider grain would remember an approval the

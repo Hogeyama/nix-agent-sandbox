@@ -70,6 +70,64 @@ test("appendAuditLog: round-trips request-policy outcome fields", async () => {
   }
 });
 
+test("appendAuditLog: stores body diagnostics as nullable JSON metadata", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-diagnostic-"));
+  try {
+    await appendAuditLog(
+      makeEntry({
+        requestId: "req-with-diagnostic",
+        bodyDiagnostic: {
+          code: "body-too-large",
+          byteLength: 8193,
+          maxBodyBytes: 8192,
+        },
+      }),
+      dir,
+    );
+    await appendAuditLog(
+      makeEntry({ requestId: "req-without-diagnostic" }),
+      dir,
+    );
+
+    const entries = await queryAuditLogs({}, dir);
+    const withDiagnostic = entries.find(
+      (entry) => entry.requestId === "req-with-diagnostic",
+    );
+    const withoutDiagnostic = entries.find(
+      (entry) => entry.requestId === "req-without-diagnostic",
+    );
+    expect(withDiagnostic?.bodyDiagnostic).toEqual({
+      code: "body-too-large",
+      byteLength: 8193,
+      maxBodyBytes: 8192,
+    });
+    expect(withoutDiagnostic?.bodyDiagnostic).toBeUndefined();
+
+    _closeAuditDb(dir);
+    const db = new Database(path.join(dir, "audit.db"));
+    try {
+      const columns = db.query("PRAGMA table_info(audit_log)").all() as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+      }>;
+      expect(
+        columns.find((column) => column.name === "body_diagnostic"),
+      ).toEqual(expect.objectContaining({ type: "TEXT", notnull: 0 }));
+      expect(
+        db
+          .query("SELECT body_diagnostic FROM audit_log WHERE request_id = ?")
+          .get("req-without-diagnostic"),
+      ).toEqual({ body_diagnostic: null });
+    } finally {
+      db.close();
+    }
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("queryAuditLogs: migrates legacy schema and preserves old rows", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-legacy-"));
   try {
@@ -115,6 +173,7 @@ test("queryAuditLogs: migrates legacy schema and preserves old rows", async () =
     expect(entry.route).toBeUndefined();
     expect(entry.requestPolicyKind).toBeUndefined();
     expect(entry.requestPolicyResult).toBeUndefined();
+    expect(entry.bodyDiagnostic).toBeUndefined();
 
     await appendAuditLog(
       makeEntry({

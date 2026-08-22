@@ -1,3 +1,5 @@
+import type { BodyDiagnostic } from "../network/protocol.ts";
+
 /** Domain of the audited action. */
 export type AuditDomain = "network" | "hostexec";
 
@@ -60,6 +62,8 @@ export interface AuditLogEntry {
   requestPolicyKind?: RequestPolicyKind;
   /** Result produced by the request policy. */
   requestPolicyResult?: RequestPolicyResult;
+  /** Cause reported for the selected indeterminate authorization rule. */
+  bodyDiagnostic?: BodyDiagnostic;
   /**
    * Acceptance-condition violations the body inspection found.
    *

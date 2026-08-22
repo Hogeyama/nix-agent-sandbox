@@ -34,6 +34,7 @@ import {
 import {
   type ApprovalScope,
   type AuthorizeRequest,
+  type BodyDiagnostic,
   type DecisionResponse,
   denyReasonForTarget,
   type InjectHeaderPreview,
@@ -648,6 +649,7 @@ export class SessionBroker {
           targetStr,
           undefined,
           decided.ruleId,
+          selectedBodyDiagnostic(message, decided),
         );
       }
       return denyDecision(message.requestId, decided.reason);
@@ -666,6 +668,7 @@ export class SessionBroker {
           targetStr,
           headerNames,
           decided.ruleId,
+          selectedBodyDiagnostic(message, decided),
         );
       }
       return decision;
@@ -688,6 +691,7 @@ export class SessionBroker {
           targetStr,
           undefined,
           decided.ruleId,
+          selectedBodyDiagnostic(message, decided),
         );
       }
       return denyDecision(message.requestId, "denied-by-user");
@@ -707,6 +711,7 @@ export class SessionBroker {
           targetStr,
           headerNames,
           decided.ruleId,
+          selectedBodyDiagnostic(message, decided),
         );
       }
       return decision;
@@ -727,6 +732,7 @@ export class SessionBroker {
           targetStr,
           undefined,
           decided.ruleId,
+          selectedBodyDiagnostic(message, decided),
         );
       }
       return denyDecision(message.requestId, "recent-deny");
@@ -934,6 +940,7 @@ export class SessionBroker {
         targetKey(request.target),
         decision.injectHeaders?.map((header) => header.name),
         decided?.ruleId,
+        selectedBodyDiagnostic(request, decided),
       );
     }
     waiter?.resolve(decision);
@@ -1007,6 +1014,7 @@ export class SessionBroker {
           targetKey(request.target),
           decision.injectHeaders?.map((h) => h.name),
           decided?.ruleId,
+          selectedBodyDiagnostic(request, decided),
         );
       }
       group.waiters.get(requestId)?.resolve(decision);
@@ -1172,6 +1180,7 @@ export class SessionBroker {
     target: string,
     injectedHeaders?: string[],
     ruleId?: string,
+    bodyDiagnostic?: BodyDiagnostic,
   ): Promise<void> {
     if (!this.auditDir) return;
     const entry: AuditLogEntry = {
@@ -1186,6 +1195,7 @@ export class SessionBroker {
       ruleId,
       target,
       injectedHeaders,
+      bodyDiagnostic,
     };
     await appendAuditLog(entry, this.auditDir);
   }
@@ -1483,11 +1493,21 @@ function toPendingEntry(
     // (`pendingGroupKey` / `approvalKeys` が同じ値を鍵に使う) ので、カードは
     // 押した答えが何に対して覚えられるかを言えるようになる。
     askReason: group.reason,
+    bodyDiagnostic: selectedBodyDiagnostic(message, group),
     // 承認 UI に出すのと同じ集合を載せる。押せるものと通るものを一致させる
     // ために、broker はこの集合の外の粒度を受け付けない。
     approvalScopes: [...group.allowedScopes],
     injectHeaders: [...group.injectHeaders],
   };
+}
+
+function selectedBodyDiagnostic(
+  message: AuthorizeRequest,
+  decided: Pick<AuthzDecision, "reason" | "ruleId"> | undefined,
+): BodyDiagnostic | undefined {
+  return decided?.reason === "indeterminate"
+    ? message.bodyDiagnostics[decided.ruleId]
+    : undefined;
 }
 
 function allowDecision(

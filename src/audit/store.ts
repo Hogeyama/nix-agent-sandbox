@@ -88,7 +88,8 @@ function openDatabase(dir: string): Database {
         target           TEXT,
         command          TEXT,
         injected_headers TEXT,
-        violations       TEXT
+        violations       TEXT,
+        body_diagnostic  TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp
         ON audit_log(timestamp);
@@ -105,6 +106,7 @@ function openDatabase(dir: string): Database {
     addColumnIfMissing(db, "request_policy_kind TEXT");
     addColumnIfMissing(db, "request_policy_result TEXT");
     addColumnIfMissing(db, "violations TEXT");
+    addColumnIfMissing(db, "body_diagnostic TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -153,9 +155,9 @@ export async function appendAuditLog(
        (id, timestamp, domain, session_id, request_id,
         decision, reason, phase, rule_id, method, route,
         request_policy_kind, request_policy_result,
-        scope, target, command, injected_headers, violations)
+        scope, target, command, injected_headers, violations, body_diagnostic)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -177,6 +179,9 @@ export async function appendAuditLog(
       ? JSON.stringify(entry.injectedHeaders)
       : null,
     entry.violations !== undefined ? JSON.stringify(entry.violations) : null,
+    entry.bodyDiagnostic !== undefined
+      ? JSON.stringify(entry.bodyDiagnostic)
+      : null,
   );
 }
 
@@ -266,7 +271,8 @@ export async function queryAuditLogs(
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
                       decision, reason, phase, rule_id, method, route,
                       request_policy_kind, request_policy_result,
-                      scope, target, command, injected_headers, violations
+                      scope, target, command, injected_headers, violations,
+                      body_diagnostic
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY timestamp ASC, id ASC`;
@@ -294,6 +300,7 @@ interface AuditLogRow {
   command: string | null;
   injected_headers: string | null;
   violations: string | null;
+  body_diagnostic: string | null;
 }
 
 function rowToEntry(row: AuditLogRow): AuditLogEntry {
@@ -325,6 +332,11 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
     entry.injectedHeaders = JSON.parse(row.injected_headers) as string[];
   if (row.violations !== null)
     entry.violations = JSON.parse(row.violations) as AuditViolation[];
+  if (row.body_diagnostic !== null) {
+    entry.bodyDiagnostic = JSON.parse(
+      row.body_diagnostic,
+    ) as AuditLogEntry["bodyDiagnostic"];
+  }
   return entry;
 }
 

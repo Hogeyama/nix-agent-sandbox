@@ -4113,6 +4113,108 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(
             authorization["bodyTruth"], {"api.messages": "true"}
         )
+        self.assertEqual(authorization.get("bodyDiagnostics"), {})
+
+    def test_authorization_reports_an_unreadable_body_without_error_detail(
+        self,
+    ):
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            request_class=FakeUndecodableRequest,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {"api.messages": {"code": "body-unreadable"}},
+        )
+        self.assertNotIn("cannot decode", json.dumps(authorization))
+
+    def test_authorization_reports_the_effective_body_byte_limit(self):
+        rule = _messages_rule()
+        rule["limits"]["maxBodyBytes"] = 4096
+        document = _flow_document([rule])
+        document["scopes"][0]["limits"]["maxBodyBytes"] = 8
+        body = b'{"secret":"SECRET-body-content"}'
+
+        _flow, messages, _stderr = self._run(
+            document=document,
+            content=body,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {
+                "api.messages": {
+                    "code": "body-too-large",
+                    "byteLength": len(body),
+                    "maxBodyBytes": 8,
+                }
+            },
+        )
+        self.assertNotIn("SECRET-body-content", json.dumps(authorization))
+
+    def test_authorization_reports_invalid_json_without_body_content(self):
+        body = b'{"SECRET-body-content":'
+
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            content=body,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {"api.messages": {"code": "invalid-json"}},
+        )
+        self.assertNotIn("SECRET-body-content", json.dumps(authorization))
+
+    def test_authorization_reports_a_declared_empty_json_body(self):
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            content=b"",
+            headers=[("content-length", "0")],
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {"api.messages": {"code": "empty-json-body"}},
+        )
+
+    def test_authorization_reports_only_the_first_non_scalar_pointer(self):
+        rule = _messages_rule()
+        rule["match"]["equals"] = {
+            "/first": "wanted",
+            "/second": "wanted",
+        }
+
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([rule]),
+            content=b'{"first":{},"second":[]}',
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {
+                "api.messages": {
+                    "code": "non-scalar-at-pointer",
+                    "pointer": "/first",
+                }
+            },
+        )
 
     def test_websocket_upgrade_reaches_the_broker_with_websocket_transport(self):
         document = _flow_document([_messages_rule()])

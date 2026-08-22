@@ -11,6 +11,7 @@ import type {
 import { formatAuditEntry, summaryFor } from "./auditEntryView";
 import {
   askReasonView,
+  formatBodyDiagnostic,
   formatRelativeTime,
   networkApprovalEffect,
   sessionLabel,
@@ -173,6 +174,20 @@ export function PendingPane(props: Props) {
                       <p class="card-ask-reason" title={reason().hint}>
                         <span class="card-ask-reason-label">why</span>
                         {reason().label}
+                      </p>
+                    )}
+                  </Show>
+                  <Show
+                    when={
+                      row.askReason === "indeterminate"
+                        ? row.bodyDiagnostic
+                        : null
+                    }
+                  >
+                    {(diagnostic) => (
+                      <p class="card-ask-reason">
+                        <span class="card-ask-reason-label">body</span>
+                        {formatBodyDiagnostic(diagnostic())}
                       </p>
                     )}
                   </Show>
@@ -389,6 +404,13 @@ export function PendingPane(props: Props) {
                     {row.domain} · {row.decision}
                   </span>
                   <span class="audit-detail">{summaryFor(row)}</span>
+                  <Show when={row.bodyDiagnostic}>
+                    {(diagnostic) => (
+                      <span class="audit-detail">
+                        {formatBodyDiagnostic(diagnostic())}
+                      </span>
+                    )}
+                  </Show>
                 </div>
               )}
             </For>

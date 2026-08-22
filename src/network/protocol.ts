@@ -84,6 +84,17 @@ export interface ReviewContext {
   bodySize: number;
 }
 
+export type BodyDiagnostic =
+  | { code: "body-unreadable" }
+  | {
+      code: "body-too-large";
+      byteLength: number;
+      maxBodyBytes: number;
+    }
+  | { code: "invalid-json" }
+  | { code: "empty-json-body" }
+  | { code: "non-scalar-at-pointer"; pointer: string };
+
 export interface AuthorizeRequest {
   version: 1;
   type: "authorize";
@@ -96,6 +107,8 @@ export interface AuthorizeRequest {
   observedAt: string;
   /** 候補ルールごとに、そのルール自身の予算で評価したボディ条件の真偽。 */
   bodyTruth: Readonly<Record<string, Truth>>;
+  /** 候補ルールごとの `indeterminate` の原因。 */
+  bodyDiagnostics: Readonly<Record<string, BodyDiagnostic>>;
   reviewContext?: ReviewContext;
 }
 
@@ -301,6 +314,7 @@ const AUTHORIZE_FIELDS = new Set([
   "requestKind",
   "observedAt",
   "bodyTruth",
+  "bodyDiagnostics",
   "reviewContext",
 ]);
 const REQUEST_KINDS = ["connect", "forward"] as const;
@@ -356,6 +370,7 @@ export function validateAuthorizeRequest(
     return "invalid authorize body truth table";
   }
   const entries = Object.entries(message.bodyTruth);
+  const truthByRuleId = new Map(entries);
   const ruleCount = document.scopes.reduce(
     (count, scope) => count + scope.rules.length,
     0,
@@ -369,7 +384,76 @@ export function validateAuthorizeRequest(
       return "invalid authorize body truth value";
     }
   }
+  if (
+    typeof message.bodyDiagnostics !== "object" ||
+    message.bodyDiagnostics === null ||
+    Array.isArray(message.bodyDiagnostics)
+  ) {
+    return "invalid authorize body diagnostic table";
+  }
+  const diagnosticEntries = Object.entries(message.bodyDiagnostics);
+  if (diagnosticEntries.length > ruleCount) {
+    return "too many authorize body diagnostics";
+  }
+  for (const [ruleId, diagnostic] of diagnosticEntries) {
+    if (!documentHasConcreteRuleId(document, ruleId)) {
+      return "unknown authorize body diagnostic rule ID";
+    }
+    if (!isBodyDiagnostic(diagnostic)) {
+      return "invalid authorize body diagnostic";
+    }
+    if (truthByRuleId.get(ruleId) !== "indeterminate") {
+      return "unexpected authorize body diagnostic";
+    }
+  }
+  for (const [ruleId, truth] of entries) {
+    if (
+      truth === "indeterminate" &&
+      !Object.hasOwn(message.bodyDiagnostics, ruleId)
+    ) {
+      return "missing authorize body diagnostic";
+    }
+  }
   return null;
+}
+
+function isBodyDiagnostic(value: unknown): value is BodyDiagnostic {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const diagnostic = value as Record<string, unknown>;
+  switch (diagnostic.code) {
+    case "body-unreadable":
+    case "invalid-json":
+    case "empty-json-body":
+      return hasExactFields(diagnostic, ["code"]);
+    case "body-too-large":
+      return (
+        hasExactFields(diagnostic, ["code", "byteLength", "maxBodyBytes"]) &&
+        Number.isSafeInteger(diagnostic.byteLength) &&
+        (diagnostic.byteLength as number) > 0 &&
+        Number.isSafeInteger(diagnostic.maxBodyBytes) &&
+        (diagnostic.maxBodyBytes as number) > 0
+      );
+    case "non-scalar-at-pointer":
+      return (
+        hasExactFields(diagnostic, ["code", "pointer"]) &&
+        typeof diagnostic.pointer === "string"
+      );
+    default:
+      return false;
+  }
+}
+
+function hasExactFields(
+  value: Readonly<Record<string, unknown>>,
+  fields: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return (
+    actual.length === fields.length &&
+    actual.every((field) => fields.includes(field))
+  );
 }
 
 export function validateRequestPolicyReview(
@@ -669,6 +753,8 @@ export interface PendingEntry {
    * 述べているもので、判定の理由ではない。
    */
   askReason?: DecisionReason;
+  /** 選択されたルールが `indeterminate` になった原因。 */
+  bodyDiagnostic?: BodyDiagnostic;
   /** この確認で選べる粒度。ルールの具体性から導出される。 */
   approvalScopes: ApprovalScope[];
   /** 承認したときに注入されるヘッダー。名前だけで、値は載らない。 */

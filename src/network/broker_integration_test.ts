@@ -668,6 +668,7 @@ test("SessionBroker: approving a rule does not approve its violations", async ()
       requestKind: "forward",
       observedAt: new Date().toISOString(),
       bodyTruth: { "policy.json": "true" },
+      bodyDiagnostics: {},
       reviewContext: {
         path: "/v1/messages",
         contentType: "application/json",
@@ -1665,6 +1666,7 @@ function authorize(
     requestKind: "connect",
     observedAt: new Date().toISOString(),
     bodyTruth: ruleId ? { [ruleId]: "true" } : {},
+    bodyDiagnostics: {},
   };
 }
 
@@ -2454,6 +2456,78 @@ test("SessionBroker: an approval for an inspected body does not release an unins
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: selected indeterminate diagnostic reaches pending and authorization audit only", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-diagnostic-"),
+  );
+  const auditDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-diagnostic-audit-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_diagnostic",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com:443"],
+            rules: {
+              messages: {
+                match: { paths: ["/v1/messages"], body: { format: "json" } },
+                onMatch: "review",
+                onIndeterminate: "review",
+              },
+              other: {
+                match: { paths: ["/v1/other"], body: { format: "json" } },
+                onMatch: "review",
+                onIndeterminate: "review",
+              },
+            },
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_diagnostic/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...post("sess_diagnostic", "req_diagnostic", "/v1/messages"),
+      bodyTruth: {
+        "api.messages": "indeterminate",
+        "api.other": "indeterminate",
+      },
+      bodyDiagnostics: {
+        "api.messages": { code: "invalid-json" },
+        "api.other": { code: "body-unreadable" },
+      },
+    });
+
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].bodyDiagnostic).toEqual({ code: "invalid-json" });
+    expect("bodyDiagnostics" in pending.items[0]).toBe(false);
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_diagnostic",
+      scope: "once",
+    });
+    expect((await waiting).decision).toEqual("deny");
+
+    const [audit] = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(audit.phase).toEqual("authorization");
+    expect(audit.bodyDiagnostic).toEqual({ code: "invalid-json" });
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

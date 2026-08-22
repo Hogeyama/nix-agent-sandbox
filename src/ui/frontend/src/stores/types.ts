@@ -38,6 +38,19 @@ export type ReviewContextLike = {
   bodySize: number;
 };
 
+// Closed, body-safe explanation selected by the broker when a rule's body
+// condition is indeterminate. It contains no raw body or parser error text.
+export type BodyDiagnostic =
+  | { code: "body-unreadable" }
+  | {
+      code: "body-too-large";
+      byteLength: number;
+      maxBodyBytes: number;
+    }
+  | { code: "invalid-json" }
+  | { code: "empty-json-body" }
+  | { code: "non-scalar-at-pointer"; pointer: string };
+
 export type NetworkPendingItemLike = {
   requestId: string;
   sessionId: string;
@@ -53,6 +66,7 @@ export type NetworkPendingItemLike = {
   // `network-fallback`). Absent on confirmations raised by a body
   // inspection, where `violations` is the reason itself.
   askReason?: string | null;
+  bodyDiagnostic?: BodyDiagnostic | null;
   // Grains this confirmation may be approved at, narrowest first. The
   // backend derives them from how specific the matched rule is and refuses
   // anything outside the list.
@@ -122,6 +136,7 @@ export type AuditLogEntryLike = {
   scope?: string | null;
   target?: string | null;
   command?: string | null;
+  bodyDiagnostic?: BodyDiagnostic | null;
 };
 
 export type SessionTurn = "user-turn" | "ack-turn" | "agent-turn" | "done";

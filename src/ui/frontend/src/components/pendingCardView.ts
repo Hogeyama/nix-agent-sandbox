@@ -8,6 +8,27 @@
  * drive re-renders by ticking a clock signal.
  */
 
+import type { BodyDiagnostic } from "../stores/types";
+
+/**
+ * Format the broker-selected indeterminate cause using only its closed,
+ * body-safe metadata. No raw request body or parser error is available here.
+ */
+export function formatBodyDiagnostic(diagnostic: BodyDiagnostic): string {
+  switch (diagnostic.code) {
+    case "body-unreadable":
+      return "Request body could not be read.";
+    case "body-too-large":
+      return `Body was ${diagnostic.byteLength} bytes; the body evaluation limit was ${diagnostic.maxBodyBytes} bytes.`;
+    case "invalid-json":
+      return "Request body was not valid JSON.";
+    case "empty-json-body":
+      return "Request body was empty, but this rule requires JSON.";
+    case "non-scalar-at-pointer":
+      return `JSON pointer ${diagnostic.pointer} resolved to an object/array, not a scalar.`;
+  }
+}
+
 /**
  * Format the difference between `targetMs` and `nowMs` as a coarse-grained
  * relative time string (e.g. `"5s ago"`, `"3m ago"`, `"2h ago"`).

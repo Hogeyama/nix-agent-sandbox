@@ -1056,6 +1056,7 @@ async function authorizeThroughBroker(
     requestKind: "connect",
     observedAt: new Date().toISOString(),
     bodyTruth: {},
+    bodyDiagnostics: {},
   };
   return await sendBrokerRequest<DecisionResponse>(socketPath, request);
 }

@@ -59,6 +59,7 @@ const validAuthorize = {
   bodyTruth: {
     "policy.json": "true",
   },
+  bodyDiagnostics: {},
   reviewContext: {
     path: "/v1/messages",
     contentType: "application/json",
@@ -71,6 +72,101 @@ test("authorize validation accepts a bounded rule truth table", () => {
     validateAuthorizeRequest(validAuthorize, "sess_test", document),
   ).toBeNull();
 });
+
+const validBodyDiagnostics = [
+  { code: "body-unreadable" },
+  { code: "body-too-large", byteLength: 4097, maxBodyBytes: 4096 },
+  { code: "invalid-json" },
+  { code: "empty-json-body" },
+  { code: "non-scalar-at-pointer", pointer: "/messages/0/content" },
+] as const;
+
+for (const diagnostic of validBodyDiagnostics) {
+  test(`authorize validation accepts ${diagnostic.code} body diagnostics`, () => {
+    expect(
+      validateAuthorizeRequest(
+        {
+          ...validAuthorize,
+          bodyTruth: { "policy.json": "indeterminate" },
+          bodyDiagnostics: { "policy.json": diagnostic },
+        },
+        "sess_test",
+        document,
+      ),
+    ).toBeNull();
+  });
+}
+
+test("authorize validation rejects a diagnostic for a determinate truth", () => {
+  expect(
+    validateAuthorizeRequest(
+      {
+        ...validAuthorize,
+        bodyDiagnostics: { "policy.json": { code: "invalid-json" } },
+      },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+test("authorize validation rejects an indeterminate truth without a diagnostic", () => {
+  expect(
+    validateAuthorizeRequest(
+      {
+        ...validAuthorize,
+        bodyTruth: { "policy.json": "indeterminate" },
+      },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+const invalidBodyDiagnostics = [
+  ["a missing diagnostic table", undefined],
+  ["a diagnostic table array", []],
+  ["an unknown rule ID", { "policy.unknown": { code: "invalid-json" } }],
+  [
+    "a fallback pseudo rule ID",
+    { "policy.$fallback": { code: "invalid-json" } },
+  ],
+  ["an unknown diagnostic code", { "policy.json": { code: "unknown" } }],
+  [
+    "an extra diagnostic field",
+    { "policy.json": { code: "invalid-json", detail: "parser secret" } },
+  ],
+  [
+    "an incomplete body-too-large diagnostic",
+    { "policy.json": { code: "body-too-large", byteLength: 4097 } },
+  ],
+  [
+    "an unsafe body-too-large byte length",
+    {
+      "policy.json": {
+        code: "body-too-large",
+        byteLength: Number.MAX_SAFE_INTEGER + 1,
+        maxBodyBytes: 4096,
+      },
+    },
+  ],
+  [
+    "a non-string pointer",
+    { "policy.json": { code: "non-scalar-at-pointer", pointer: 1 } },
+  ],
+] as const;
+
+for (const [name, bodyDiagnostics] of invalidBodyDiagnostics) {
+  test(`authorize validation rejects ${name}`, () => {
+    const message = { ...validAuthorize } as Record<string, unknown>;
+    if (bodyDiagnostics === undefined) delete message.bodyDiagnostics;
+    else message.bodyDiagnostics = bodyDiagnostics;
+
+    expect(
+      validateAuthorizeRequest(message, "sess_test", document),
+    ).not.toBeNull();
+  });
+}
 
 for (const transport of [undefined, "ws", "WebSocket", true, null]) {
   test(`authorize validation rejects invalid transport ${String(transport)}`, () => {
