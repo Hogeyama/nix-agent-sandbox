@@ -24,7 +24,7 @@ Docker が無い環境の高速テストを壊す。逆に付けると unit レ�
 
 除外グロブに先頭のアンダースコアが無いので、実在する形は2つある:
 
-- `<module>_integration_test.ts` — ソースファイルに隣接させる場合（26ファイル）
+- `<module>_integration_test.ts` — ソースファイルに隣接させる場合（27ファイル）
 - `integration_test.ts` — `src/stages/<name>/` のようにディレクトリ全体が
   一つの関心事に対応する場合（6ファイル）
 
@@ -46,12 +46,28 @@ bun run test:unit              # unit のみ（Docker 不要、高速、安全�
 bun run test:integration       # integration + tests/ 配下すべて
 ```
 
+## Docker / hostexec 承認をまとめる
+
+Docker integration を含む変更では、開発中は Docker に触れない unit test だけを
+絞って実行し、最終確認で `bun run test` を **1 回だけ**実行する。異なる引数の
+`bun test <integration-file>` を途中で何度も実行すると、hostexec では別 capability
+として扱われ、承認が増える。integration file は import 時の availability probe
+（例: `docker info`）も実行し得るため、test body が skip でも無害ではない。
+
+Docker integration の個別再実行は、full suite で失敗を確認した後の原因調査、
+またはユーザーが明示的に求めた場合に限る。承認を減らすために Docker policy を
+迂回したり、絶対パスや permissive rule を使ったりしてはならない。
+
 ## Unit テストで許可される依存
 
 - temp dir: `mkdtemp(path.join(tmpdir(), "nas-<area>-"))`（`node:fs/promises` + `node:os`）
 - fake script（PATH 差し替え）
 - in-memory mock / Fake Layer（Effect サービスは Fake Layer、probe はデータを直接捏造）
-- 外部デーモンが不在でも graceful に落ちる関数呼び出し（`dockerIsRunning("no-such")` → `false` 等）
+
+Unit test は live の Docker CLI / daemon に到達してはならない。存在しない対象へ
+graceful に落ちる呼び出しでも、`docker inspect` や `docker logs` を起動するなら
+integration である。Docker wrapper を unit test する場合は Fake Layer または注入した
+fake command runner を使う。
 
 ## Integration / E2E のルール
 
