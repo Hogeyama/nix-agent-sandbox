@@ -281,6 +281,41 @@ describe("normalizeNetworkPending", () => {
 });
 
 describe("normalizeHostExecPending", () => {
+  test("preserves the broker's safe capability metadata and configured default scope", () => {
+    const capability = {
+      ruleId: "git.push",
+      argv0: "git",
+      normalizedArgv: ["git", "push", "origin", "main"],
+      normalizedCwd: "/workspace",
+      envBindings: [{ key: "GITHUB_TOKEN", source: "secret:github" }],
+      inheritEnv: { mode: "minimal" as const, keys: ["SSH_AUTH_SOCK"] },
+    };
+    const item = {
+      ...makeHostExec(),
+      defaultScope: "once" as const,
+      capability,
+    } as HostExecPendingItemLike & {
+      defaultScope: "once";
+      capability: typeof capability;
+    };
+
+    const [row] = normalizeHostExecPending([item]);
+
+    expect(row?.defaultScope).toBe("once");
+    expect(row?.ruleId).toBe("git.push");
+    expect(row?.cwd).toBe("/workspace");
+    expect(row?.capability).toEqual(capability);
+  });
+
+  test("uses safe compatibility defaults when an older payload lacks metadata", () => {
+    const [row] = normalizeHostExecPending([makeHostExec()]);
+
+    expect(row?.defaultScope).toBe("capability");
+    expect(row?.ruleId).toBeNull();
+    expect(row?.cwd).toBeNull();
+    expect(row?.capability).toBeNull();
+  });
+
   test("argv0 + args join with single space", () => {
     const rows = normalizeHostExecPending([
       makeHostExec({ argv0: "git", args: ["push"] }),

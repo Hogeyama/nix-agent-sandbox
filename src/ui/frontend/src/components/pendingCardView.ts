@@ -8,7 +8,80 @@
  * drive re-renders by ticking a clock signal.
  */
 
-import type { BodyDiagnostic, RequestBodyAuditStatus } from "../stores/types";
+import type {
+  BodyDiagnostic,
+  HostExecCapabilityLike,
+  RequestBodyAuditStatus,
+} from "../stores/types";
+
+export type HostExecApprovalScope = "once" | "capability";
+
+export type HostExecMatchDetail = { label: string; value: string };
+
+type HostExecMatchMetadata = {
+  ruleId: string | null;
+  cwd: string | null;
+  capability: HostExecCapabilityLike | null;
+};
+
+/** Present hostexec's wire scopes in the terms a person chooses between. */
+export function hostExecScopeLabel(scope: HostExecApprovalScope): string {
+  return scope === "once"
+    ? "This request only"
+    : "Matching command for this session";
+}
+
+/** State exactly what approving at a hostexec scope does and remembers. */
+export function hostExecApprovalEffect(scope: HostExecApprovalScope): string {
+  return scope === "once"
+    ? "Approves this request only. Nothing is remembered."
+    : "Approves all requests waiting on these exact conditions and remembers them for future requests in this session.";
+}
+
+/**
+ * Show the broker-owned, safe identity metadata defining a hostexec match.
+ * Older brokers did not send the snapshot, so missing fields remain explicit
+ * rather than being reconstructed from a potentially different local state.
+ */
+export function hostExecMatchDetails(
+  row: HostExecMatchMetadata,
+): HostExecMatchDetail[] {
+  const capability = row.capability;
+  const command = capability
+    ? listOrNone(
+        capability.normalizedArgv.map((arg) => JSON.stringify(arg)),
+        " ",
+      )
+    : "not reported";
+  const bindings = capability
+    ? listOrNone(
+        capability.envBindings.map(
+          (binding) => `${binding.key} ← ${binding.source}`,
+        ),
+      )
+    : "not reported";
+  const inherited = capability
+    ? `${capability.inheritEnv.mode}; ${listOrNone(capability.inheritEnv.keys)}`
+    : "not reported";
+
+  return [
+    {
+      label: "Rule",
+      value: row.ruleId ?? capability?.ruleId ?? "not reported",
+    },
+    { label: "Command", value: command },
+    {
+      label: "Working directory",
+      value: row.cwd ?? capability?.normalizedCwd ?? "not reported",
+    },
+    { label: "Environment bindings", value: bindings },
+    { label: "Inherited environment", value: inherited },
+  ];
+}
+
+function listOrNone(values: readonly string[], separator = ", "): string {
+  return values.length > 0 ? values.join(separator) : "none";
+}
 
 /** Format metadata about whether exact raw request bytes were retained. */
 export function formatRequestBodyAuditStatus(

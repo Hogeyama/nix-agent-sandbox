@@ -4,6 +4,9 @@ import {
   formatBodyDiagnostic,
   formatRelativeTime,
   formatRequestBodyAuditStatus,
+  hostExecApprovalEffect,
+  hostExecMatchDetails,
+  hostExecScopeLabel,
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
@@ -186,6 +189,88 @@ describe("networkApprovalEffect", () => {
     expect(networkApprovalEffect(row, "violation")).toBe(
       "Answers the current group and future matching requests in this session for the same rule and violation identities shown here.",
     );
+  });
+});
+
+describe("hostexec approval views", () => {
+  const capability = {
+    ruleId: "git.push",
+    argv0: "git",
+    normalizedArgv: ["git", "push", "origin", "main"],
+    normalizedCwd: "/workspace",
+    envBindings: [{ key: "GITHUB_TOKEN", source: "secret:github" }],
+    inheritEnv: { mode: "minimal" as const, keys: ["SSH_AUTH_SOCK"] },
+  };
+
+  test("uses plain language for each approval scope", () => {
+    expect(hostExecScopeLabel("once")).toBe("This request only");
+    expect(hostExecScopeLabel("capability")).toBe(
+      "Matching command for this session",
+    );
+    expect(hostExecScopeLabel("capability")).not.toContain("capability");
+  });
+
+  test("states what each approval scope remembers", () => {
+    expect(hostExecApprovalEffect("once")).toBe(
+      "Approves this request only. Nothing is remembered.",
+    );
+    expect(hostExecApprovalEffect("capability")).toContain(
+      "future requests in this session",
+    );
+  });
+
+  test("shows every broker-reported condition that defines a match", () => {
+    expect(
+      hostExecMatchDetails({
+        ruleId: capability.ruleId,
+        cwd: capability.normalizedCwd,
+        capability,
+      }),
+    ).toEqual([
+      { label: "Rule", value: "git.push" },
+      { label: "Command", value: '"git" "push" "origin" "main"' },
+      { label: "Working directory", value: "/workspace" },
+      {
+        label: "Environment bindings",
+        value: "GITHUB_TOKEN ← secret:github",
+      },
+      { label: "Inherited environment", value: "minimal; SSH_AUTH_SOCK" },
+    ]);
+  });
+
+  test("calls out broker-reported empty match lists as none", () => {
+    const details = hostExecMatchDetails({
+      ruleId: "git.push",
+      cwd: "/workspace",
+      capability: {
+        ...capability,
+        normalizedArgv: [],
+        envBindings: [],
+        inheritEnv: { mode: "minimal", keys: [] },
+      },
+    });
+
+    expect(details).toContainEqual({ label: "Command", value: "none" });
+    expect(details).toContainEqual({
+      label: "Environment bindings",
+      value: "none",
+    });
+    expect(details).toContainEqual({
+      label: "Inherited environment",
+      value: "minimal; none",
+    });
+  });
+
+  test("shows unavailable evidence explicitly for an older payload", () => {
+    expect(
+      hostExecMatchDetails({ ruleId: null, cwd: null, capability: null }),
+    ).toEqual([
+      { label: "Rule", value: "not reported" },
+      { label: "Command", value: "not reported" },
+      { label: "Working directory", value: "not reported" },
+      { label: "Environment bindings", value: "not reported" },
+      { label: "Inherited environment", value: "not reported" },
+    ]);
   });
 });
 

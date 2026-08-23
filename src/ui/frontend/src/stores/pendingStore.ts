@@ -11,6 +11,7 @@ import { pendingRequestKey } from "./pendingRequestKey";
 import { shortenSessionId } from "./sessionId";
 import type {
   BodyDiagnostic,
+  HostExecCapabilityLike,
   HostExecPendingItemLike,
   InjectHeaderPreviewLike,
   NetworkPendingItemLike,
@@ -92,6 +93,15 @@ export type HostExecPendingRow = {
   sessionShortId: string;
   sessionName: string | null;
   command: string; // argv joined by space, presentation only
+  // The broker configuration that initialized this pending request. Older
+  // payloads default to the existing session-wide approval behavior.
+  defaultScope: "once" | "capability";
+  // These duplicate fields make the normalizer tolerant of payload versions
+  // that supplied partial identity metadata before the full snapshot existed.
+  ruleId: string | null;
+  cwd: string | null;
+  // Safe identity metadata only: never resolved environment or secret values.
+  capability: HostExecCapabilityLike | null;
   integrityChanged: boolean; // true のとき対象ファイルが起動時 baseline から変化
   createdAtMs: number | null;
 };
@@ -171,6 +181,10 @@ export function normalizeHostExecPending(
     sessionShortId: shortenSessionId(it.sessionId),
     sessionName: null,
     command: [it.argv0, ...it.args].join(" "),
+    defaultScope: it.defaultScope === "once" ? "once" : "capability",
+    ruleId: it.ruleId ?? it.capability?.ruleId ?? null,
+    cwd: it.cwd ?? it.capability?.normalizedCwd ?? null,
+    capability: it.capability ?? null,
     integrityChanged: it.integrityChanged === true,
     createdAtMs: parseIsoToMs(it.createdAt),
   }));

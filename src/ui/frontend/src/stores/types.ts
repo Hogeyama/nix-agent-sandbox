@@ -118,13 +118,31 @@ export type InjectHeaderPreviewLike = {
   secrets?: string[] | null;
 };
 
+// The safe, broker-owned identity snapshot for a hostexec approval. It names
+// configured sources but deliberately contains neither resolved environment
+// values nor host environment contents.
+export type HostExecCapabilityLike = {
+  ruleId: string;
+  argv0: string;
+  normalizedArgv: string[];
+  normalizedCwd: string;
+  envBindings: { key: string; source: string }[];
+  inheritEnv: {
+    mode: "minimal" | "unsafe-inherit-all";
+    keys: string[];
+  };
+};
+
 export type HostExecPendingItemLike = {
   requestId: string;
   sessionId: string;
   createdAt: string;
   argv0: string;
   args: string[];
+  ruleId?: string | null;
   cwd?: string | null;
+  defaultScope?: "once" | "capability" | null;
+  capability?: HostExecCapabilityLike | null;
   integrityChanged?: boolean | null;
 };
 
