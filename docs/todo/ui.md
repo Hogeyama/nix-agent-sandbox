@@ -12,10 +12,8 @@
    pending と audit から遅延取得できる
 6. 240px の pending pane でも長い session name、rule ID、SHA-256、body、
    Content-Type が横にはみ出さない
-
-残る承認 UI の主要な不一致は hostexec である。scope selector は Approve にだけ
-効くが Deny と共有して見え、UI の初期値は設定の `prompt.defaultScope` ではなく
-常に `capability` である。次に変更するなら、この一件だけを独立して扱う。
+7. hostexec card は `Approve scope` と request-only Deny を分離し、broker の
+   `prompt.defaultScope` と secret-safe な match evidence を表示する
 
 ## 現在の表示と挙動
 
@@ -79,26 +77,29 @@ UI 操作では使われない。
 - session name と short ID
 - command
 - executable integrity warning
-- `once` / `capability` selector
-- Approve / Deny
-
-wire の pending entry にある `ruleId` と `cwd` は frontend の正規化時に捨てて
-おり、表示しない。capability を構成する env binding と `inheritEnv` も表示しない。
+- `Approve scope` の `This request only` / `Matching command for this session`
+- 選択中の Approve が現在と将来の request に及ぼす効果
+- match を定義する rule ID、全 argv、normalized cwd、env binding の key/source、
+  inheritEnv mode/keys
+- `Deny this request only`
 
 現在の操作 semantic は次のとおりである。
 
 | 操作 | 効果 |
 |---|---|
-| Approve + `once` | 押した request 1 件だけを解決し、将来には記憶しない |
-| Approve + `capability` | 現在の同一 capability group を解決し、session 中の完全一致 capability を承認する |
-| Deny | selector を無視し、押した request 1 件だけを拒否する |
+| Approve + `This request only` (`once`) | 押した request 1 件だけを解決し、将来には記憶しない |
+| Approve + `Matching command for this session` (`capability`) | 現在の同一 capability group を解決し、session 中の完全一致 capability を承認する |
+| `Deny this request only` | selector を無視し、押した request 1 件だけを拒否する |
 
 capability identity には rule ID、正規化 argv0、全引数、cwd、env binding の
-key/source、`inheritEnv` mode/keys が入る。secret の実値は入らない。
+key/source、`inheritEnv` mode/keys が入る。secret の実値や host environment の
+内容は入らない。UI は broker がこの identity に使った secret-safe snapshot をその
+まま evidence として表示し、config や rule matching を再計算しない。
 
-UI は未選択時に常に `capability` を選び、その値を明示送信する。したがって
-backend が scope 省略時に使う `prompt.defaultScope` は、現在の UI 操作には
-反映されない。
+UI は未選択時に pending request を作った broker の `prompt.defaultScope` を選ぶ。
+old payload にこの additive field や match evidence がない場合は、既存挙動を保つ
+`capability` を選び、evidence は `not reported` と明示する。Approve は従来どおり
+wire value の `once` / `capability` を送る一方、Deny は scope を送らない。
 
 ### Audit
 
@@ -228,16 +229,6 @@ audit directory は `0700` に揃える。DB / WAL / SHM を明示的に `0600` 
 ある場合だけ扱う。
 
 ## 残タスク
-
-### 次に実装する候補: hostexec action 表示だけを整合させる
-
-実装するなら一つの小さい変更として、次を同時に満たす。
-
-- Deny が selector に依存しないことをボタン配置と文言で示す
-- `prompt.defaultScope` を UI に反映するか、UI 固有の既定値であることを仕様化する
-- capability 承認前に、少なくとも rule / cwd と capability の主要構成を確認できる
-
-hostexec broker の capability key や Deny semantic 自体は変更しない。
 
 ### 保留
 

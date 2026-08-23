@@ -4,6 +4,7 @@ import {
   formatBodyDiagnostic,
   formatRelativeTime,
   formatRequestBodyAuditStatus,
+  HOSTEXEC_DENY_LABEL,
   hostExecApprovalEffect,
   hostExecMatchDetails,
   hostExecScopeLabel,
@@ -201,6 +202,11 @@ describe("hostexec approval views", () => {
     envBindings: [{ key: "GITHUB_TOKEN", source: "secret:github" }],
     inheritEnv: { mode: "minimal" as const, keys: ["SSH_AUTH_SOCK"] },
   };
+
+  test("Deny explicitly applies to this request only", () => {
+    expect(HOSTEXEC_DENY_LABEL).toBe("Deny this request only");
+    expect(HOSTEXEC_DENY_LABEL).not.toContain("scope");
+  });
 
   test("uses plain language for each approval scope", () => {
     expect(hostExecScopeLabel("once")).toBe("This request only");

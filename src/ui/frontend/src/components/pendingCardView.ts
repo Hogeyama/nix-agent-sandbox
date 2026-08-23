@@ -18,6 +18,9 @@ export type HostExecApprovalScope = "once" | "capability";
 
 export type HostExecMatchDetail = { label: string; value: string };
 
+/** Denial never uses or remembers the approval scope selected above it. */
+export const HOSTEXEC_DENY_LABEL = "Deny this request only";
+
 type HostExecMatchMetadata = {
   ruleId: string | null;
   cwd: string | null;
