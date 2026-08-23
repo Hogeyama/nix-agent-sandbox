@@ -233,6 +233,7 @@ local commonHostexec: HostExecConfig = new {
       id = "bun"
       match {
         argv0 = "bun"
+        argRegex = "^run test$"
       }
       cwd {
         mode = "workspace-or-session-tmp"
@@ -240,7 +241,7 @@ local commonHostexec: HostExecConfig = new {
       inheritEnv {
         mode = "unsafe-inherit-all"
       }
-      approval = "allow"
+      approval = "prompt"
       fallback = "container"
     }
     new {

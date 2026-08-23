@@ -33,6 +33,18 @@ bun run check
 bun test
 ```
 
+## Manual Approval Is Unavailable
+
+When running inside NAS and the full suite requires hostexec approval that the
+user cannot currently provide:
+
+- Do not bypass approval with an absolute host path, a temporarily permissive
+  rule, or an already-allowed parent process.
+- Run `bun run test:unit` as the safe partial test lane. Do not substitute
+  `bun test src/`; `src/` also contains Docker integration tests.
+- Report the full suite as not run and the change as not fully verified. Resume
+  `bun run test` when manual approval is available.
+
 ## Reporting
 
 Report these items in the final response:
