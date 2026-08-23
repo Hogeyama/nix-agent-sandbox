@@ -46,8 +46,6 @@ export interface ShortcutHandlers {
   onNewSession?: () => void;
   /** 1-based index. Called with values 1 through 9 inclusive. */
   onSelectSessionByIndex?: (index: number) => void;
-  onApproveSelected?: () => void;
-  onDenySelected?: () => void;
   onToggleRightCollapse?: () => void;
   onOpenSettings?: () => void;
   onOpenShortcuts?: () => void;
@@ -112,10 +110,6 @@ function invokeForId(id: string, handlers: ShortcutHandlers): DispatchResult {
   switch (id) {
     case "session.new":
       return runIfPresent(handlers.onNewSession);
-    case "action.approve":
-      return runIfPresent(handlers.onApproveSelected);
-    case "action.deny":
-      return runIfPresent(handlers.onDenySelected);
     case "settings.open":
       return runIfPresent(handlers.onOpenSettings);
     case "settings.shortcuts":

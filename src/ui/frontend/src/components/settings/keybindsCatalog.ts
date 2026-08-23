@@ -23,7 +23,7 @@
 
 import type { ShortcutSpec } from "../../hooks/matchShortcut";
 
-export type ShortcutGroup = "session" | "pane" | "action" | "settings";
+export type ShortcutGroup = "session" | "pane" | "settings";
 
 export interface ShortcutEntry {
   /**
@@ -73,20 +73,6 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     group: "session",
   },
   {
-    id: "action.approve",
-    display: "Ctrl+Shift+A",
-    spec: { ctrl: true, shift: true, key: "A", allowInTextField: true },
-    label: "選択中 Pending を Approve (once)",
-    group: "action",
-  },
-  {
-    id: "action.deny",
-    display: "Ctrl+Shift+D",
-    spec: { ctrl: true, shift: true, key: "D", allowInTextField: true },
-    label: "選択中 Pending を Deny",
-    group: "action",
-  },
-  {
     id: "pane.toggleCollapse",
     display: "Ctrl+Shift+[ / ]",
     spec: null,
@@ -113,7 +99,6 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
 /** Display order for `shortcutsByGroup` and the rendered table. */
 export const SHORTCUT_GROUP_ORDER: readonly ShortcutGroup[] = [
   "session",
-  "action",
   "pane",
   "settings",
 ] as const;
@@ -127,7 +112,6 @@ export function shortcutsByGroup(): Record<ShortcutGroup, ShortcutEntry[]> {
   const out: Record<ShortcutGroup, ShortcutEntry[]> = {
     session: [],
     pane: [],
-    action: [],
     settings: [],
   };
   for (const entry of SHORTCUTS) {

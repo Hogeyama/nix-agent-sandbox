@@ -31,12 +31,7 @@ import { SettingsShell } from "./components/settings/SettingsShell";
 import { TerminalPane } from "./components/TerminalPane";
 import { Topbar } from "./components/Topbar";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
-import {
-  createPendingActionHandlers,
-  DEFAULT_HOSTEXEC_SCOPE,
-  networkScopeFor,
-} from "./handlers/createPendingActionHandlers";
-import { selectPendingTarget } from "./handlers/selectedPendingKey";
+import { createPendingActionHandlers } from "./handlers/createPendingActionHandlers";
 import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
 import { useConnection } from "./hooks/useConnection";
 import { useFaviconBadge } from "./hooks/useFaviconBadge";
@@ -129,18 +124,6 @@ export function App() {
   // which is exactly the lifecycle this design is built to avoid.
   const router = createRouter();
 
-  // Resolves the row that `Ctrl+Shift+A` / `Ctrl+Shift+D` should act
-  // on: focused pending card first, then network[0], then hostexec[0],
-  // and `null` when the right pane is collapsed (the user cannot see
-  // which row would be acted on).
-  const resolvePendingTarget = () =>
-    selectPendingTarget({
-      activeElement: document.activeElement,
-      network: pending.network(),
-      hostexec: pending.hostexec(),
-      collapsed: ui.rightCollapsed(),
-    });
-
   useGlobalKeyboard({
     onNewSession: () => setDialogOpen(true),
     // Index is 1-based and follows the rendered order of SessionsPane,
@@ -148,23 +131,6 @@ export function App() {
     onSelectSessionByIndex: (index) => {
       const row = sessions.rows()[index - 1];
       if (row) terminals.selectSession(row.id);
-    },
-    onApproveSelected: () => {
-      const target = resolvePendingTarget();
-      if (target === null) return;
-      const selected = pendingAction.scopeFor(target.row.key);
-      // Network grains come from the entry itself, so the keyboard path
-      // clamps the selection exactly like the buttons do.
-      const scope =
-        target.kind === "network"
-          ? networkScopeFor(target.row, selected)
-          : (selected ?? DEFAULT_HOSTEXEC_SCOPE);
-      void pendingHandlers.onApprove(target.row, scope);
-    },
-    onDenySelected: () => {
-      const target = resolvePendingTarget();
-      if (target === null) return;
-      void pendingHandlers.onDeny(target.row);
     },
     onToggleRightCollapse: ui.toggleRightCollapsed,
     onOpenSettings: () => router.navigate("#/settings/sidecars"),

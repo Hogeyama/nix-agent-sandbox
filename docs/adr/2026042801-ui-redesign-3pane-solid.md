@@ -62,10 +62,9 @@ spec=null でハードコード経路に置く。catalog 経路と hard-coded �
 **`metaKey` の扱いを揃える** (どちらも metaKey を検査しない)。
 `matchShortcut` は `allowInTextField?: boolean` で TEXTAREA / INPUT /
 contenteditable の bypass を opt-in 可能にし、terminal focus 中・dialog
-input focus 中でも UI 側 shortcut が届くようにする。Approve/Deny の
-対象選択は state-less な
-`focused-card → network[0] → hostexec[0]` の 3 段 fallback、collapsed
-時は no-op。
+input focus 中でも UI 側 shortcut が届くようにする。Approve/Deny は誤操作時の
+影響が大きいためグローバルショートカットを持たず、Pending card の明示ボタン
+からのみ実行する。
 
 ## Consequences
 - TerminalModal (846 行) が解体され、xterm lifecycle は
@@ -121,8 +120,8 @@ input focus 中でも UI 側 shortcut が届くようにする。Approve/Deny �
   合成 key にする。
 - **scope 選択を card component の local state**: SSE で同じ requestId
   が再到着すると reset する。store に集約する。
-- **Approve/Deny shortcut のターゲットを selection store**: SSE で
-  消えた card が selected として残る。state-less な毎回再計算にする。
+- **Approve/Deny shortcut**: 表示中の card と対象がずれると誤操作になるため、
+  shortcut 自体を持たず、card の明示ボタンに限定する。
 - **Manual `nas ui` shortcut override 機構を初期実装に含める**:
   catalog が正本になった時点で素直に乗せられる構造になっているが、
   要望ベースでよく初期 scope に入れない。

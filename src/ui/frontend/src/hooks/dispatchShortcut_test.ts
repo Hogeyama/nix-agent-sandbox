@@ -44,12 +44,6 @@ function makeSpies(): Spies {
       calls.push("onSelectSessionByIndex");
       indexArgs.push(i);
     },
-    onApproveSelected: () => {
-      calls.push("onApproveSelected");
-    },
-    onDenySelected: () => {
-      calls.push("onDenySelected");
-    },
     onToggleRightCollapse: () => {
       calls.push("onToggleRightCollapse");
     },
@@ -72,20 +66,16 @@ describe("dispatchShortcut catalog-driven entries", () => {
     expect(spies.calls).toEqual(["onNewSession"]);
   });
 
-  test("Ctrl+Shift+A dispatches action.approve", () => {
-    const spies = makeSpies();
-    const e = makeEvent({ key: "A", ctrlKey: true, shiftKey: true });
-    const result = dispatchShortcut(e, spies.handlers);
-    expect(result).toEqual({ matched: true, preventDefault: true });
-    expect(spies.calls).toEqual(["onApproveSelected"]);
-  });
-
-  test("Ctrl+Shift+D dispatches action.deny", () => {
-    const spies = makeSpies();
-    const e = makeEvent({ key: "D", ctrlKey: true, shiftKey: true });
-    const result = dispatchShortcut(e, spies.handlers);
-    expect(result).toEqual({ matched: true, preventDefault: true });
-    expect(spies.calls).toEqual(["onDenySelected"]);
+  test("retired approval shortcuts do not match", () => {
+    for (const key of ["A", "D"]) {
+      const spies = makeSpies();
+      const result = dispatchShortcut(
+        makeEvent({ key, ctrlKey: true, shiftKey: true }),
+        spies.handlers,
+      );
+      expect(result).toEqual({ matched: false, preventDefault: false });
+      expect(spies.calls).toEqual([]);
+    }
   });
 
   test("Ctrl+, dispatches settings.open", () => {

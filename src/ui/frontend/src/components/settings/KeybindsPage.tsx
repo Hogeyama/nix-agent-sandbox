@@ -17,7 +17,6 @@ import {
 const GROUP_HEADINGS: Record<ShortcutGroup, string> = {
   session: "Sessions",
   pane: "Panes",
-  action: "Approvals",
   settings: "Settings",
 };
 

@@ -17,16 +17,14 @@ import {
 } from "./keybindsCatalog";
 
 describe("SHORTCUTS", () => {
-  test("contains exactly the seven rows of docs/ui-redesign.md §8", () => {
-    expect(SHORTCUTS.length).toBe(7);
+  test("contains exactly the five supported shortcuts", () => {
+    expect(SHORTCUTS.length).toBe(5);
   });
 
   test("preserves the docs/ui-redesign.md §8 row order", () => {
     expect(SHORTCUTS.map((s) => s.id)).toEqual([
       "session.new",
       "session.switch",
-      "action.approve",
-      "action.deny",
       "pane.toggleCollapse",
       "settings.open",
       "settings.shortcuts",
@@ -52,18 +50,6 @@ describe("SHORTCUTS", () => {
         display: "Ctrl+1..9",
         label: "セッション切替（左 pane の順）",
         group: "session",
-      },
-      {
-        id: "action.approve",
-        display: "Ctrl+Shift+A",
-        label: "選択中 Pending を Approve (once)",
-        group: "action",
-      },
-      {
-        id: "action.deny",
-        display: "Ctrl+Shift+D",
-        label: "選択中 Pending を Deny",
-        group: "action",
       },
       {
         id: "pane.toggleCollapse",
@@ -97,13 +83,7 @@ describe("SHORTCUTS", () => {
     );
     expect(specByid.get("session.switch")).toBeNull();
     expect(specByid.get("pane.toggleCollapse")).toBeNull();
-    for (const id of [
-      "session.new",
-      "action.approve",
-      "action.deny",
-      "settings.open",
-      "settings.shortcuts",
-    ]) {
+    for (const id of ["session.new", "settings.open", "settings.shortcuts"]) {
       expect(specByid.get(id)).not.toBeNull();
     }
   });
@@ -136,12 +116,7 @@ describe("SHORTCUTS", () => {
 describe("shortcutsByGroup", () => {
   test("returns every ShortcutGroup key, including empty groups", () => {
     const grouped = shortcutsByGroup();
-    const expectedKeys: ShortcutGroup[] = [
-      "session",
-      "pane",
-      "action",
-      "settings",
-    ];
+    const expectedKeys: ShortcutGroup[] = ["session", "pane", "settings"];
     expect(Object.keys(grouped).sort()).toEqual([...expectedKeys].sort());
   });
 
@@ -154,17 +129,13 @@ describe("shortcutsByGroup", () => {
     );
   });
 
-  test("classifies entries into the four groups exactly as catalog declares", () => {
+  test("classifies entries into the three groups exactly as catalog declares", () => {
     const grouped = shortcutsByGroup();
     expect(grouped.session.map((e) => e.id)).toEqual([
       "session.new",
       "session.switch",
     ]);
     expect(grouped.pane.map((e) => e.id)).toEqual(["pane.toggleCollapse"]);
-    expect(grouped.action.map((e) => e.id)).toEqual([
-      "action.approve",
-      "action.deny",
-    ]);
     expect(grouped.settings.map((e) => e.id)).toEqual([
       "settings.open",
       "settings.shortcuts",
@@ -174,12 +145,7 @@ describe("shortcutsByGroup", () => {
 
 describe("SHORTCUT_GROUP_ORDER", () => {
   test("lists every ShortcutGroup once in the documented display order", () => {
-    expect(SHORTCUT_GROUP_ORDER).toEqual([
-      "session",
-      "action",
-      "pane",
-      "settings",
-    ]);
+    expect(SHORTCUT_GROUP_ORDER).toEqual(["session", "pane", "settings"]);
     expect(new Set(SHORTCUT_GROUP_ORDER).size).toBe(
       SHORTCUT_GROUP_ORDER.length,
     );
