@@ -18,6 +18,7 @@ import {
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
+import { filterPendingForSession } from "./pendingNotificationView";
 import { RequestBodyPanel } from "./RequestBodyPanel";
 
 // Network scope chips. The label is what the user reads; the hint is the
@@ -60,6 +61,9 @@ type Props = {
   network: () => NetworkPendingRow[];
   hostexec: () => HostExecPendingRow[];
   sessionNameFor: (sessionId: string) => string | undefined;
+  activeSessionId: () => string | null;
+  showAllSessions: () => boolean;
+  setShowAllSessions: (showAll: boolean) => void;
   collapsed: () => boolean;
   onToggleCollapse: () => void;
   // Per-card state accessors. The store owns the underlying signals;
@@ -99,6 +103,30 @@ export function PendingPane(props: Props) {
   const interval = setInterval(() => setNow(Date.now()), TICK_MS);
   onCleanup(() => clearInterval(interval));
 
+  const visibleNetwork = () => {
+    return filterPendingForSession(
+      props.network(),
+      props.activeSessionId(),
+      props.showAllSessions(),
+    );
+  };
+  const visibleHostExec = () => {
+    return filterPendingForSession(
+      props.hostexec(),
+      props.activeSessionId(),
+      props.showAllSessions(),
+    );
+  };
+  const totalPending = () => props.network().length + props.hostexec().length;
+  const visiblePending = () =>
+    visibleNetwork().length + visibleHostExec().length;
+  const activeSessionName = () => {
+    const sessionId = props.activeSessionId();
+    return sessionId === null
+      ? "Current session"
+      : (props.sessionNameFor(sessionId) ?? "Current session");
+  };
+
   return (
     <aside class="pane pane-right" classList={{ collapsed: props.collapsed() }}>
       <Show
@@ -130,14 +158,54 @@ export function PendingPane(props: Props) {
           </button>
         </div>
         <div class="content" id="pending-pane-content">
+          <fieldset
+            class="pending-session-filter"
+            aria-label="Pending sessions"
+          >
+            <button
+              type="button"
+              classList={{
+                selected:
+                  props.activeSessionId() !== null && !props.showAllSessions(),
+              }}
+              aria-pressed={
+                props.activeSessionId() !== null && !props.showAllSessions()
+              }
+              disabled={props.activeSessionId() === null}
+              onClick={() => props.setShowAllSessions(false)}
+              title={
+                props.activeSessionId() === null
+                  ? "Select a session to filter pending requests"
+                  : "Show pending requests for the selected session"
+              }
+            >
+              {activeSessionName()}
+            </button>
+            <button
+              type="button"
+              classList={{
+                selected:
+                  props.showAllSessions() || props.activeSessionId() === null,
+              }}
+              aria-pressed={
+                props.showAllSessions() || props.activeSessionId() === null
+              }
+              onClick={() => props.setShowAllSessions(true)}
+            >
+              All {totalPending()}
+            </button>
+            <span class="pending-session-filter-count">
+              {visiblePending()} shown
+            </span>
+          </fieldset>
           <div class="section-label">
             <span>Network · out</span>
             <span class="section-sub">
-              {formatSectionCount(props.network().length)}
+              {formatSectionCount(visibleNetwork().length)}
             </span>
           </div>
           <For
-            each={props.network()}
+            each={visibleNetwork()}
             fallback={<div class="empty">No pending</div>}
           >
             {(row) => {
@@ -332,11 +400,11 @@ export function PendingPane(props: Props) {
           <div class="section-label">
             <span>Host exec · cmd</span>
             <span class="section-sub">
-              {formatSectionCount(props.hostexec().length)}
+              {formatSectionCount(visibleHostExec().length)}
             </span>
           </div>
           <For
-            each={props.hostexec()}
+            each={visibleHostExec()}
             fallback={<div class="empty">No pending</div>}
           >
             {(row) => {

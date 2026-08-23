@@ -8,6 +8,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { parseShellSessionId } from "../../shell_session_id";
 import * as client from "./api/client";
 import {
   ackSessionTurn,
@@ -22,6 +23,7 @@ import {
   type HistoryRoute as HistoryShellRoute,
 } from "./components/history/HistoryShell";
 import { PaneResizer } from "./components/PaneResizer";
+import { PendingNotifications } from "./components/PendingNotifications";
 import { PendingPane } from "./components/PendingPane";
 import { SessionsPane } from "./components/SessionsPane";
 import { StatusBar } from "./components/StatusBar";
@@ -93,6 +95,12 @@ export function App() {
     eventNames: SSE_EVENT_NAMES,
   });
   const [dialogOpen, setDialogOpen] = createSignal(false);
+  const [pendingShowAll, setPendingShowAll] = createSignal(false);
+  const activeAgentSessionId = createMemo(() => {
+    const activeId = terminals.activeId();
+    if (activeId === null) return null;
+    return parseShellSessionId(activeId)?.parentSessionId ?? activeId;
+  });
 
   // Host home directory used by SessionsPane to tildify session DIR
   // entries. Fetched once on mount; we degrade gracefully when the call
@@ -208,7 +216,6 @@ export function App() {
     pendingByKey().get(sessionId) ?? { network: 0, hostexec: 0 };
   const sessionNameFor = (sessionId: string) =>
     sessions.rows().find((row) => row.id === sessionId)?.name;
-
   // Favicon badge: re-rendered only when the aggregate lamp transitions
   // (a `createMemo` with the default `===` equality dedupes per-row
   // mutations that don't change the aggregate). The accessor adapts
@@ -345,6 +352,9 @@ export function App() {
           network={pending.network}
           hostexec={pending.hostexec}
           sessionNameFor={sessionNameFor}
+          activeSessionId={activeAgentSessionId}
+          showAllSessions={pendingShowAll}
+          setShowAllSessions={setPendingShowAll}
           collapsed={ui.rightCollapsed}
           onToggleCollapse={ui.toggleRightCollapsed}
           scopeFor={pendingAction.scopeFor}
@@ -355,6 +365,17 @@ export function App() {
           onDeny={pendingHandlers.onDeny}
           auditEntries={audit.entries}
           fetchRequestBody={client.getRequestBody}
+        />
+        <PendingNotifications
+          network={pending.network}
+          hostexec={pending.hostexec}
+          sessionNameFor={sessionNameFor}
+          visible={ui.rightCollapsed}
+          onReview={(sessionId) => {
+            terminals.selectSession(sessionId);
+            setPendingShowAll(false);
+            if (ui.rightCollapsed()) ui.toggleRightCollapsed();
+          }}
         />
       </main>
       {/* SettingsShell stays mounted alongside the workspace and toggles

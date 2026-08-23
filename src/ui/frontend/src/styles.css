@@ -251,8 +251,21 @@ body::after {
  * easing applied during a collapse toggle. */
 .workspace {
   display: grid;
+  position: relative;
   overflow: hidden;
   transition: grid-template-columns 0.25s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Vertical drag handle between two panes. The element is interactive
@@ -806,6 +819,134 @@ body::after {
   overflow-y: auto;
   flex: 1;
   transition: opacity 0.2s;
+}
+
+.pending-session-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.pending-session-filter button {
+  min-width: 0;
+  max-width: 52%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-2);
+  font: inherit;
+  font-size: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.pending-session-filter button.selected {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: var(--ink);
+}
+.pending-session-filter button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.pending-session-filter-count {
+  margin-left: auto;
+  color: var(--muted-2);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.pending-notifications {
+  position: absolute;
+  right: 50px;
+  bottom: 14px;
+  z-index: 20;
+  width: min(360px, calc(100% - 72px));
+  max-height: min(420px, calc(100% - 28px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--amber);
+  background: var(--surface);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.48);
+}
+.pending-notifications-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--cream);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.pending-notifications-total {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--rose);
+  color: var(--cream);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.pending-notifications-list {
+  overflow-y: auto;
+}
+.pending-notification {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.pending-notification:last-child {
+  border-bottom: 0;
+}
+.pending-notification-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.pending-notification-copy strong,
+.pending-notification-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-notification-copy strong {
+  color: var(--cream);
+  font-size: 11px;
+}
+.pending-notification-counts {
+  color: var(--rose);
+  font-size: 9px;
+}
+.pending-notification-summary {
+  color: var(--muted-2);
+  font-size: 10px;
+}
+.pending-notification-review {
+  border: 1px solid var(--amber);
+  background: transparent;
+  color: var(--amber-hi);
+  font: inherit;
+  font-size: 10px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+.pending-notification-review:hover,
+.pending-notification-review:focus-visible {
+  background: rgba(217, 119, 6, 0.15);
+  outline: none;
 }
 
 /* Collapsed right pane: a 38px-wide rail rendered in place of the
