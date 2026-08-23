@@ -2068,32 +2068,42 @@ for (const scenario of [
     const workspace = await mkdtemp(
       path.join(tmpdir(), "nas-hostexec-workspace-"),
     );
-    const broker = new HostExecBroker({
-      paths,
-      sessionId: "sess_test",
-      profileName: "test",
-      notify: "off",
-      workspaceRoot: workspace,
-      sessionTmpDir: `${runtimeDir}/tmp`,
-      hostexec: makeConfig({
-        prompt: { defaultScope: scenario.defaultScope },
-        rules: [
-          {
-            id: "node-eval",
-            match: { argv0: "node", argRegex: "^-e\\b" },
-            cwd: { mode: "workspace-only", allow: [] },
-            env: {},
-            inheritEnv: { mode: "minimal", keys: [] },
-            approval: "prompt",
-            fallback: "container",
-          },
-        ],
-      }),
-    });
-    const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
-    const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
-    await broker.start(execSocketPath, controlSocketPath);
+    const metadataSecret = "sibling-metadata-secret";
+    const oldMetadataSecret = process.env.HOSTEXEC_PENDING_METADATA_TEST_TOKEN;
+    let broker: HostExecBroker | undefined;
     try {
+      process.env.HOSTEXEC_PENDING_METADATA_TEST_TOKEN = metadataSecret;
+      broker = new HostExecBroker({
+        paths,
+        sessionId: "sess_test",
+        profileName: "test",
+        notify: "off",
+        workspaceRoot: workspace,
+        sessionTmpDir: `${runtimeDir}/tmp`,
+        hostexec: makeConfig({
+          prompt: { defaultScope: scenario.defaultScope },
+          secrets: {
+            metadata_token: {
+              from: "env:HOSTEXEC_PENDING_METADATA_TEST_TOKEN",
+              required: true,
+            },
+          },
+          rules: [
+            {
+              id: "node-eval",
+              match: { argv0: "node", argRegex: "^-e\\b" },
+              cwd: { mode: "workspace-only", allow: [] },
+              env: { TOKEN: "secret:metadata_token" },
+              inheritEnv: { mode: "minimal", keys: [] },
+              approval: "prompt",
+              fallback: "container",
+            },
+          ],
+        }),
+      });
+      const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+      const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+      await broker.start(execSocketPath, controlSocketPath);
       const selectedPromise = sendStreamingRequestRaw(
         execSocketPath,
         request(
@@ -2115,6 +2125,19 @@ for (const scenario of [
       });
       const grouped = await waitForPendingEntries(paths, 2);
       expect(new Set(grouped.map((entry) => entry.approvalKey)).size).toBe(1);
+      const sibling = grouped.find(
+        (entry) => entry.requestId === "req_once_sibling",
+      );
+      expect(sibling?.defaultScope).toBe(scenario.defaultScope);
+      expect(sibling?.capability).toEqual({
+        ruleId: "node-eval",
+        argv0: "node",
+        normalizedArgv: ["node", "-e", "console.log('same-group')"],
+        normalizedCwd: workspace,
+        envBindings: [{ key: "TOKEN", source: "secret:metadata_token" }],
+        inheritEnv: { mode: "minimal", keys: [] },
+      });
+      expect(JSON.stringify(sibling?.capability)).not.toContain(metadataSecret);
 
       const approval =
         scenario.decision === "deny"
@@ -2155,7 +2178,12 @@ for (const scenario of [
       });
       expect((await siblingPromise).finalType).toBe("error");
     } finally {
-      await broker.close();
+      if (oldMetadataSecret !== undefined) {
+        process.env.HOSTEXEC_PENDING_METADATA_TEST_TOKEN = oldMetadataSecret;
+      } else {
+        delete process.env.HOSTEXEC_PENDING_METADATA_TEST_TOKEN;
+      }
+      await broker?.close();
       await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
       await rm(workspace, { recursive: true, force: true }).catch(() => {});
     }
@@ -2971,42 +2999,51 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const scriptPath = path.join(runtimeDir, "tool.sh");
   await writeFile(scriptPath, "#!/bin/sh\necho original\n");
-
-  const config: HostExecConfig = {
-    prompt: {
-      enable: true,
-      timeoutSeconds: 300,
-      defaultScope: "capability",
-      notify: "off",
-    },
-    secrets: {},
-    rules: [
-      {
-        id: "tool",
-        match: { argv0: scriptPath },
-        cwd: { mode: "any", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "deny",
-      },
-    ],
-  };
-
-  const broker = new HostExecBroker({
-    paths,
-    sessionId: "sess_integ",
-    profileName: "test",
-    notify: "off",
-    workspaceRoot: runtimeDir,
-    sessionTmpDir: `${runtimeDir}/tmp`,
-    hostexec: config,
-    integrityTargets: [scriptPath],
-  });
-  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ");
-  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ");
-  await broker.start(execSocketPath, controlSocketPath);
+  const metadataSecret = "integrity-metadata-secret";
+  const oldMetadataSecret = process.env.HOSTEXEC_INTEGRITY_METADATA_TEST_TOKEN;
+  let broker: HostExecBroker | undefined;
   try {
+    process.env.HOSTEXEC_INTEGRITY_METADATA_TEST_TOKEN = metadataSecret;
+
+    const config: HostExecConfig = {
+      prompt: {
+        enable: true,
+        timeoutSeconds: 300,
+        defaultScope: "capability",
+        notify: "off",
+      },
+      secrets: {
+        metadata_token: {
+          from: "env:HOSTEXEC_INTEGRITY_METADATA_TEST_TOKEN",
+          required: true,
+        },
+      },
+      rules: [
+        {
+          id: "tool",
+          match: { argv0: scriptPath },
+          cwd: { mode: "any", allow: [] },
+          env: { TOKEN: "secret:metadata_token" },
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    };
+
+    broker = new HostExecBroker({
+      paths,
+      sessionId: "sess_integ",
+      profileName: "test",
+      notify: "off",
+      workspaceRoot: runtimeDir,
+      sessionTmpDir: `${runtimeDir}/tmp`,
+      hostexec: config,
+      integrityTargets: [scriptPath],
+    });
+    const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ");
+    const execSocketPath = hostExecExecSocketPath(paths, "sess_integ");
+    await broker.start(execSocketPath, controlSocketPath);
     // 差し替え: baseline 取得後に同じパスの中身を変える
     await writeFile(scriptPath, "#!/bin/sh\necho SWAPPED\n");
 
@@ -3030,7 +3067,7 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
 
     // control 側で pending を列挙し、integrityChanged が立つことを確認する。
     // pending 生成は非同期なので短くポーリングする。
-    let hit: { requestId: string; integrityChanged?: boolean } | undefined;
+    let hit: PendingListResponse["items"][number] | undefined;
     for (let i = 0; i < 50; i++) {
       const res = (await sendHostExecControlRequest(controlSocketPath, {
         type: "list_pending",
@@ -3041,6 +3078,16 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     }
     expect(hit).toBeDefined();
     expect(hit?.integrityChanged).toBe(true);
+    expect(hit?.defaultScope).toBe("capability");
+    expect(hit?.capability).toEqual({
+      ruleId: "tool",
+      argv0: scriptPath,
+      normalizedArgv: [scriptPath],
+      normalizedCwd: runtimeDir,
+      envBindings: [{ key: "TOKEN", source: "secret:metadata_token" }],
+      inheritEnv: { mode: "minimal", keys: [] },
+    });
+    expect(JSON.stringify(hit?.capability)).not.toContain(metadataSecret);
 
     // pending グループを deny で正常に解消してから teardown する。exec ソケットを
     // 開いたまま破棄すると、ブローカー側が pending waiter へエラーを書き込む際に
@@ -3056,7 +3103,12 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     await responsePromise;
     execSocket.destroy();
   } finally {
-    await broker.close();
+    if (oldMetadataSecret !== undefined) {
+      process.env.HOSTEXEC_INTEGRITY_METADATA_TEST_TOKEN = oldMetadataSecret;
+    } else {
+      delete process.env.HOSTEXEC_INTEGRITY_METADATA_TEST_TOKEN;
+    }
+    await broker?.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
