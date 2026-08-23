@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
-import { appendAuditLog } from "../../audit/store.ts";
+import { appendAuditLog, storeRequestBody } from "../../audit/store.ts";
 import type { AuditLogEntry, AuditLogFilter } from "../../audit/types.ts";
 import {
   AuditQueryService,
@@ -176,5 +176,103 @@ describe("makeAuditQueryClient (plain async adapter)", () => {
 
     expect(items).toEqual([]);
     expect(calls).toEqual([{ auditDir: "/tmp/nas-audit-client-test", filter }]);
+  });
+});
+
+describe("AuditQueryService: request body detail", () => {
+  test("Live returns the exact stored bytes", async () => {
+    await withTmpDir(async (dir) => {
+      const body = Uint8Array.from([0x00, 0xff, 0x41]);
+      const sha256 = `sha256:${new Bun.CryptoHasher("sha256")
+        .update(body)
+        .digest("hex")}`;
+      await storeRequestBody(
+        {
+          sessionId: "sess-body",
+          requestId: "req-body",
+          capturedAt: "2099-01-01T00:00:00.000Z",
+          contentType: "application/octet-stream",
+          contentEncoding: null,
+          byteLength: body.byteLength,
+          sha256,
+          body,
+        },
+        { retentionSeconds: 60, maxTotalBytes: 1024 },
+        dir,
+      );
+
+      const item = await Effect.runPromise(
+        Effect.gen(function* () {
+          const svc = yield* AuditQueryService;
+          return yield* svc.getRequestBody(dir, "sess-body", "req-body");
+        }).pipe(Effect.provide(AuditQueryServiceLive)),
+      );
+
+      expect(item).toEqual({
+        sessionId: "sess-body",
+        requestId: "req-body",
+        capturedAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: "2099-01-01T00:01:00.000Z",
+        contentType: "application/octet-stream",
+        contentEncoding: null,
+        byteLength: body.byteLength,
+        sha256,
+        body,
+      });
+    });
+  });
+
+  test("Fake defaults to missing and accepts a detail override", async () => {
+    const missing = makeAuditQueryServiceFake();
+    const missingItem = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* AuditQueryService;
+        return yield* svc.getRequestBody("/tmp/audit", "sess", "req");
+      }).pipe(Effect.provide(missing)),
+    );
+    expect(missingItem).toBeNull();
+
+    const calls: string[][] = [];
+    const body = Uint8Array.from([1, 2]);
+    const fake = makeAuditQueryServiceFake({
+      getRequestBody: (auditDir, sessionId, requestId) =>
+        Effect.sync(() => {
+          calls.push([auditDir, sessionId, requestId]);
+          return {
+            sessionId,
+            requestId,
+            capturedAt: "2099-01-01T00:00:00.000Z",
+            expiresAt: "2099-01-01T00:01:00.000Z",
+            contentType: null,
+            contentEncoding: null,
+            byteLength: body.byteLength,
+            sha256: "sha256:test",
+            body,
+          };
+        }),
+    });
+    const item = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* AuditQueryService;
+        return yield* svc.getRequestBody("/tmp/audit", "sess", "req");
+      }).pipe(Effect.provide(fake)),
+    );
+    expect(item?.body).toEqual(body);
+    expect(calls).toEqual([["/tmp/audit", "sess", "req"]]);
+  });
+
+  test("plain async client exposes request body detail", async () => {
+    const calls: string[][] = [];
+    const fake = makeAuditQueryServiceFake({
+      getRequestBody: (auditDir, sessionId, requestId) =>
+        Effect.sync(() => {
+          calls.push([auditDir, sessionId, requestId]);
+          return null;
+        }),
+    });
+
+    const client = makeAuditQueryClient(fake);
+    expect(await client.getRequestBody("/tmp/audit", "sess", "req")).toBeNull();
+    expect(calls).toEqual([["/tmp/audit", "sess", "req"]]);
   });
 });

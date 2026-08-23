@@ -8,6 +8,43 @@
  * drive re-renders by ticking a clock signal.
  */
 
+import type { BodyDiagnostic, RequestBodyAuditStatus } from "../stores/types";
+
+/** Format metadata about whether exact raw request bytes were retained. */
+export function formatRequestBodyAuditStatus(
+  status: RequestBodyAuditStatus,
+): string {
+  switch (status.state) {
+    case "disabled":
+      return "raw audit: disabled";
+    case "not-applicable":
+      return "raw audit: not applicable";
+    case "attached":
+      return `raw audit: saved (${status.byteLength} bytes, ${status.sha256})`;
+    case "unavailable":
+      return `raw audit: unavailable (${status.code})`;
+  }
+}
+
+/**
+ * Format the broker-selected indeterminate cause using only its closed,
+ * body-safe metadata. No raw request body or parser error is available here.
+ */
+export function formatBodyDiagnostic(diagnostic: BodyDiagnostic): string {
+  switch (diagnostic.code) {
+    case "body-unreadable":
+      return "Request body could not be read.";
+    case "body-too-large":
+      return `Body was ${diagnostic.byteLength} bytes; the body evaluation limit was ${diagnostic.maxBodyBytes} bytes.`;
+    case "invalid-json":
+      return "Request body was not valid JSON.";
+    case "empty-json-body":
+      return "Request body was empty, but this rule requires JSON.";
+    case "non-scalar-at-pointer":
+      return `JSON pointer ${diagnostic.pointer} resolved to an object/array, not a scalar.`;
+  }
+}
+
 /**
  * Format the difference between `targetMs` and `nowMs` as a coarse-grained
  * relative time string (e.g. `"5s ago"`, `"3m ago"`, `"2h ago"`).
@@ -36,17 +73,47 @@ export function formatRelativeTime(
 }
 
 /**
- * Pick the human-friendly label for the chip on a pending card.
+ * Build the session identity shown on a pending card.
  *
- * Prefers `sessionName` when present so users see the session they
- * named (e.g. `"feature-auth"`); falls back to the short id derived
- * from the raw session id (e.g. `"s_7a3f12"`) when no name is set.
+ * The name is resolved by `App` from the sessions store. Pending rows do not
+ * own a copy of it, so renames are reflected from the single source of truth.
  */
-export function sessionLabel(row: {
-  sessionShortId: string;
-  sessionName: string | null;
-}): string {
-  return row.sessionName ?? row.sessionShortId;
+export function sessionLabel(
+  row: { sessionShortId: string },
+  sessionName: string | null | undefined,
+): string {
+  return sessionName
+    ? `${sessionName} · ${row.sessionShortId}`
+    : row.sessionShortId;
+}
+
+/**
+ * State the settlement unit and future lifetime of a network decision.
+ *
+ * `violations` is used only to keep the violation wording grammatically
+ * precise. The broker remains the authority for which scopes a row offers.
+ */
+export function networkApprovalEffect(
+  row: { violations: readonly unknown[] },
+  scope: string,
+): string {
+  switch (scope) {
+    case "rule":
+      return "Answers the current group and future matching requests in this session for the same rule and fixed target.";
+    case "host-port":
+      return "Answers the current group and future matching requests in this session for the same rule, host, and port.";
+    case "host":
+      return "Answers the current group and future matching requests in this session for the same rule and host, on any port.";
+    case "violation": {
+      const identity =
+        row.violations.length === 1
+          ? "violation identity"
+          : "violation identities";
+      return `Answers the current group and future matching requests in this session for the same rule and ${identity} shown here.`;
+    }
+    default:
+      return "Answers this request only. It is not remembered for future requests.";
+  }
 }
 
 // Why a network confirmation is on screen, in the words of the decision that

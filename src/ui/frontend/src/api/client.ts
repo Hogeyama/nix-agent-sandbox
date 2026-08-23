@@ -141,6 +141,19 @@ export interface DtachSessionLike {
   createdAt: number;
 }
 
+export interface RequestBodyItem {
+  sessionId: string;
+  requestId: string;
+  capturedAt: string;
+  expiresAt: string;
+  contentType: string | null;
+  contentEncoding: string | null;
+  byteLength: number;
+  sha256: string;
+  encoding: "base64";
+  data: string;
+}
+
 export async function request<T>(
   method: string,
   path: string,
@@ -415,5 +428,15 @@ export function getAuditLogs(
   return request<{ items: AuditLogEntryLike[] }>(
     "GET",
     qs.length === 0 ? "/api/audit" : `/api/audit?${qs}`,
+  );
+}
+
+export function getRequestBody(
+  sessionId: string,
+  requestId: string,
+): Promise<{ item: RequestBodyItem }> {
+  return request<{ item: RequestBodyItem }>(
+    "GET",
+    `/api/network/body/${encodeURIComponent(sessionId)}/${encodeURIComponent(requestId)}`,
   );
 }

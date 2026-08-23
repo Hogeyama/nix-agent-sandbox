@@ -43,6 +43,43 @@ test("readJsonLine: resolves with payload up to the newline", async () => {
   });
 });
 
+test("readJsonLine: rejects when raw bytes before the newline exceed the limit", async () => {
+  await withSocket(async (socketPath) => {
+    const requestContent = "é";
+    const server = await createUnixServer(socketPath, (socket) => {
+      socket.end(`${requestContent}\n`);
+    });
+    try {
+      const client = await connectUnix(socketPath);
+      const error = await readJsonLine(client, 1).then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("JSON line exceeds byte limit");
+      expect((error as Error).message).not.toContain(requestContent);
+      client.destroy();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+test("readJsonLine: accepts an exact byte limit and ignores data after the newline", async () => {
+  await withSocket(async (socketPath) => {
+    const server = await createUnixServer(socketPath, (socket) => {
+      socket.end("é\nignored after newline");
+    });
+    try {
+      const client = await connectUnix(socketPath);
+      expect(await readJsonLine(client, 2)).toBe("é");
+      client.destroy();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
 test("readJsonLine: onEnd path — resolves with trimmed text when no newline was sent", async () => {
   await withSocket(async (socketPath) => {
     const server = await createUnixServer(socketPath, (socket) => {

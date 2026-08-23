@@ -1391,8 +1391,10 @@ body::after {
 
 .card-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 4px 8px;
   margin-bottom: 10px;
 }
 .chip {
@@ -1403,6 +1405,10 @@ body::after {
   border: 1px solid var(--line);
   color: var(--cream-dim);
   background: var(--ink);
+}
+.card-head .chip {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .card-time {
   font-size: 10px;
@@ -1449,6 +1455,10 @@ body::after {
   color: var(--cream-dim);
   border-bottom: 1px solid var(--line-soft);
 }
+.card-review-meta > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .card-review-ct {
   color: var(--muted);
 }
@@ -1476,15 +1486,69 @@ body::after {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 8px;
+  min-width: 0;
   margin: 0 0 10px;
   font-size: 11px;
   color: var(--cream-dim);
+  overflow-wrap: anywhere;
 }
 .card-ask-reason-label {
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--amber-hi);
+}
+
+.request-body-panel {
+  min-width: 0;
+  margin: 0 0 10px;
+}
+.request-body-load {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--cream-dim);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.request-body-load:disabled {
+  color: var(--muted-2);
+  cursor: wait;
+}
+.request-body-error {
+  margin-left: 8px;
+  color: var(--rose);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.request-body-result {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.request-body-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 10px;
+}
+.request-body-meta > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.request-body-content {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  color: var(--cream);
+  font: inherit;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* -- Acceptance-condition violations an approval would cover -- *

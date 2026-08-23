@@ -1,3 +1,8 @@
+import type {
+  BodyDiagnostic,
+  RequestBodyAuditStatus,
+} from "../network/protocol.ts";
+
 /** Domain of the audited action. */
 export type AuditDomain = "network" | "hostexec";
 
@@ -60,6 +65,10 @@ export interface AuditLogEntry {
   requestPolicyKind?: RequestPolicyKind;
   /** Result produced by the request policy. */
   requestPolicyResult?: RequestPolicyResult;
+  /** Cause reported for the selected indeterminate authorization rule. */
+  bodyDiagnostic?: BodyDiagnostic;
+  /** Metadata-only outcome of optional raw request-body retention. */
+  requestBodyAuditStatus?: RequestBodyAuditStatus;
   /**
    * Acceptance-condition violations the body inspection found.
    *
@@ -109,4 +118,40 @@ export interface AuditLogFilter {
    * internal commands like "nas hook".
    */
   excludeCommandPrefixes?: string[];
+}
+
+/** Exact pre-policy request bytes and the metadata needed to retain them. */
+export interface RequestBodyWrite {
+  sessionId: string;
+  requestId: string;
+  capturedAt: string;
+  contentType: string | null;
+  contentEncoding: string | null;
+  byteLength: number;
+  sha256: string;
+  body: Uint8Array;
+}
+
+/** Retention and aggregate-capacity limits for one request-body write. */
+export interface RequestBodyStorageLimits {
+  retentionSeconds: number;
+  maxTotalBytes: number;
+}
+
+/** Metadata-only outcome; raw bytes never travel with the store result. */
+export type RequestBodyStoreResult =
+  | { state: "attached"; byteLength: number; sha256: string }
+  | { state: "unavailable"; code: "capacity" | "invalid-capture" };
+
+/** One retained request body returned only by an explicit detail lookup. */
+export interface StoredRequestBody {
+  sessionId: string;
+  requestId: string;
+  capturedAt: string;
+  expiresAt: string;
+  contentType: string | null;
+  contentEncoding: string | null;
+  byteLength: number;
+  sha256: string;
+  body: Uint8Array;
 }

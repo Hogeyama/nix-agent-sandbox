@@ -12,7 +12,7 @@
  */
 
 import { Match, Switch } from "solid-js";
-import type { getAuditLogs } from "../../api/client";
+import type { getAuditLogs, getRequestBody } from "../../api/client";
 import type { SettingsPage } from "../../routes/router";
 import type { AuditPageStore } from "../../stores/auditPageStore";
 import type { AuditLogEntryLike } from "../../stores/types";
@@ -51,6 +51,7 @@ interface SettingsShellProps {
   auditPageStore: AuditPageStore;
   /** Injected for testability; production passes the real client. */
   fetchAuditLogs: typeof getAuditLogs;
+  fetchRequestBody: typeof getRequestBody;
   /** UI preferences store, forwarded to `PrefsPage`. */
   ui: UiStore;
 }
@@ -98,6 +99,7 @@ export function SettingsShell(props: SettingsShellProps) {
               activeIds={props.auditActiveIds}
               store={props.auditPageStore}
               fetchAuditLogs={props.fetchAuditLogs}
+              fetchRequestBody={props.fetchRequestBody}
             />
           </Match>
           <Match when={props.page === "keybinds"}>

@@ -240,6 +240,8 @@ export function App() {
   );
   const pendingFor = (sessionId: string) =>
     pendingByKey().get(sessionId) ?? { network: 0, hostexec: 0 };
+  const sessionNameFor = (sessionId: string) =>
+    sessions.rows().find((row) => row.id === sessionId)?.name;
 
   // Favicon badge: re-rendered only when the aggregate lamp transitions
   // (a `createMemo` with the default `===` equality dedupes per-row
@@ -376,6 +378,7 @@ export function App() {
         <PendingPane
           network={pending.network}
           hostexec={pending.hostexec}
+          sessionNameFor={sessionNameFor}
           collapsed={ui.rightCollapsed}
           onToggleCollapse={ui.toggleRightCollapsed}
           scopeFor={pendingAction.scopeFor}
@@ -385,6 +388,7 @@ export function App() {
           onApprove={pendingHandlers.onApprove}
           onDeny={pendingHandlers.onDeny}
           auditEntries={audit.entries}
+          fetchRequestBody={client.getRequestBody}
         />
       </main>
       {/* SettingsShell stays mounted alongside the workspace and toggles
@@ -402,6 +406,7 @@ export function App() {
         auditActiveIds={activeIds}
         auditPageStore={auditPageStore}
         fetchAuditLogs={client.getAuditLogs}
+        fetchRequestBody={client.getRequestBody}
         ui={ui}
       />
       {/* HistoryShell is mounted only while a history route is active,

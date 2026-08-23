@@ -23,8 +23,15 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import { queryAuditLogs } from "../../audit/store.ts";
-import type { AuditLogEntry, AuditLogFilter } from "../../audit/types.ts";
+import {
+  getRequestBody as getStoredRequestBody,
+  queryAuditLogs,
+} from "../../audit/store.ts";
+import type {
+  AuditLogEntry,
+  AuditLogFilter,
+  StoredRequestBody,
+} from "../../audit/types.ts";
 
 // ---------------------------------------------------------------------------
 // AuditQueryService tag
@@ -37,6 +44,11 @@ export class AuditQueryService extends Context.Tag("nas/AuditQueryService")<
       auditDir: string,
       filter: AuditLogFilter,
     ) => Effect.Effect<AuditLogEntry[], Error>;
+    readonly getRequestBody: (
+      auditDir: string,
+      sessionId: string,
+      requestId: string,
+    ) => Effect.Effect<StoredRequestBody | null, Error>;
   }
 >() {}
 
@@ -57,6 +69,11 @@ export const AuditQueryServiceLive: Layer.Layer<AuditQueryService> =
           try: () => queryAuditLogs(filter, auditDir),
           catch: toError,
         }),
+      getRequestBody: (auditDir, sessionId, requestId) =>
+        Effect.tryPromise({
+          try: () => getStoredRequestBody(sessionId, requestId, auditDir),
+          catch: toError,
+        }),
     }),
   );
 
@@ -69,6 +86,11 @@ export interface AuditQueryServiceFakeConfig {
     auditDir: string,
     filter: AuditLogFilter,
   ) => Effect.Effect<AuditLogEntry[], Error>;
+  readonly getRequestBody?: (
+    auditDir: string,
+    sessionId: string,
+    requestId: string,
+  ) => Effect.Effect<StoredRequestBody | null, Error>;
 }
 
 export function makeAuditQueryServiceFake(
@@ -78,6 +100,7 @@ export function makeAuditQueryServiceFake(
     AuditQueryService,
     AuditQueryService.of({
       query: overrides.query ?? (() => Effect.succeed([])),
+      getRequestBody: overrides.getRequestBody ?? (() => Effect.succeed(null)),
     }),
   );
 }
@@ -112,5 +135,11 @@ export function makeAuditQueryClient(
       auditDir: string,
       filter: AuditLogFilter,
     ): Promise<AuditLogEntry[]> => run((svc) => svc.query(auditDir, filter)),
+    getRequestBody: (
+      auditDir: string,
+      sessionId: string,
+      requestId: string,
+    ): Promise<StoredRequestBody | null> =>
+      run((svc) => svc.getRequestBody(auditDir, sessionId, requestId)),
   };
 }

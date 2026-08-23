@@ -928,8 +928,10 @@ export class HostExecBroker {
     const selectedScope = scope ?? this.config.prompt.defaultScope;
     if (selectedScope === "capability") {
       this.approvedKeys.add(group.approvalKey);
+      await this.resolveGroup(group.approvalKey, "approve");
+    } else {
+      await this.resolvePendingRequest(requestId, "approve");
     }
-    await this.resolveGroup(group.approvalKey, "approve");
     return { type: "ack", requestId, decision: "approve" };
   }
 
@@ -942,7 +944,7 @@ export class HostExecBroker {
         message: `Pending request not found: ${requestId}`,
       };
     }
-    await this.resolveGroup(group.approvalKey, "deny", {
+    await this.resolvePendingRequest(requestId, "deny", {
       type: "error",
       requestId,
       message: "permission denied by user",
@@ -984,25 +986,56 @@ export class HostExecBroker {
     waiter?.resolve();
   }
 
+  private async resolvePendingRequest(
+    requestId: string,
+    mode: "approve" | "deny",
+    denyResponse?: HostExecErrorResponse,
+  ): Promise<void> {
+    const group = this.findGroupByRequestId(requestId);
+    if (!group) return;
+    await this.resolveGroup(group.approvalKey, mode, denyResponse, requestId);
+  }
+
   private async resolveGroup(
     approvalKey: string,
     mode: "approve" | "deny",
     denyResponse?: HostExecErrorResponse,
+    selectedRequestId?: string,
   ): Promise<void> {
     const group = this.groups.get(approvalKey);
     if (!group) return;
-    clearTimeout(group.timer);
-    this.groups.delete(approvalKey);
-    group.notificationAbort.abort();
-    await closeNotification();
+    if (selectedRequestId === undefined) {
+      clearTimeout(group.timer);
+      this.groups.delete(approvalKey);
+      group.notificationAbort.abort();
+      await closeNotification();
+    }
 
-    for (const [requestId, pending] of group.requests.entries()) {
+    const requestIds =
+      selectedRequestId === undefined
+        ? [...group.requests.keys()]
+        : [selectedRequestId];
+    for (const requestId of requestIds) {
+      const pending = group.requests.get(requestId);
+      if (!pending) continue;
+      const waiter = group.waiters.get(requestId);
+      if (selectedRequestId !== undefined) {
+        group.waiters.delete(requestId);
+        group.requests.delete(requestId);
+        group.requestIds.delete(requestId);
+        group.pendingEntries.delete(requestId);
+      }
       this.requestToApprovalKey.delete(requestId);
       await removeHostExecPendingEntry(this.paths, this.sessionId, requestId);
+      if (selectedRequestId !== undefined && group.requests.size === 0) {
+        clearTimeout(group.timer);
+        this.groups.delete(approvalKey);
+        group.notificationAbort.abort();
+        await closeNotification();
+      }
       const commandStr = [pending.request.argv0, ...pending.request.args].join(
         " ",
       );
-      const waiter = group.waiters.get(requestId);
       if (!waiter) continue;
       try {
         if (mode === "deny") {

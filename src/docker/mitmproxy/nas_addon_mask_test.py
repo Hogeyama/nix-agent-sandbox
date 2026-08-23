@@ -9,6 +9,7 @@ import asyncio
 import base64
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
@@ -262,6 +263,124 @@ class FakeUndecodableRequest(FakeRequest):
     @content.setter
     def content(self, value):
         raise AssertionError("must not set .content on undecodable body")
+
+
+class RequestBodyCaptureTest(unittest.TestCase):
+    def setUp(self):
+        self.enabled = {
+            "enable": True,
+            "retentionSeconds": 604800,
+            "maxBodyBytes": 8388608,
+            "maxTotalBytes": 268435456,
+        }
+
+    def test_disabled_capture_does_not_encode_or_hash(self):
+        request = FakeRequest(content=b"SECRET-raw-body")
+        disabled = {**self.enabled, "enable": False}
+
+        with patch.object(
+            nas_addon.base64, "b64encode", side_effect=AssertionError
+        ), patch.object(
+            nas_addon.hashlib, "sha256", side_effect=AssertionError
+        ):
+            capture = nas_addon._request_body_capture(
+                request.content, request, disabled
+            )
+
+        self.assertEqual(capture, {"state": "disabled"})
+
+    def test_empty_body_without_framing_is_not_applicable(self):
+        request = FakeRequest(content=b"")
+
+        self.assertEqual(
+            nas_addon._request_body_capture(
+                request.content, request, self.enabled
+            ),
+            {"state": "not-applicable"},
+        )
+
+    def test_declared_empty_body_is_attached(self):
+        request = FakeRequest(
+            content=b"",
+            headers={"content-length": "0"},
+        )
+
+        self.assertEqual(
+            nas_addon._request_body_capture(
+                request.content, request, self.enabled
+            ),
+            {
+                "state": "attached",
+                "encoding": "base64",
+                "byteLength": 0,
+                "sha256": (
+                    "sha256:e3b0c44298fc1c149afbf4c8996fb924"
+                    "27ae41e4649b934ca495991b7852b855"
+                ),
+                "contentType": None,
+                "contentEncoding": None,
+                "data": "",
+            },
+        )
+
+    def test_attaches_exact_binary_bytes_and_content_metadata(self):
+        body = b"\x00\xffSECRET-raw-body"
+        request = FakeRequest(
+            content=body,
+            headers={
+                "content-type": "application/octet-stream",
+                "content-encoding": "gzip",
+            },
+        )
+
+        capture = nas_addon._request_body_capture(
+            request.content, request, self.enabled
+        )
+
+        self.assertEqual(capture["state"], "attached")
+        self.assertEqual(capture["encoding"], "base64")
+        self.assertEqual(capture["byteLength"], len(body))
+        self.assertEqual(
+            capture["sha256"], f"sha256:{hashlib.sha256(body).hexdigest()}"
+        )
+        self.assertEqual(capture["contentType"], "application/octet-stream")
+        self.assertEqual(capture["contentEncoding"], "gzip")
+        self.assertEqual(base64.b64decode(capture["data"]), body)
+
+    def test_unreadable_body_is_unavailable(self):
+        request = FakeUndecodableRequest()
+
+        self.assertEqual(
+            nas_addon._request_body_capture(None, request, self.enabled),
+            {"state": "unavailable", "code": "body-unreadable"},
+        )
+
+    def test_body_over_capture_limit_is_unavailable_without_data(self):
+        request = FakeRequest(content=b"12345")
+        capture = nas_addon._request_body_capture(
+            request.content,
+            request,
+            {**self.enabled, "maxBodyBytes": 4},
+        )
+
+        self.assertEqual(
+            capture,
+            {"state": "unavailable", "code": "body-too-large"},
+        )
+        self.assertNotIn("data", capture)
+
+    def test_encode_failure_is_invalid_capture(self):
+        request = FakeRequest(content=b"valid")
+
+        with patch.object(
+            nas_addon.base64, "b64encode", side_effect=ValueError
+        ):
+            self.assertEqual(
+                nas_addon._request_body_capture(
+                    request.content, request, self.enabled
+                ),
+                {"state": "unavailable", "code": "invalid-capture"},
+            )
 
 
 class FakeClientConnection:
@@ -3508,7 +3627,15 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.proxy_auth = "Basic " + base64.b64encode(
             f"{self.session_id}:{self.token}".encode()
         ).decode()
-        self.registry = {"tokenHash": nas_addon._hash_token(self.token)}
+        self.registry = {
+            "tokenHash": nas_addon._hash_token(self.token),
+            "requestBodyAudit": {
+                "enable": False,
+                "retentionSeconds": 604800,
+                "maxBodyBytes": 8388608,
+                "maxTotalBytes": 268435456,
+            },
+        }
 
     def _run(
         self,
@@ -3527,6 +3654,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         mask_values=("SECRET123",),
         review_decision="allow",
         review_response=None,
+        request_body_audit=None,
     ):
         """rule_id は broker が返す答え。addon の選択と食い違えば止まる。"""
         request_headers = list(headers or [])
@@ -3541,6 +3669,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
         flow.client_conn.id = client_id
         addon = addon or nas_addon.NasAddon()
         messages = []
+        if request_body_audit is not None:
+            self.registry["requestBodyAudit"] = request_body_audit
 
         async def query_broker(_socket_path, request, reply_timeout=None):
             messages.append(json.loads(json.dumps(request)))
@@ -4112,6 +4242,147 @@ class RequestPolicyFlowTest(unittest.TestCase):
         )
         self.assertEqual(
             authorization["bodyTruth"], {"api.messages": "true"}
+        )
+        self.assertEqual(authorization.get("bodyDiagnostics"), {})
+        self.assertEqual(
+            authorization["requestBodyCapture"], {"state": "disabled"}
+        )
+
+    def test_raw_capture_is_pre_mask_and_only_on_authorize(self):
+        body = b'{"text":"SECRET123","kind":"future"}'
+        enabled = {
+            "enable": True,
+            "retentionSeconds": 604800,
+            "maxBodyBytes": 8388608,
+            "maxTotalBytes": 268435456,
+        }
+
+        flow, messages, stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=body,
+            request_body_audit=enabled,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            base64.b64decode(authorization["requestBodyCapture"]["data"]),
+            body,
+        )
+        self.assertNotEqual(flow.request.content, body)
+        self.assertNotIn(b"SECRET123", flow.request.content)
+        self.assertEqual(
+            [
+                message["type"]
+                for message in messages
+                if "requestBodyCapture" in message
+            ],
+            ["authorize"],
+        )
+        self.assertNotIn("SECRET123", json.dumps(messages[1:]))
+        self.assertNotIn("SECRET123", stderr)
+
+    def test_authorization_reports_an_unreadable_body_without_error_detail(
+        self,
+    ):
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            request_class=FakeUndecodableRequest,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {"api.messages": {"code": "body-unreadable"}},
+        )
+        self.assertNotIn("cannot decode", json.dumps(authorization))
+
+    def test_authorization_reports_the_effective_body_byte_limit(self):
+        rule = _messages_rule()
+        rule["limits"]["maxBodyBytes"] = 4096
+        document = _flow_document([rule])
+        document["scopes"][0]["limits"]["maxBodyBytes"] = 8
+        body = b'{"secret":"SECRET-body-content"}'
+
+        _flow, messages, _stderr = self._run(
+            document=document,
+            content=body,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {
+                "api.messages": {
+                    "code": "body-too-large",
+                    "byteLength": len(body),
+                    "maxBodyBytes": 8,
+                }
+            },
+        )
+        self.assertNotIn("SECRET-body-content", json.dumps(authorization))
+
+    def test_authorization_reports_invalid_json_without_body_content(self):
+        body = b'{"SECRET-body-content":'
+
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            content=body,
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {"api.messages": {"code": "invalid-json"}},
+        )
+        self.assertNotIn("SECRET-body-content", json.dumps(authorization))
+
+    def test_authorization_reports_a_declared_empty_json_body(self):
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            content=b"",
+            headers=[("content-length", "0")],
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {"api.messages": {"code": "empty-json-body"}},
+        )
+
+    def test_authorization_reports_only_the_first_non_scalar_pointer(self):
+        rule = _messages_rule()
+        rule["match"]["equals"] = {
+            "/first": "wanted",
+            "/second": "wanted",
+        }
+
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([rule]),
+            content=b'{"first":{},"second":[]}',
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization.get("bodyDiagnostics"),
+            {
+                "api.messages": {
+                    "code": "non-scalar-at-pointer",
+                    "pointer": "/first",
+                }
+            },
         )
 
     def test_websocket_upgrade_reaches_the_broker_with_websocket_transport(self):

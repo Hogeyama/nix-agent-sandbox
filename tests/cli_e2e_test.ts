@@ -1056,6 +1056,8 @@ async function authorizeThroughBroker(
     requestKind: "connect",
     observedAt: new Date().toISOString(),
     bodyTruth: {},
+    bodyDiagnostics: {},
+    requestBodyCapture: { state: "disabled" },
   };
   return await sendBrokerRequest<DecisionResponse>(socketPath, request);
 }

@@ -57,6 +57,10 @@ function validateProfile(name: string, profile: Profile): string[] {
     ...validateForwardPorts(name, profile.network.proxy.forwardPorts),
   );
 
+  errors.push(
+    ...validateRequestBodyAudit(name, profile.network.requestBodyAudit),
+  );
+
   // --- nix.extraPackages の入力検証 ---
   errors.push(...validateNixExtraPackages(name, profile.nix.extraPackages));
 
@@ -212,6 +216,45 @@ function validateForwardPorts(profileName: string, ports: number[]): string[] {
     }
     seen.add(port);
   }
+  return errors;
+}
+
+function validateRequestBodyAudit(
+  profileName: string,
+  config: Profile["network"]["requestBodyAudit"],
+): string[] {
+  const errors: string[] = [];
+  const prefix = `profile "${profileName}": requestBodyAudit`;
+  const positiveSafeIntegers = [
+    ["retentionSeconds", config.retentionSeconds],
+    ["maxBodyBytes", config.maxBodyBytes],
+    ["maxTotalBytes", config.maxTotalBytes],
+  ] as const;
+
+  for (const [field, value] of positiveSafeIntegers) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      errors.push(`${prefix}.${field} must be a positive safe integer`);
+    }
+  }
+
+  if (
+    Number.isSafeInteger(config.maxBodyBytes) &&
+    config.maxBodyBytes > 33_554_432
+  ) {
+    errors.push(`${prefix}.maxBodyBytes must be at most 33554432`);
+  }
+  if (
+    Number.isSafeInteger(config.maxBodyBytes) &&
+    config.maxBodyBytes > 0 &&
+    Number.isSafeInteger(config.maxTotalBytes) &&
+    config.maxTotalBytes > 0 &&
+    config.maxTotalBytes < config.maxBodyBytes
+  ) {
+    errors.push(
+      `${prefix}.maxTotalBytes must be greater than or equal to requestBodyAudit.maxBodyBytes`,
+    );
+  }
+
   return errors;
 }
 

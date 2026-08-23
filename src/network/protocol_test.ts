@@ -11,6 +11,8 @@ import {
   parseAllowlistEntry,
   type ViolationFinding,
   validateAuthorizeRequest,
+  validateRequestBodyAuditStatus,
+  validateRequestBodyCapture,
   validateRequestPolicyOutcome,
 } from "./protocol.ts";
 
@@ -59,6 +61,8 @@ const validAuthorize = {
   bodyTruth: {
     "policy.json": "true",
   },
+  bodyDiagnostics: {},
+  requestBodyCapture: { state: "disabled" },
   reviewContext: {
     path: "/v1/messages",
     contentType: "application/json",
@@ -66,11 +70,193 @@ const validAuthorize = {
   },
 };
 
+const attachedCapture = {
+  state: "attached",
+  encoding: "base64",
+  byteLength: 2,
+  sha256:
+    "sha256:2689367b205c16ce32ed4200942b8b1e9b9c9b83b0c44298fc1c149afbf4c899",
+  contentType: "application/json",
+  contentEncoding: null,
+  data: "e30=",
+} as const;
+
+test("request body capture validation accepts every closed variant", () => {
+  expect(validateRequestBodyCapture({ state: "disabled" })).toBeNull();
+  expect(validateRequestBodyCapture({ state: "not-applicable" })).toBeNull();
+  expect(
+    validateRequestBodyCapture({
+      state: "unavailable",
+      code: "body-unreadable",
+    }),
+  ).toBeNull();
+  expect(
+    validateRequestBodyCapture({
+      state: "unavailable",
+      code: "body-too-large",
+    }),
+  ).toBeNull();
+  expect(
+    validateRequestBodyCapture({
+      state: "unavailable",
+      code: "invalid-capture",
+    }),
+  ).toBeNull();
+  expect(validateRequestBodyCapture(attachedCapture)).toBeNull();
+});
+
+test("request body capture validation rejects malformed and open variants", () => {
+  for (const capture of [
+    undefined,
+    { state: "disabled", data: "secret" },
+    { state: "unavailable", code: "capacity" },
+    { ...attachedCapture, encoding: "utf8" },
+    { ...attachedCapture, byteLength: -1 },
+    { ...attachedCapture, sha256: "2689" },
+    { ...attachedCapture, contentType: 1 },
+    { ...attachedCapture, data: "not base64!" },
+    { ...attachedCapture, byteLength: 1, data: "Zh==" },
+  ]) {
+    expect(validateRequestBodyCapture(capture)).not.toBeNull();
+  }
+});
+
+test("request body audit status validation accepts every closed variant", () => {
+  for (const status of [
+    { state: "disabled" },
+    { state: "not-applicable" },
+    {
+      state: "attached",
+      byteLength: 2,
+      sha256:
+        "sha256:2689367b205c16ce32ed4200942b8b1e9b9c9b83b0c44298fc1c149afbf4c899",
+    },
+    { state: "unavailable", code: "body-unreadable" },
+    { state: "unavailable", code: "body-too-large" },
+    { state: "unavailable", code: "capacity" },
+    { state: "unavailable", code: "invalid-capture" },
+    { state: "unavailable", code: "store-failed" },
+  ]) {
+    expect(validateRequestBodyAuditStatus(status)).toBeNull();
+  }
+});
+
+test("request body audit status validation rejects malformed and open variants", () => {
+  for (const status of [
+    undefined,
+    { state: "disabled", code: "store-failed" },
+    { state: "attached", byteLength: 2 },
+    {
+      state: "attached",
+      byteLength: -1,
+      sha256: `sha256:${"0".repeat(64)}`,
+    },
+    { state: "unavailable", code: "unknown" },
+  ]) {
+    expect(validateRequestBodyAuditStatus(status)).not.toBeNull();
+  }
+});
+
 test("authorize validation accepts a bounded rule truth table", () => {
   expect(
     validateAuthorizeRequest(validAuthorize, "sess_test", document),
   ).toBeNull();
 });
+
+const validBodyDiagnostics = [
+  { code: "body-unreadable" },
+  { code: "body-too-large", byteLength: 4097, maxBodyBytes: 4096 },
+  { code: "invalid-json" },
+  { code: "empty-json-body" },
+  { code: "non-scalar-at-pointer", pointer: "/messages/0/content" },
+] as const;
+
+for (const diagnostic of validBodyDiagnostics) {
+  test(`authorize validation accepts ${diagnostic.code} body diagnostics`, () => {
+    expect(
+      validateAuthorizeRequest(
+        {
+          ...validAuthorize,
+          bodyTruth: { "policy.json": "indeterminate" },
+          bodyDiagnostics: { "policy.json": diagnostic },
+        },
+        "sess_test",
+        document,
+      ),
+    ).toBeNull();
+  });
+}
+
+test("authorize validation rejects a diagnostic for a determinate truth", () => {
+  expect(
+    validateAuthorizeRequest(
+      {
+        ...validAuthorize,
+        bodyDiagnostics: { "policy.json": { code: "invalid-json" } },
+      },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+test("authorize validation rejects an indeterminate truth without a diagnostic", () => {
+  expect(
+    validateAuthorizeRequest(
+      {
+        ...validAuthorize,
+        bodyTruth: { "policy.json": "indeterminate" },
+      },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+const invalidBodyDiagnostics = [
+  ["a missing diagnostic table", undefined],
+  ["a diagnostic table array", []],
+  ["an unknown rule ID", { "policy.unknown": { code: "invalid-json" } }],
+  [
+    "a fallback pseudo rule ID",
+    { "policy.$fallback": { code: "invalid-json" } },
+  ],
+  ["an unknown diagnostic code", { "policy.json": { code: "unknown" } }],
+  [
+    "an extra diagnostic field",
+    { "policy.json": { code: "invalid-json", detail: "parser secret" } },
+  ],
+  [
+    "an incomplete body-too-large diagnostic",
+    { "policy.json": { code: "body-too-large", byteLength: 4097 } },
+  ],
+  [
+    "an unsafe body-too-large byte length",
+    {
+      "policy.json": {
+        code: "body-too-large",
+        byteLength: Number.MAX_SAFE_INTEGER + 1,
+        maxBodyBytes: 4096,
+      },
+    },
+  ],
+  [
+    "a non-string pointer",
+    { "policy.json": { code: "non-scalar-at-pointer", pointer: 1 } },
+  ],
+] as const;
+
+for (const [name, bodyDiagnostics] of invalidBodyDiagnostics) {
+  test(`authorize validation rejects ${name}`, () => {
+    const message = { ...validAuthorize } as Record<string, unknown>;
+    if (bodyDiagnostics === undefined) delete message.bodyDiagnostics;
+    else message.bodyDiagnostics = bodyDiagnostics;
+
+    expect(
+      validateAuthorizeRequest(message, "sess_test", document),
+    ).not.toBeNull();
+  });
+}
 
 for (const transport of [undefined, "ws", "WebSocket", true, null]) {
   test(`authorize validation rejects invalid transport ${String(transport)}`, () => {

@@ -6,6 +6,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
+  DEFAULT_REQUEST_BODY_AUDIT_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
@@ -44,6 +45,7 @@ function makeProfile(): Profile {
       fallback: "deny",
       defaults: {},
       proxy: { forwardPorts: [] },
+      requestBodyAudit: structuredClone(DEFAULT_REQUEST_BODY_AUDIT_CONFIG),
       pendingTimeoutSeconds: 300,
       pendingNotify: "off",
     },

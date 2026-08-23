@@ -15,7 +15,11 @@
  */
 
 import { createStore } from "solid-js/store";
-import type { AuditLogEntryLike } from "./types";
+import type {
+  AuditLogEntryLike,
+  BodyDiagnostic,
+  RequestBodyAuditStatus,
+} from "./types";
 
 const RECENT_LIMIT = 50;
 
@@ -30,6 +34,8 @@ export type AuditLogEntryRow = {
   scope: string | null;
   target: string | null;
   command: string | null;
+  bodyDiagnostic?: BodyDiagnostic | null;
+  requestBodyAuditStatus?: RequestBodyAuditStatus | null;
 };
 
 export function normalizeAuditEntries(
@@ -55,6 +61,8 @@ export function normalizeAuditEntries(
     scope: it.scope ?? null,
     target: it.target ?? null,
     command: it.command ?? null,
+    bodyDiagnostic: it.bodyDiagnostic ?? null,
+    requestBodyAuditStatus: it.requestBodyAuditStatus ?? null,
   }));
 }
 

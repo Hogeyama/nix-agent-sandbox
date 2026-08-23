@@ -14,6 +14,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
+  DEFAULT_REQUEST_BODY_AUDIT_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
@@ -68,6 +69,9 @@ function makeProfile(
     proxy: networkOverrides.proxy
       ? { forwardPorts: [...networkOverrides.proxy.forwardPorts] }
       : { forwardPorts: [] },
+    requestBodyAudit:
+      networkOverrides.requestBodyAudit ??
+      structuredClone(DEFAULT_REQUEST_BODY_AUDIT_CONFIG),
     pendingTimeoutSeconds: networkOverrides.pendingTimeoutSeconds ?? 300,
     pendingNotify: networkOverrides.pendingNotify ?? "auto",
   };
@@ -124,6 +128,13 @@ function makeProbes(): ProbeResults {
 }
 
 const DISABLED_OBSERVABILITY: ObservabilityState = { enabled: false };
+
+const REQUEST_BODY_AUDIT_CONFIG = {
+  enable: true,
+  retentionSeconds: 86_400,
+  maxBodyBytes: 4_194_304,
+  maxTotalBytes: 67_108_864,
+};
 
 const ALLOW_EXAMPLE: NetworkConfig["scopes"] = {
   example: { targets: ["example.com"], fallback: "allow" },
@@ -410,6 +421,17 @@ test("ProxyStage: uses profile network settings", () => {
     promptToken: "slice-token",
   });
   expect(result.envVars.no_proxy).toEqual("localhost,127.0.0.1");
+});
+
+test("planProxy: carries requestBodyAudit without changing it", () => {
+  const profile = makeProfile({
+    network: { requestBodyAudit: REQUEST_BODY_AUDIT_CONFIG },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.requestBodyAudit).toEqual(REQUEST_BODY_AUDIT_CONFIG);
 });
 
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {
@@ -1079,6 +1101,27 @@ test("runProxy: resolves the registry and hands the values to the broker", async
     "gh-token": ["token abc"],
   });
   expect(capturedBrokerConfigs[0]!.proxyMasking).toEqual(true);
+});
+
+test("runProxy: hands requestBodyAudit to SessionBrokerService", async () => {
+  const profile = makeProfile({
+    network: { requestBodyAudit: REQUEST_BODY_AUDIT_CONFIG },
+  });
+  const capturedBrokerConfigs: SessionBrokerConfig[] = [];
+
+  await runStageWithFakes(profile, {
+    sessionBroker: makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          capturedBrokerConfigs.push(config);
+          return { close: () => Effect.void };
+        }),
+    }),
+  });
+
+  expect(capturedBrokerConfigs[0]!.requestBodyAudit).toEqual(
+    REQUEST_BODY_AUDIT_CONFIG,
+  );
 });
 
 // ---------------------------------------------------------------------------

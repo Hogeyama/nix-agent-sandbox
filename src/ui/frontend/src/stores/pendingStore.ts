@@ -10,9 +10,11 @@ import { createStore } from "solid-js/store";
 import { pendingRequestKey } from "./pendingRequestKey";
 import { shortenSessionId } from "./sessionId";
 import type {
+  BodyDiagnostic,
   HostExecPendingItemLike,
   InjectHeaderPreviewLike,
   NetworkPendingItemLike,
+  RequestBodyAuditStatus,
   ReviewContextLike,
   ViolationFindingLike,
 } from "./types";
@@ -41,6 +43,12 @@ export type NetworkPendingRow = {
   // say — violation cards never do. Passed through verbatim: the vocabulary
   // belongs to the backend and the view resolves it to a sentence.
   askReason: string | null;
+  // Exact closed cause for the selected indeterminate rule. Null for all
+  // other confirmations and for older daemon payloads.
+  bodyDiagnostic?: BodyDiagnostic | null;
+  // Metadata only. Exact bytes are fetched separately and never belong in
+  // the pending store.
+  requestBodyAuditStatus?: RequestBodyAuditStatus | null;
   // Grains this entry may be approved at, narrowest first. Never empty:
   // an entry that advertises nothing usable is treated as `once` only.
   approvalScopes: string[];
@@ -103,6 +111,8 @@ export function normalizeNetworkPending(
     reviewContext: it.reviewContext ?? null,
     ruleId: it.ruleId ?? null,
     askReason: it.askReason ?? null,
+    bodyDiagnostic: it.bodyDiagnostic ?? null,
+    requestBodyAuditStatus: it.requestBodyAuditStatus ?? null,
     approvalScopes: approvalScopesOf(it.approvalScopes),
     injectHeaders: injectHeadersOf(it.injectHeaders),
     violations: violationsOf(it.violations),

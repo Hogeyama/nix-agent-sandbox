@@ -6,8 +6,12 @@ import type {
   AuditLogFilter,
   AuditPhase,
   AuditViolation,
+  RequestBodyStorageLimits,
+  RequestBodyStoreResult,
+  RequestBodyWrite,
   RequestPolicyKind,
   RequestPolicyResult,
+  StoredRequestBody,
 } from "./types.ts";
 
 /**
@@ -88,7 +92,9 @@ function openDatabase(dir: string): Database {
         target           TEXT,
         command          TEXT,
         injected_headers TEXT,
-        violations       TEXT
+        violations       TEXT,
+        body_diagnostic  TEXT,
+        body_audit_status TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp
         ON audit_log(timestamp);
@@ -96,6 +102,18 @@ function openDatabase(dir: string): Database {
         ON audit_log(session_id);
       CREATE INDEX IF NOT EXISTS idx_audit_domain
         ON audit_log(domain);
+      CREATE TABLE IF NOT EXISTS request_body (
+        session_id      TEXT NOT NULL,
+        request_id      TEXT NOT NULL,
+        captured_at     TEXT NOT NULL,
+        expires_at      TEXT NOT NULL,
+        content_type    TEXT,
+        content_encoding TEXT,
+        byte_length     INTEGER NOT NULL,
+        sha256          TEXT NOT NULL,
+        body            BLOB NOT NULL,
+        PRIMARY KEY (session_id, request_id)
+      );
     `);
     addColumnIfMissing(db, "injected_headers TEXT");
     addColumnIfMissing(db, "phase TEXT");
@@ -105,6 +123,8 @@ function openDatabase(dir: string): Database {
     addColumnIfMissing(db, "request_policy_kind TEXT");
     addColumnIfMissing(db, "request_policy_result TEXT");
     addColumnIfMissing(db, "violations TEXT");
+    addColumnIfMissing(db, "body_diagnostic TEXT");
+    addColumnIfMissing(db, "body_audit_status TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -153,9 +173,10 @@ export async function appendAuditLog(
        (id, timestamp, domain, session_id, request_id,
         decision, reason, phase, rule_id, method, route,
         request_policy_kind, request_policy_result,
-        scope, target, command, injected_headers, violations)
+        scope, target, command, injected_headers, violations, body_diagnostic,
+        body_audit_status)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -177,7 +198,188 @@ export async function appendAuditLog(
       ? JSON.stringify(entry.injectedHeaders)
       : null,
     entry.violations !== undefined ? JSON.stringify(entry.violations) : null,
+    entry.bodyDiagnostic !== undefined
+      ? JSON.stringify(entry.bodyDiagnostic)
+      : null,
+    entry.requestBodyAuditStatus !== undefined
+      ? JSON.stringify(entry.requestBodyAuditStatus)
+      : null,
   );
+}
+
+/**
+ * Retain one exact pre-policy request body in the host audit database.
+ *
+ * Invalid capture metadata and aggregate-capacity exhaustion are returned as
+ * metadata-only statuses so neither condition needs to alter authorization.
+ * Actual SQLite failures still throw for the caller to map to `store-failed`.
+ */
+export async function storeRequestBody(
+  input: RequestBodyWrite,
+  limits: RequestBodyStorageLimits,
+  auditDir?: string,
+): Promise<RequestBodyStoreResult> {
+  if (
+    !Number.isSafeInteger(input.byteLength) ||
+    input.byteLength < 0 ||
+    input.byteLength !== input.body.byteLength ||
+    requestBodySha256(input.body) !== input.sha256
+  ) {
+    return { state: "unavailable", code: "invalid-capture" };
+  }
+
+  const capturedAtMs = Date.parse(input.capturedAt);
+  if (!Number.isFinite(capturedAtMs)) {
+    return { state: "unavailable", code: "invalid-capture" };
+  }
+  if (
+    !Number.isSafeInteger(limits.retentionSeconds) ||
+    limits.retentionSeconds <= 0 ||
+    !Number.isSafeInteger(limits.maxTotalBytes) ||
+    limits.maxTotalBytes <= 0
+  ) {
+    throw new RangeError(
+      "request body retentionSeconds and maxTotalBytes must be positive safe integers",
+    );
+  }
+
+  const expiresAtMs = capturedAtMs + limits.retentionSeconds * 1000;
+  if (!Number.isFinite(expiresAtMs)) {
+    return { state: "unavailable", code: "invalid-capture" };
+  }
+  const expiresAt = new Date(expiresAtMs).toISOString();
+  const dir = auditDir ?? resolveAuditDir();
+  await ensureDir(dir);
+  const db = openDatabase(dir);
+
+  const write = db.transaction((): RequestBodyStoreResult => {
+    db.prepare("DELETE FROM request_body WHERE expires_at <= ?").run(
+      new Date().toISOString(),
+    );
+
+    const existing = db
+      .prepare(
+        `SELECT byte_length, sha256
+           FROM request_body
+          WHERE session_id = ? AND request_id = ?`,
+      )
+      .get(input.sessionId, input.requestId) as ExistingRequestBodyRow | null;
+    if (existing !== null) {
+      if (
+        existing.byte_length === input.byteLength &&
+        existing.sha256 === input.sha256
+      ) {
+        return {
+          state: "attached",
+          byteLength: input.byteLength,
+          sha256: input.sha256,
+        };
+      }
+      return { state: "unavailable", code: "invalid-capture" };
+    }
+
+    const aggregate = db
+      .prepare(
+        "SELECT COALESCE(SUM(byte_length), 0) AS total_bytes FROM request_body",
+      )
+      .get() as { total_bytes: number };
+    if (aggregate.total_bytes + input.byteLength > limits.maxTotalBytes) {
+      return { state: "unavailable", code: "capacity" };
+    }
+
+    db.prepare(
+      `INSERT INTO request_body
+         (session_id, request_id, captured_at, expires_at, content_type,
+          content_encoding, byte_length, sha256, body)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.sessionId,
+      input.requestId,
+      input.capturedAt,
+      expiresAt,
+      input.contentType,
+      input.contentEncoding,
+      input.byteLength,
+      input.sha256,
+      input.body,
+    );
+    return {
+      state: "attached",
+      byteLength: input.byteLength,
+      sha256: input.sha256,
+    };
+  });
+
+  // Take the writer lock before capacity accounting so concurrent processes
+  // cannot both observe the same free space and overfill the aggregate limit.
+  return write.immediate();
+}
+
+/**
+ * Fetch one retained body by its request identity.
+ *
+ * Expired rows are pruned first. The BLOB appears only in this explicit detail
+ * query; normal audit-log queries select exclusively from `audit_log`.
+ */
+export async function getRequestBody(
+  sessionId: string,
+  requestId: string,
+  auditDir?: string,
+): Promise<StoredRequestBody | null> {
+  const dir = auditDir ?? resolveAuditDir();
+  const dbPath = path.join(dir, DB_FILENAME);
+  if (!(await Bun.file(dbPath).exists())) return null;
+
+  const db = openDatabase(dir);
+  const read = db.transaction((): StoredRequestBody | null => {
+    db.prepare("DELETE FROM request_body WHERE expires_at <= ?").run(
+      new Date().toISOString(),
+    );
+    const row = db
+      .prepare(
+        `SELECT session_id, request_id, captured_at, expires_at, content_type,
+                content_encoding, byte_length, sha256, body
+           FROM request_body
+          WHERE session_id = ? AND request_id = ?`,
+      )
+      .get(sessionId, requestId) as RequestBodyRow | null;
+    return row === null ? null : requestBodyRowToStored(row);
+  });
+  return read.immediate();
+}
+
+interface ExistingRequestBodyRow {
+  byte_length: number;
+  sha256: string;
+}
+
+interface RequestBodyRow extends ExistingRequestBodyRow {
+  session_id: string;
+  request_id: string;
+  captured_at: string;
+  expires_at: string;
+  content_type: string | null;
+  content_encoding: string | null;
+  body: Uint8Array;
+}
+
+function requestBodyRowToStored(row: RequestBodyRow): StoredRequestBody {
+  return {
+    sessionId: row.session_id,
+    requestId: row.request_id,
+    capturedAt: row.captured_at,
+    expiresAt: row.expires_at,
+    contentType: row.content_type,
+    contentEncoding: row.content_encoding,
+    byteLength: row.byte_length,
+    sha256: row.sha256,
+    body: Uint8Array.from(row.body),
+  };
+}
+
+function requestBodySha256(body: Uint8Array): string {
+  const digest = new Bun.CryptoHasher("sha256").update(body).digest("hex");
+  return `sha256:${digest}`;
 }
 
 /**
@@ -266,7 +468,8 @@ export async function queryAuditLogs(
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
                       decision, reason, phase, rule_id, method, route,
                       request_policy_kind, request_policy_result,
-                      scope, target, command, injected_headers, violations
+                      scope, target, command, injected_headers, violations,
+                      body_diagnostic, body_audit_status
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY timestamp ASC, id ASC`;
@@ -294,6 +497,8 @@ interface AuditLogRow {
   command: string | null;
   injected_headers: string | null;
   violations: string | null;
+  body_diagnostic: string | null;
+  body_audit_status: string | null;
 }
 
 function rowToEntry(row: AuditLogRow): AuditLogEntry {
@@ -325,6 +530,16 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
     entry.injectedHeaders = JSON.parse(row.injected_headers) as string[];
   if (row.violations !== null)
     entry.violations = JSON.parse(row.violations) as AuditViolation[];
+  if (row.body_diagnostic !== null) {
+    entry.bodyDiagnostic = JSON.parse(
+      row.body_diagnostic,
+    ) as AuditLogEntry["bodyDiagnostic"];
+  }
+  if (row.body_audit_status !== null) {
+    entry.requestBodyAuditStatus = JSON.parse(
+      row.body_audit_status,
+    ) as AuditLogEntry["requestBodyAuditStatus"];
+  }
   return entry;
 }
 

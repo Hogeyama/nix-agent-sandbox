@@ -166,6 +166,20 @@ class ProxyConfig {
   forwardPorts: Listing<Int> = new {}
 }
 
+class RequestBodyAuditConfig {
+  /// masking 前の exact request body を host audit DB に保存する。既定では送信もしない。
+  enable: Boolean = false
+
+  /// 保存した body を保持する秒数。
+  retentionSeconds: Int = 604800
+
+  /// 1 request あたりに保存する body の最大バイト数。
+  maxBodyBytes: Int = 8388608
+
+  /// retention 期間内に保存する body の総最大バイト数。
+  maxTotalBytes: Int = 268435456
+}
+
 /// 秘密ごとの扱い。
 /// - `inject`: `inject` ブロックからの参照を許す。ボディ・URL・クライアント由来の
 ///   ヘッダーに現れた場合の扱いは `mask` と同じ。
@@ -387,6 +401,8 @@ class NetworkConfig {
   defaults: NetworkDefaults = new {}
 
   proxy: ProxyConfig = new {}
+
+  requestBodyAudit: RequestBodyAuditConfig = new {}
 
   /// review ルールで pending に回されたリクエストの待機秒数。タイムアウト時は deny。
   pendingTimeoutSeconds: Int = 300

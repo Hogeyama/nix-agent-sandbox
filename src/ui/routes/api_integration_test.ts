@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { appendAuditLog } from "../../audit/store.ts";
+import { appendAuditLog, storeRequestBody } from "../../audit/store.ts";
 import { useRepoSchemaAsset } from "../../config/schema_asset_testing.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import { resolveAsset } from "../../lib/asset.ts";
@@ -100,6 +100,86 @@ test("GET /network/pending returns items array", async () => {
     const body = await res.json();
     expect(Array.isArray(body.items)).toEqual(true);
     expect(body.items.length).toEqual(0);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /network/body/:sessionId/:requestId returns retained bytes as base64", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    const ctx = createTestContext(tmpDir);
+    const body = Uint8Array.from([0x00, 0xff, 0x41]);
+    const sha256 = `sha256:${new Bun.CryptoHasher("sha256")
+      .update(body)
+      .digest("hex")}`;
+    await storeRequestBody(
+      {
+        sessionId: "sess-body",
+        requestId: "req-body",
+        capturedAt: "2099-01-01T00:00:00.000Z",
+        contentType: "application/octet-stream",
+        contentEncoding: "gzip",
+        byteLength: body.byteLength,
+        sha256,
+        body,
+      },
+      { retentionSeconds: 60, maxTotalBytes: 1024 },
+      ctx.auditDir,
+    );
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/network/body/sess-body/req-body");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      item: {
+        sessionId: "sess-body",
+        requestId: "req-body",
+        capturedAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: "2099-01-01T00:01:00.000Z",
+        contentType: "application/octet-stream",
+        contentEncoding: "gzip",
+        byteLength: body.byteLength,
+        sha256,
+        encoding: "base64",
+        data: Buffer.from(body).toString("base64"),
+      },
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /network/body/:sessionId/:requestId returns 404 when unavailable", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/network/body/sess-missing/req-missing");
+    expect(res.status).toBe(404);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /network/body/:sessionId/:requestId validates both identifiers", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const badSession = await app.request("/api/network/body/%24bad/req-body");
+    expect(badSession.status).toBe(400);
+    const badRequest = await app.request("/api/network/body/sess-body/%24bad");
+    expect(badRequest.status).toBe(400);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

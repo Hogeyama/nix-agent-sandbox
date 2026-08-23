@@ -75,6 +75,51 @@ describe("normalizeAuditEntries", () => {
     expect(row?.scope).toBe("host");
     expect(row?.target).toBe("example.com:443");
   });
+
+  test("carries a body diagnostic and normalizes omission to null", () => {
+    const [withDiagnostic, withoutDiagnostic] = normalizeAuditEntries([
+      makeEntry({
+        id: "with",
+        timestamp: "2026-04-20T11:00:00.000Z",
+        bodyDiagnostic: {
+          code: "non-scalar-at-pointer",
+          pointer: "/messages/0/content",
+        },
+      }),
+      makeEntry({
+        id: "without",
+        timestamp: "2026-04-20T10:00:00.000Z",
+        bodyDiagnostic: undefined,
+      }),
+    ]);
+
+    expect(withDiagnostic?.bodyDiagnostic).toEqual({
+      code: "non-scalar-at-pointer",
+      pointer: "/messages/0/content",
+    });
+    expect(withoutDiagnostic?.bodyDiagnostic).toBeNull();
+  });
+
+  test("carries raw body audit metadata and normalizes omission to null", () => {
+    const [withStatus, withoutStatus] = normalizeAuditEntries([
+      makeEntry({
+        id: "with",
+        timestamp: "2026-04-20T11:00:00.000Z",
+        requestBodyAuditStatus: { state: "unavailable", code: "capacity" },
+      }),
+      makeEntry({
+        id: "without",
+        timestamp: "2026-04-20T10:00:00.000Z",
+        requestBodyAuditStatus: undefined,
+      }),
+    ]);
+
+    expect(withStatus?.requestBodyAuditStatus).toEqual({
+      state: "unavailable",
+      code: "capacity",
+    });
+    expect(withoutStatus?.requestBodyAuditStatus).toBeNull();
+  });
 });
 
 describe("createAuditStore", () => {

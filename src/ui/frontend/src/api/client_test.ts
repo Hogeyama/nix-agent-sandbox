@@ -25,6 +25,7 @@ import {
   getInfo,
   getLaunchBranches,
   getLaunchInfo,
+  getRequestBody,
   HttpError,
   renameSession,
   request,
@@ -468,6 +469,36 @@ describe("approveHostExec", () => {
     const body = parseBody(init);
     expect(body).toEqual({ sessionId: "sess-1", requestId: "exec-1" });
     expect(body).not.toHaveProperty("scope");
+  });
+});
+
+describe("getRequestBody", () => {
+  test("GETs encoded session and request ids and returns the item envelope", async () => {
+    const item = {
+      sessionId: "sess/one",
+      requestId: "req?two",
+      capturedAt: "2026-08-22T00:00:00.000Z",
+      expiresAt: "2026-08-29T00:00:00.000Z",
+      contentType: "application/json",
+      contentEncoding: null,
+      byteLength: 2,
+      sha256: "sha256:44136fa355b3678a",
+      encoding: "base64" as const,
+      data: "e30=",
+    };
+    const fetchMock = installFetch(async () => jsonResponse({ item }));
+
+    const result = await getRequestBody("sess/one", "req?two");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/network/body/${encodeURIComponent("sess/one")}/${encodeURIComponent("req?two")}`,
+    );
+    expect(init.method).toBe("GET");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(result).toEqual({ item });
   });
 });
 

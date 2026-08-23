@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { Cause, Effect, Exit } from "effect";
+import { DEFAULT_REQUEST_BODY_AUDIT_CONFIG } from "../../config/types.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { StageInput } from "../../pipeline/types.ts";
 import {
@@ -39,6 +40,7 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
         fallback: "deny",
         defaults: {},
         proxy: { forwardPorts: [] },
+        requestBodyAudit: structuredClone(DEFAULT_REQUEST_BODY_AUDIT_CONFIG),
         pendingTimeoutSeconds: 300,
         pendingNotify: "off",
       },

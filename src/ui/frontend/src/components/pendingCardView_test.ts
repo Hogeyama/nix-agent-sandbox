@@ -1,9 +1,91 @@
 import { describe, expect, test } from "bun:test";
 import {
   askReasonView,
+  formatBodyDiagnostic,
   formatRelativeTime,
+  formatRequestBodyAuditStatus,
+  networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
+
+describe("formatRequestBodyAuditStatus", () => {
+  test("describes disabled capture", () => {
+    expect(formatRequestBodyAuditStatus({ state: "disabled" })).toBe(
+      "raw audit: disabled",
+    );
+  });
+
+  test("describes a request without a body", () => {
+    expect(formatRequestBodyAuditStatus({ state: "not-applicable" })).toBe(
+      "raw audit: not applicable",
+    );
+  });
+
+  test("describes saved bytes with their digest", () => {
+    expect(
+      formatRequestBodyAuditStatus({
+        state: "attached",
+        byteLength: 12,
+        sha256: "sha256:0123456789abcdef",
+      }),
+    ).toBe("raw audit: saved (12 bytes, sha256:0123456789abcdef)");
+  });
+
+  test.each([
+    "body-unreadable",
+    "body-too-large",
+    "capacity",
+    "invalid-capture",
+    "store-failed",
+  ] as const)("describes unavailable capture: %s", (code) => {
+    expect(formatRequestBodyAuditStatus({ state: "unavailable", code })).toBe(
+      `raw audit: unavailable (${code})`,
+    );
+  });
+});
+
+describe("formatBodyDiagnostic", () => {
+  test("describes an unreadable body without exposing an exception", () => {
+    expect(formatBodyDiagnostic({ code: "body-unreadable" })).toBe(
+      "Request body could not be read.",
+    );
+  });
+
+  test("describes the exact body-size limit", () => {
+    expect(
+      formatBodyDiagnostic({
+        code: "body-too-large",
+        byteLength: 9_000_000,
+        maxBodyBytes: 8_388_608,
+      }),
+    ).toBe(
+      "Body was 9000000 bytes; the body evaluation limit was 8388608 bytes.",
+    );
+  });
+
+  test("describes invalid JSON without parser output or body text", () => {
+    expect(formatBodyDiagnostic({ code: "invalid-json" })).toBe(
+      "Request body was not valid JSON.",
+    );
+  });
+
+  test("distinguishes an empty JSON body", () => {
+    expect(formatBodyDiagnostic({ code: "empty-json-body" })).toBe(
+      "Request body was empty, but this rule requires JSON.",
+    );
+  });
+
+  test("names only the safe pointer for a non-scalar value", () => {
+    expect(
+      formatBodyDiagnostic({
+        code: "non-scalar-at-pointer",
+        pointer: "/messages/0/content",
+      }),
+    ).toBe(
+      "JSON pointer /messages/0/content resolved to an object/array, not a scalar.",
+    );
+  });
+});
 
 describe("formatRelativeTime", () => {
   test("targetMs = null returns the em dash placeholder", () => {
@@ -60,16 +142,50 @@ describe("formatRelativeTime", () => {
 });
 
 describe("sessionLabel", () => {
-  test("returns sessionName when set", () => {
-    expect(
-      sessionLabel({ sessionShortId: "s_7a3f12", sessionName: "feature-auth" }),
-    ).toBe("feature-auth");
+  test("shows a session name together with the short id", () => {
+    expect(sessionLabel({ sessionShortId: "s_7a3f12" }, "feature-auth")).toBe(
+      "feature-auth · s_7a3f12",
+    );
   });
 
-  test("falls back to sessionShortId when sessionName is null", () => {
-    expect(
-      sessionLabel({ sessionShortId: "s_7a3f12", sessionName: null }),
-    ).toBe("s_7a3f12");
+  test("falls back to the short id when the session has no name", () => {
+    expect(sessionLabel({ sessionShortId: "s_7a3f12" }, undefined)).toBe(
+      "s_7a3f12",
+    );
+  });
+});
+
+describe("networkApprovalEffect", () => {
+  const row = { violations: [{}, {}] };
+
+  test("once covers only this request and creates no future memory", () => {
+    expect(networkApprovalEffect(row, "once")).toBe(
+      "Answers this request only. It is not remembered for future requests.",
+    );
+  });
+
+  test("rule covers the current group and future same-rule fixed-target requests", () => {
+    expect(networkApprovalEffect(row, "rule")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule and fixed target.",
+    );
+  });
+
+  test("host-port covers the current group and future same-rule host-port requests", () => {
+    expect(networkApprovalEffect(row, "host-port")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule, host, and port.",
+    );
+  });
+
+  test("host covers the current group and future same-rule host requests on every port", () => {
+    expect(networkApprovalEffect(row, "host")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule and host, on any port.",
+    );
+  });
+
+  test("violation covers the current group and the shown violation identities", () => {
+    expect(networkApprovalEffect(row, "violation")).toBe(
+      "Answers the current group and future matching requests in this session for the same rule and violation identities shown here.",
+    );
   });
 });
 

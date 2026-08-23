@@ -997,6 +997,8 @@ def _authorize_message(
     transport: str,
     body_truth: dict[str, str],
     review_context: dict,
+    request_body_capture: dict,
+    body_diagnostics: Optional[dict[str, dict]] = None,
 ) -> dict:
     """Build the authorization message shared with the broker validator."""
     return {
@@ -1012,7 +1014,9 @@ def _authorize_message(
             "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
         ),
         "bodyTruth": body_truth,
+        "bodyDiagnostics": body_diagnostics or {},
         "reviewContext": review_context,
+        "requestBodyCapture": request_body_capture,
     }
 
 
@@ -1730,6 +1734,85 @@ def _request_carries_body(request) -> bool:
     return "content-length" in headers or "transfer-encoding" in headers
 
 
+_REQUEST_BODY_AUDIT_KEYS = frozenset((
+    "enable",
+    "retentionSeconds",
+    "maxBodyBytes",
+    "maxTotalBytes",
+))
+_MAX_SAFE_INTEGER = 9_007_199_254_740_991
+
+
+def _request_body_capture(
+    request_body: Optional[bytes], request, config: object
+) -> dict:
+    """Build the bounded pre-policy body capture sent on `authorize`.
+
+    A disabled capture stops before touching the body or either encoder. The
+    registry is host-written, but malformed or partially written capture
+    settings still degrade to a closed metadata-only state rather than
+    breaking request authorization or creating an unbounded message.
+    """
+    if isinstance(config, dict) and config.get("enable") is False:
+        return {"state": "disabled"}
+    if not (
+        isinstance(config, dict)
+        and config.keys() == _REQUEST_BODY_AUDIT_KEYS
+        and config.get("enable") is True
+    ):
+        return {"state": "unavailable", "code": "invalid-capture"}
+
+    retention_seconds = config.get("retentionSeconds")
+    max_body_bytes = config.get("maxBodyBytes")
+    max_total_bytes = config.get("maxTotalBytes")
+    if not all(
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 < value <= _MAX_SAFE_INTEGER
+        for value in (retention_seconds, max_body_bytes, max_total_bytes)
+    ) or not (
+        max_body_bytes <= _LIMIT_CEILINGS["maxBodyBytes"]
+        and max_total_bytes >= max_body_bytes
+    ):
+        return {"state": "unavailable", "code": "invalid-capture"}
+
+    if request_body is None:
+        return {"state": "unavailable", "code": "body-unreadable"}
+    if not isinstance(request_body, bytes):
+        return {"state": "unavailable", "code": "invalid-capture"}
+    try:
+        carries_body = _request_carries_body(request)
+    except Exception:
+        return {"state": "unavailable", "code": "invalid-capture"}
+    if not request_body and not carries_body:
+        return {"state": "not-applicable"}
+    if len(request_body) > max_body_bytes:
+        return {"state": "unavailable", "code": "body-too-large"}
+
+    try:
+        content_type = request.headers.get("content-type")
+        content_encoding = request.headers.get("content-encoding")
+        if not all(
+            value is None or isinstance(value, str)
+            for value in (content_type, content_encoding)
+        ):
+            raise ValueError("invalid capture metadata")
+        digest = hashlib.sha256(request_body).hexdigest()
+        data = base64.b64encode(request_body).decode("ascii")
+    except Exception:
+        return {"state": "unavailable", "code": "invalid-capture"}
+
+    return {
+        "state": "attached",
+        "encoding": "base64",
+        "byteLength": len(request_body),
+        "sha256": f"sha256:{digest}",
+        "contentType": content_type,
+        "contentEncoding": content_encoding,
+        "data": data,
+    }
+
+
 def _request_transport(request) -> str:
     upgrade = request.headers.get("upgrade", "")
     tokens = {
@@ -1743,6 +1826,15 @@ def _request_transport(request) -> str:
 def _classify_body(
     body: Optional[bytes], max_body_bytes: int, carries_body: bool
 ) -> tuple[str, object]:
+    body_kind, parsed, _diagnostic = _classify_body_with_diagnostic(
+        body, max_body_bytes, carries_body
+    )
+    return body_kind, parsed
+
+
+def _classify_body_with_diagnostic(
+    body: Optional[bytes], max_body_bytes: int, carries_body: bool
+) -> tuple[str, object, Optional[dict]]:
     """Sort a body into the four kinds selection distinguishes.
 
     A body that cannot be read at all is reported as `binary` rather than
@@ -1757,11 +1849,17 @@ def _classify_body(
     would let a bodyless GET be taken by a rule whose condition is that the
     request carries something."""
     if body is None:
-        return "binary", None
+        return "binary", None, {"code": "body-unreadable"}
     if len(body) == 0:
-        return ("empty" if carries_body else "absent"), None
+        if carries_body:
+            return "empty", None, {"code": "empty-json-body"}
+        return "absent", None, None
     if len(body) > max_body_bytes:
-        return "binary", None
+        return "binary", None, {
+            "code": "body-too-large",
+            "byteLength": len(body),
+            "maxBodyBytes": max_body_bytes,
+        }
     try:
         parsed = json.loads(
             body,
@@ -1770,8 +1868,8 @@ def _classify_body(
             parse_int=_parse_javascript_integer,
         )
     except Exception:
-        return "binary", None
-    return "json", parsed
+        return "binary", None, {"code": "invalid-json"}
+    return "json", parsed, None
 
 
 def _inspect_body(
@@ -2049,41 +2147,74 @@ def _javascript_number(value):
 
 
 def _evaluate_pointer(root, pointer: str, expected: list) -> str:
+    truth, _diagnostic = _evaluate_pointer_with_diagnostic(
+        root, pointer, expected
+    )
+    return truth
+
+
+def _evaluate_pointer_with_diagnostic(
+    root, pointer: str, expected: list
+) -> tuple[str, Optional[dict]]:
     found = _resolve_json_pointer(root, pointer)
     if found is _POINTER_MISSING:
-        return "false"
+        return "false", None
     if not _is_observed_json_scalar(found):
-        return "indeterminate"
+        return "indeterminate", {
+            "code": "non-scalar-at-pointer",
+            "pointer": pointer,
+        }
     return (
-        "true"
-        if any(_scalars_equal(found, value) for value in expected)
-        else "false"
+        (
+            "true"
+            if any(_scalars_equal(found, value) for value in expected)
+            else "false"
+        ),
+        None,
     )
 
 
 def _evaluate_body_match(match: dict, body_kind: str, parsed_body) -> str:
+    truth, _diagnostic = _evaluate_body_match_with_diagnostic(
+        match, body_kind, parsed_body, None
+    )
+    return truth
+
+
+def _evaluate_body_match_with_diagnostic(
+    match: dict, body_kind: str, parsed_body,
+    body_diagnostic: Optional[dict],
+) -> tuple[str, Optional[dict]]:
     """Mirror TypeScript evaluateBody for the stage-3 Pointer vocabulary."""
     format_truth = _evaluate_body_format(match["bodyFormat"], body_kind)
     if format_truth != "true":
-        return format_truth
+        return (
+            format_truth,
+            body_diagnostic if format_truth == "indeterminate" else None,
+        )
 
     equals = match["equals"]
     one_of = match["oneOf"]
     if not equals and not one_of:
-        return "true"
+        return "true", None
     if body_kind != "json":
-        return "indeterminate"
+        return "indeterminate", body_diagnostic
 
     indeterminate = False
+    first_diagnostic = None
     determined_false = False
     conditions = itertools.chain(
         ((pointer, [value]) for pointer, value in equals.items()),
         one_of.items(),
     )
     for pointer, expected in conditions:
-        truth = _evaluate_pointer(parsed_body, pointer, expected)
+        truth, diagnostic = _evaluate_pointer_with_diagnostic(
+            parsed_body, pointer, expected
+        )
         if truth == "indeterminate":
             indeterminate = True
+            if first_diagnostic is None:
+                first_diagnostic = diagnostic
         elif truth == "false":
             determined_false = True
 
@@ -2091,35 +2222,58 @@ def _evaluate_body_match(match: dict, body_kind: str, parsed_body) -> str:
     # condition is already false; otherwise a malformed body can evade a
     # more specific rule and fall through to a broader one.
     if indeterminate:
-        return "indeterminate"
-    return "false" if determined_false else "true"
+        return "indeterminate", first_diagnostic
+    return ("false" if determined_false else "true"), None
 
 
 def _body_truth_table(
     document: dict, host: str, port: int, method: str, path: str,
     body_kind: str, body_size: Optional[int], parsed_body=None,
 ) -> dict[str, str]:
+    truths, _diagnostics = _body_truth_and_diagnostics(
+        document, host, port, method, path, body_kind, body_size,
+        parsed_body, None,
+    )
+    return truths
+
+
+def _body_truth_and_diagnostics(
+    document: dict, host: str, port: int, method: str, path: str,
+    body_kind: str, body_size: Optional[int], parsed_body=None,
+    body_diagnostic: Optional[dict] = None,
+) -> tuple[dict[str, str], dict[str, dict]]:
     """Evaluate every candidate under that candidate's body byte budget."""
     scope = _select_scope(document, host, port)
     if scope is None:
-        return {}
+        return {}, {}
     candidates = [
         rule
         for rule in scope["rules"]
         if _is_candidate(rule, method, _path_for_selection(path))
     ]
     truths = {}
+    diagnostics = {}
     for rule in candidates:
         candidate_kind = body_kind
         candidate_parsed = parsed_body
+        candidate_diagnostic = body_diagnostic
         max_body_bytes = rule.get("limits", _LIMIT_CEILINGS)["maxBodyBytes"]
         if body_size is not None and body_size > max_body_bytes:
             candidate_kind = "binary"
             candidate_parsed = None
-        truths[rule["id"]] = _evaluate_body_match(
-            rule["match"], candidate_kind, candidate_parsed
+            candidate_diagnostic = {
+                "code": "body-too-large",
+                "byteLength": body_size,
+                "maxBodyBytes": max_body_bytes,
+            }
+        truth, diagnostic = _evaluate_body_match_with_diagnostic(
+            rule["match"], candidate_kind, candidate_parsed,
+            candidate_diagnostic,
         )
-    return truths
+        truths[rule["id"]] = truth
+        if truth == "indeterminate" and diagnostic is not None:
+            diagnostics[rule["id"]] = diagnostic
+    return truths, diagnostics
 
 
 def _decide(document: dict, host: str, port: int, method: str,
@@ -2389,16 +2543,22 @@ class NasAddon:
             request_body = flow.request.content
         except ValueError:
             request_body = None
-        body_kind, parsed_body = _classify_body(
-            request_body,
-            limits["maxBodyBytes"],
+        request_body_capture = _request_body_capture(
+            request_body, flow.request, registry.get("requestBodyAudit")
+        )
+        (
+            body_kind,
+            parsed_body,
+            body_diagnostic,
+        ) = _classify_body_with_diagnostic(
+            request_body, limits["maxBodyBytes"],
             _request_carries_body(flow.request),
         )
 
         body_size = None if request_body is None else len(request_body)
-        body_truth = _body_truth_table(
+        body_truth, body_diagnostics = _body_truth_and_diagnostics(
             document, host, port, method, request_path, body_kind,
-            body_size, parsed_body,
+            body_size, parsed_body, body_diagnostic,
         )
         local = _decide(
             document, host, port, method, request_path, body_truth, transport
@@ -2432,7 +2592,7 @@ class NasAddon:
 
         authorize_req = _authorize_message(
             request_id, session_id, host, port, method, transport, body_truth,
-            review_context,
+            review_context, request_body_capture, body_diagnostics,
         )
 
         # The broker may have to ask a person before it can answer, so this

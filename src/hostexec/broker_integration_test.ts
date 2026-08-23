@@ -2042,6 +2042,126 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
   }
 });
 
+for (const scenario of [
+  {
+    label: "explicit once",
+    defaultScope: "capability" as const,
+    decision: "approve" as const,
+    scope: "once" as const,
+  },
+  {
+    label: "default once",
+    defaultScope: "once" as const,
+    decision: "approve" as const,
+    scope: undefined,
+  },
+  {
+    label: "unscoped deny",
+    defaultScope: "capability" as const,
+    decision: "deny" as const,
+    scope: undefined,
+  },
+]) {
+  test(`HostExecBroker: ${scenario.label} settles only the selected request`, async () => {
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+    const paths = await resolveHostExecRuntimePaths(runtimeDir);
+    const workspace = await mkdtemp(
+      path.join(tmpdir(), "nas-hostexec-workspace-"),
+    );
+    const broker = new HostExecBroker({
+      paths,
+      sessionId: "sess_test",
+      profileName: "test",
+      notify: "off",
+      workspaceRoot: workspace,
+      sessionTmpDir: `${runtimeDir}/tmp`,
+      hostexec: makeConfig({
+        prompt: { defaultScope: scenario.defaultScope },
+        rules: [
+          {
+            id: "node-eval",
+            match: { argv0: "node", argRegex: "^-e\\b" },
+            cwd: { mode: "workspace-only", allow: [] },
+            env: {},
+            inheritEnv: { mode: "minimal", keys: [] },
+            approval: "prompt",
+            fallback: "container",
+          },
+        ],
+      }),
+    });
+    const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+    const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+    await broker.start(execSocketPath, controlSocketPath);
+    try {
+      const selectedPromise = sendStreamingRequestRaw(
+        execSocketPath,
+        request(
+          ["-e", "console.log('same-group')"],
+          workspace,
+          "req_once_selected",
+        ),
+      );
+      let siblingSettled = false;
+      const siblingPromise = sendStreamingRequestRaw(
+        execSocketPath,
+        request(
+          ["-e", "console.log('same-group')"],
+          workspace,
+          "req_once_sibling",
+        ),
+      ).finally(() => {
+        siblingSettled = true;
+      });
+      const grouped = await waitForPendingEntries(paths, 2);
+      expect(new Set(grouped.map((entry) => entry.approvalKey)).size).toBe(1);
+
+      const approval =
+        scenario.decision === "deny"
+          ? {
+              type: "deny" as const,
+              requestId: "req_once_selected",
+            }
+          : scenario.scope === undefined
+            ? {
+                type: "approve" as const,
+                requestId: "req_once_selected",
+              }
+            : {
+                type: "approve" as const,
+                requestId: "req_once_selected",
+                scope: scenario.scope,
+              };
+      expect(
+        await sendHostExecControlRequest(controlSocketPath, approval),
+      ).toEqual({
+        type: "ack",
+        requestId: "req_once_selected",
+        decision: scenario.decision,
+      });
+      expect((await selectedPromise).finalType).toBe(
+        scenario.decision === "approve" ? "result" : "error",
+      );
+
+      const remaining = await listHostExecPendingEntries(paths, "sess_test");
+      expect(remaining.map((entry) => entry.requestId)).toEqual([
+        "req_once_sibling",
+      ]);
+      expect(siblingSettled).toBe(false);
+
+      await sendHostExecControlRequest(controlSocketPath, {
+        type: "deny",
+        requestId: "req_once_sibling",
+      });
+      expect((await siblingPromise).finalType).toBe("error");
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
 test("HostExecBroker: scope capability caches approval key", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
