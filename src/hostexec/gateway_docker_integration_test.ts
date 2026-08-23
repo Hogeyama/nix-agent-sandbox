@@ -212,19 +212,18 @@ test.skipIf(!dockerProofAvailable)(
   },
 );
 
-// A skipped Docker proof must still explain why it did not run; otherwise a
-// Docker-less developer sees a green suite without knowing that this security
-// boundary was not exercised locally.
-test.skipIf(dockerAvailable)(
-  "hostexec gateway Docker proof skipped (Docker is unavailable)",
-  () => {
-    expect(dockerAvailable).toBe(false);
-  },
-);
+if (dockerAvailable) {
+  test("hostexec gateway Docker proof: Docker is available", () => {
+    expect(dockerAvailable).toBe(true);
+  });
+} else {
+  test.skip("hostexec gateway Docker proof skipped (Docker is unavailable)", () => {});
+}
 
-test.skipIf(artifacts.gatewayPath !== null)(
-  "hostexec gateway Docker proof skipped (gateway artifact unavailable: cd src/hostexec/intercept && zig build)",
-  () => {
-    expect(artifacts.gatewayPath).toBeNull();
-  },
-);
+if (artifacts.gatewayPath !== null) {
+  test("hostexec gateway Docker proof: gateway artifact is available", () => {
+    expect(artifacts.gatewayPath).not.toBeNull();
+  });
+} else {
+  test.skip("hostexec gateway Docker proof skipped (gateway artifact unavailable: cd src/hostexec/intercept && zig build)", () => {});
+}

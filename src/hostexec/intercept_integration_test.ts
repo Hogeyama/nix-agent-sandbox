@@ -509,11 +509,10 @@ test.skipIf(!interceptGatewayAvailable || !echoPath)(
   },
 );
 
-// ライブラリまたは gateway が無いときだけ走る診断。各ケースを無言で通さず、
-// 欠けている native 成果物を build コマンド付きで報告する。
-test.skipIf(interceptGatewayAvailable)(
-  "hostexec intercept tests skipped (artifacts unavailable: cd src/hostexec/intercept && zig build)",
-  () => {
-    expect(interceptGatewayAvailable).toBe(false);
-  },
-);
+if (interceptGatewayAvailable) {
+  test("hostexec intercept artifacts are available", () => {
+    expect(interceptGatewayAvailable).toBe(true);
+  });
+} else {
+  test.skip("hostexec intercept tests skipped (artifacts unavailable: cd src/hostexec/intercept && zig build)", () => {});
+}

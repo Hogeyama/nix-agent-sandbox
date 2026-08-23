@@ -678,11 +678,10 @@ test.skipIf(!clientGatewayAvailable)(
   },
 );
 
-// バイナリが無いときだけ走る診断。欠けている成果物を明示した skip として
-// 数えるため、成果物が無い環境でも suite が無言で成功しない。
-test.skipIf(clientGatewayAvailable)(
-  "hostexec client tests skipped (artifacts unavailable: cd src/hostexec/intercept && zig build)",
-  () => {
-    expect(clientGatewayAvailable).toBe(false);
-  },
-);
+if (clientGatewayAvailable) {
+  test("hostexec client artifacts are available", () => {
+    expect(clientGatewayAvailable).toBe(true);
+  });
+} else {
+  test.skip("hostexec client tests skipped (artifacts unavailable: cd src/hostexec/intercept && zig build)", () => {});
+}

@@ -1426,11 +1426,10 @@ describe("nas-mask-filter --serve", () => {
   );
 });
 
-// バイナリが無いときだけ走るテスト。skip 件数だけでは「何が欠けていてどう直すか」
-// が出力に出ないので、理由と復旧手順をテスト名で告げる pass を 1 件残す。
-test.skipIf(binaryPath !== null)(
-  "nas-mask-filter tests skipped (binary not built: cd src/mask-filter && zig build)",
-  () => {
-    expect(binaryPath).toBeNull();
-  },
-);
+if (binaryPath !== null) {
+  test("nas-mask-filter binary is available", () => {
+    expect(binaryPath).not.toBeNull();
+  });
+} else {
+  test.skip("nas-mask-filter tests skipped (binary not built: cd src/mask-filter && zig build)", () => {});
+}

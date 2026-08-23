@@ -641,20 +641,18 @@ test.skipIf(!interceptedGatewayAvailable)(
   },
 );
 
-// Keep the gateway's own build prerequisite visible independently of the
-// client and interceptor. A combined availability check could otherwise turn
-// a missing host-side endpoint into ordinary skips with no recovery command in
-// the output.
-test.skipIf(artifacts.gatewayPath !== null)(
-  "hostexec gateway tests skipped (gateway binary not built: cd src/hostexec/intercept && zig build)",
-  () => {
-    expect(artifacts.gatewayPath).toBeNull();
-  },
-);
+if (artifacts.gatewayPath !== null) {
+  test("hostexec gateway artifact is available", () => {
+    expect(artifacts.gatewayPath).not.toBeNull();
+  });
+} else {
+  test.skip("hostexec gateway tests skipped (gateway binary not built: cd src/hostexec/intercept && zig build)", () => {});
+}
 
-test.skipIf(missingPrerequisites.length === 0)(
-  `hostexec FD gateway regressions skipped (${missingPrerequisiteReason})`,
-  () => {
-    expect(missingPrerequisites.length).toBeGreaterThan(0);
-  },
-);
+if (missingPrerequisites.length === 0) {
+  test("hostexec FD gateway prerequisites are available", () => {
+    expect(missingPrerequisites).toEqual([]);
+  });
+} else {
+  test.skip(`hostexec FD gateway regressions skipped (${missingPrerequisiteReason})`, () => {});
+}
