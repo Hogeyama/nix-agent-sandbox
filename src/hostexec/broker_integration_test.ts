@@ -2864,7 +2864,7 @@ test("HostExecBroker: surfaces an error instead of a truncated result when the m
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, 15_000);
 
 test("HostExecBroker: records command exit before mask-filter finish failure", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));

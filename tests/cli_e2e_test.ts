@@ -1101,7 +1101,7 @@ test("CLI E2E: network pending lists queued approvals", async () => {
     // what an approval is remembered against.
     expect(result.stdout).toMatch(
       new RegExp(
-        `${sessionId} req_pending api\\.openai\\.com:443 \\$fallback pending`,
+        `${sessionId} req_pending api\\.openai\\.com:443 \\$fallback \\(network-fallback\\) pending`,
       ),
     );
 

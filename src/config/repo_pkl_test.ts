@@ -34,6 +34,31 @@ async function pklAvailable(): Promise<boolean> {
 const hasPkl = await pklAvailable();
 
 test.skipIf(!hasPkl)(
+  "repository Docker hostexec rule requires manual approval",
+  async () => {
+    const repoRoot = path.resolve(import.meta.dir, "../..");
+    const config = await loadConfig({ startDir: repoRoot });
+    if (config.default === undefined) {
+      throw new Error("repository config has no default profile");
+    }
+    const profile = config.profiles[config.default];
+    if (profile === undefined) {
+      throw new Error(
+        `repository default profile not found: ${config.default}`,
+      );
+    }
+    if (profile.hostexec === undefined) {
+      throw new Error("repository default profile has no hostexec config");
+    }
+    const dockerRule = profile.hostexec.rules.find(
+      (rule) => rule.match.argv0 === "docker",
+    );
+
+    expect(dockerRule?.approval).toBe("prompt");
+  },
+);
+
+test.skipIf(!hasPkl)(
   "repository config routes OpenAI Responses by the stream flag",
   async () => {
     const repoRoot = path.resolve(import.meta.dir, "../..");

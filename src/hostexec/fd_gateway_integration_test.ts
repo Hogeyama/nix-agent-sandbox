@@ -5,6 +5,7 @@ import {
   readdir,
   readFile,
   readlink,
+  realpath,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -62,6 +63,7 @@ async function findProcessByExecutable(
   cwd?: string,
   commandLineNeedle?: string,
 ): Promise<number | null> {
+  const expectedExecutable = await realpath(executable).catch(() => executable);
   let entries: import("node:fs").Dirent[];
   try {
     entries = await readdir("/proc", { withFileTypes: true });
@@ -71,7 +73,8 @@ async function findProcessByExecutable(
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
     try {
-      if ((await readlink(`/proc/${entry.name}/exe`)) !== executable) continue;
+      if ((await readlink(`/proc/${entry.name}/exe`)) !== expectedExecutable)
+        continue;
       if (cwd && (await readlink(`/proc/${entry.name}/cwd`)) !== cwd) continue;
       if (
         commandLineNeedle &&
@@ -145,6 +148,9 @@ async function waitForGatewayHandler(
   gatewayPid: number,
   timeoutMs = 2_000,
 ): Promise<number> {
+  const gatewayExecutable = await realpath(artifacts.gatewayPath!).catch(
+    () => artifacts.gatewayPath!,
+  );
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -155,7 +161,7 @@ async function waitForGatewayHandler(
       for (const child of children.trim().split(/\s+/)) {
         if (!child) continue;
         const executable = await readlink(`/proc/${child}/exe`).catch(() => "");
-        if (executable === artifacts.gatewayPath) return Number(child);
+        if (executable === gatewayExecutable) return Number(child);
       }
     } catch {
       // The gateway can reap a handler between the proc reads.
