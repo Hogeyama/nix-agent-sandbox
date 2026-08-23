@@ -189,8 +189,21 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
 test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
   "getImageLabel: returns null for non-existing label",
   async () => {
-    const label = await getImageLabel("alpine:latest", "no.such.label.xyz");
-    expect(label).toEqual(null);
+    const tag = `${PREFIX}-missing-label`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "tmp-"));
+    try {
+      await writeFile(
+        `${tmpDir}/Dockerfile`,
+        "FROM scratch\nLABEL present=yes\n",
+      );
+      await dockerBuild(tmpDir, tag);
+
+      const label = await getImageLabel(tag, "no.such.label.xyz");
+      expect(label).toEqual(null);
+    } finally {
+      await dockerRemoveImage(tag, { force: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
   },
 );
 
