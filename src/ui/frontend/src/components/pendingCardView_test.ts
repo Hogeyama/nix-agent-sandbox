@@ -261,6 +261,41 @@ describe("hostexec approval views", () => {
     });
   });
 
+  test("JSON-quotes empty and special-character command arguments", () => {
+    const details = hostExecMatchDetails({
+      ruleId: capability.ruleId,
+      cwd: capability.normalizedCwd,
+      capability: {
+        ...capability,
+        normalizedArgv: ["", 'a"b', "line\nbreak", "\\"],
+      },
+    });
+
+    expect(details).toContainEqual({
+      label: "Command",
+      value: '"" "a\\"b" "line\\nbreak" "\\\\"',
+    });
+  });
+
+  test.each([
+    [[], "unsafe-inherit-all; none"],
+    [["HOME", "SSH_AUTH_SOCK"], "unsafe-inherit-all; HOME, SSH_AUTH_SOCK"],
+  ])("renders unsafe inherited environment keys %p as %s", (keys, value) => {
+    const details = hostExecMatchDetails({
+      ruleId: capability.ruleId,
+      cwd: capability.normalizedCwd,
+      capability: {
+        ...capability,
+        inheritEnv: { mode: "unsafe-inherit-all", keys },
+      },
+    });
+
+    expect(details).toContainEqual({
+      label: "Inherited environment",
+      value,
+    });
+  });
+
   test("shows unavailable evidence explicitly for an older payload", () => {
     expect(
       hostExecMatchDetails({ ruleId: null, cwd: null, capability: null }),

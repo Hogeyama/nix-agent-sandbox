@@ -316,6 +316,45 @@ describe("normalizeHostExecPending", () => {
     expect(row?.capability).toBeNull();
   });
 
+  const nonOnceDefaultScopes: [unknown, "capability"][] = [
+    ["capability", "capability"],
+    [null, "capability"],
+    ["scope-from-a-newer-broker", "capability"],
+  ];
+
+  test.each(
+    nonOnceDefaultScopes,
+  )("normalizes a %p default scope to %s", (defaultScope, expectedScope) => {
+    const item = {
+      ...makeHostExec(),
+      defaultScope,
+    } as unknown as HostExecPendingItemLike;
+
+    expect(normalizeHostExecPending([item])[0]?.defaultScope).toBe(
+      expectedScope,
+    );
+  });
+
+  test("prefers top-level rule and working-directory metadata over a capability fallback", () => {
+    const [row] = normalizeHostExecPending([
+      makeHostExec({
+        ruleId: "top-level-rule",
+        cwd: "/top-level-cwd",
+        capability: {
+          ruleId: "capability-rule",
+          argv0: "git",
+          normalizedArgv: ["git", "push"],
+          normalizedCwd: "/capability-cwd",
+          envBindings: [],
+          inheritEnv: { mode: "minimal", keys: [] },
+        },
+      }),
+    ]);
+
+    expect(row?.ruleId).toBe("top-level-rule");
+    expect(row?.cwd).toBe("/top-level-cwd");
+  });
+
   test("argv0 + args join with single space", () => {
     const rows = normalizeHostExecPending([
       makeHostExec({ argv0: "git", args: ["push"] }),
