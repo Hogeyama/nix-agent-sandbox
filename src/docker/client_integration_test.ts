@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
  *
  * - computeEmbedHash: Docker daemon 不要、ファイル I/O のみ
  * - それ以外: 実 Docker daemon 必要（ignore ガードあり）
- * - unit テスト（Docker 不要・I/O 不要）は client_test.ts を参照
+ * - unit テスト（Docker 不要・I/O 不要）は client.ts の純粋な関数を対象にする
  */
 
 import {
@@ -167,6 +167,30 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
 
     const exists = await dockerImageExists(TEST_IMAGE);
     expect(exists).toEqual(true);
+  },
+);
+
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerImageExists: returns false for non-existing image",
+  async () => {
+    const exists = await dockerImageExists("no-such-image-xyz:never");
+    expect(exists).toEqual(false);
+  },
+);
+
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "getImageLabel: returns null for non-existing image",
+  async () => {
+    const label = await getImageLabel("no-such-image-xyz:never", "foo");
+    expect(label).toEqual(null);
+  },
+);
+
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "getImageLabel: returns null for non-existing label",
+  async () => {
+    const label = await getImageLabel("alpine:latest", "no.such.label.xyz");
+    expect(label).toEqual(null);
   },
 );
 
@@ -342,6 +366,22 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
       await dockerRm(containerName).catch(() => {});
       throw e;
     }
+  },
+);
+
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerIsRunning: returns false for non-existing container",
+  async () => {
+    const result = await dockerIsRunning("no-such-container-xyz");
+    expect(result).toEqual(false);
+  },
+);
+
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerLogs: returns fallback for non-existing container",
+  async () => {
+    const logs = await dockerLogs("no-such-container-xyz");
+    expect(logs).toEqual("(failed to retrieve container logs)");
   },
 );
 
