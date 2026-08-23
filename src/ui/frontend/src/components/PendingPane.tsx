@@ -1,20 +1,22 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import type { getRequestBody } from "../api/client";
-import {
-  DEFAULT_HOSTEXEC_SCOPE,
-  networkScopeFor,
-} from "../handlers/createPendingActionHandlers";
+import { networkScopeFor } from "../handlers/createPendingActionHandlers";
 import type { AuditLogEntryRow } from "../stores/auditStore";
 import type {
   HostExecPendingRow,
   NetworkPendingRow,
 } from "../stores/pendingStore";
 import { formatAuditEntry, summaryFor } from "./auditEntryView";
+import type { HostExecApprovalScope } from "./pendingCardView";
 import {
   askReasonView,
   formatBodyDiagnostic,
   formatRelativeTime,
   formatRequestBodyAuditStatus,
+  HOSTEXEC_DENY_LABEL,
+  hostExecApprovalEffect,
+  hostExecMatchDetails,
+  hostExecScopeLabel,
   networkApprovalEffect,
   sessionLabel,
 } from "./pendingCardView";
@@ -408,8 +410,12 @@ export function PendingPane(props: Props) {
             fallback={<div class="empty">No pending</div>}
           >
             {(row) => {
-              const scope = () =>
-                props.scopeFor(row.key) ?? DEFAULT_HOSTEXEC_SCOPE;
+              const scope = (): HostExecApprovalScope => {
+                const selected = props.scopeFor(row.key);
+                return selected === "once" || selected === "capability"
+                  ? selected
+                  : row.defaultScope;
+              };
               const busy = () => props.busyFor(row.key);
               const error = () => props.errorFor(row.key);
               return (
@@ -431,37 +437,57 @@ export function PendingPane(props: Props) {
                       ⚠ 実行対象ファイルがセッション開始時から変化しています
                     </p>
                   </Show>
-                  <div class="scope-row">
-                    <For each={HOSTEXEC_SCOPES}>
-                      {(opt) => (
-                        <button
-                          type="button"
-                          class="scope"
-                          classList={{ selected: scope() === opt }}
-                          disabled={busy()}
-                          onClick={() => props.setScope(row.key, opt)}
-                        >
-                          {opt}
-                        </button>
+                  <dl class="hostexec-match">
+                    <For each={hostExecMatchDetails(row)}>
+                      {(detail) => (
+                        <div class="hostexec-match-row">
+                          <dt>{detail.label}</dt>
+                          <dd>{detail.value}</dd>
+                        </div>
                       )}
                     </For>
-                  </div>
-                  <div class="action-row">
-                    <button
-                      type="button"
-                      class="action approve"
-                      disabled={busy()}
-                      onClick={() => props.onApprove(row, scope())}
-                    >
-                      Approve
-                    </button>
+                  </dl>
+                  <section aria-label="Approve scope">
+                    <div class="scope-row hostexec-scope-row">
+                      <span class="card-ask-reason-label">Approve scope</span>
+                      <For each={HOSTEXEC_SCOPES}>
+                        {(opt) => (
+                          <button
+                            type="button"
+                            class="scope hostexec-scope"
+                            classList={{ selected: scope() === opt }}
+                            aria-pressed={scope() === opt}
+                            disabled={busy()}
+                            onClick={() => props.setScope(row.key, opt)}
+                          >
+                            {hostExecScopeLabel(opt)}
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                    <p class="card-ask-reason">
+                      <span class="card-ask-reason-label">This approval</span>
+                      {hostExecApprovalEffect(scope())}
+                    </p>
+                    <div class="action-row hostexec-approve">
+                      <button
+                        type="button"
+                        class="action approve"
+                        disabled={busy()}
+                        onClick={() => props.onApprove(row, scope())}
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  </section>
+                  <div class="action-row hostexec-deny">
                     <button
                       type="button"
                       class="action deny"
                       disabled={busy()}
                       onClick={() => props.onDeny(row)}
                     >
-                      Deny
+                      {HOSTEXEC_DENY_LABEL}
                     </button>
                   </div>
                   <Show when={error()}>

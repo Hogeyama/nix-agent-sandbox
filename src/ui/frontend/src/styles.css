@@ -1800,6 +1800,44 @@ body::after {
   color: var(--amber-hi);
   border-color: var(--amber);
 }
+.hostexec-match {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 10px;
+}
+.hostexec-match-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.45fr) minmax(0, 1fr);
+  gap: 8px;
+  font-size: 10px;
+}
+.hostexec-match-row dt,
+.hostexec-match-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.hostexec-scope-row {
+  flex-direction: column;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.hostexec-scope {
+  width: 100%;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.hostexec-approve,
+.hostexec-deny {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+.hostexec-deny {
+  margin-top: 10px;
+}
 
 .action-row {
   display: flex;
