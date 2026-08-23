@@ -834,6 +834,7 @@ export class HostExecBroker {
         approvalKey,
         group.createdAt,
         integrity === "prompt",
+        this.config.prompt.defaultScope,
       );
       group.pendingEntries.set(message.requestId, entry);
       group.waiters.set(message.requestId, waiter);
@@ -886,6 +887,7 @@ export class HostExecBroker {
       approvalKey,
       createdAt,
       integrityChanged,
+      this.config.prompt.defaultScope,
     );
     group.pendingEntries.set(message.requestId, entry);
     await writeHostExecPendingEntry(this.paths, entry);
@@ -1485,6 +1487,7 @@ function toPendingEntry(
   approvalKey: string,
   createdAt: string,
   integrityChanged: boolean,
+  defaultScope: HostExecPromptScope,
 ): HostExecPendingEntry {
   return {
     version: 1,
@@ -1498,6 +1501,8 @@ function toPendingEntry(
     state: "pending",
     createdAt,
     updatedAt: new Date().toISOString(),
+    defaultScope,
+    capability: structuredClone(resolved.capability),
     ...(integrityChanged ? { integrityChanged: true } : {}),
   };
 }

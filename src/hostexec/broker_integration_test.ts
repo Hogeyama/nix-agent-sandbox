@@ -2258,7 +2258,18 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
       execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_def_1"),
     );
+    void firstPromise.catch(() => {});
     await waitForPendingEntries(paths, 1);
+    const [pending] = await listHostExecPendingEntries(paths);
+    expect(pending?.defaultScope).toBe("once");
+    expect(pending?.capability).toEqual({
+      ruleId: "node-eval",
+      argv0: "node",
+      normalizedArgv: ["node", "-e", "console.log('first')"],
+      normalizedCwd: workspace,
+      envBindings: [],
+      inheritEnv: { mode: "minimal", keys: [] },
+    });
     await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_def_1",
