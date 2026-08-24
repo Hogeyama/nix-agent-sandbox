@@ -370,7 +370,9 @@ export function App() {
           network={pending.network}
           hostexec={pending.hostexec}
           sessionNameFor={sessionNameFor}
-          visible={ui.rightCollapsed}
+          collapsed={ui.rightCollapsed}
+          activeSessionId={activeAgentSessionId}
+          showAllSessions={pendingShowAll}
           onReview={(sessionId) => {
             terminals.selectSession(sessionId);
             setPendingShowAll(false);

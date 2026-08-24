@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   filterPendingForSession,
   groupPendingNotifications,
+  selectPendingNotificationRows,
 } from "./pendingNotificationView";
 
 describe("groupPendingNotifications", () => {
@@ -57,6 +58,79 @@ describe("groupPendingNotifications", () => {
         latestAt: 250,
       },
     ]);
+  });
+});
+
+describe("selectPendingNotificationRows", () => {
+  const network = [
+    {
+      sessionId: "session-a",
+      sessionShortId: "aaaaaa",
+      createdAtMs: 100,
+      verb: "GET",
+      summary: "a.example:443",
+    },
+    {
+      sessionId: "session-b",
+      sessionShortId: "bbbbbb",
+      createdAtMs: 200,
+      verb: "POST",
+      summary: "b.example:443",
+    },
+  ];
+  const hostexec = [
+    {
+      sessionId: "session-a",
+      sessionShortId: "aaaaaa",
+      createdAtMs: 300,
+      command: "bun test",
+    },
+    {
+      sessionId: "session-c",
+      sessionShortId: "cccccc",
+      createdAtMs: 400,
+      command: "bun run check",
+    },
+  ];
+
+  test("selects every approval while the pane is collapsed", () => {
+    expect(
+      selectPendingNotificationRows(network, hostexec, {
+        collapsed: true,
+        activeSessionId: "session-a",
+        showAllSessions: false,
+      }),
+    ).toEqual({ network, hostexec });
+  });
+
+  test("selects only other sessions while the pane shows the active session", () => {
+    expect(
+      selectPendingNotificationRows(network, hostexec, {
+        collapsed: false,
+        activeSessionId: "session-a",
+        showAllSessions: false,
+      }),
+    ).toEqual({ network: [network[1]], hostexec: [hostexec[1]] });
+  });
+
+  test("selects nothing while the open pane shows All", () => {
+    expect(
+      selectPendingNotificationRows(network, hostexec, {
+        collapsed: false,
+        activeSessionId: "session-a",
+        showAllSessions: true,
+      }),
+    ).toEqual({ network: [], hostexec: [] });
+  });
+
+  test("selects nothing when the open pane has no active session", () => {
+    expect(
+      selectPendingNotificationRows(network, hostexec, {
+        collapsed: false,
+        activeSessionId: null,
+        showAllSessions: false,
+      }),
+    ).toEqual({ network: [], hostexec: [] });
   });
 });
 

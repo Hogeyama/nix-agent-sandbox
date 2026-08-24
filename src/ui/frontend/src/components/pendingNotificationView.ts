@@ -13,6 +13,17 @@ type HostExecNotificationRow = Pick<
   "sessionId" | "sessionShortId" | "createdAtMs" | "command"
 >;
 
+type PendingNotificationPaneState = {
+  collapsed: boolean;
+  activeSessionId: string | null;
+  showAllSessions: boolean;
+};
+
+type PendingNotificationRows = {
+  network: readonly NetworkNotificationRow[];
+  hostexec: readonly HostExecNotificationRow[];
+};
+
 export type PendingNotificationGroup = {
   sessionId: string;
   sessionShortId: string;
@@ -70,4 +81,19 @@ export function filterPendingForSession<T extends { sessionId: string }>(
 ): readonly T[] {
   if (showAllSessions || activeSessionId === null) return rows;
   return rows.filter((row) => row.sessionId === activeSessionId);
+}
+
+export function selectPendingNotificationRows(
+  network: readonly NetworkNotificationRow[],
+  hostexec: readonly HostExecNotificationRow[],
+  pane: PendingNotificationPaneState,
+): PendingNotificationRows {
+  if (pane.collapsed) return { network, hostexec };
+  if (pane.showAllSessions || pane.activeSessionId === null) {
+    return { network: [], hostexec: [] };
+  }
+  return {
+    network: network.filter((row) => row.sessionId !== pane.activeSessionId),
+    hostexec: hostexec.filter((row) => row.sessionId !== pane.activeSessionId),
+  };
 }

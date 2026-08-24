@@ -4,19 +4,32 @@ import type {
   NetworkPendingRow,
 } from "../stores/pendingStore";
 import { sessionLabel } from "./pendingCardView";
-import { groupPendingNotifications } from "./pendingNotificationView";
+import {
+  groupPendingNotifications,
+  selectPendingNotificationRows,
+} from "./pendingNotificationView";
 
 type Props = {
   network: () => NetworkPendingRow[];
   hostexec: () => HostExecPendingRow[];
   sessionNameFor: (sessionId: string) => string | undefined;
-  visible: () => boolean;
+  collapsed: () => boolean;
+  activeSessionId: () => string | null;
+  showAllSessions: () => boolean;
   onReview: (sessionId: string) => void;
 };
 
 export function PendingNotifications(props: Props) {
-  const groups = () =>
-    groupPendingNotifications(props.network(), props.hostexec());
+  const notificationRows = () =>
+    selectPendingNotificationRows(props.network(), props.hostexec(), {
+      collapsed: props.collapsed(),
+      activeSessionId: props.activeSessionId(),
+      showAllSessions: props.showAllSessions(),
+    });
+  const groups = () => {
+    const rows = notificationRows();
+    return groupPendingNotifications(rows.network, rows.hostexec);
+  };
 
   const total = () =>
     groups().reduce((sum, group) => sum + group.network + group.hostexec, 0);
@@ -28,7 +41,7 @@ export function PendingNotifications(props: Props) {
           ? `${total()} approvals waiting across ${groups().length} sessions`
           : ""}
       </div>
-      <Show when={props.visible() && total() > 0}>
+      <Show when={total() > 0}>
         <aside class="pending-notifications">
           <div class="pending-notifications-head">
             <span>Approval requested</span>
