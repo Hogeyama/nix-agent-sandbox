@@ -27,30 +27,40 @@ bun run lint
 bun run check
 ```
 
-4. Run tests.
+4. Run the test lane for the current environment.
+
+Inside NAS, run unit tests only:
+
+```bash
+bun run test:unit
+```
+
+Do not run `bun test`, `bun run test`, or `bun test src/` as the standard NAS
+verification path. `bun test` is not routed through hostexec, and integration
+test modules can execute `docker info` probes while being imported, causing the
+run to hang instead of reaching an approval flow. This constraint applies even
+when interactive hostexec approval is available.
+
+Outside NAS, when Docker and the other integration dependencies are directly
+available, run the full suite:
 
 ```bash
 bun test
 ```
 
-## Manual Approval Is Unavailable
-
-When running inside NAS and the full suite requires hostexec approval that the
-user cannot currently provide:
-
-- Do not bypass approval with an absolute host path, a temporarily permissive
-  rule, or an already-allowed parent process.
-- Run `bun run test:unit` as the safe partial test lane. Do not substitute
-  `bun test src/`; `src/` also contains Docker integration tests.
-- Report the full suite as not run and the change as not fully verified. Resume
-  `bun run test` when manual approval is available.
+If integration or e2e verification is required while working inside NAS,
+report that it was not run and must be executed in an environment where those
+dependencies are directly available. Do not bypass the boundary with an
+absolute host path, a permissive rule, or an already-allowed parent process.
 
 ## Reporting
 
 Report these items in the final response:
 
-- Whether `fmt`, `lint`, `check`, and `test` passed or failed
+- Whether `fmt`, `lint`, `check`, and the selected test lane passed or failed
 - Test summary counts when available
+- Whether integration/e2e tests were not run because verification occurred
+  inside NAS
 - Notable failures or errors if the output highlights them
 
 ## Failure Handling
@@ -62,4 +72,4 @@ If dependencies must be downloaded or sandbox/network approval is needed, reques
 ## Notes
 
 - Prefer the commands above over alternative shortcuts so the workflow stays consistent.
-- Integration tests (`tests/`) require Docker. If the user only changed unit-testable code, `bun test src/` is sufficient.
+- `src/` contains Docker integration tests, so `bun test src/` is not a unit-only substitute. Use `bun run test:unit`.
