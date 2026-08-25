@@ -22,9 +22,31 @@ pub fn build(b: *std.Build) void {
     const host_target = b.resolveTargetQuery(.{});
 
     // ── shared library ──
+    //
+    // Forced onto glibc, pinned to an ancient version. Same shape as the
+    // client below, opposite libc: the .so is LD_PRELOADed into processes the
+    // sandbox does not pick, so it must match *their* libc rather than carry
+    // its own. Every agent image nas builds on is glibc, which makes `.gnu`
+    // the only ABI worth emitting — and leaving the ABI to `-Dtarget` emits a
+    // musl .so for a bare `x86_64-linux` (Zig's default ABI), an interceptor
+    // that no glibc process can load at all.
+    //
+    // The version pin covers the other half. Those processes come from the
+    // image and from whatever /nix closures the host mounts in, some built
+    // against a glibc far older than the build machine's. A native build asks
+    // for the *build* host's symbols (`dlsym@GLIBC_2.34`,
+    // `fstat@GLIBC_2.33`), and the loader then refuses every such process with
+    // "version `GLIBC_2.34' not found" — killing not just hostexec but every
+    // command under the preload. 2.17 keeps Zig on the symbols glibc has
+    // exported since RHEL 7; a newer glibc still resolves those through its
+    // compat versions.
+    var lib_query = target.query;
+    lib_query.abi = .gnu;
+    lib_query.setGnuLibCVersion(2, 17, 0);
+    const lib_target = b.resolveTargetQuery(lib_query);
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("hostexec_intercept.zig"),
-        .target = target,
+        .target = lib_target,
         .optimize = optimize,
         .link_libc = true,
     });
@@ -47,6 +69,11 @@ pub fn build(b: *std.Build) void {
     // cross-compiles both artifacts for the same machine.
     var client_query = target.query;
     client_query.abi = .musl;
+    // `-Dtarget=x86_64-linux-gnu.2.28` parses that suffix into `glibc_version`,
+    // which then rides along onto the musl query and is rejected as
+    // `x86_64-linux-musl.2.28: InvalidAbiVersion`. The suffix constrains the
+    // .so above; it means nothing here.
+    client_query.glibc_version = null;
     const client_target = b.resolveTargetQuery(client_query);
     const client_mod = b.createModule(.{
         .root_source_file = b.path("client_main.zig"),
