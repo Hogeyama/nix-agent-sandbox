@@ -33,6 +33,21 @@ import { fileURLToPath } from "node:url";
  */
 export async function buildInterceptArtifactsForDev(): Promise<void> {
   if (process.env.NAS_ASSET_DIR) return;
+  await buildInterceptArtifactsFromSource();
+}
+
+/**
+ * Build the three artifacts into `intercept/zig-out/`, bundled mode or not.
+ *
+ * Only for a suite that reads `zig-out/` directly instead of through
+ * `resolveInterceptLibPath`. Skipping the build in bundled mode is right for
+ * everyone who resolves the artifact the same way `nas` does — nix already
+ * built what they will read. A suite that measures the *source tree's* build
+ * output gets no such guarantee from `NAS_ASSET_DIR`: it would silently grade
+ * whatever `zig-out/` happened to hold from an earlier build, so a
+ * regression reintroduced today can still pass.
+ */
+export async function buildInterceptArtifactsFromSource(): Promise<void> {
   if (Bun.which("zig") === null) return;
   const srcDir = fileURLToPath(new URL("./intercept/", import.meta.url));
   const proc = Bun.spawn(["zig", "build"], {
