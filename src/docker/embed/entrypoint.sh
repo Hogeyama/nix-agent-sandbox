@@ -263,15 +263,15 @@ if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
     LOCAL_PROXY_PID=$!
 
     # ヘルスチェック: localhost:18080 に接続可能になるまで待機
-    for i in $(seq 1 50); do
+    for i in $(seq 1 500); do
       if bash -c "echo >/dev/tcp/127.0.0.1/18080" 2>/dev/null; then
         nas_info "[nas] Local auth proxy ready (pid=$LOCAL_PROXY_PID)"
         break
       fi
-      if [ "$i" -eq 50 ]; then
+      if [ "$i" -eq 500 ]; then
         echo "[nas] WARNING: local proxy failed to start within 5s" >&2
       fi
-      sleep 0.1
+      sleep 0.01
     done
   fi
 
