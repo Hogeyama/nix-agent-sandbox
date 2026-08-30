@@ -3,6 +3,36 @@ import { Effect } from "effect";
 import { makeSecretResolverService } from "./secret_resolver.ts";
 
 describe("SecretResolverService", () => {
+  test("異なる source を並列に解決する", async () => {
+    const firstCanFinish = Promise.withResolvers<void>();
+    let secondStarted = false;
+    const service = makeSecretResolverService(async (source) => {
+      if (source === "command:first") {
+        await firstCanFinish.promise;
+      } else {
+        secondStarted = true;
+        firstCanFinish.resolve();
+      }
+      return `${source}-value`;
+    });
+
+    const resolved = await Effect.runPromise(
+      service.resolveRegistry(
+        {
+          first: { from: "command:first" },
+          second: { from: "command:second" },
+        },
+        {},
+      ),
+    );
+
+    expect(secondStarted).toBeTrue();
+    expect(resolved).toEqual({
+      first: ["command:first-value"],
+      second: ["command:second-value"],
+    });
+  }, 500);
+
   test("同じセッションでは同じ source を一度だけ解決する", async () => {
     const calls: string[] = [];
     const service = makeSecretResolverService(async (source) => {

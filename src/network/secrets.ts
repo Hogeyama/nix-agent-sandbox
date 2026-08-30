@@ -46,37 +46,39 @@ export async function resolveSecretRegistry(
   env: Record<string, string | undefined>,
   resolveSource: SecretSourceResolver = resolveSecret,
 ): Promise<Record<string, string[]>> {
-  const resolved: Record<string, string[]> = {};
-  for (const [name, config] of Object.entries(secrets)) {
-    const required = config.required !== false;
-    let value: string | string[] | null;
-    try {
-      value = await resolveSource(config.from, env);
-    } catch (error) {
-      // 取得元の綴りは設定に書いてあるので出してよい。値は出さない。
-      throw new Error(
-        `[nas] secrets["${name}"] (${config.from}) を解決できませんでした: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    const values = (
-      value === null ? [] : Array.isArray(value) ? value : [value]
-    ).filter((entry) => entry !== "");
-    if (values.length === 0) {
-      if (required) {
+  const entries = await Promise.all(
+    Object.entries(secrets).map(async ([name, config]) => {
+      const required = config.required !== false;
+      let value: string | string[] | null;
+      try {
+        value = await resolveSource(config.from, env);
+      } catch (error) {
+        // 取得元の綴りは設定に書いてあるので出してよい。値は出さない。
         throw new Error(
-          `[nas] secrets["${name}"] (${config.from}) が空です。required = false でなければセッションを開始できません。`,
+          `[nas] secrets["${name}"] (${config.from}) を解決できませんでした: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         );
       }
-      continue;
-    }
-    for (const entry of values) {
-      assertMinSecretBytes(entry, name);
-    }
-    resolved[name] = values;
-  }
-  return resolved;
+      const values = (
+        value === null ? [] : Array.isArray(value) ? value : [value]
+      ).filter((entry) => entry !== "");
+      if (values.length === 0) {
+        if (required) {
+          throw new Error(
+            `[nas] secrets["${name}"] (${config.from}) が空です。required = false でなければセッションを開始できません。`,
+          );
+        }
+        return null;
+      }
+      for (const entry of values) {
+        assertMinSecretBytes(entry, name);
+      }
+      return [name, values] as const;
+    }),
+  );
+
+  return Object.fromEntries(entries.filter((entry) => entry !== null));
 }
 
 function assertMinSecretBytes(value: string, name: string): void {
