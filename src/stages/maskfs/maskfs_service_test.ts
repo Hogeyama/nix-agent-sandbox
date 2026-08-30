@@ -18,6 +18,7 @@ import { Effect, Exit, Layer } from "effect";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
 import { makeProcessServiceFake } from "../../services/process.ts";
+import { SecretResolverServiceLive } from "../../services/secret_resolver.ts";
 import {
   MaskFsService,
   MaskFsServiceLive,
@@ -67,7 +68,13 @@ describe("MaskFsService", () => {
         }),
     });
     const layer = MaskFsServiceLive.pipe(
-      Layer.provide(Layer.merge(makeFsServiceFake().layer, procFake)),
+      Layer.provide(
+        Layer.mergeAll(
+          makeFsServiceFake().layer,
+          procFake,
+          SecretResolverServiceLive,
+        ),
+      ),
     );
     const plan = makePlan();
 
@@ -97,7 +104,13 @@ describe("MaskFsService", () => {
   test("creates the mountpoint directory before spawning", async () => {
     const fsFake = makeFsServiceFake();
     const layer = MaskFsServiceLive.pipe(
-      Layer.provide(Layer.merge(fsFake.layer, makeProcessServiceFake())),
+      Layer.provide(
+        Layer.mergeAll(
+          fsFake.layer,
+          makeProcessServiceFake(),
+          SecretResolverServiceLive,
+        ),
+      ),
     );
     const plan = makePlan();
 
@@ -119,7 +132,11 @@ describe("MaskFsService", () => {
   test("fails when readiness never arrives (fail-closed)", async () => {
     const layer = MaskFsServiceLive.pipe(
       Layer.provide(
-        Layer.merge(makeFsServiceFake().layer, makeProcessServiceFake()),
+        Layer.mergeAll(
+          makeFsServiceFake().layer,
+          makeProcessServiceFake(),
+          SecretResolverServiceLive,
+        ),
       ),
     );
     const exit = await Effect.runPromiseExit(
@@ -139,7 +156,11 @@ describe("MaskFsService", () => {
   test("fails when preflight rejects (fusermount3 missing)", async () => {
     const layer = MaskFsServiceLive.pipe(
       Layer.provide(
-        Layer.merge(makeFsServiceFake().layer, makeProcessServiceFake()),
+        Layer.mergeAll(
+          makeFsServiceFake().layer,
+          makeProcessServiceFake(),
+          SecretResolverServiceLive,
+        ),
       ),
     );
     const exit = await Effect.runPromiseExit(
@@ -175,7 +196,13 @@ describe("MaskFsService", () => {
         }),
     });
     const layer = MaskFsServiceLive.pipe(
-      Layer.provide(Layer.merge(makeFsServiceFake().layer, procFake)),
+      Layer.provide(
+        Layer.mergeAll(
+          makeFsServiceFake().layer,
+          procFake,
+          SecretResolverServiceLive,
+        ),
+      ),
     );
     const plan = makePlan();
 
@@ -209,7 +236,13 @@ describe("MaskFsService", () => {
       exec: () => Effect.die(new Error("fusermount3: not mounted")),
     });
     const layer = MaskFsServiceLive.pipe(
-      Layer.provide(Layer.merge(makeFsServiceFake().layer, procFake)),
+      Layer.provide(
+        Layer.mergeAll(
+          makeFsServiceFake().layer,
+          procFake,
+          SecretResolverServiceLive,
+        ),
+      ),
     );
 
     await Effect.runPromise(
@@ -231,7 +264,11 @@ describe("MaskFsService", () => {
 describe("MaskFsService.resolveSecrets", () => {
   const layer = MaskFsServiceLive.pipe(
     Layer.provide(
-      Layer.merge(makeFsServiceFake().layer, makeProcessServiceFake()),
+      Layer.mergeAll(
+        makeFsServiceFake().layer,
+        makeProcessServiceFake(),
+        SecretResolverServiceLive,
+      ),
     ),
   );
 

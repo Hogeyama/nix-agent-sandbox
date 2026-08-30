@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService, type SpawnHandle } from "../../services/process.ts";
+import { SecretResolverServiceLive } from "../../services/secret_resolver.ts";
 import {
   MASK_FILTER_CONTAINER_PATH,
   type MaskFilterResult,
@@ -200,7 +201,11 @@ async function runCapturing(
           );
         }),
       ),
-      MaskFilterServiceLive.pipe(Layer.provide(Layer.merge(fakeFs, fakeProc))),
+      MaskFilterServiceLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(fakeFs, fakeProc, SecretResolverServiceLive),
+        ),
+      ),
     ),
   );
 
@@ -417,7 +422,9 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
           }),
         ),
         MaskFilterServiceLive.pipe(
-          Layer.provide(Layer.merge(fakeFs, fakeProc)),
+          Layer.provide(
+            Layer.mergeAll(fakeFs, fakeProc, SecretResolverServiceLive),
+          ),
         ),
       ),
     );
@@ -491,7 +498,9 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
           }),
         ),
         MaskFilterServiceLive.pipe(
-          Layer.provide(Layer.merge(fakeFs, fakeProc)),
+          Layer.provide(
+            Layer.mergeAll(fakeFs, fakeProc, SecretResolverServiceLive),
+          ),
         ),
       ),
     );

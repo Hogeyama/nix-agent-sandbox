@@ -41,7 +41,7 @@ import {
   shouldRecordInvocation,
 } from "./history/cli_lifecycle.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
-import { formatElapsed, logDebug, setLogLevel } from "./log.ts";
+import { formatElapsed, logDebug, logWarn, setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
 import type { PipelineState } from "./pipeline/state.ts";
@@ -49,6 +49,10 @@ import type { StageInput } from "./pipeline/types.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { ProcessServiceLive } from "./services/process.ts";
+import {
+  makeSecretResolverService,
+  SecretResolverService,
+} from "./services/secret_resolver.ts";
 import { addRecentDir } from "./sessions/recent_dirs.ts";
 import {
   createDbusProxyStage,
@@ -288,12 +292,21 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
     }
 
     if (config.ui.enable) {
-      phaseStart = performance.now();
-      await ensureUiDaemon({
+      const uiDaemonStart = performance.now();
+      void ensureUiDaemon({
         port: config.ui.port,
         idleTimeout: config.ui.idleTimeout,
-      });
-      logDebug(`[nas] ensureUiDaemon done (${formatElapsed(phaseStart)})`);
+      })
+        .then(() => {
+          logDebug(
+            `[nas] ensureUiDaemon done (${formatElapsed(uiDaemonStart)})`,
+          );
+        })
+        .catch((error) => {
+          logWarn(
+            `[nas] UI daemon failed to start: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
     }
 
     // MountProbes を事前解決
@@ -312,6 +325,15 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
     logDebug(`[nas] resolveBuildProbes done (${formatElapsed(phaseStart)})`);
 
     const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
+    const secretResolverLayer = Layer.succeed(
+      SecretResolverService,
+      makeSecretResolverService(),
+    );
+    const hostServiceLayer = Layer.mergeAll(
+      FsServiceLive,
+      ProcessServiceLive,
+      secretResolverLayer,
+    );
     const dockerLayer = DockerServiceLive;
     const liveLayer = Layer.mergeAll(
       ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
@@ -330,10 +352,10 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-      MaskFilterServiceLive.pipe(Layer.provide(primitiveLayer)),
-      MaskFsServiceLive.pipe(Layer.provide(primitiveLayer)),
+      MaskFilterServiceLive.pipe(Layer.provide(hostServiceLayer)),
+      MaskFsServiceLive.pipe(Layer.provide(hostServiceLayer)),
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-      NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
+      NetworkRuntimeServiceLive.pipe(Layer.provide(hostServiceLayer)),
       OtlpReceiverServiceLive,
       ProcessServiceLive,
       DockerServiceLive,

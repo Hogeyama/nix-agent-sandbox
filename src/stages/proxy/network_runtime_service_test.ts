@@ -15,6 +15,7 @@ import {
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
 import { makeProcessServiceFake } from "../../services/process.ts";
+import { SecretResolverServiceLive } from "../../services/secret_resolver.ts";
 import {
   NetworkRuntimeService,
   NetworkRuntimeServiceLive,
@@ -41,7 +42,13 @@ function makeLiveLayer(
   fsFake: ReturnType<typeof makeFsServiceFake>,
 ): Layer.Layer<NetworkRuntimeService> {
   return NetworkRuntimeServiceLive.pipe(
-    Layer.provide(Layer.mergeAll(fsFake.layer, makeProcessServiceFake())),
+    Layer.provide(
+      Layer.mergeAll(
+        fsFake.layer,
+        makeProcessServiceFake(),
+        SecretResolverServiceLive,
+      ),
+    ),
   );
 }
 

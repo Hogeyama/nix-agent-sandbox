@@ -14,8 +14,8 @@ import {
   withoutInjectLiterals,
 } from "../../network/authz/resolve.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
-import { resolveSecretRegistry } from "../../network/secrets.ts";
 import { FsService } from "../../services/fs.ts";
+import { SecretResolverService } from "../../services/secret_resolver.ts";
 
 // ---------------------------------------------------------------------------
 // NetworkRuntimeService tag
@@ -68,11 +68,12 @@ function authzDocumentPath(
 export const NetworkRuntimeServiceLive: Layer.Layer<
   NetworkRuntimeService,
   never,
-  FsService
+  FsService | SecretResolverService
 > = Layer.effect(
   NetworkRuntimeService,
   Effect.gen(function* () {
     const fs = yield* FsService;
+    const secretResolver = yield* SecretResolverService;
 
     return NetworkRuntimeService.of({
       ensureRuntimeDirs: (paths) =>
@@ -141,10 +142,7 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           .pipe(Effect.orDie),
 
       resolveSecrets: (secrets, env) =>
-        Effect.tryPromise({
-          try: () => resolveSecretRegistry(secrets, env),
-          catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-        }).pipe(Effect.orDie),
+        secretResolver.resolveRegistry(secrets, env).pipe(Effect.orDie),
     });
   }),
 );

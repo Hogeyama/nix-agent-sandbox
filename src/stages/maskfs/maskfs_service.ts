@@ -14,10 +14,10 @@
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
 import type { SecretConfig } from "../../config/types.ts";
-import { resolveSecretList } from "../../network/secrets.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
+import { SecretResolverService } from "../../services/secret_resolver.ts";
 
 type Fs = Context.Tag.Service<typeof FsService>;
 type Proc = Context.Tag.Service<typeof ProcessService>;
@@ -207,12 +207,13 @@ function spawnMaskFs(proc: Proc, plan: MaskFsStartPlan) {
 export const MaskFsServiceLive: Layer.Layer<
   MaskFsService,
   never,
-  FsService | ProcessService
+  FsService | ProcessService | SecretResolverService
 > = Layer.effect(
   MaskFsService,
   Effect.gen(function* () {
     const fs = yield* FsService;
     const proc = yield* ProcessService;
+    const secretResolver = yield* SecretResolverService;
 
     return MaskFsService.of({
       startMaskFs: (plan, options) =>
@@ -248,13 +249,11 @@ export const MaskFsServiceLive: Layer.Layer<
         }),
 
       resolveSecrets: (secrets, host) =>
-        Effect.tryPromise({
-          try: () => {
-            const env: Record<string, string | undefined> = {};
-            for (const [k, v] of host.env) env[k] = v;
-            return resolveSecretList(secrets, env);
-          },
-          catch: (e) => e,
+        Effect.gen(function* () {
+          const env: Record<string, string | undefined> = {};
+          for (const [k, v] of host.env) env[k] = v;
+          const registry = yield* secretResolver.resolveRegistry(secrets, env);
+          return Object.values(registry).flat();
         }),
     });
   }),

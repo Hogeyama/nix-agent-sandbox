@@ -30,6 +30,11 @@ const MIN_SECRET_BYTES = 4;
 /** 名前 → その名前が展開する値。`lines:` は複数の値になる。 */
 export type SecretValues = Readonly<Record<string, readonly string[]>>;
 
+export type SecretSourceResolver = (
+  source: string,
+  env: Record<string, string | undefined>,
+) => Promise<string | string[] | null>;
+
 /**
  * レジストリの各エントリを実際の値に解決する。
  *
@@ -39,13 +44,14 @@ export type SecretValues = Readonly<Record<string, readonly string[]>>;
 export async function resolveSecretRegistry(
   secrets: Readonly<Record<string, SecretConfig>>,
   env: Record<string, string | undefined>,
+  resolveSource: SecretSourceResolver = resolveSecret,
 ): Promise<Record<string, string[]>> {
   const resolved: Record<string, string[]> = {};
   for (const [name, config] of Object.entries(secrets)) {
     const required = config.required !== false;
     let value: string | string[] | null;
     try {
-      value = await resolveSecret(config.from, env);
+      value = await resolveSource(config.from, env);
     } catch (error) {
       // 取得元の綴りは設定に書いてあるので出してよい。値は出さない。
       throw new Error(
