@@ -14,6 +14,8 @@
 - Run `nix build .#default` successfully before taking any sample.
 - Start timing immediately before spawning `nix run .#default -- copilot` and stop at the first complete stub marker observed on stdout.
 - Take exactly five samples and report each value plus minimum, median, and maximum in milliseconds; median is the primary metric.
+- Embed the unique marker in the generated stub; arbitrary host environment variables are not forwarded into the container.
+- Capture elapsed time at the marker, but wait for each `nix run` child to exit before starting the next sample.
 - Fail if a run exits before its marker or does not produce the marker within 30 seconds.
 - Do not change production NAS startup behavior in this task.
 
@@ -66,16 +68,18 @@ Expected: 3 tests pass.
 Create `scripts/benchmark_startup.ts`, importing the helpers by the relative
 path `../src/benchmark/startup.ts`. When `import.meta.main`, create a temporary directory with
 `mkdtemp(join(tmpdir(), "nas-startup-"))`. Write an executable POSIX shell
-stub named `copilot` that prints the marker supplied through
-`NAS_STARTUP_BENCHMARK_MARKER`, and set mode `0o755`. Prepend that directory to
+stub named `copilot` with the unique marker embedded as a safely quoted
+literal, and set mode `0o755`. Prepend that directory to
 the child `PATH`. Run `nix build .#default` once with inherited output and
 abort on non-zero status. Then take five sequential samples by spawning
-`nix run .#default -- copilot` with piped stdout, inherited stderr, ignored
-stdin, and the marker environment variable. Start `performance.now()`
-immediately before each spawn, stream-decode stdout, and resolve the sample on
-marker detection. Reject on early exit or after 30 seconds, killing a timed-out
-child. After all samples, print individual millisecond values and the summary.
-Always remove the temporary directory recursively in `finally`.
+`nix run .#default -- copilot` with piped stdout, inherited stderr, and ignored
+stdin. Start `performance.now()`
+immediately before each spawn, stream-decode stdout, and capture the sample on
+marker detection. Await that child's exit before returning the captured sample
+so teardown cannot overlap the next run. Reject on early exit or after 30
+seconds, killing a timed-out child. After all samples, print individual
+millisecond values and the summary. Always remove the temporary directory
+recursively in `finally`.
 
 - [ ] **Step 6: Expose the command**
 

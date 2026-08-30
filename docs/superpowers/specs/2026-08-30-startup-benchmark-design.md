@@ -39,15 +39,20 @@ minimum, median, and maximum. Median is the primary comparison metric.
 scanning. `scripts/benchmark_startup.ts` owns the benchmark lifecycle:
 
 1. Create a temporary directory and an executable file named `copilot`.
-2. Make the executable emit a per-run marker immediately and exit successfully.
+2. Embed a unique marker in the executable and make it emit that marker
+   immediately before exiting successfully. The marker cannot rely on an
+   arbitrary host environment variable because NAS deliberately forwards only
+   selected environment variables into the container.
 3. Prepend the temporary directory to `PATH` so NAS resolves and bind-mounts
    the stub as `/usr/local/bin/copilot`.
 4. Run `nix build .#default` once.
 5. Spawn each `nix run .#default -- copilot` sample without a TTY and inspect
    stdout incrementally.
 6. Record the elapsed monotonic time at the first complete marker occurrence.
-7. Forward ordinary NAS output so a failed or slow stage remains diagnosable.
-8. Remove temporary state in a `finally` block.
+7. Wait for the current `nix run` process to exit before starting the next
+   sample, without adding that wait to the recorded elapsed time.
+8. Forward ordinary NAS output so a failed or slow stage remains diagnosable.
+9. Remove temporary state in a `finally` block.
 
 The harness must terminate a sample and fail clearly if the command exits
 before the marker or if the marker is not observed within 30 seconds.
