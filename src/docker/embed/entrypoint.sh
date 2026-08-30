@@ -49,15 +49,13 @@ nas_debug() {
   echo "$@" >&2
 }
 
-nas_now_ns() {
-  date +%s%N
-}
-
 nas_measure_start() {
+  local target="$1"
   if [ "$nas_debug_enabled" != "true" ]; then
+    printf -v "$target" '%s' ""
     return 0
   fi
-  nas_now_ns
+  printf -v "$target" '%s' "${EPOCHREALTIME/./}"
 }
 
 nas_measure_done() {
@@ -70,8 +68,8 @@ nas_measure_done() {
     return 0
   fi
   local ended_at elapsed
-  ended_at="$(nas_now_ns)"
-  elapsed=$(((ended_at - started_at) / 1000000))
+  ended_at="${EPOCHREALTIME/./}"
+  elapsed=$(((ended_at - started_at) / 1000))
   nas_debug "[nas]   ↳ entrypoint:${label} done (${elapsed}ms)"
 }
 
@@ -80,14 +78,20 @@ exec_nas() {
   exec "$@"
 }
 
-ENTRYPOINT_TOTAL_START="$(nas_measure_start)"
+nas_measure_start ENTRYPOINT_TOTAL_START
 nas_debug "[nas] entrypoint start (shell_mode=${NAS_SHELL_MODE}, nix_enabled=${NIX_ENABLED:-false})"
+if [ "$nas_debug_enabled" = "true" ] && [ -n "${NAS_DOCKER_RUN_STARTED_AT_US:-}" ]; then
+  NAS_ENTRYPOINT_STARTED_AT_US="${EPOCHREALTIME/./}"
+  NAS_DOCKER_STARTUP_MS=$(((NAS_ENTRYPOINT_STARTED_AT_US - NAS_DOCKER_RUN_STARTED_AT_US) / 1000))
+  nas_debug "[nas]   ↳ docker-run-to-entrypoint done (${NAS_DOCKER_STARTUP_MS}ms)"
+fi
+unset NAS_DOCKER_RUN_STARTED_AT_US
 
 # --- CA 証明書のインストール ---
 # update-ca-certificates は全証明書を走査するため ~1s かかる。
 # 追加するのは mitmproxy CA 1 枚だけなので、CA bundle への追記と
 # ハッシュシンボリンク作成を直接行う。
-CA_CERT_START="$(nas_measure_start)"
+nas_measure_start CA_CERT_START
 NAS_PROXY_CERT="/usr/local/share/ca-certificates/nas-proxy.crt"
 if [ -f "$NAS_PROXY_CERT" ]; then
   cat "$NAS_PROXY_CERT" >> /etc/ssl/certs/ca-certificates.crt
@@ -126,7 +130,7 @@ nas_measure_done "ca-cert" "$CA_CERT_START"
 # --- 環境変数 prefix/suffix 適用 ---
 # Nix devShell が同名の変数を上書きするため、ここでは eval せず
 # ファイルに保存し、各 exec パスで nix 環境 source 後に適用する。
-ENV_OPS_START="$(nas_measure_start)"
+nas_measure_start ENV_OPS_START
 NAS_ENV_OPS_FILE=""
 if [ -n "${NAS_ENV_OPS:-}" ]; then
   NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
@@ -144,7 +148,7 @@ fi
 nas_measure_done "env-ops" "$ENV_OPS_START"
 
 # --- Nix セットアップ ---
-NIX_SETUP_START="$(nas_measure_start)"
+nas_measure_start NIX_SETUP_START
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
   # ホストの nix バイナリ (/nix/store/... 内) へのシンボリックリンクを作成
   ln -sf "$NIX_BIN_PATH" /usr/local/bin/nix
@@ -166,7 +170,7 @@ NAS_USER="${NAS_USER:-${USER:-nas}}"
 NAS_HOME="/home/${NAS_USER}"
 WORKSPACE="${WORKSPACE:?WORKSPACE must be set}"
 
-USER_SETUP_START="$(nas_measure_start)"
+nas_measure_start USER_SETUP_START
 if [ "$NAS_UID" != "0" ]; then
   # 同じ UID/GID を持つ既存エントリを削除 (ubuntu イメージのデフォルト ubuntu ユーザー等)
   EXISTING_USER=$(awk -F: -v uid="$NAS_UID" '$3 == uid {print $1}' /etc/passwd)
@@ -246,7 +250,7 @@ append_git_config_env() {
   export "${value_var}=${value}"
 }
 
-GIT_SETUP_START="$(nas_measure_start)"
+nas_measure_start GIT_SETUP_START
 append_git_config_env "safe.directory" "$WORKSPACE"
 # /etc/gitconfig 方式: nix が内部で git を呼ぶ際に env var が渡らないため
 git config --system safe.directory "$WORKSPACE"
@@ -256,7 +260,7 @@ nas_measure_done "git-safe-directory" "$GIT_SETUP_START"
 # NAS_UPSTREAM_PROXY が設定されている場合、認証代行ローカルプロキシを起動し
 # http_proxy/https_proxy を localhost:18080 に書き換える。
 # --shell モードでは初回起動時の proxy が既に走っているため env のみ書き換える。
-LOCAL_PROXY_SETUP_START="$(nas_measure_start)"
+nas_measure_start LOCAL_PROXY_SETUP_START
 if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
   if [ "$NAS_SHELL_MODE" != "true" ]; then
     bun /usr/local/bin/local-proxy.mjs &
@@ -387,7 +391,7 @@ export PATH="${NAS_BASH_OVERRIDE}:${PATH}"
 # エージェント用の経路は入出力を expr/exec で回しているため、そのまま bash -i
 # を流すと source 結果や set オプションとの相互作用で無言即死しうる。
 # シェルは会話的に使えればよいので最短経路にする。
-SHELL_BOOTSTRAP_START="$(nas_measure_start)"
+nas_measure_start SHELL_BOOTSTRAP_START
 if [ "$NAS_SHELL_MODE" = "true" ]; then
   SHELL_PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE}:"
   SHELL_CACHE_FILE=""
@@ -445,7 +449,7 @@ exec_agent_command() {
 }
 
 # --- nix 統合 ---
-NIX_INTEGRATION_START="$(nas_measure_start)"
+nas_measure_start NIX_INTEGRATION_START
 if [ "${NIX_ENABLED:-false}" = "true" ]; then
   NIX_EXTRA_PACKAGES_LIST=()
   if [ -n "${NIX_EXTRA_PACKAGES:-}" ]; then
@@ -477,14 +481,14 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
       nas_debug "[nas] nix-devshell-probe skipped (cache hit)"
       nas_info "[nas] Using cached nix dev environment."
     else
-      DEV_SHELL_PROBE_START="$(nas_measure_start)"
+      nas_measure_start DEV_SHELL_PROBE_START
       SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
       if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
         nix eval --raw "${WORKSPACE}#devShells.${SYSTEM}.default.type" 2>/dev/null | grep -qx derivation; then
         nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
 
         mkdir -p "$NAS_NIX_CACHE"
-        NIX_PRINT_DEV_ENV_START="$(nas_measure_start)"
+        nas_measure_start NIX_PRINT_DEV_ENV_START
         nas_info "[nas] Caching nix dev environment via print-dev-env..."
         if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
           nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CANDIDATE}.tmp"; then

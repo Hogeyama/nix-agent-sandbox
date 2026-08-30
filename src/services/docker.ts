@@ -179,16 +179,21 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
 
     runInteractive: (opts) =>
       Effect.tryPromise({
-        try: () =>
-          dockerRun({
+        try: () => {
+          const envVars = { ...opts.envVars };
+          if (envVars.NAS_LOG_LEVEL === "debug") {
+            envVars.NAS_DOCKER_RUN_STARTED_AT_US = `${Date.now()}000`;
+          }
+          return dockerRun({
             image: opts.image,
             args: opts.args,
-            envVars: opts.envVars,
+            envVars,
             command: opts.command,
             interactive: true,
             name: opts.name,
             labels: opts.labels,
-          }),
+          });
+        },
         catch: wrapError("docker run (interactive) failed"),
       }),
 
