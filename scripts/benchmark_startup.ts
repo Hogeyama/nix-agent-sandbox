@@ -81,12 +81,27 @@ async function measureStartupSample(
   marker: string,
 ): Promise<number> {
   const startedAt = performance.now();
-  const child = Bun.spawn(["nix", "run", ".#default", "--", "copilot"], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "inherit",
-    env,
-  });
+  const child = Bun.spawn(
+    [
+      "script",
+      "--quiet",
+      "--return",
+      "--flush",
+      "/dev/null",
+      "--",
+      "nix",
+      "run",
+      ".#default",
+      "--",
+      "copilot",
+    ],
+    {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "inherit",
+      env,
+    },
+  );
 
   const stdout = child.stdout as ReadableStream<Uint8Array> | null;
   if (stdout === null) {

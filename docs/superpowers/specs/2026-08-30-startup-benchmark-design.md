@@ -46,8 +46,8 @@ scanning. `scripts/benchmark_startup.ts` owns the benchmark lifecycle:
 3. Prepend the temporary directory to `PATH` so NAS resolves and bind-mounts
    the stub as `/usr/local/bin/copilot`.
 4. Run `nix build .#default` once.
-5. Spawn each `nix run .#default -- copilot` sample without a TTY and inspect
-   stdout incrementally.
+5. Spawn each `nix run .#default -- copilot` sample under `script` so profiles
+   using dtach receive a pseudo-TTY, and inspect stdout incrementally.
 6. Record the elapsed monotonic time at the first complete marker occurrence.
 7. Wait for the current `nix run` process to exit before starting the next
    sample, without adding that wait to the recorded elapsed time.

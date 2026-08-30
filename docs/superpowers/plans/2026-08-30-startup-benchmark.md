@@ -15,6 +15,7 @@
 - Start timing immediately before spawning `nix run .#default -- copilot` and stop at the first complete stub marker observed on stdout.
 - Take exactly five samples and report each value plus minimum, median, and maximum in milliseconds; median is the primary metric.
 - Embed the unique marker in the generated stub; arbitrary host environment variables are not forwarded into the container.
+- Run each sample under util-linux `script` so multiplexed profiles receive the TTY required by dtach.
 - Capture elapsed time at the marker, but wait for each `nix run` child to exit before starting the next sample.
 - Fail if a run exits before its marker or does not produce the marker within 30 seconds.
 - Do not change production NAS startup behavior in this task.
@@ -72,8 +73,8 @@ stub named `copilot` with the unique marker embedded as a safely quoted
 literal, and set mode `0o755`. Prepend that directory to
 the child `PATH`. Run `nix build .#default` once with inherited output and
 abort on non-zero status. Then take five sequential samples by spawning
-`nix run .#default -- copilot` with piped stdout, inherited stderr, and ignored
-stdin. Start `performance.now()`
+`script --quiet --return --flush /dev/null -- nix run .#default -- copilot`
+with piped stdout, inherited stderr, and ignored stdin. Start `performance.now()`
 immediately before each spawn, stream-decode stdout, and capture the sample on
 marker detection. Await that child's exit before returning the captured sample
 so teardown cannot overlap the next run. Reject on early exit or after 30
