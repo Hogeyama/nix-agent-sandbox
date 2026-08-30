@@ -15,7 +15,8 @@
     "lint:ast-grep": "ast-grep test && ast-grep scan",
     "fmt": "biome format --write src/ tests/ scripts/ main.ts",
     "check": "bun run lint && tsc --noEmit && tsc -p src/ui/frontend/tsconfig.json --noEmit && tsc -p src/ui/frontend/tsconfig.test.json --noEmit",
-    "bun2nix": "bun2nix -o bun.nix"
+    "bun2nix": "bun2nix -o bun.nix",
+    "benchmark:startup": "bun run scripts/benchmark_startup.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
