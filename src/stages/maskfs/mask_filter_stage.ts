@@ -31,7 +31,7 @@ import { MaskFilterService } from "./mask_filter_service.ts";
 type StageResult = Pick<PipelineState, "container">;
 
 const SOCKET_READY_TIMEOUT_MS = 10_000;
-const SOCKET_READY_POLL_MS = 50;
+const SOCKET_READY_POLL_MS = 10;
 
 /** sun_path は NUL 終端込みで 108 バイト。 */
 const MAX_SOCKET_PATH_BYTES = 107;
