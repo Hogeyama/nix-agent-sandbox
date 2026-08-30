@@ -49,15 +49,15 @@ nas_debug() {
   echo "$@" >&2
 }
 
-nas_now_ms() {
-  date +%s%3N
+nas_now_ns() {
+  date +%s%N
 }
 
 nas_measure_start() {
   if [ "$nas_debug_enabled" != "true" ]; then
     return 0
   fi
-  nas_now_ms
+  nas_now_ns
 }
 
 nas_measure_done() {
@@ -70,8 +70,8 @@ nas_measure_done() {
     return 0
   fi
   local ended_at elapsed
-  ended_at="$(nas_now_ms)"
-  elapsed=$((ended_at - started_at))
+  ended_at="$(nas_now_ns)"
+  elapsed=$(((ended_at - started_at) / 1000000))
   nas_debug "[nas]   ↳ entrypoint:${label} done (${elapsed}ms)"
 }
 
