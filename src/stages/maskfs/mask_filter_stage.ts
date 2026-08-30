@@ -19,6 +19,7 @@
 
 import { Effect } from "effect";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
+import { formatElapsed, logDebug } from "../../log.ts";
 import { selectAppliedSecrets } from "../../network/secrets.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
@@ -59,10 +60,14 @@ export function createMaskFilterStage(
         const svc = yield* MaskFilterService;
 
         const resolveBin = options.resolveBinPath ?? resolveMaskFilterBinPath;
+        let phaseStart = performance.now();
         const binaryPath = yield* Effect.tryPromise({
           try: () => resolveBin(),
           catch: (e) => e,
         });
+        logDebug(
+          `[nas]   ↳ MaskFilterStage:resolve-binary done (${formatElapsed(phaseStart)})`,
+        );
         if (!binaryPath) {
           return yield* Effect.fail(
             new Error(
@@ -90,7 +95,12 @@ export function createMaskFilterStage(
           );
         }
 
+        phaseStart = performance.now();
         const secrets = yield* svc.resolveSecrets(applied, shared.host);
+        logDebug(
+          `[nas]   ↳ MaskFilterStage:resolve-secrets done (${formatElapsed(phaseStart)})`,
+        );
+        phaseStart = performance.now();
         const result = yield* svc.prepareMaskFilter(
           {
             secretsFramePath: `${sessionDir}/mask-secrets`,
@@ -102,6 +112,9 @@ export function createMaskFilterStage(
             pollIntervalMs: SOCKET_READY_POLL_MS,
           },
           secrets,
+        );
+        logDebug(
+          `[nas]   ↳ MaskFilterStage:prepare done (${formatElapsed(phaseStart)})`,
         );
 
         return {

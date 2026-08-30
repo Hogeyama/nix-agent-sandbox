@@ -25,6 +25,7 @@
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
 import type { SecretConfig } from "../../config/types.ts";
+import { formatElapsed, logDebug } from "../../log.ts";
 import { resolveSecretList } from "../../network/secrets.ts";
 import type { MountSpec } from "../../pipeline/state.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
@@ -390,11 +391,23 @@ function startServe(
   plan: MaskFilterPreparePlan,
 ): Effect.Effect<void, unknown, Scope.Scope> {
   return Effect.gen(function* () {
+    let phaseStart = performance.now();
     yield* Effect.acquireRelease(spawnServe(proc, plan), (handle) =>
       releaseServe(fs, plan, handle),
     );
+    logDebug(
+      `[nas]   ↳ MaskFilterStage:spawn-serve done (${formatElapsed(phaseStart)})`,
+    );
+    phaseStart = performance.now();
     yield* restrictLogFile(fs, plan.logFile);
+    logDebug(
+      `[nas]   ↳ MaskFilterStage:restrict-log done (${formatElapsed(phaseStart)})`,
+    );
+    phaseStart = performance.now();
     yield* awaitSocket(fs, proc, plan);
+    logDebug(
+      `[nas]   ↳ MaskFilterStage:await-socket done (${formatElapsed(phaseStart)})`,
+    );
   });
 }
 
@@ -405,8 +418,16 @@ function prepareMaskFilter(
   secrets: string[],
 ): Effect.Effect<MaskFilterResult, unknown, Scope.Scope> {
   return Effect.gen(function* () {
+    let phaseStart = performance.now();
     yield* writeHostSideFrame(fs, plan, secrets);
+    logDebug(
+      `[nas]   ↳ MaskFilterStage:write-frame done (${formatElapsed(phaseStart)})`,
+    );
+    phaseStart = performance.now();
     yield* startServe(fs, proc, plan);
+    logDebug(
+      `[nas]   ↳ MaskFilterStage:start-serve done (${formatElapsed(phaseStart)})`,
+    );
     return { mounts: planMounts(plan), envVars: planEnvVars(plan) };
   });
 }

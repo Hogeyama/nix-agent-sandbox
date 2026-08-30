@@ -16,6 +16,7 @@ import type {
   SecretConfig,
 } from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
+import { formatElapsed, logDebug } from "../../log.ts";
 import {
   type ResolvedDocument,
   resolveAuthzConfig,
@@ -351,21 +352,38 @@ function runProxy(
 
     // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers,
     //    caCertDir, authzDir)
+    let phaseStart = performance.now();
     yield* networkRuntime.ensureRuntimeDirs(plan.runtimePaths);
+    logDebug(
+      `[nas]   ↳ ProxyStage:ensure-runtime-dirs done (${formatElapsed(phaseStart)})`,
+    );
 
     // 2. GC stale sessions
+    phaseStart = performance.now();
     yield* networkRuntime.gcStaleRuntime(plan.runtimePaths);
+    logDebug(
+      `[nas]   ↳ ProxyStage:gc-stale-runtime done (${formatElapsed(phaseStart)})`,
+    );
 
     // 3. Ensure CA cert exists (generates via docker run --rm if missing)
+    phaseStart = performance.now();
     yield* caService.ensureCaCert(plan.runtimePaths, plan.proxyImage);
+    logDebug(
+      `[nas]   ↳ ProxyStage:ensure-ca-cert done (${formatElapsed(phaseStart)})`,
+    );
 
     // 4. Copy addon script to runtime dir
+    phaseStart = performance.now();
     yield* networkRuntime.copyAddonScript(plan.runtimePaths);
+    logDebug(
+      `[nas]   ↳ ProxyStage:copy-addon done (${formatElapsed(phaseStart)})`,
+    );
 
     // 5. Write the per-session resolved authorization document, and take it
     //    away again when the session ends. The document describes what this
     //    one session was allowed to do; leaving it behind lets a later reader
     //    mistake it for a live policy, and it accumulates one file per run.
+    phaseStart = performance.now();
     yield* Effect.acquireRelease(
       networkRuntime.writeAuthzDocument(
         plan.runtimePaths,
@@ -375,8 +393,12 @@ function runProxy(
       () =>
         networkRuntime.removeAuthzDocument(plan.runtimePaths, plan.sessionId),
     );
+    logDebug(
+      `[nas]   ↳ ProxyStage:write-authz done (${formatElapsed(phaseStart)})`,
+    );
 
     // 5.5. Resolve the secret registry (fail-closed: 解決失敗はセッション起動中止)
+    phaseStart = performance.now();
     const secretValues =
       Object.keys(plan.secretRegistry).length > 0
         ? yield* networkRuntime.resolveSecrets(
@@ -384,8 +406,12 @@ function runProxy(
             plan.hostEnv,
           )
         : {};
+    logDebug(
+      `[nas]   ↳ ProxyStage:resolve-secrets done (${formatElapsed(phaseStart)})`,
+    );
 
     // 6. Session broker + registry (acquireRelease)
+    phaseStart = performance.now();
     const tokenHash = yield* Effect.tryPromise({
       try: () => hashToken(plan.token),
       catch: (e) =>
@@ -393,6 +419,10 @@ function runProxy(
           `hashToken failed: ${e instanceof Error ? e.message : String(e)}`,
         ),
     });
+    logDebug(
+      `[nas]   ↳ ProxyStage:hash-token done (${formatElapsed(phaseStart)})`,
+    );
+    phaseStart = performance.now();
     yield* Effect.acquireRelease(
       sessionBrokerService.start({
         paths: plan.runtimePaths,
@@ -414,10 +444,14 @@ function runProxy(
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );
+    logDebug(
+      `[nas]   ↳ ProxyStage:start-session-broker done (${formatElapsed(phaseStart)})`,
+    );
 
     // 7. Forward-port relays (acquireRelease).
     // Always called regardless of plan.forwardPorts.length: the live impl
     // fast-paths empty ports to a no-op.
+    phaseStart = performance.now();
     yield* Effect.acquireRelease(
       forwardPortRelayService.ensureRelays({
         runtimeDir: plan.runtimePaths.runtimeDir,
@@ -426,9 +460,17 @@ function runProxy(
       }),
       (handle: ForwardPortRelayHandle) => handle.close(),
     );
+    logDebug(
+      `[nas]   ↳ ProxyStage:ensure-relays done (${formatElapsed(phaseStart)})`,
+    );
 
     // 8. Compute addon hash and ensure shared proxy container
+    phaseStart = performance.now();
     const addonHash = yield* networkRuntime.computeAddonHash();
+    logDebug(
+      `[nas]   ↳ ProxyStage:compute-addon-hash done (${formatElapsed(phaseStart)})`,
+    );
+    phaseStart = performance.now();
     yield* Effect.acquireRelease(
       proxy.ensureSharedProxy({
         proxyContainerName: plan.proxyContainerName,
@@ -439,8 +481,12 @@ function runProxy(
       }),
       () => Effect.void,
     );
+    logDebug(
+      `[nas]   ↳ ProxyStage:ensure-shared-proxy done (${formatElapsed(phaseStart)})`,
+    );
 
     // 9. Session network + proxy connect (acquireRelease)
+    phaseStart = performance.now();
     const { proxyIp } = yield* Effect.acquireRelease(
       proxy.createSessionNetwork({
         sessionNetworkName: plan.sessionNetworkName,
@@ -448,6 +494,9 @@ function runProxy(
         proxyAlias: plan.proxyAlias,
       }),
       ({ teardown }) => teardown(),
+    );
+    logDebug(
+      `[nas]   ↳ ProxyStage:create-session-network done (${formatElapsed(phaseStart)})`,
     );
 
     // 10. Add --add-host so the agent container can resolve the proxy alias

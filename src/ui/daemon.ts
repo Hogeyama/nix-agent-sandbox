@@ -5,7 +5,7 @@
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolveNasCommand } from "../lib/notify_utils.ts";
-import { logInfo, logWarn } from "../log.ts";
+import { formatElapsed, logDebug, logInfo, logWarn } from "../log.ts";
 import {
   daemonLogPath,
   daemonStateDir,
@@ -39,19 +39,38 @@ export async function ensureUiDaemon(
 ): Promise<string> {
   const port = options?.port ?? DEFAULT_UI_PORT;
   const url = `http://localhost:${port}`;
-  if (await isUiDaemonRunning(port)) {
+  let phaseStart = performance.now();
+  const alreadyRunning = await isUiDaemonRunning(port);
+  logDebug(
+    `[nas]   ↳ ensureUiDaemon:initial-health done (${formatElapsed(phaseStart)})`,
+  );
+  if (alreadyRunning) {
     return url;
   }
 
   logInfo(`[nas] Starting UI daemon on port ${port}...`);
+  phaseStart = performance.now();
   await startUiDaemon(port, options?.idleTimeout);
+  logDebug(
+    `[nas]   ↳ ensureUiDaemon:spawn done (${formatElapsed(phaseStart)})`,
+  );
 
   // setsid --fork makes the actual daemon a grandchild process, so we
   // cannot track it via child.status. Poll health check instead.
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+  const readinessStart = performance.now();
+  let attempts = 0;
   while (Date.now() < deadline) {
+    attempts += 1;
     if (await isUiDaemonRunning(port)) {
+      logDebug(
+        `[nas]   ↳ ensureUiDaemon:readiness done (${formatElapsed(readinessStart)}, attempts=${attempts})`,
+      );
+      phaseStart = performance.now();
       await syncDaemonStatePid(port);
+      logDebug(
+        `[nas]   ↳ ensureUiDaemon:sync-pid done (${formatElapsed(phaseStart)})`,
+      );
       logInfo(`[nas] UI daemon ready at ${url}`);
       return url;
     }
