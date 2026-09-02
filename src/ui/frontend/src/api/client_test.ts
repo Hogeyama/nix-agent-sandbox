@@ -27,6 +27,7 @@ import {
   getLaunchInfo,
   getRequestBody,
   HttpError,
+  openDocument,
   renameSession,
   request,
   startShell,
@@ -214,6 +215,57 @@ describe("HttpError", () => {
     expect((caught as HttpError).status).toBe(500);
     // Falls back to statusText when the body is not parseable JSON.
     expect((caught as HttpError).message).toBe("Internal Server Error");
+  });
+});
+
+describe("openDocument", () => {
+  test("posts the session and clipboard target, then returns the document", async () => {
+    const item = {
+      path: "docs/a.md",
+      content: "# A",
+      line: 3,
+      column: null,
+    };
+    const fetchMock = installFetch(async () => jsonResponse(item));
+
+    const result = await openDocument("sess-1", "docs/a.md:3");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/documents/open");
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "sess-1",
+        clipboardText: "docs/a.md:3",
+      }),
+    });
+    expect(result).toEqual(item);
+  });
+
+  test("retains the daemon error code alongside status", async () => {
+    installFetch(
+      async () =>
+        new Response(
+          JSON.stringify({ error: "Document is too large", code: "too-large" }),
+          {
+            status: 413,
+            statusText: "Payload Too Large",
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+
+    let caught: unknown;
+    try {
+      await openDocument("sess-1", "docs/a.md");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(413);
+    expect((caught as HttpError).code).toBe("too-large");
   });
 });
 

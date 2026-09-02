@@ -41,9 +41,14 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
+import type {
+  DocumentMode,
+  DocumentReviewState,
+} from "../stores/documentReviewStore";
 import { describeShellToggle, type ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
 import type { TerminalHandle } from "../terminal/attachTerminalSession";
+import { DocumentToolbarControls } from "./document/DocumentToolbarControls";
 import { EditableSessionName } from "./EditableSessionName";
 import {
   clampFontSize,
@@ -94,6 +99,11 @@ export interface TerminalToolbarProps {
   scheduledCount: () => number;
   /** Opens the schedule-send dialog. */
   onScheduleClick: () => void;
+  documentState: () => DocumentReviewState;
+  onDocumentOpen: (sessionId: string) => void;
+  onDocumentBack: () => void;
+  onDocumentRefresh: () => void;
+  onDocumentMode: (mode: DocumentMode) => void;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
@@ -138,6 +148,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   const ack = createMemo(() =>
     describeAckButton(props.contextAgentRow()?.turn ?? null, acking()),
   );
+  const documentOpen = createMemo(() => props.documentState().item !== null);
 
   const shellToggle = createMemo(() => {
     const row = props.contextAgentRow();
@@ -270,20 +281,30 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
           {ack().label}
         </button>
       </Show>
-      <Show when={shellToggle()}>
-        {(state) => (
-          <button
-            type="button"
-            class="tool"
-            disabled={state().disabled}
-            onClick={handleShellToggleClick}
-            aria-label={state().label}
-          >
-            {state().label}
-          </button>
-        )}
+      <Show when={!documentOpen()}>
+        <Show when={shellToggle()}>
+          {(state) => (
+            <button
+              type="button"
+              class="tool"
+              disabled={state().disabled}
+              onClick={handleShellToggleClick}
+              aria-label={state().label}
+            >
+              {state().label}
+            </button>
+          )}
+        </Show>
       </Show>
-      <Show when={props.activeTerminalId()}>
+      <DocumentToolbarControls
+        selectedSessionId={() => props.contextAgentRow()?.id ?? null}
+        state={props.documentState}
+        onOpen={props.onDocumentOpen}
+        onBack={props.onDocumentBack}
+        onRefresh={props.onDocumentRefresh}
+        onMode={props.onDocumentMode}
+      />
+      <Show when={!documentOpen() && props.activeTerminalId()}>
         <button
           type="button"
           class="tool"
@@ -304,7 +325,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
           />
         </Show>
       </Show>
-      <Show when={props.activeTerminalId()}>
+      <Show when={!documentOpen() && props.activeTerminalId()}>
         <button
           type="button"
           class="tool"
@@ -318,25 +339,27 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
         </button>
       </Show>
       <span class="spacer" />
-      <span class="fontsize">
-        <button
-          type="button"
-          class="tool"
-          onClick={handleFontDec}
-          aria-label="Decrease font size"
-        >
-          −
-        </button>
-        <span class="size-value">{fontSize()}px</span>
-        <button
-          type="button"
-          class="tool"
-          onClick={handleFontInc}
-          aria-label="Increase font size"
-        >
-          +
-        </button>
-      </span>
+      <Show when={!documentOpen()}>
+        <span class="fontsize">
+          <button
+            type="button"
+            class="tool"
+            onClick={handleFontDec}
+            aria-label="Decrease font size"
+          >
+            −
+          </button>
+          <span class="size-value">{fontSize()}px</span>
+          <button
+            type="button"
+            class="tool"
+            onClick={handleFontInc}
+            aria-label="Increase font size"
+          >
+            +
+          </button>
+        </span>
+      </Show>
       <button
         type="button"
         class="tool danger"
@@ -345,12 +368,20 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
       >
         {stopping() ? "Stopping…" : "Stop container"}
       </button>
-      <Show when={errorMessage()}>
-        {(msg) => (
-          <output class="toolbar-error" aria-live="polite">
-            {msg()}
-          </output>
-        )}
+      <Show
+        when={errorMessage() !== null || props.documentState().error !== null}
+      >
+        <output class="toolbar-error" aria-live="polite">
+          <Show when={errorMessage()}>{(msg) => msg()}</Show>
+          <Show
+            when={
+              errorMessage() !== null && props.documentState().error !== null
+            }
+          >
+            {" · "}
+          </Show>
+          <Show when={props.documentState().error}>{(msg) => msg()}</Show>
+        </output>
       </Show>
     </footer>
   );

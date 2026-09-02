@@ -171,6 +171,11 @@ async function buildOnce(): Promise<void> {
       dst: path.join(licenseDir, "xterm-MIT.txt"),
       label: "xterm",
     },
+    {
+      src: path.join(ROOT, "node_modules/marked/LICENSE"),
+      dst: path.join(licenseDir, "marked-MIT.md"),
+      label: "marked",
+    },
   ];
   for (const { src, dst, label } of licenseSources) {
     try {
