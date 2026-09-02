@@ -15,6 +15,21 @@ import {
 import { Router } from "../router.ts";
 import { diffSnapshots, initialSnapshotState } from "./sse_diff.ts";
 
+/**
+ * How many audit entries the live SSE feed carries.
+ *
+ * This is a live activity view, not the history browser: paging into
+ * older entries is what `/api/audit` and the audit page are for.
+ *
+ * The bound is not cosmetic. Unbounded, this array is re-read, diffed
+ * and serialised on every poll — on the same event loop that relays
+ * terminal I/O — and pushed to every connected browser to parse. On a
+ * long-lived install the audit table reaches hundreds of thousands of
+ * rows, which measured as ~390 ms of synchronous work per 2 s round and
+ * a ~43 MiB SSE frame, felt as keystrokes freezing in the terminal.
+ */
+export const LIVE_AUDIT_LIMIT = 200;
+
 export function createSseRoutes(ctx: UiDataContext): Router {
   const app = new Router();
 
@@ -67,7 +82,7 @@ export function createSseRoutes(ctx: UiDataContext): Router {
             // `diffSnapshots` to suppress the audit:logs event.
             let auditLogs: AuditLogEntry[] | undefined;
             try {
-              auditLogs = await getAuditLogs(ctx);
+              auditLogs = await getAuditLogs(ctx, {}, LIVE_AUDIT_LIMIT);
             } catch {
               auditLogs = undefined;
             }

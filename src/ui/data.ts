@@ -394,13 +394,15 @@ export async function getAuditLogs(
   filter: AuditLogFilter = {},
   limit?: number,
 ): Promise<AuditLogEntry[]> {
+  // The limit goes into the query, not into a slice of the result. The
+  // audit table is unbounded (hundreds of thousands of rows in a
+  // long-lived install), so materialising every row to keep the last N
+  // costs a full scan plus an object per discarded row — on the same
+  // event loop that relays terminal I/O.
   const merged: AuditLogFilter = {
     excludeCommandPrefixes: DEFAULT_EXCLUDE_COMMAND_PREFIXES,
     ...filter,
+    ...(limit !== undefined && limit > 0 ? { limit } : {}),
   };
-  const entries = await auditClient.query(ctx.auditDir, merged);
-  if (limit !== undefined && limit > 0) {
-    return entries.slice(-limit);
-  }
-  return entries;
+  return await auditClient.query(ctx.auditDir, merged);
 }

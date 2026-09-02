@@ -383,10 +383,25 @@ function requestBodySha256(body: Uint8Array): string {
 }
 
 /**
+ * Coerce a caller-supplied limit into a usable SQL bound.
+ *
+ * Returns `null` for "no limit" so the caller can distinguish it from a
+ * limit of zero. A non-integer or non-positive value is treated as
+ * absent rather than clamped: silently turning a bad limit into `LIMIT 1`
+ * would hide the caller's bug behind plausible-looking output.
+ */
+function normaliseLimit(limit: number | undefined): number | null {
+  if (limit === undefined) return null;
+  if (!Number.isInteger(limit) || limit <= 0) return null;
+  return limit;
+}
+
+/**
  * Query audit log entries matching `filter`. Results are returned in
  * chronological order (oldest first) to match the previous JSONL-scanning
- * behaviour — callers that want the latest N entries typically slice the
- * tail.
+ * behaviour — callers that want the latest N entries pass `filter.limit`
+ * rather than slicing the tail off a full result, which would scan the
+ * whole table to throw most of it away.
  *
  * An empty `sessionIds` array means "match nothing" (the explicit empty
  * set), not "match everything".
@@ -465,6 +480,18 @@ export async function queryAuditLogs(
     }
   }
 
+  // A bounded query walks `idx_audit_timestamp` backwards and stops once
+  // it has `limit` matching rows, so the caller pays for what it reads.
+  // Unbounded, this is a full table scan: `excludeCommandPrefixes`
+  // compiles to leading-wildcard `NOT LIKE` predicates, which no index
+  // can satisfy, and the audit table grows without bound.
+  //
+  // DESC + reverse is chosen over ASC so the LIMIT keeps the *newest*
+  // rows. `ORDER BY timestamp DESC, id DESC` reversed is exactly
+  // `ORDER BY timestamp ASC, id ASC`, so bounded and unbounded results
+  // are ordered identically.
+  const limit = normaliseLimit(filter.limit);
+  const direction = limit === null ? "ASC" : "DESC";
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
                       decision, reason, phase, rule_id, method, route,
                       request_policy_kind, request_policy_result,
@@ -472,9 +499,12 @@ export async function queryAuditLogs(
                       body_diagnostic, body_audit_status
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
-               ORDER BY timestamp ASC, id ASC`;
+               ORDER BY timestamp ${direction}, id ${direction}
+               ${limit === null ? "" : "LIMIT ?"}`;
+  if (limit !== null) params.push(limit);
 
   const rows = db.prepare(sql).all(...params) as AuditLogRow[];
+  if (limit !== null) rows.reverse();
   return rows.map(rowToEntry);
 }
 

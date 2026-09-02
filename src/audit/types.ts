@@ -118,6 +118,14 @@ export interface AuditLogFilter {
    * internal commands like "nas hook".
    */
   excludeCommandPrefixes?: string[];
+  /**
+   * Return at most this many entries, keeping the most recent ones.
+   * Applied as a SQL `LIMIT`, not as a slice of a fully materialised
+   * result: the audit table grows without bound, so a caller that wants
+   * a handful of recent rows must not pay for a full scan to get them.
+   * Non-positive and non-integer values are ignored.
+   */
+  limit?: number;
 }
 
 /** Exact pre-policy request bytes and the metadata needed to retain them. */

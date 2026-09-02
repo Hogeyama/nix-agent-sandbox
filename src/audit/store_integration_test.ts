@@ -872,3 +872,107 @@ test("request body store: capacity rejects only the new body without truncation 
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+/**
+ * Seed `count` entries one second apart so ordering is unambiguous and
+ * the newest entries are identifiable by index.
+ */
+async function seedSequence(dir: string, count: number): Promise<string[]> {
+  const ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const entry = makeEntry({
+      timestamp: `2026-03-28T12:00:${String(i).padStart(2, "0")}Z`,
+      reason: `entry-${i}`,
+    });
+    ids.push(entry.id);
+    await appendAuditLog(entry, dir);
+  }
+  return ids;
+}
+
+test("queryAuditLogs: limit keeps the newest entries in ascending order", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-limit-"));
+  try {
+    const ids = await seedSequence(dir, 10);
+
+    const limited = await queryAuditLogs({ limit: 3 }, dir);
+
+    // The bounded query must return exactly what slicing the tail off an
+    // unbounded ascending result would: same entries, same order. That
+    // equivalence is what makes pushing LIMIT into SQL a pure speedup
+    // rather than a behaviour change.
+    expect(limited.map((e) => e.id)).toEqual(ids.slice(-3));
+    expect(limited.map((e) => e.reason)).toEqual([
+      "entry-7",
+      "entry-8",
+      "entry-9",
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: a limited result matches the tail of the unlimited one", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-limit-parity-"));
+  try {
+    await seedSequence(dir, 25);
+
+    const all = await queryAuditLogs({}, dir);
+    const limited = await queryAuditLogs({ limit: 8 }, dir);
+
+    expect(limited).toEqual(all.slice(-8));
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: limit larger than the table returns everything", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-limit-big-"));
+  try {
+    const ids = await seedSequence(dir, 4);
+    const limited = await queryAuditLogs({ limit: 100 }, dir);
+    expect(limited.map((e) => e.id)).toEqual(ids);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: composes limit with the other filters", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-limit-filter-"));
+  try {
+    for (let i = 0; i < 6; i++) {
+      await appendAuditLog(
+        makeEntry({
+          timestamp: `2026-03-28T12:00:0${i}Z`,
+          domain: i % 2 === 0 ? "network" : "hostexec",
+          reason: `entry-${i}`,
+        }),
+        dir,
+      );
+    }
+
+    // The limit must apply after the WHERE clause, not before it:
+    // limiting first would return the newest rows and then filter them
+    // down to fewer than asked for.
+    const limited = await queryAuditLogs({ domain: "network", limit: 2 }, dir);
+    expect(limited.map((e) => e.reason)).toEqual(["entry-2", "entry-4"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: non-positive and non-integer limits are ignored", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-limit-bad-"));
+  try {
+    const ids = await seedSequence(dir, 5);
+
+    // Silently clamping a bad limit to 1 would hide a caller's bug behind
+    // output that still looks plausible, so these fall back to "no limit".
+    for (const limit of [0, -1, 2.5, Number.NaN]) {
+      const rows = await queryAuditLogs({ limit }, dir);
+      expect(rows.map((e) => e.id)).toEqual(ids);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
