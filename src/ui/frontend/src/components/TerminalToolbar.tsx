@@ -48,6 +48,7 @@ import type {
 import { describeShellToggle, type ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
 import type { TerminalHandle } from "../terminal/attachTerminalSession";
+import type { DocumentTheme } from "./document/DocumentPane";
 import { DocumentToolbarControls } from "./document/DocumentToolbarControls";
 import { EditableSessionName } from "./EditableSessionName";
 import {
@@ -104,6 +105,8 @@ export interface TerminalToolbarProps {
   onDocumentBack: () => void;
   onDocumentRefresh: () => void;
   onDocumentMode: (mode: DocumentMode) => void;
+  documentTheme: () => DocumentTheme;
+  onDocumentTheme: (theme: DocumentTheme) => void;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
@@ -303,6 +306,8 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
         onBack={props.onDocumentBack}
         onRefresh={props.onDocumentRefresh}
         onMode={props.onDocumentMode}
+        theme={props.documentTheme}
+        onTheme={props.onDocumentTheme}
       />
       <Show when={!documentOpen() && props.activeTerminalId()}>
         <button

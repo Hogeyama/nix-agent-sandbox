@@ -3,6 +3,7 @@ import type {
   DocumentMode,
   DocumentReviewState,
 } from "../../stores/documentReviewStore";
+import type { DocumentTheme } from "./DocumentPane";
 import { describeDocumentToolbar } from "./documentToolbarView";
 
 export interface DocumentToolbarControlsProps {
@@ -12,6 +13,8 @@ export interface DocumentToolbarControlsProps {
   onBack: () => void;
   onRefresh: () => void;
   onMode: (mode: DocumentMode) => void;
+  theme: () => DocumentTheme;
+  onTheme: (theme: DocumentTheme) => void;
 }
 
 export function DocumentToolbarControls(props: DocumentToolbarControlsProps) {
@@ -73,6 +76,17 @@ export function DocumentToolbarControls(props: DocumentToolbarControlsProps) {
             Source
           </button>
         </fieldset>
+        <button
+          type="button"
+          class="tool document-theme-toggle"
+          aria-pressed={props.theme() === "dark"}
+          disabled={view().modes.disabled}
+          onClick={() =>
+            props.onTheme(props.theme() === "light" ? "dark" : "light")
+          }
+        >
+          Theme: {props.theme() === "light" ? "Light" : "Dark"}
+        </button>
       </Show>
       <Show when={view().staleVisible}>
         <span class="document-toolbar-stale">Stale</span>

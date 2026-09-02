@@ -662,12 +662,37 @@ body::after {
 }
 
 .document-pane {
+  --document-bg: #ffffff;
+  --document-panel: #f6f8fa;
+  --document-surface: #f6f8fa;
+  --document-line: #d0d7de;
+  --document-line-soft: #d8dee4;
+  --document-text: #24292f;
+  --document-strong: #1f2328;
+  --document-muted: #57606a;
+  --document-muted-2: #6e7781;
+  --document-muted-3: #8c959f;
+  --document-link: #0969da;
   flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  background: var(--bg);
-  color: var(--cream-dim);
+  background: var(--document-bg);
+  color: var(--document-text);
+}
+
+.document-pane.document-theme-dark {
+  --document-bg: var(--bg);
+  --document-panel: var(--panel);
+  --document-surface: var(--surface);
+  --document-line: var(--line);
+  --document-line-soft: var(--line-soft);
+  --document-text: var(--cream-dim);
+  --document-strong: var(--cream);
+  --document-muted: var(--muted);
+  --document-muted-2: var(--muted-2);
+  --document-muted-3: var(--muted-3);
+  --document-link: var(--teal);
 }
 
 .document-header {
@@ -677,13 +702,13 @@ body::after {
   gap: 16px;
   min-width: 0;
   padding: 12px 18px;
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--panel);
+  border-bottom: 1px solid var(--document-line-soft);
+  background: var(--document-panel);
 }
 
 .document-path {
   min-width: 0;
-  color: var(--cream);
+  color: var(--document-strong);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -693,7 +718,7 @@ body::after {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  color: var(--muted);
+  color: var(--document-muted);
   font-size: 11px;
 }
 
@@ -708,7 +733,7 @@ body::after {
 
 .document-markdown,
 .document-source {
-  width: min(80ch, calc(100% - 36px));
+  width: max(min(80ch, calc(100% - 36px)), 90%);
   min-width: 0;
   margin: 24px auto 40px;
 }
@@ -725,7 +750,7 @@ body::after {
 .document-markdown h4,
 .document-markdown h5,
 .document-markdown h6 {
-  color: var(--cream);
+  color: var(--document-strong);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -739,12 +764,12 @@ body::after {
 .document-markdown blockquote {
   margin-inline: 0;
   padding-left: 16px;
-  border-left: 3px solid var(--line);
-  color: var(--muted);
+  border-left: 3px solid var(--document-line);
+  color: var(--document-muted);
 }
 
 .document-markdown a {
-  color: var(--teal);
+  color: var(--document-link);
   text-underline-offset: 2px;
 }
 
@@ -761,8 +786,8 @@ body::after {
 
 .document-markdown :not(pre) > code {
   padding: 1px 4px;
-  border: 1px solid var(--line-soft);
-  background: var(--surface);
+  border: 1px solid var(--document-line-soft);
+  background: var(--document-surface);
   overflow-wrap: anywhere;
 }
 
@@ -770,15 +795,15 @@ body::after {
   max-width: 100%;
   overflow-x: auto;
   padding: 14px;
-  border: 1px solid var(--line);
-  background: var(--surface);
+  border: 1px solid var(--document-line);
+  background: var(--document-surface);
   white-space: pre;
 }
 
 .document-code-language {
   display: block;
   margin-bottom: 8px;
-  color: var(--muted);
+  color: var(--document-muted);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -797,13 +822,13 @@ body::after {
 .document-markdown th,
 .document-markdown td {
   padding: 6px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--document-line);
   text-align: left;
 }
 
 .document-markdown th {
-  color: var(--cream);
-  background: var(--surface);
+  color: var(--document-strong);
+  background: var(--document-surface);
 }
 
 .document-task-marker {
@@ -814,9 +839,9 @@ body::after {
 
 .document-placeholder {
   padding: 1px 4px;
-  border: 1px dashed var(--muted-3);
-  background: var(--surface);
-  color: var(--muted);
+  border: 1px dashed var(--document-muted-3);
+  background: var(--document-surface);
+  color: var(--document-muted);
   font-family: var(--mono);
   font-size: 0.9em;
   overflow-wrap: anywhere;
@@ -835,15 +860,15 @@ body::after {
 }
 
 .document-source {
-  border: 1px solid var(--line-soft);
-  background: var(--surface);
+  border: 1px solid var(--document-line-soft);
+  background: var(--document-surface);
 }
 
 .document-source-row {
   display: grid;
   grid-template-columns: minmax(3rem, auto) minmax(0, 1fr);
   min-width: 0;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--document-line-soft);
 }
 
 .document-source-row:last-child {
@@ -860,8 +885,8 @@ body::after {
 
 .document-source-number {
   padding: 2px 10px;
-  border-right: 1px solid var(--line-soft);
-  color: var(--muted-2);
+  border-right: 1px solid var(--document-line-soft);
+  color: var(--document-muted-2);
   text-align: right;
   font-variant-numeric: tabular-nums;
   user-select: none;

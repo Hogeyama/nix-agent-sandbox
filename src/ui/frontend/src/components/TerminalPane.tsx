@@ -22,7 +22,7 @@ import {
   type TerminalHandle,
 } from "../terminal/attachTerminalSession";
 import { applyTerminalActions } from "./applyTerminalActions";
-import { DocumentPane } from "./document/DocumentPane";
+import { DocumentPane, type DocumentTheme } from "./document/DocumentPane";
 import { closeDocumentAndRefitTerminal } from "./documentTerminalReturn";
 import { reconcileTerminals } from "./reconcileTerminals";
 import { TerminalToolbar } from "./TerminalToolbar";
@@ -145,6 +145,8 @@ export function TerminalPane(props: Props) {
   >();
   let prevActiveId: string | null = null;
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  const [documentTheme, setDocumentTheme] =
+    createSignal<DocumentTheme>("light");
   // Bumps when handles map mutates so memos that read the map invalidate.
   const [handlesVersion, setHandlesVersion] = createSignal(0);
 
@@ -290,7 +292,10 @@ export function TerminalPane(props: Props) {
   createEffect(
     on(
       () => toolbarContext().contextAgentRow?.id ?? null,
-      (id) => documents.selectSession(id),
+      (id) => {
+        documents.selectSession(id);
+        setDocumentTheme("light");
+      },
       { defer: true },
     ),
   );
@@ -333,6 +338,7 @@ export function TerminalPane(props: Props) {
             item={item}
             mode={() => documents.state().mode}
             stale={() => documents.state().stale}
+            theme={documentTheme}
           />
         )}
       </Show>
@@ -351,20 +357,24 @@ export function TerminalPane(props: Props) {
         onScheduleClick={() => setScheduleDialogOpen(true)}
         documentState={documents.state}
         onDocumentOpen={(sessionId) => {
+          setDocumentTheme("light");
           void documents.openFromClipboard(sessionId);
         }}
-        onDocumentBack={() =>
+        onDocumentBack={() => {
+          setDocumentTheme("light");
           closeDocumentAndRefitTerminal({
             activeHandle: activeTerminalHandle(),
             close: documents.close,
             requestAnimationFrame: (callback) =>
               globalThis.requestAnimationFrame(callback),
-          })
-        }
+          });
+        }}
         onDocumentRefresh={() => {
           void documents.refresh();
         }}
         onDocumentMode={(mode) => documents.setMode(mode)}
+        documentTheme={documentTheme}
+        onDocumentTheme={setDocumentTheme}
       />
       <ScheduleSendDialog
         open={scheduleDialogOpen}

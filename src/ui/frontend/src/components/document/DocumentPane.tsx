@@ -5,10 +5,13 @@ import { MarkdownNodes } from "./MarkdownNodes";
 import { buildMarkdownView } from "./markdownView";
 import { buildSourceView } from "./sourceView";
 
+export type DocumentTheme = "light" | "dark";
+
 export interface DocumentPaneProps {
   item: () => DocumentItem;
   mode: () => DocumentMode;
   stale: () => boolean;
+  theme: () => DocumentTheme;
 }
 
 export function DocumentPane(props: DocumentPaneProps) {
@@ -37,7 +40,15 @@ export function DocumentPane(props: DocumentPaneProps) {
   );
 
   return (
-    <article class="document-pane" aria-label="Document review">
+    <article
+      class="document-pane"
+      classList={{
+        "document-theme-light": props.theme() === "light",
+        "document-theme-dark": props.theme() === "dark",
+      }}
+      data-document-theme={props.theme()}
+      aria-label="Document review"
+    >
       <header class="document-header">
         <span class="document-path">{props.item().path}</span>
         <span class="document-location">
