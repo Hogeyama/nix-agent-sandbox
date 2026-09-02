@@ -17,6 +17,7 @@ import {
 } from "../network/registry.ts";
 import type { UiDataContext } from "./data.ts";
 import { createDataContext } from "./data.ts";
+import { startLoopWatchdog } from "./loop_watchdog.ts";
 import { daemonStateDir } from "./paths.ts";
 import { html, Router, text } from "./router.ts";
 import { createApiRoutes } from "./routes/api.ts";
@@ -334,6 +335,10 @@ export async function startServer(options: ServeOptions): Promise<void> {
   if (options.idleTimeout && options.idleTimeout > 0) {
     startIdleWatcher(ctx, options.idleTimeout);
   }
+
+  // Terminal I/O shares this loop with every route, so a synchronous
+  // stall anywhere surfaces as keystrokes freezing. Silent while healthy.
+  startLoopWatchdog();
 
   // Keep the process running
   await new Promise(() => {});
