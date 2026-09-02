@@ -107,6 +107,8 @@ export interface TerminalToolbarProps {
   onDocumentMode: (mode: DocumentMode) => void;
   documentTheme: () => DocumentTheme;
   onDocumentTheme: (theme: DocumentTheme) => void;
+  documentFontSize: () => number;
+  onDocumentFontSize: (fontSize: number) => void;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
@@ -211,8 +213,22 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
     setFontSize(clamped);
     props.activeTerminalHandle()?.setFontSize(clamped);
   };
-  const handleFontInc = () => applyFontSize(fontSize() + FONT_SIZE_STEP);
-  const handleFontDec = () => applyFontSize(fontSize() - FONT_SIZE_STEP);
+  const displayedFontSize = () =>
+    documentOpen() ? props.documentFontSize() : fontSize();
+  const handleFontInc = () => {
+    if (documentOpen()) {
+      props.onDocumentFontSize(props.documentFontSize() + FONT_SIZE_STEP);
+      return;
+    }
+    applyFontSize(fontSize() + FONT_SIZE_STEP);
+  };
+  const handleFontDec = () => {
+    if (documentOpen()) {
+      props.onDocumentFontSize(props.documentFontSize() - FONT_SIZE_STEP);
+      return;
+    }
+    applyFontSize(fontSize() - FONT_SIZE_STEP);
+  };
 
   const handleSearchKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -344,27 +360,33 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
         </button>
       </Show>
       <span class="spacer" />
-      <Show when={!documentOpen()}>
-        <span class="fontsize">
-          <button
-            type="button"
-            class="tool"
-            onClick={handleFontDec}
-            aria-label="Decrease font size"
-          >
-            −
-          </button>
-          <span class="size-value">{fontSize()}px</span>
-          <button
-            type="button"
-            class="tool"
-            onClick={handleFontInc}
-            aria-label="Increase font size"
-          >
-            +
-          </button>
-        </span>
-      </Show>
+      <span class="fontsize">
+        <button
+          type="button"
+          class="tool"
+          onClick={handleFontDec}
+          aria-label={
+            documentOpen()
+              ? "Decrease document font size"
+              : "Decrease font size"
+          }
+        >
+          −
+        </button>
+        <span class="size-value">{displayedFontSize()}px</span>
+        <button
+          type="button"
+          class="tool"
+          onClick={handleFontInc}
+          aria-label={
+            documentOpen()
+              ? "Increase document font size"
+              : "Increase font size"
+          }
+        >
+          +
+        </button>
+      </span>
       <button
         type="button"
         class="tool danger"

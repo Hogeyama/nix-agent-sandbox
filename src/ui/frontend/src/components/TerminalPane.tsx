@@ -147,6 +147,7 @@ export function TerminalPane(props: Props) {
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
   const [documentTheme, setDocumentTheme] =
     createSignal<DocumentTheme>("light");
+  const [documentFontSize, setDocumentFontSize] = createSignal(14);
   // Bumps when handles map mutates so memos that read the map invalidate.
   const [handlesVersion, setHandlesVersion] = createSignal(0);
 
@@ -339,6 +340,7 @@ export function TerminalPane(props: Props) {
             mode={() => documents.state().mode}
             stale={() => documents.state().stale}
             theme={documentTheme}
+            fontSize={documentFontSize}
           />
         )}
       </Show>
@@ -375,6 +377,10 @@ export function TerminalPane(props: Props) {
         onDocumentMode={(mode) => documents.setMode(mode)}
         documentTheme={documentTheme}
         onDocumentTheme={setDocumentTheme}
+        documentFontSize={documentFontSize}
+        onDocumentFontSize={(fontSize) =>
+          setDocumentFontSize(Math.min(32, Math.max(10, Math.round(fontSize))))
+        }
       />
       <ScheduleSendDialog
         open={scheduleDialogOpen}

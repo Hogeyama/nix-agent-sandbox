@@ -12,6 +12,7 @@ export interface DocumentPaneProps {
   mode: () => DocumentMode;
   stale: () => boolean;
   theme: () => DocumentTheme;
+  fontSize: () => number;
 }
 
 export function DocumentPane(props: DocumentPaneProps) {
@@ -46,6 +47,7 @@ export function DocumentPane(props: DocumentPaneProps) {
         "document-theme-light": props.theme() === "light",
         "document-theme-dark": props.theme() === "dark",
       }}
+      style={`--document-font-size: ${props.fontSize()}px`}
       data-document-theme={props.theme()}
       aria-label="Document review"
     >

@@ -740,7 +740,7 @@ body::after {
 
 .document-markdown {
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: var(--document-font-size, 14px);
   line-height: 1.7;
 }
 
@@ -862,6 +862,7 @@ body::after {
 .document-source {
   border: 1px solid var(--document-line-soft);
   background: var(--document-surface);
+  font-size: var(--document-font-size, 14px);
 }
 
 .document-source-row {
