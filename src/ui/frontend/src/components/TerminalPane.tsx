@@ -8,8 +8,10 @@ import {
 } from "solid-js";
 import { getAgentTerminalTraits } from "../../../../agents/terminalTraits";
 import { parseShellSessionId } from "../../../shell_session_id";
+import * as client from "../api/client";
 import { ScheduleSendDialog } from "../dialogs/ScheduleSendDialog";
 import { useScheduledSendExecutor } from "../hooks/useScheduledSendExecutor";
+import { createDocumentReviewStore } from "../stores/documentReviewStore";
 import { createScheduledSendStore } from "../stores/scheduledSendStore";
 import type { SessionsStore } from "../stores/sessionsStore";
 import { resolveContextAgentRow } from "../stores/shellMapping";
@@ -20,6 +22,8 @@ import {
   type TerminalHandle,
 } from "../terminal/attachTerminalSession";
 import { applyTerminalActions } from "./applyTerminalActions";
+import { DocumentPane } from "./document/DocumentPane";
+import { closeDocumentAndRefitTerminal } from "./documentTerminalReturn";
 import { reconcileTerminals } from "./reconcileTerminals";
 import { TerminalToolbar } from "./TerminalToolbar";
 
@@ -129,6 +133,10 @@ export function describeTerminalToolbarContext(
  */
 export function TerminalPane(props: Props) {
   let containerRef!: HTMLDivElement;
+  const documents = createDocumentReviewStore({
+    readClipboard: () => navigator.clipboard.readText(),
+    openDocument: client.openDocument,
+  });
   // Map preserves insertion order, which both `mountedSessionIds` and
   // the dispose-all path on cleanup rely on for deterministic ordering.
   const handles = new Map<
@@ -279,6 +287,13 @@ export function TerminalPane(props: Props) {
   const toolbarContext = createMemo(() =>
     describeTerminalToolbarContext(activeTerminalId(), props.sessions.rows()),
   );
+  createEffect(
+    on(
+      () => toolbarContext().contextAgentRow?.id ?? null,
+      (id) => documents.selectSession(id),
+      { defer: true },
+    ),
+  );
 
   // Scheduled send: store, executor, and dialog state.
   const scheduledSendStore = createScheduledSendStore();
@@ -297,6 +312,9 @@ export function TerminalPane(props: Props) {
     <section class="pane pane-center">
       <div
         class="terminal"
+        classList={{
+          "terminal-document-hidden": documents.state().item !== null,
+        }}
         data-active-id={props.terminals.activeId() ?? ""}
         ref={containerRef}
       >
@@ -309,6 +327,15 @@ export function TerminalPane(props: Props) {
           {(msg) => <div class="terminal-error">{msg()}</div>}
         </Show>
       </div>
+      <Show when={documents.state().item}>
+        {(item) => (
+          <DocumentPane
+            item={item}
+            mode={() => documents.state().mode}
+            stale={() => documents.state().stale}
+          />
+        )}
+      </Show>
       <TerminalToolbar
         contextAgentRow={() => toolbarContext().contextAgentRow}
         ackTargetSessionId={() => toolbarContext().ackTargetSessionId}
@@ -322,6 +349,22 @@ export function TerminalPane(props: Props) {
         onShellToggle={props.onShellToggle}
         scheduledCount={() => scheduledSendStore.count()}
         onScheduleClick={() => setScheduleDialogOpen(true)}
+        documentState={documents.state}
+        onDocumentOpen={(sessionId) => {
+          void documents.openFromClipboard(sessionId);
+        }}
+        onDocumentBack={() =>
+          closeDocumentAndRefitTerminal({
+            activeHandle: activeTerminalHandle(),
+            close: documents.close,
+            requestAnimationFrame: (callback) =>
+              globalThis.requestAnimationFrame(callback),
+          })
+        }
+        onDocumentRefresh={() => {
+          void documents.refresh();
+        }}
+        onDocumentMode={(mode) => documents.setMode(mode)}
       />
       <ScheduleSendDialog
         open={scheduleDialogOpen}

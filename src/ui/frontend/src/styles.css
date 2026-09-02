@@ -657,6 +657,241 @@ body::after {
   letter-spacing: 0.04em;
 }
 
+.terminal-document-hidden {
+  display: none;
+}
+
+.document-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--cream-dim);
+}
+
+.document-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+}
+
+.document-path {
+  min-width: 0;
+  color: var(--cream);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.document-location {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.document-stale,
+.document-toolbar-stale {
+  color: var(--amber-hi);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.document-markdown,
+.document-source {
+  width: min(80ch, calc(100% - 36px));
+  min-width: 0;
+  margin: 24px auto 40px;
+}
+
+.document-markdown {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.document-markdown h1,
+.document-markdown h2,
+.document-markdown h3,
+.document-markdown h4,
+.document-markdown h5,
+.document-markdown h6 {
+  color: var(--cream);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.document-markdown p,
+.document-markdown li,
+.document-markdown blockquote {
+  overflow-wrap: anywhere;
+}
+
+.document-markdown blockquote {
+  margin-inline: 0;
+  padding-left: 16px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+.document-markdown a {
+  color: var(--teal);
+  text-underline-offset: 2px;
+}
+
+.document-markdown a:focus-visible,
+.document-toolbar-controls .tool:focus-visible {
+  outline: 2px solid var(--amber-hi);
+  outline-offset: 2px;
+}
+
+.document-markdown code,
+.document-source code {
+  font-family: var(--mono);
+}
+
+.document-markdown :not(pre) > code {
+  padding: 1px 4px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.document-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  white-space: pre;
+}
+
+.document-code-language {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.document-markdown table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+
+.document-markdown th,
+.document-markdown td {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+
+.document-markdown th {
+  color: var(--cream);
+  background: var(--surface);
+}
+
+.document-task-marker {
+  margin-right: 5px;
+  color: var(--amber-hi);
+  font-family: var(--mono);
+}
+
+.document-placeholder {
+  padding: 1px 4px;
+  border: 1px dashed var(--muted-3);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.document-placeholder-image::before {
+  content: "image ";
+}
+
+.document-placeholder-link::before {
+  content: "link ";
+}
+
+.document-placeholder-html::before {
+  content: "html ";
+}
+
+.document-source {
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.document-source-row {
+  display: grid;
+  grid-template-columns: minmax(3rem, auto) minmax(0, 1fr);
+  min-width: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.document-source-row:last-child {
+  border-bottom: 0;
+}
+
+.document-source-row code {
+  min-width: 0;
+  min-height: 1.5em;
+  padding: 2px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.document-source-number {
+  padding: 2px 10px;
+  border-right: 1px solid var(--line-soft);
+  color: var(--muted-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.document-source-highlighted {
+  background: rgba(217, 119, 6, 0.14);
+  box-shadow: inset 3px 0 var(--amber);
+}
+
+.document-toolbar-controls,
+.document-mode-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.document-mode-controls {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.document-mode[aria-pressed="true"] {
+  border-color: var(--amber);
+  background: rgba(217, 119, 6, 0.14);
+  color: var(--amber-hi);
+}
+
 .term-toolbar {
   display: flex;
   align-items: center;
