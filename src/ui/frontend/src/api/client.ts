@@ -46,11 +46,31 @@ import type { AuditLogEntryLike, SessionRecordLike } from "../stores/types";
  */
 export class HttpError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  constructor(
+    status: number,
+    message: string,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = "HttpError";
     this.status = status;
   }
+}
+
+export type DocumentApiErrorCode =
+  | "invalid-path"
+  | "unsupported-type"
+  | "outside-worktree"
+  | "not-found"
+  | "not-regular-file"
+  | "too-large"
+  | "unreadable";
+
+export interface DocumentItem {
+  path: string;
+  content: string;
+  line: number | null;
+  column: number | null;
 }
 
 /**
@@ -171,9 +191,11 @@ export async function request<T>(
     // surrounding `if (!res.ok)` guarantees we throw either way.
     const err = (await res.json().catch(() => ({ error: res.statusText }))) as {
       error?: unknown;
+      code?: unknown;
     };
     const message = typeof err.error === "string" ? err.error : res.statusText;
-    throw new HttpError(res.status, message);
+    const code = typeof err.code === "string" ? err.code : undefined;
+    throw new HttpError(res.status, message, code);
   }
   return (await res.json()) as T;
 }
@@ -194,6 +216,16 @@ export function getLaunchInfo(cwd?: string): Promise<LaunchInfo> {
 
 export function getInfo(): Promise<Info> {
   return request<Info>("GET", "/api/info");
+}
+
+export function openDocument(
+  sessionId: string,
+  clipboardText: string,
+): Promise<DocumentItem> {
+  return request<DocumentItem>("POST", "/api/documents/open", {
+    sessionId,
+    clipboardText,
+  });
 }
 
 /**
