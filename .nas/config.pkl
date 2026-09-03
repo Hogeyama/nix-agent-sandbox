@@ -255,7 +255,7 @@ local commonHostexec: HostExecConfig = new {
       inheritEnv {
         mode = "unsafe-inherit-all"
       }
-      approval = "prompt"
+      approval = "deny"
       fallback = "container"
     }
     new {
