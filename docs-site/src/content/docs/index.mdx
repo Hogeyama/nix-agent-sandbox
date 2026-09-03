@@ -1,0 +1,37 @@
+---
+title: nas を使い始める
+description: AI コーディングエージェントを、必要な権限だけで隔離実行する
+---
+
+import { CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
+
+nas は AI コーディングエージェントを Docker サンドボックス内で実行する CLI です。作業対象のワークスペースはエージェントへ読み書き可能にマウントされます。さらに存在する場合、選択したエージェントのホスト設定・認証ディレクトリ（`~/.claude`、`~/.codex`、または旧 `~/.copilot`。Claude では `~/.claude.json` も）は読み書き可能でマウントされ、`~/.config/git` は読み取り専用でマウントされます。それ以外のホストファイルシステムと外部ネットワークは最初は利用できません。ネットワーク接続、追加のホストパス、Docker in Docker などは設定で明示的に有効にします。ただし Nix 統合は既定で `"auto"` です。ホストで Nix が検出されると有効になり、既定の `mountSocket = true` により `/nix` がマウントされます。
+
+## 最初の 3 ステップ
+
+<Steps>
+
+1. [nas をインストールする](./getting-started/installation/)
+
+2. 作業したいプロジェクトのルートで設定を生成します。
+
+   ```sh
+   nas config init
+   ```
+
+3. エージェントを起動します。
+
+   ```sh
+   nas
+   ```
+
+</Steps>
+
+## 次に読むページ
+
+<CardGrid>
+  <LinkCard title="nas とは" description="隔離の範囲と、必要な権限だけを追加する考え方を確認します。" href={`${import.meta.env.BASE_URL}/getting-started/about/`} />
+  <LinkCard title="インストール" description="対応環境と GitHub Releases・Nix からの導入方法です。" href={`${import.meta.env.BASE_URL}/getting-started/installation/`} />
+  <LinkCard title="クイックスタート" description="初期設定を作り、最初のセッションを起動します。" href={`${import.meta.env.BASE_URL}/getting-started/quick-start/`} />
+  <LinkCard title="設定の基本" description="global 設定、プロジェクト設定、profile の関係を説明します。" href={`${import.meta.env.BASE_URL}/getting-started/configuration/`} />
+</CardGrid>

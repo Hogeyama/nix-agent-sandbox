@@ -8,6 +8,8 @@ src/ui/dist/
 .worktrees/
 .direnv/
 node_modules/
+docs-site/.astro/
+docs-site/dist/
 result
 zig-out/
 .zig-cache/

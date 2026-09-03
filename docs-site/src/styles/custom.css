@@ -1,0 +1,32 @@
+:root {
+  --sl-color-accent-low: #d9f5e7;
+  --sl-color-accent: #137a55;
+  --sl-color-accent-high: #123d2d;
+  --sl-font: "Geist Variable", system-ui, -apple-system, BlinkMacSystemFont,
+    sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #123d2d;
+  --sl-color-accent: #75d9ad;
+  --sl-color-accent-high: #d9f5e7;
+}
+
+.sl-markdown-content img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+}
+
+.sl-markdown-content pre,
+.sl-markdown-content .table-wrapper {
+  overflow-x: auto;
+}
+
+@media (max-width: 50rem) {
+  .sl-markdown-content table {
+    display: block;
+    overflow-x: auto;
+  }
+}

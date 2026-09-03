@@ -15,6 +15,10 @@
     "lint:ast-grep": "ast-grep test && ast-grep scan",
     "fmt": "biome format --write src/ tests/ scripts/ main.ts",
     "check": "bun run lint && tsc --noEmit && tsc -p src/ui/frontend/tsconfig.json --noEmit && tsc -p src/ui/frontend/tsconfig.test.json --noEmit",
+    "docs:dev": "astro --root docs-site dev",
+    "docs:check": "astro --root docs-site check",
+    "docs:build": "astro --root docs-site build && bun scripts/check_docs.ts",
+    "docs:preview": "astro --root docs-site preview",
     "bun2nix": "bun2nix -o bun.nix",
     "benchmark:startup": "bun run scripts/benchmark_startup.ts"
   },
@@ -33,14 +37,18 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@astrojs/starlight": "^0.42.0",
     "@babel/core": "^7",
     "@babel/preset-typescript": "^7",
     "@biomejs/biome": "2.4.11",
     "@playwright/cli": "^0.1.8",
     "@types/node": "^22",
+    "astro": "^7.3.1",
     "babel-preset-solid": "^1.9",
     "bun-types": "latest",
     "bun2nix": "latest",
+    "parse5": "^7.3.0",
     "typescript": "^6.0.2"
   }
 }
