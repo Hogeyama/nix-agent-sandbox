@@ -322,9 +322,11 @@ test.skipIf(!hasPkl)(
       const nasStat = await stat(nasDir);
       expect(nasStat.isDirectory()).toBe(true);
 
-      // デフォルトプロファイルが返されること（テンプレートに "default" プロファイルがある）
-      expect("default" in config.profiles).toBe(true);
-      expect(config.profiles.default.agent).toBe("claude");
+      // テンプレートの claude / codex プロファイルが返されること
+      expect(Object.keys(config.profiles).sort()).toEqual(["claude", "codex"]);
+      expect(config.default).toBe("claude");
+      expect(config.profiles.claude.agent).toBe("claude");
+      expect(config.profiles.codex.agent).toBe("codex");
 
       // グローバル設定も XDG_CONFIG_HOME 配下に生成されていること
       const globalNasDir = path.join(xdgDir, "nas");

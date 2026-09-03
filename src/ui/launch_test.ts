@@ -412,7 +412,7 @@ describe("getLaunchInfo", () => {
     const emptyDir = path.join(testRoot, "no-config-anywhere");
     await mkdir(emptyDir, { recursive: true });
     const info = await getLaunchInfo(dummyCtx, { cwd: emptyDir });
-    expect(info.profiles).toContain("default");
+    expect(info.profiles).toContain("claude");
   });
 });
 

@@ -1,7 +1,8 @@
 amends "Schema.pkl"
 
+default = "claude"
+
 profiles {
-  ["default"] {
-    agent = "claude"
-  }
+  ["claude"] { agent = "claude" }
+  ["codex"] { agent = "codex" }
 }
