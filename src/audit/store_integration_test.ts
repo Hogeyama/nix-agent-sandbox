@@ -825,48 +825,118 @@ test("request body store: prunes expired rows before reads and inserts", async (
   }
 });
 
-test("request body store: capacity rejects only the new body without truncation or eviction", async () => {
+async function storeBody(
+  dir: string,
+  requestId: string,
+  body: Uint8Array,
+  capturedAt: string,
+  maxTotalBytes: number,
+) {
+  return await storeRequestBody(
+    {
+      sessionId: "sess-capacity",
+      requestId,
+      capturedAt,
+      contentType: null,
+      contentEncoding: null,
+      byteLength: body.byteLength,
+      sha256: requestBodySha256(body),
+      body,
+    },
+    { retentionSeconds: 60, maxTotalBytes },
+    dir,
+  );
+}
+
+test("request body store: evicts oldest-captured bodies to admit a new one", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-capacity-"));
   try {
     const first = Uint8Array.from([0, 1, 2, 3]);
     const second = Uint8Array.from([4, 5, 6]);
-    const limits = { retentionSeconds: 60, maxTotalBytes: 6 };
 
-    await storeRequestBody(
-      {
-        sessionId: "sess-capacity",
-        requestId: "req-first",
-        capturedAt: "2099-01-01T00:00:00.000Z",
-        contentType: null,
-        contentEncoding: null,
-        byteLength: first.byteLength,
-        sha256: requestBodySha256(first),
-        body: first,
-      },
-      limits,
+    await storeBody(dir, "req-first", first, "2099-01-01T00:00:00.000Z", 6);
+    expect(
+      await storeBody(dir, "req-second", second, "2099-01-01T00:00:01.000Z", 6),
+    ).toEqual({
+      state: "attached",
+      byteLength: second.byteLength,
+      sha256: requestBodySha256(second),
+    });
+
+    expect(await getRequestBody("sess-capacity", "req-first", dir)).toBeNull();
+    expect(
+      (await getRequestBody("sess-capacity", "req-second", dir))?.body,
+    ).toEqual(second);
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("request body store: evicts only as many bodies as the new one needs", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-partial-"));
+  try {
+    const oldest = Uint8Array.from([0, 1, 2]);
+    const middle = Uint8Array.from([3, 4, 5]);
+    const newest = Uint8Array.from([6, 7, 8]);
+    const incoming = Uint8Array.from([9, 10, 11]);
+
+    await storeBody(dir, "req-oldest", oldest, "2099-01-01T00:00:00.000Z", 10);
+    await storeBody(dir, "req-middle", middle, "2099-01-01T00:00:01.000Z", 10);
+    await storeBody(dir, "req-newest", newest, "2099-01-01T00:00:02.000Z", 10);
+    await storeBody(
       dir,
+      "req-incoming",
+      incoming,
+      "2099-01-01T00:00:03.000Z",
+      10,
+    );
+
+    expect(await getRequestBody("sess-capacity", "req-oldest", dir)).toBeNull();
+    expect(
+      (await getRequestBody("sess-capacity", "req-middle", dir))?.body,
+    ).toEqual(middle);
+    expect(
+      (await getRequestBody("sess-capacity", "req-newest", dir))?.body,
+    ).toEqual(newest);
+    expect(
+      (await getRequestBody("sess-capacity", "req-incoming", dir))?.body,
+    ).toEqual(incoming);
+  } finally {
+    _closeAuditDb(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("request body store: a body larger than the whole budget evicts nothing", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-body-oversize-"));
+  try {
+    const retained = Uint8Array.from([0, 1, 2, 3]);
+    const oversize = Uint8Array.from([0, 1, 2, 3, 4, 5, 6]);
+
+    await storeBody(
+      dir,
+      "req-retained",
+      retained,
+      "2099-01-01T00:00:00.000Z",
+      6,
     );
     expect(
-      await storeRequestBody(
-        {
-          sessionId: "sess-capacity",
-          requestId: "req-second",
-          capturedAt: "2099-01-01T00:00:00.000Z",
-          contentType: null,
-          contentEncoding: null,
-          byteLength: second.byteLength,
-          sha256: requestBodySha256(second),
-          body: second,
-        },
-        limits,
+      await storeBody(
         dir,
+        "req-oversize",
+        oversize,
+        "2099-01-01T00:00:01.000Z",
+        6,
       ),
     ).toEqual({ state: "unavailable", code: "capacity" });
 
     expect(
-      (await getRequestBody("sess-capacity", "req-first", dir))?.body,
-    ).toEqual(first);
-    expect(await getRequestBody("sess-capacity", "req-second", dir)).toBeNull();
+      (await getRequestBody("sess-capacity", "req-retained", dir))?.body,
+    ).toEqual(retained);
+    expect(
+      await getRequestBody("sess-capacity", "req-oversize", dir),
+    ).toBeNull();
   } finally {
     _closeAuditDb(dir);
     await rm(dir, { recursive: true, force: true }).catch(() => {});

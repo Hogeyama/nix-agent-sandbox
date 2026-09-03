@@ -210,9 +210,14 @@ export async function appendAuditLog(
 /**
  * Retain one exact pre-policy request body in the host audit database.
  *
- * Invalid capture metadata and aggregate-capacity exhaustion are returned as
- * metadata-only statuses so neither condition needs to alter authorization.
- * Actual SQLite failures still throw for the caller to map to `store-failed`.
+ * The aggregate byte budget is enforced by evicting oldest-captured bodies
+ * until the new one fits, so a full store costs the oldest retained bytes
+ * rather than every subsequent capture.
+ *
+ * Invalid capture metadata and a body larger than the whole budget are
+ * returned as metadata-only statuses so neither condition needs to alter
+ * authorization. Actual SQLite failures still throw for the caller to map to
+ * `store-failed`.
  */
 export async function storeRequestBody(
   input: RequestBodyWrite,
@@ -278,13 +283,40 @@ export async function storeRequestBody(
       return { state: "unavailable", code: "invalid-capture" };
     }
 
+    // A body that alone exceeds the aggregate limit can never be admitted:
+    // evicting every other row would still leave it over budget. Rejecting it
+    // here also keeps the eviction loop below guaranteed to terminate.
+    if (input.byteLength > limits.maxTotalBytes) {
+      return { state: "unavailable", code: "capacity" };
+    }
+
     const aggregate = db
       .prepare(
         "SELECT COALESCE(SUM(byte_length), 0) AS total_bytes FROM request_body",
       )
       .get() as { total_bytes: number };
-    if (aggregate.total_bytes + input.byteLength > limits.maxTotalBytes) {
-      return { state: "unavailable", code: "capacity" };
+    let overflow =
+      aggregate.total_bytes + input.byteLength - limits.maxTotalBytes;
+    if (overflow > 0) {
+      // Evict oldest-captured first, and only as many rows as the new body
+      // needs. The alternative — refusing the write — keeps old evidence at
+      // the cost of a permanently blind window once the budget fills up, and
+      // the recent request is the one an operator is about to inspect.
+      const candidates = db
+        .prepare(
+          `SELECT session_id, request_id, byte_length
+             FROM request_body
+            ORDER BY captured_at ASC, session_id ASC, request_id ASC`,
+        )
+        .all() as EvictionCandidateRow[];
+      const evict = db.prepare(
+        "DELETE FROM request_body WHERE session_id = ? AND request_id = ?",
+      );
+      for (const candidate of candidates) {
+        evict.run(candidate.session_id, candidate.request_id);
+        overflow -= candidate.byte_length;
+        if (overflow <= 0) break;
+      }
     }
 
     db.prepare(
@@ -311,7 +343,8 @@ export async function storeRequestBody(
   });
 
   // Take the writer lock before capacity accounting so concurrent processes
-  // cannot both observe the same free space and overfill the aggregate limit.
+  // cannot both observe the same free space, or evict for each other's write,
+  // and overfill the aggregate limit.
   return write.immediate();
 }
 
@@ -351,6 +384,12 @@ export async function getRequestBody(
 interface ExistingRequestBodyRow {
   byte_length: number;
   sha256: string;
+}
+
+interface EvictionCandidateRow {
+  session_id: string;
+  request_id: string;
+  byte_length: number;
 }
 
 interface RequestBodyRow extends ExistingRequestBodyRow {

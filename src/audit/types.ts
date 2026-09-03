@@ -143,12 +143,21 @@ export interface RequestBodyWrite {
 /** Retention and aggregate-capacity limits for one request-body write. */
 export interface RequestBodyStorageLimits {
   retentionSeconds: number;
+  /**
+   * Ceiling on the total bytes of unexpired retained bodies. A write that
+   * would breach it evicts oldest-captured bodies until it fits, so this
+   * bounds disk use without bounding how long capture keeps working.
+   */
   maxTotalBytes: number;
 }
 
 /** Metadata-only outcome; raw bytes never travel with the store result. */
 export type RequestBodyStoreResult =
   | { state: "attached"; byteLength: number; sha256: string }
+  /**
+   * `capacity` means the body alone exceeds `maxTotalBytes`, which no amount
+   * of eviction can accommodate. A merely full store is not this outcome.
+   */
   | { state: "unavailable"; code: "capacity" | "invalid-capture" };
 
 /** One retained request body returned only by an explicit detail lookup. */

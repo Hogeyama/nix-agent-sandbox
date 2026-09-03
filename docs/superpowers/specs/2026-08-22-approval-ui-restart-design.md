@@ -82,7 +82,7 @@ requestBodyAudit {
 
 - `enable = false` が既定であり、既存利用者は raw body を送信も保存もしない。
 - `maxBodyBytes` は一 request の exact 保存上限。超過時は truncate せず `unavailable/body-too-large` とする。
-- `maxTotalBytes` は未期限切れ body の総 BLOB 上限。超過時は既存の未期限切れ body を追い出さず、新規 body を `unavailable/capacity` とする。
+- `maxTotalBytes` は未期限切れ body の総 BLOB 上限。超過時は新規 body が収まるまで `captured_at` の古い順に既存 body を追い出す。追い出しても収まらない、すなわち新規 body 単体が `maxTotalBytes` を超える場合だけ `unavailable/capacity` とする。
 - `retentionSeconds` 後は detail query と次回 insert の前に削除する。
 - 数値は正の整数とし、`maxBodyBytes <= 33554432`、`maxTotalBytes >= maxBodyBytes` を検証する。32 MiB は既存 network body policy の固定 ceiling と同じである。
 

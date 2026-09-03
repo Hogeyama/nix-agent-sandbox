@@ -187,11 +187,14 @@ insert transaction は次の順で処理する。
 
 1. 期限切れ row を削除する
 2. 同一主キーの idempotency を digest と length で確認する
-3. 未期限切れ body の総 byte length を計算する
-4. 上限内なら新規 BLOB を保存する
+3. 新規 body 単体が上限を超えるなら `unavailable/capacity` とする
+4. 未期限切れ body の総 byte length を計算する
+5. 新規 body が収まるまで `captured_at` の古い順に既存 body を追い出す
+6. 新規 BLOB を保存する
 
-容量を超える場合は既存の未期限切れ body を削除せず、新規 body だけを
-`unavailable/capacity` とする。truncate や eviction は行わない。
+truncate は行わない。容量が満ちた状態でも新規 body の保存は続き、代償として
+最も古い保存済み body が失われる。`unavailable/capacity` は手順 3 の経路、
+すなわち追い出しでは解消しえない場合に限る。
 
 保存結果は raw bytes を含まない次の metadata として pending と audit に残す。
 
