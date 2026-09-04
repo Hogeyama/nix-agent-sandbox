@@ -22,6 +22,7 @@
 import { Effect, type Scope } from "effect";
 import {
   DIND_INTERNAL_PORT,
+  DIND_ROOTLESS_SOCKET_PATH,
   SHARED_CONTAINER_NAME,
   SHARED_TMP_MOUNT_PATH,
 } from "../../docker/dind.ts";
@@ -242,14 +243,21 @@ function buildContainerState(
   // loopback and every port an inner container publishes lands on the agent's
   // own 127.0.0.1 -- what a locally installed Docker would do. `no_proxy`
   // needs no addition: ProxyStage's baseline already carries 127.0.0.1.
+  const staticEnv: Record<string, string> = {
+    DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+    NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
+  };
+  // env.static is a key-merge in which the patch wins, so writing this
+  // unconditionally would silently replace a value set through profile env.
+  if (
+    input.container.env.static.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE ===
+    undefined
+  ) {
+    staticEnv.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE = DIND_ROOTLESS_SOCKET_PATH;
+  }
   return mergeContainerPlan(input.container, {
     network: { mode: "container", containerName: config.containerName },
-    env: {
-      static: {
-        DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
-        NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
-      },
-    },
+    env: { static: staticEnv },
     extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],
   });
 }

@@ -33,6 +33,15 @@ import {
 // ---------------------------------------------------------------------------
 
 export const DIND_IMAGE = "docker:dind-rootless";
+/**
+ * Where `docker:dind-rootless` puts its Unix socket.
+ *
+ * Testcontainers' Ryuk reaper bind-mounts /var/run/docker.sock from the
+ * daemon's filesystem, and that path does not exist inside the sidecar, so
+ * Docker creates an empty directory there and Ryuk cannot connect. This path
+ * is a property of DIND_IMAGE, which is why it lives here.
+ */
+export const DIND_ROOTLESS_SOCKET_PATH = "/run/user/1000/docker.sock";
 export const DIND_INTERNAL_PORT = 2375;
 export const DIND_CACHE_VOLUME = "nas-docker-cache";
 export const DIND_DATA_DIR = "/home/rootless/.local/share/docker";

@@ -196,6 +196,39 @@ test("planDind: does not invent NAS_DIND_CONTAINER_NAME", () => {
   ).toBeUndefined();
 });
 
+test("planDind: sets the Testcontainers socket override", () => {
+  const plan = planDind(makeDindInput({ dockerEnable: true }));
+
+  expect(
+    plan?.outputOverrides.container?.env.static
+      .TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE,
+  ).toBe("/run/user/1000/docker.sock");
+});
+
+test("planDind: does not override a user-supplied socket path", () => {
+  const input = makeDindInput({ dockerEnable: true });
+  const withUserValue = {
+    ...input,
+    container: {
+      ...input.container,
+      env: {
+        ...input.container.env,
+        static: {
+          ...input.container.env.static,
+          TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/custom.sock",
+        },
+      },
+    },
+  };
+
+  const plan = planDind(withUserValue);
+
+  expect(
+    plan?.outputOverrides.container?.env.static
+      .TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE,
+  ).toBe("/custom.sock");
+});
+
 test("buildDindSidecarArgs: expands extraHosts", () => {
   const args = buildDindSidecarArgs("nas-dind-tmp-abc12345", [
     { host: "nas-envoy", ip: "172.20.0.2" },
@@ -242,6 +275,7 @@ test("DindStage: shared mode uses fixed names", () => {
       static: {
         DOCKER_HOST: "tcp://127.0.0.1:2375",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+        TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
       },
       dynamicOps: [],
     },
@@ -321,6 +355,7 @@ test("DindStage: planner merges into existing container slice and overrides a st
         EXISTING_ENV: "1",
         DOCKER_HOST: "tcp://127.0.0.1:2375",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+        TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
       },
       dynamicOps: [],
     },
