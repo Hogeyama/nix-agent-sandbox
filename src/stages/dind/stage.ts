@@ -126,9 +126,13 @@ export function planDind(
   const networkName = input.network.networkName;
   const proxyEndpoint = input.proxy.proxyEndpoint;
 
-  const sessionId = input.sessionId.slice(0, 8);
-  const containerName = `nas-dind-${sessionId}`;
-  const sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
+  // Truncating to a handful of hex digits (as this used to) leaves too few
+  // possibilities that two concurrent sessions can plausibly collide on the
+  // same sidecar/volume name -- Docker then rejects the second `docker run
+  // --name` outright, and both sessions would contend for one shared tmp
+  // volume. Use the session id untruncated, matching `containerNameForSession`.
+  const containerName = `nas-dind-${input.sessionId}`;
+  const sharedTmpVolume = `nas-dind-tmp-${input.sessionId}`;
 
   return {
     containerName,
