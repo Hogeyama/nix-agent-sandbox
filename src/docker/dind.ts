@@ -33,6 +33,13 @@ import {
 
 export const DIND_IMAGE = "docker:dind-rootless";
 /**
+ * Where the sidecar sees the proxy's CA certificate.
+ *
+ * SSL_CERT_DIR makes Go read every file in this directory, so it must hold
+ * nothing else. A path the image does not otherwise use satisfies that.
+ */
+export const DIND_CA_MOUNT_PATH = "/etc/nas-ca";
+/**
  * Where `docker:dind-rootless` puts its Unix socket.
  *
  * Testcontainers' Ryuk reaper bind-mounts /var/run/docker.sock from the
@@ -47,6 +54,31 @@ export const DIND_DATA_DIR = "/home/rootless/.local/share/docker";
 export const SHARED_TMP_MOUNT_PATH = "/tmp/nas-shared";
 export const READINESS_TIMEOUT_MS = 30_000;
 export const READINESS_POLL_INTERVAL_MS = 500;
+
+/**
+ * Bind the proxy's CA certificate into the sidecar.
+ *
+ * `--mount` rather than `-v` on purpose: given a source that does not exist,
+ * `-v` creates a directory there instead of failing, which would leave the
+ * daemon silently untrusting and leave a directory named
+ * `mitmproxy-ca-cert.pem` behind — enough for the CA service's existence check
+ * to treat the certificate as present forever.
+ */
+export function buildDindSidecarMounts(caCertPath: string): Array<{
+  source: string;
+  target: string;
+  mode: "ro";
+  type: "bind";
+}> {
+  return [
+    {
+      source: caCertPath,
+      target: `${DIND_CA_MOUNT_PATH}/nas-proxy.crt`,
+      mode: "ro",
+      type: "bind",
+    },
+  ];
+}
 
 // ---------------------------------------------------------------------------
 // Exported helper functions (called by effect executor)
@@ -76,15 +108,15 @@ export async function ensureSharedTmpWritable(
  * Start the DinD sidecar.
  * Tries with cache volume first; on failure retries without cache.
  *
- * `proxyEndpoint` is injected into dockerd's HTTP(S)_PROXY env so that image
- * pulls from inside DinD are forced through the session proxy. It is independent
- * of `DindStageOptions` (which only controls cache/readiness) so that the
- * cache-reset retry paths below re-pass the same proxy config verbatim.
+ * The proxy endpoint is injected into dockerd's HTTP(S)_PROXY env and its CA
+ * certificate is mounted for Go's trust search. This is independent of
+ * `DindStageOptions` (which only controls cache/readiness) so cache-reset
+ * retry paths below re-pass the same proxy config verbatim.
  */
 export async function startDindSidecar(
   containerName: string,
   sharedTmpVolume: string,
-  proxyEndpoint: string,
+  proxy: { proxyEndpoint: string; caCertPath: string },
   extraHosts: readonly { readonly host: string; readonly ip: string }[],
   options: DindStageOptions = {},
 ): Promise<void> {
@@ -99,7 +131,7 @@ export async function startDindSidecar(
   await runDindSidecar(
     containerName,
     sharedTmpVolume,
-    proxyEndpoint,
+    proxy,
     extraHosts,
     options,
   );
@@ -132,7 +164,7 @@ export async function startDindSidecar(
     await runDindSidecar(
       containerName,
       sharedTmpVolume,
-      proxyEndpoint,
+      proxy,
       extraHosts,
       options,
     );
@@ -162,16 +194,10 @@ export async function startDindSidecar(
       );
     }
 
-    await runDindSidecar(
-      containerName,
-      sharedTmpVolume,
-      proxyEndpoint,
-      extraHosts,
-      {
-        ...options,
-        disableCache: true,
-      },
-    );
+    await runDindSidecar(containerName, sharedTmpVolume, proxy, extraHosts, {
+      ...options,
+      disableCache: true,
+    });
     logInfo("[nas] DinD: waiting for daemon to be ready (no cache)...");
     await waitForDindReady(
       containerName,
@@ -200,6 +226,8 @@ export interface EnsureDindSidecarParams {
   sessionNetworkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   proxyEndpoint: string;
+  /** Path to the proxy CA certificate generated for this session. */
+  caCertPath: string;
   /**
    * Host-to-IP mappings to add to the sidecar's /etc/hosts (e.g. the proxy
    * alias). The agent joins this container's network namespace and so cannot
@@ -223,6 +251,7 @@ export async function ensureDindSidecar(
     sharedTmpVolume,
     sessionNetworkName,
     proxyEndpoint,
+    caCertPath,
     extraHosts,
     disableCache,
     readinessTimeoutMs,
@@ -232,7 +261,7 @@ export async function ensureDindSidecar(
   await startDindSidecar(
     containerName,
     sharedTmpVolume,
-    proxyEndpoint,
+    { proxyEndpoint, caCertPath },
     extraHosts,
     {
       disableCache,
@@ -385,7 +414,7 @@ export async function teardownDindSidecar(
 async function runDindSidecar(
   containerName: string,
   sharedTmpVolume: string,
-  proxyEndpoint: string,
+  proxy: { proxyEndpoint: string; caCertPath: string },
   extraHosts: readonly { readonly host: string; readonly ip: string }[],
   options: DindStageOptions,
 ): Promise<void> {
@@ -393,7 +422,8 @@ async function runDindSidecar(
     name: containerName,
     image: DIND_IMAGE,
     args: buildDindSidecarArgs(sharedTmpVolume, extraHosts, options),
-    envVars: buildDindSidecarEnv(proxyEndpoint),
+    envVars: buildDindSidecarEnv(proxy),
+    mounts: buildDindSidecarMounts(proxy.caCertPath),
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_DIND,
@@ -410,16 +440,18 @@ async function runDindSidecar(
  * listener / local socket) direct. DOCKER_TLS_CERTDIR is cleared so dockerd
  * listens on plain TCP 2375.
  */
-export function buildDindSidecarEnv(
-  proxyEndpoint: string,
-): Record<string, string> {
+export function buildDindSidecarEnv(proxy: {
+  proxyEndpoint: string;
+  caCertPath: string;
+}): Record<string, string> {
   return {
     DOCKER_TLS_CERTDIR: "",
-    HTTP_PROXY: proxyEndpoint,
-    HTTPS_PROXY: proxyEndpoint,
+    HTTP_PROXY: proxy.proxyEndpoint,
+    HTTPS_PROXY: proxy.proxyEndpoint,
     NO_PROXY: "localhost,127.0.0.1",
-    http_proxy: proxyEndpoint,
-    https_proxy: proxyEndpoint,
+    SSL_CERT_DIR: DIND_CA_MOUNT_PATH,
+    http_proxy: proxy.proxyEndpoint,
+    https_proxy: proxy.proxyEndpoint,
     no_proxy: "localhost,127.0.0.1",
   };
 }

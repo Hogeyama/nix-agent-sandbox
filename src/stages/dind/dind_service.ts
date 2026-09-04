@@ -21,6 +21,8 @@ export interface DindSidecarOpts {
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
+  /** Path to the session proxy's public CA certificate. */
+  readonly caCertPath: string;
   /**
    * Host-to-IP mappings the sidecar's /etc/hosts must carry (e.g. the proxy
    * alias). The agent joins the sidecar's network namespace and shares its
@@ -71,6 +73,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
             sharedTmpVolume: opts.sharedTmpVolume,
             sessionNetworkName: opts.networkName,
             proxyEndpoint: opts.proxyEndpoint,
+            caCertPath: opts.caCertPath,
             extraHosts: opts.extraHosts,
             disableCache: opts.disableCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,

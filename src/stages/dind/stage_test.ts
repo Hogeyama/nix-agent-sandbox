@@ -18,7 +18,11 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
-import { buildDindSidecarEnv } from "../../docker/dind.ts";
+import {
+  buildDindSidecarEnv,
+  buildDindSidecarMounts,
+  DIND_CA_MOUNT_PATH,
+} from "../../docker/dind.ts";
 import { containerNameForSession } from "../../docker/nas_resources.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
@@ -472,6 +476,9 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(ensureCalls[0].proxyEndpoint).toEqual(
     "http://test-session-1234:tok@nas-proxy:8080",
   );
+  expect(ensureCalls[0].caCertPath).toEqual(
+    "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.pem",
+  );
   expect(ensureCalls[0].sharedTmpVolume).toEqual(
     "nas-dind-tmp-test-session-1234",
   );
@@ -507,6 +514,38 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
 });
 
 // ============================================================
+// buildDindSidecarMounts tests
+// ============================================================
+
+test("buildDindSidecarMounts: binds the certificate file read-only", () => {
+  const mounts = buildDindSidecarMounts(
+    "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+  );
+
+  expect(mounts).toEqual([
+    {
+      source: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+      target: `${DIND_CA_MOUNT_PATH}/nas-proxy.crt`,
+      mode: "ro",
+      type: "bind",
+    },
+  ]);
+});
+
+test("buildDindSidecarMounts: never binds the certificate's parent directory", () => {
+  const certPath = "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem";
+  const parent = "/run/nas/mitmproxy-ca";
+
+  const sources = buildDindSidecarMounts(certPath).map((mount) => mount.source);
+
+  // The parent directory also holds mitmproxy-ca.pem and mitmproxy-ca.p12,
+  // which carry the CA's private key. Compare sources exactly: a substring
+  // check would pass on the very mount it is meant to forbid.
+  expect(sources.filter((source) => source === certPath)).toHaveLength(1);
+  expect(sources).not.toContain(parent);
+});
+
+// ============================================================
 // buildDindSidecarArgs tests
 // ============================================================
 
@@ -532,7 +571,10 @@ test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
 
 test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", () => {
   const proxyEndpoint = "http://test-session:tok@nas-proxy:8080";
-  const env = buildDindSidecarEnv(proxyEndpoint);
+  const env = buildDindSidecarEnv({
+    proxyEndpoint,
+    caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+  });
 
   // dockerd's outbound pulls are forced through the proxy in both casings so
   // tooling inside the sidecar sees a consistent proxy config.
@@ -547,4 +589,14 @@ test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", (
 
   // Plain-TCP 2375 listener (no TLS cert dir).
   expect(env.DOCKER_TLS_CERTDIR).toEqual("");
+});
+
+test("buildDindSidecarEnv: points Go's trust search at the mount directory", () => {
+  const env = buildDindSidecarEnv({
+    proxyEndpoint: "http://sid:tok@nas-proxy:8080",
+    caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+  });
+
+  expect(env.SSL_CERT_DIR).toBe(DIND_CA_MOUNT_PATH);
+  expect(env.SSL_CERT_FILE).toBeUndefined();
 });

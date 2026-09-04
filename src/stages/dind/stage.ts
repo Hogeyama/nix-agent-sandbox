@@ -52,6 +52,8 @@ export interface DindPlan {
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
+  /** Path to the session proxy's public CA certificate. */
+  readonly caCertPath: string;
   /**
    * Host-to-IP mappings the sidecar's /etc/hosts must carry (e.g. the proxy
    * alias). The agent joins the sidecar's network namespace and cannot carry
@@ -125,6 +127,7 @@ export function planDind(
   // funnelled through the proxy.
   const networkName = input.network.networkName;
   const proxyEndpoint = input.proxy.proxyEndpoint;
+  const caCertPath = input.proxy.caCertPath;
 
   // Truncating to a handful of hex digits (as this used to) leaves too few
   // possibilities that two concurrent sessions can plausibly collide on the
@@ -139,6 +142,7 @@ export function planDind(
     sharedTmpVolume,
     networkName,
     proxyEndpoint,
+    caCertPath,
     extraHosts: input.container.extraHosts,
     disableCache,
     readinessTimeoutMs,
@@ -229,6 +233,7 @@ function runDind(
         sharedTmpVolume: plan.sharedTmpVolume,
         networkName: plan.networkName,
         proxyEndpoint: plan.proxyEndpoint,
+        caCertPath: plan.caCertPath,
         extraHosts: plan.extraHosts,
         disableCache: plan.disableCache,
         readinessTimeoutMs: plan.readinessTimeoutMs,
