@@ -63,7 +63,14 @@ export const PortBindServiceLive: Layer.Layer<
         Effect.tryPromise({
           try: async () => {
             const paths = await resolvePortsRuntimePaths(plan.runtimeDir);
-            await copyRelayScript(relayScriptPath(paths));
+            const scriptPath = relayScriptPath(paths);
+            await copyRelayScript(scriptPath);
+            await writeSessionRegistry(paths, {
+              sessionId: plan.sessionId,
+              pid: process.pid,
+              brokerSocket: scriptPath,
+              bindings: [],
+            });
 
             let gateway: RelayGateway | undefined;
             let supervisor: RelaySupervisor;
@@ -148,7 +155,11 @@ export const PortBindServiceLive: Layer.Layer<
                   }).pipe(Effect.ignoreLogged),
               };
             } catch (error) {
-              if (gateway) await gateway.close();
+              try {
+                if (gateway) await gateway.close();
+              } finally {
+                await removeSessionRegistry(paths, plan.sessionId);
+              }
               throw error;
             }
           },

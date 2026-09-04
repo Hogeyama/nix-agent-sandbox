@@ -251,6 +251,17 @@ test("PortBindServiceLive rolls back only an acquired gateway", async () => {
     expect(Exit.isFailure(exit)).toEqual(true);
     expect(await exists(plan.relaySocketSource)).toEqual(false);
     expect((await stat(plan.controlSocket)).isDirectory()).toEqual(true);
+    expect(
+      await readSessionRegistry<PortBindSessionEntry>(
+        {
+          runtimeDir: plan.runtimeDir,
+          sessionsDir: path.join(plan.runtimeDir, "sessions"),
+          pendingDir: path.join(plan.runtimeDir, "pending"),
+          brokersDir: path.join(plan.runtimeDir, "brokers"),
+        },
+        plan.sessionId,
+      ),
+    ).toEqual(null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
