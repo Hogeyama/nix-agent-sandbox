@@ -135,9 +135,73 @@ function makeStageState(
   return { workspace, container, network, proxy };
 }
 
+function makeDindInput(opts: { dockerEnable: boolean }) {
+  const profile = makeProfile({
+    docker: { enable: opts.dockerEnable, shared: false },
+  });
+  return { ...makeSharedInput(profile), ...makeStageState() };
+}
+
 // ============================================================
 // planDind tests
 // ============================================================
+
+test("planDind: agent joins the sidecar network namespace", () => {
+  const plan = planDind(makeDindInput({ dockerEnable: true }));
+
+  expect(plan?.outputOverrides.container?.network).toEqual({
+    mode: "container",
+    containerName: plan!.containerName,
+  });
+  expect(plan?.outputOverrides.container?.env.static.DOCKER_HOST).toBe(
+    "tcp://127.0.0.1:2375",
+  );
+});
+
+test("planDind: no_proxy and NO_PROXY survive as ProxyStage seeded them", () => {
+  const profile = makeProfile({
+    docker: { enable: true, shared: false },
+  });
+  const workspace = { workDir: "/tmp", imageName: "nas:latest" };
+  const seededNoProxy = "localhost,127.0.0.1,seeded-by-proxystage";
+  const container = {
+    ...emptyContainerPlan(workspace.imageName, workspace.workDir),
+    command: { agentCommand: ["claude"], extraArgs: [] },
+    env: {
+      static: { no_proxy: seededNoProxy, NO_PROXY: seededNoProxy },
+      dynamicOps: [],
+    },
+  };
+  const input = {
+    ...makeSharedInput(profile),
+    ...makeStageState({ workspace, container }),
+  };
+
+  const plan = planDind(input);
+
+  expect(plan?.outputOverrides.container?.env.static.no_proxy).toEqual(
+    seededNoProxy,
+  );
+  expect(plan?.outputOverrides.container?.env.static.NO_PROXY).toEqual(
+    seededNoProxy,
+  );
+});
+
+test("planDind: does not invent NAS_DIND_CONTAINER_NAME", () => {
+  const plan = planDind(makeDindInput({ dockerEnable: true }));
+
+  expect(
+    plan?.outputOverrides.container?.env.static.NAS_DIND_CONTAINER_NAME,
+  ).toBeUndefined();
+});
+
+test("buildDindSidecarArgs: expands extraHosts", () => {
+  const args = buildDindSidecarArgs("nas-dind-tmp-abc12345", [
+    { host: "nas-envoy", ip: "172.20.0.2" },
+  ]);
+
+  expect(args).toContain("--add-host=nas-envoy:172.20.0.2");
+});
 
 test("DindStage: skip when disabled (plan returns null)", () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
@@ -175,16 +239,14 @@ test("DindStage: shared mode uses fixed names", () => {
     mounts: [],
     env: {
       static: {
-        DOCKER_HOST: "tcp://nas-dind-shared:2375",
-        NAS_DIND_CONTAINER_NAME: "nas-dind-shared",
+        DOCKER_HOST: "tcp://127.0.0.1:2375",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
-        no_proxy: "localhost,127.0.0.1,nas-dind-shared",
-        NO_PROXY: "localhost,127.0.0.1,nas-dind-shared",
       },
       dynamicOps: [],
     },
     extraHosts: [],
     extraRunArgs: ["-v", "nas-dind-shared-tmp:/tmp/nas-shared"],
+    network: { mode: "container", containerName: "nas-dind-shared" },
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
   });
@@ -206,45 +268,12 @@ test("DindStage: non-shared mode uses session-based names", () => {
   expect(p.sharedTmpVolume).toEqual("nas-dind-tmp-abcdef12");
   expect(p.shared).toEqual(false);
 
-  expect(p.outputOverrides.container?.network).toBeUndefined();
+  expect(p.outputOverrides.container?.network).toEqual({
+    mode: "container",
+    containerName: "nas-dind-abcdef12",
+  });
   expect(p.outputOverrides.container?.env.static.DOCKER_HOST).toEqual(
-    "tcp://nas-dind-abcdef12:2375",
-  );
-  expect(p.outputOverrides.container?.env.static.no_proxy).toEqual(
-    "localhost,127.0.0.1,nas-dind-abcdef12",
-  );
-  expect(p.outputOverrides.container?.env.static.NO_PROXY).toEqual(
-    "localhost,127.0.0.1,nas-dind-abcdef12",
-  );
-});
-
-test("DindStage: appends dind name to ProxyStage-seeded no_proxy", () => {
-  const profile = makeProfile({ docker: { enable: true, shared: false } });
-  const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-  const input = {
-    ...makeSharedInput(profile, sessionId),
-    ...makeStageState({
-      container: {
-        ...emptyContainerPlan("nas:latest", "/tmp"),
-        env: {
-          static: {
-            no_proxy: "localhost,127.0.0.1",
-            NO_PROXY: "localhost,127.0.0.1",
-          },
-          dynamicOps: [],
-        },
-        command: { agentCommand: ["claude"], extraArgs: [] },
-      },
-    }),
-  };
-
-  const plan = planDind(input);
-  expect(plan).not.toBeNull();
-  expect(plan!.outputOverrides.container?.env.static.no_proxy).toEqual(
-    "localhost,127.0.0.1,nas-dind-abcdef12",
-  );
-  expect(plan!.outputOverrides.container?.env.static.NO_PROXY).toEqual(
-    "localhost,127.0.0.1,nas-dind-abcdef12",
+    "tcp://127.0.0.1:2375",
   );
 });
 
@@ -259,7 +288,7 @@ test("DindStage: default options", () => {
   expect(p.readinessTimeoutMs).toEqual(30_000);
 });
 
-test("DindStage: planner merges into existing container slice and preserves existing network attachment", () => {
+test("DindStage: planner merges into existing container slice and overrides a stale network attachment", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
   const input = {
     ...makeSharedInput(profile, "abcdef12-3456-7890-abcd-ef1234567890"),
@@ -289,11 +318,8 @@ test("DindStage: planner merges into existing container slice and preserves exis
     env: {
       static: {
         EXISTING_ENV: "1",
-        DOCKER_HOST: "tcp://nas-dind-abcdef12:2375",
-        NAS_DIND_CONTAINER_NAME: "nas-dind-abcdef12",
+        DOCKER_HOST: "tcp://127.0.0.1:2375",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
-        no_proxy: "localhost,127.0.0.1,nas-dind-abcdef12",
-        NO_PROXY: "localhost,127.0.0.1,nas-dind-abcdef12",
       },
       dynamicOps: [],
     },
@@ -304,7 +330,7 @@ test("DindStage: planner merges into existing container slice and preserves exis
       "-v",
       "nas-dind-tmp-abcdef12:/tmp/nas-shared",
     ],
-    network: { mode: "network", name: "stale-net" },
+    network: { mode: "container", containerName: "nas-dind-abcdef12" },
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
     labels: { "nas.managed": "true" },
   });
@@ -356,7 +382,16 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
 
   const profile = makeProfile({ docker: { enable: true, shared: true } });
   const sharedInput = makeSharedInput(profile);
-  const stageState = makeStageState();
+  const workspace = { workDir: "/tmp", imageName: "nas:latest" };
+  const seededExtraHosts = [{ host: "nas-envoy", ip: "172.18.0.9" }];
+  const stageState = makeStageState({
+    workspace,
+    container: {
+      ...emptyContainerPlan(workspace.imageName, workspace.workDir),
+      command: { agentCommand: ["claude"], extraArgs: [] },
+      extraHosts: seededExtraHosts,
+    },
+  });
   const stage = createDindStageWithOptions(sharedInput, {
     disableCache: true,
     readinessTimeoutMs: 5000,
@@ -384,11 +419,15 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(ensureCalls[0].shared).toEqual(true);
   expect(ensureCalls[0].disableCache).toEqual(true);
   expect(ensureCalls[0].readinessTimeoutMs).toEqual(5000);
+  expect(ensureCalls[0].extraHosts).toEqual(seededExtraHosts);
 
   expect(result.dind).toEqual({ containerName: "nas-dind-shared" });
-  expect(result.container?.network).toBeUndefined();
+  expect(result.container?.network).toEqual({
+    mode: "container",
+    containerName: "nas-dind-shared",
+  });
   expect(result.container?.env.static.DOCKER_HOST).toEqual(
-    "tcp://nas-dind-shared:2375",
+    "tcp://127.0.0.1:2375",
   );
   expect(result.container?.extraRunArgs).toEqual([
     "-v",
@@ -410,7 +449,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
 // ============================================================
 
 test("buildDindSidecarArgs: cache enabled keeps both volume specs valid", () => {
-  expect(buildDindSidecarArgs("nas-dind-shared-tmp")).toEqual([
+  expect(buildDindSidecarArgs("nas-dind-shared-tmp", [])).toEqual([
     "--privileged",
     "-v",
     "nas-docker-cache:/home/rootless/.local/share/docker",
@@ -421,7 +460,7 @@ test("buildDindSidecarArgs: cache enabled keeps both volume specs valid", () => 
 
 test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
   expect(
-    buildDindSidecarArgs("nas-dind-shared-tmp", { disableCache: true }),
+    buildDindSidecarArgs("nas-dind-shared-tmp", [], { disableCache: true }),
   ).toEqual(["--privileged", "-v", "nas-dind-shared-tmp:/tmp/nas-shared"]);
 });
 

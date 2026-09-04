@@ -8,6 +8,7 @@
 
 import { Context, Effect, Layer } from "effect";
 import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
+import type { ExtraHost } from "../../pipeline/state.ts";
 
 // ---------------------------------------------------------------------------
 // Option types
@@ -20,6 +21,13 @@ export interface DindSidecarOpts {
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
+  /**
+   * Host-to-IP mappings the sidecar's /etc/hosts must carry (e.g. the proxy
+   * alias). The agent joins the sidecar's network namespace and shares its
+   * /etc/hosts, so entries the agent needs must be added here instead of via
+   * the agent container's own --add-host.
+   */
+  readonly extraHosts: readonly ExtraHost[];
   readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
@@ -60,6 +68,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
             sharedTmpVolume: opts.sharedTmpVolume,
             sessionNetworkName: opts.networkName,
             proxyEndpoint: opts.proxyEndpoint,
+            extraHosts: opts.extraHosts,
             shared: opts.shared,
             disableCache: opts.disableCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,

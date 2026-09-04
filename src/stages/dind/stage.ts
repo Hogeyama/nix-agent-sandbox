@@ -12,11 +12,11 @@
  * 1. dind-rootless をデフォルト bridge で起動（rootlesskit が vpnkit + copy-up で
  *    ネットワーク名前空間をセットアップするため、カスタムネットワーク上では起動に失敗する）
  * 2. TCP 経由で daemon の readiness を確認
- * 3. エージェントコンテナに DOCKER_HOST env（tcp://<サイドカー名>:2375）を注入し、
- *    サイドカーの Docker デーモンを利用可能にする
- *
- * エージェントコンテナの network は DindStage では設定しない（network の設定は
- * 別ステージが担う）。
+ * 3. エージェントコンテナをサイドカーの network namespace に参加させる
+ *    (`--network container:<サイドカー名>`)。これにより daemon は
+ *    127.0.0.1:2375 で応答し、エージェントが起動した内部コンテナの公開ポートも
+ *    エージェント自身の loopback に現れる — ローカルインストールされた Docker と
+ *    同じ挙動になる。
  */
 
 import { Effect, type Scope } from "effect";
@@ -28,7 +28,11 @@ import {
 import { logInfo } from "../../log.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
-import type { ContainerPlan, PipelineState } from "../../pipeline/state.ts";
+import type {
+  ContainerPlan,
+  ExtraHost,
+  PipelineState,
+} from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { DindService } from "./dind_service.ts";
 
@@ -51,6 +55,12 @@ export interface DindPlan {
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
+  /**
+   * Host-to-IP mappings the sidecar's /etc/hosts must carry (e.g. the proxy
+   * alias). The agent joins the sidecar's network namespace and cannot carry
+   * its own --add-host, so these entries are wired onto the sidecar instead.
+   */
+  readonly extraHosts: readonly ExtraHost[];
   readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
@@ -108,6 +118,7 @@ export function planDind(
     sharedTmpVolume,
     networkName,
     proxyEndpoint,
+    extraHosts: input.container.extraHosts,
     shared,
     disableCache,
     readinessTimeoutMs,
@@ -191,6 +202,7 @@ function runDind(
         sharedTmpVolume: plan.sharedTmpVolume,
         networkName: plan.networkName,
         proxyEndpoint: plan.proxyEndpoint,
+        extraHosts: plan.extraHosts,
         shared: plan.shared,
         disableCache: plan.disableCache,
         readinessTimeoutMs: plan.readinessTimeoutMs,
@@ -217,25 +229,16 @@ function buildContainerState(
     readonly sharedTmpVolume: string;
   },
 ): ContainerPlan {
-  // The agent talks to the sidecar over DOCKER_HOST=tcp://<dind>:2375. That
-  // hostname must bypass the agent's local proxy, so append the sidecar name to
-  // the no_proxy lists ProxyStage already seeded. env.static is key-merged
-  // (patch wins), so writing the full appended value here overrides ProxyStage's
-  // baseline cleanly. Fall back to the loopback baseline if (unexpectedly)
-  // ProxyStage left no value.
-  const baseNoProxyLower =
-    input.container.env.static.no_proxy ?? "localhost,127.0.0.1";
-  const baseNoProxyUpper =
-    input.container.env.static.NO_PROXY ?? "localhost,127.0.0.1";
-
+  // The agent joins the sidecar's network namespace, so the daemon answers on
+  // loopback and every port an inner container publishes lands on the agent's
+  // own 127.0.0.1 -- what a locally installed Docker would do. `no_proxy`
+  // needs no addition: ProxyStage's baseline already carries 127.0.0.1.
   return mergeContainerPlan(input.container, {
+    network: { mode: "container", containerName: config.containerName },
     env: {
       static: {
-        DOCKER_HOST: `tcp://${config.containerName}:${DIND_INTERNAL_PORT}`,
-        NAS_DIND_CONTAINER_NAME: config.containerName,
+        DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
         NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
-        no_proxy: `${baseNoProxyLower},${config.containerName}`,
-        NO_PROXY: `${baseNoProxyUpper},${config.containerName}`,
       },
     },
     extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],

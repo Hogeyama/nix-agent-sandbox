@@ -164,8 +164,8 @@ export function planProxy(
 
   const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
-  // DinD's hostname is appended to no_proxy later by DindStage (which now runs
-  // after ProxyStage); here we only seed the loopback baseline.
+  // The agent reaches the DinD sidecar's daemon over its joined network
+  // namespace at 127.0.0.1, so this loopback baseline is all no_proxy needs.
   const noProxyEntries = ["localhost", "127.0.0.1"];
 
   const envVars: Record<string, string> = {

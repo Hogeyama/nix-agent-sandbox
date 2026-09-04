@@ -398,23 +398,17 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
           ),
       );
 
-      expect(
-        result.container?.env.static.DOCKER_HOST.startsWith("tcp://"),
-      ).toEqual(true);
-      expect(
-        result.container?.env.static.DOCKER_HOST.endsWith(":2375"),
-      ).toEqual(true);
-      expect(
-        typeof result.container?.env.static.NAS_DIND_CONTAINER_NAME,
-      ).toEqual("string");
+      expect(result.container?.env.static.DOCKER_HOST).toEqual(
+        "tcp://127.0.0.1:2375",
+      );
       expect(typeof result.container?.env.static.NAS_DIND_SHARED_TMP).toEqual(
         "string",
       );
       expect(result.dind?.containerName).toEqual(containerName);
-      expect(result.container?.network).toBeUndefined();
-      expect(result.container?.env.static.DOCKER_HOST).toEqual(
-        `tcp://${containerName}:2375`,
-      );
+      expect(result.container?.network).toEqual({
+        mode: "container",
+        containerName,
+      });
 
       const running = await dockerIsRunning(containerName);
       expect(running).toEqual(true);

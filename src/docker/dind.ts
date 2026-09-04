@@ -78,6 +78,7 @@ export async function startDindSidecar(
   containerName: string,
   sharedTmpVolume: string,
   proxyEndpoint: string,
+  extraHosts: readonly { readonly host: string; readonly ip: string }[],
   options: DindStageOptions = {},
 ): Promise<void> {
   logInfo(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
@@ -88,7 +89,13 @@ export async function startDindSidecar(
     logInfo(`[nas] DinD: failed to create shared tmp volume: ${e}`),
   );
 
-  await runDindSidecar(containerName, sharedTmpVolume, proxyEndpoint, options);
+  await runDindSidecar(
+    containerName,
+    sharedTmpVolume,
+    proxyEndpoint,
+    extraHosts,
+    options,
+  );
   logInfo("[nas] DinD: waiting for daemon to be ready...");
   try {
     await waitForDindReady(
@@ -119,6 +126,7 @@ export async function startDindSidecar(
       containerName,
       sharedTmpVolume,
       proxyEndpoint,
+      extraHosts,
       options,
     );
     logInfo("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
@@ -147,10 +155,16 @@ export async function startDindSidecar(
       );
     }
 
-    await runDindSidecar(containerName, sharedTmpVolume, proxyEndpoint, {
-      ...options,
-      disableCache: true,
-    });
+    await runDindSidecar(
+      containerName,
+      sharedTmpVolume,
+      proxyEndpoint,
+      extraHosts,
+      {
+        ...options,
+        disableCache: true,
+      },
+    );
     logInfo("[nas] DinD: waiting for daemon to be ready (no cache)...");
     await waitForDindReady(
       containerName,
@@ -179,6 +193,13 @@ export interface EnsureDindSidecarParams {
   sessionNetworkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   proxyEndpoint: string;
+  /**
+   * Host-to-IP mappings to add to the sidecar's /etc/hosts (e.g. the proxy
+   * alias). The agent joins this container's network namespace and so cannot
+   * carry its own --add-host; Docker shares the owner's /etc/hosts with the
+   * joiner, so these entries must land on the sidecar instead.
+   */
+  extraHosts: readonly { readonly host: string; readonly ip: string }[];
   shared: boolean;
   disableCache?: boolean;
   readinessTimeoutMs?: number;
@@ -203,6 +224,7 @@ export async function ensureDindSidecar(
     sharedTmpVolume,
     sessionNetworkName,
     proxyEndpoint,
+    extraHosts,
     shared,
     disableCache,
     readinessTimeoutMs,
@@ -224,10 +246,16 @@ export async function ensureDindSidecar(
     }
 
     // DinD rootless サイドカーをデフォルト bridge で起動
-    await startDindSidecar(containerName, sharedTmpVolume, proxyEndpoint, {
-      disableCache,
-      readinessTimeoutMs,
-    });
+    await startDindSidecar(
+      containerName,
+      sharedTmpVolume,
+      proxyEndpoint,
+      extraHosts,
+      {
+        disableCache,
+        readinessTimeoutMs,
+      },
+    );
     sidecarStarted = true;
   }
 
@@ -436,12 +464,13 @@ async function runDindSidecar(
   containerName: string,
   sharedTmpVolume: string,
   proxyEndpoint: string,
+  extraHosts: readonly { readonly host: string; readonly ip: string }[],
   options: DindStageOptions,
 ): Promise<void> {
   await dockerRunDetached({
     name: containerName,
     image: DIND_IMAGE,
-    args: buildDindSidecarArgs(sharedTmpVolume, options),
+    args: buildDindSidecarArgs(sharedTmpVolume, extraHosts, options),
     envVars: buildDindSidecarEnv(proxyEndpoint),
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
@@ -479,6 +508,7 @@ export function buildDindSidecarEnv(
  */
 export function buildDindSidecarArgs(
   sharedTmpVolume: string,
+  extraHosts: readonly { readonly host: string; readonly ip: string }[],
   options: DindStageOptions = {},
 ): string[] {
   const args = ["--privileged"];
@@ -486,6 +516,11 @@ export function buildDindSidecarArgs(
     args.push("-v", `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`);
   }
   args.push("-v", `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`);
+  // The agent joins this container's network namespace and so cannot carry
+  // --add-host itself; Docker shares the owner's /etc/hosts with the joiner.
+  for (const entry of extraHosts) {
+    args.push(`--add-host=${entry.host}:${entry.ip}`);
+  }
   return args;
 }
 
