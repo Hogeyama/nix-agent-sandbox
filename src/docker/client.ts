@@ -477,6 +477,38 @@ export async function dockerExec(
   }
 }
 
+/**
+ * Start a command inside a container and return once Docker has accepted it.
+ * Under `-d` the CLI exits immediately, so the exit code reports whether the
+ * exec was created, not what the command did; stderr distinguishes a stopped
+ * container from a missing executable.
+ */
+export async function dockerExecDetached(
+  containerName: string,
+  command: string[],
+  options?: { user?: string; env?: Record<string, string> },
+): Promise<{ code: number; stderr: string }> {
+  const userArgs = options?.user ? ["-u", options.user] : [];
+  const envArgs = Object.entries(options?.env ?? {}).flatMap(([key, value]) => [
+    "-e",
+    `${key}=${value}`,
+  ]);
+  try {
+    await $`docker exec -d ${userArgs} ${envArgs} ${containerName} ${command}`.quiet();
+    return { code: 0, stderr: "" };
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "exitCode" in err
+        ? (err as { exitCode: number }).exitCode
+        : 1;
+    const stderr =
+      err && typeof err === "object" && "stderr" in err
+        ? String((err as { stderr: unknown }).stderr)
+        : "";
+    return { code, stderr };
+  }
+}
+
 /** コンテナが実行中かどうかを確認 */
 export async function dockerIsRunning(containerName: string): Promise<boolean> {
   try {
