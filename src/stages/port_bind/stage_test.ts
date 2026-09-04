@@ -266,3 +266,53 @@ test("PortBindServiceLive rolls back only an acquired gateway", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * Docker pins a single-file bind mount to the inode it resolved when the
+ * container was created, and `copyRelayScript` publishes the script with a
+ * rename — a fresh inode every time. While every session shared one script
+ * path, starting session B silently detached the script from every container
+ * already running: their mount kept pointing at the now-unlinked inode, so
+ * `bun /usr/local/lib/nas/port-relay.mjs` failed with "Module not found
+ * (deleted)" and the relay could never be exec'd again. `docker exec -d`
+ * reports only that the exec was created, so the supervisor saw exit 0 and
+ * reported `relay-unreachable` with the real cause nowhere in sight.
+ */
+test("starting a session leaves other sessions' relay scripts untouched", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-port-bind-stage-"));
+  const first = planAt(root, "s1");
+  const second = planAt(root, "s2");
+  try {
+    expect(first.relayScriptSource).not.toEqual(second.relayScriptSource);
+
+    const firstHandle = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* PortBindService;
+        return yield* service.start(first);
+      }).pipe(Effect.provide(liveLayer())),
+    );
+    const before = await stat(first.relayScriptSource);
+
+    const secondHandle = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* PortBindService;
+        return yield* service.start(second);
+      }).pipe(Effect.provide(liveLayer())),
+    );
+    const after = await stat(first.relayScriptSource);
+
+    // Same inode, still linked: the mount in s1's container stays valid.
+    expect(after.ino).toEqual(before.ino);
+    expect(after.nlink).toBeGreaterThan(0);
+
+    // Closing one session must not remove the other's script either.
+    await Effect.runPromise(secondHandle.close());
+    expect(await exists(second.relayScriptSource)).toEqual(false);
+    expect((await stat(first.relayScriptSource)).ino).toEqual(before.ino);
+
+    await Effect.runPromise(firstHandle.close());
+    expect(await exists(first.relayScriptSource)).toEqual(false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

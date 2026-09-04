@@ -51,8 +51,8 @@ test("resolvePortsRuntimePaths derives every subdirectory from the root", async 
     expect(relaySocketPath(paths, "s1")).toEqual(
       path.join(root, "brokers", "s1", "relay.sock"),
     );
-    expect(relayScriptPath(paths)).toEqual(
-      path.join(root, "relay", "port-relay.mjs"),
+    expect(relayScriptPath(paths, "s1")).toEqual(
+      path.join(root, "relay", "s1", "port-relay.mjs"),
     );
   });
 });

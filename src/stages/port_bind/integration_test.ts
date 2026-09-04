@@ -91,7 +91,8 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       runtimeDir = await makeDockerBindableTempDir();
       const paths = await resolvePortsRuntimePaths(runtimeDir);
       const socketPath = relaySocketPath(paths, containerName);
-      const scriptPath = relayScriptPath(paths);
+      const scriptPath = relayScriptPath(paths, containerName);
+      await mkdir(path.dirname(scriptPath), { recursive: true });
       await copyFile(
         new URL("../../docker/embed/port-relay.mjs", import.meta.url),
         scriptPath,

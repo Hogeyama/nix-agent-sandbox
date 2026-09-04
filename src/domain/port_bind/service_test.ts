@@ -75,7 +75,8 @@ test("the fake treats host port zero as automatic selection", async () => {
 
 test("the live service hides provisional session entries", async () => {
   await withPaths(async (paths) => {
-    const livenessPath = relayScriptPath(paths);
+    const livenessPath = relayScriptPath(paths, "starting");
+    await mkdir(path.dirname(livenessPath), { recursive: true });
     await writeFile(livenessPath, "");
     await writeSessionRegistry(paths, entry("starting", livenessPath, []));
 

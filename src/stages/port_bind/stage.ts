@@ -41,7 +41,7 @@ export function planPortBind(input: PortBindStageInput): PortBindPlan {
     relayDir: `${runtimeDir}/relay`,
   };
   const relaySocketSource = relaySocketPath(paths, input.sessionId);
-  const relayScriptSource = relayScriptPath(paths);
+  const relayScriptSource = relayScriptPath(paths, input.sessionId);
 
   return {
     sessionId: input.sessionId,

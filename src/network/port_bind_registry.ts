@@ -1,7 +1,11 @@
+import { readdir } from "node:fs/promises";
 import * as path from "node:path";
-import { defaultRuntimeDir, ensureDir } from "../lib/fs_utils.ts";
+import { defaultRuntimeDir, ensureDir, safeRemove } from "../lib/fs_utils.ts";
 import {
+  assertWithin,
   type BaseRuntimePaths,
+  type GcResult,
+  gcRuntime,
   listSessionRegistries,
   sessionBrokerDir,
 } from "../lib/runtime_registry.ts";
@@ -15,7 +19,10 @@ export {
 } from "../lib/runtime_registry.ts";
 
 export interface PortsRuntimePaths extends BaseRuntimePaths {
-  /** Directory holding the relay script that containers mount read-only. */
+  /**
+   * Root of the per-session directories holding the relay script that
+   * containers mount read-only.
+   */
   relayDir: string;
 }
 
@@ -64,8 +71,59 @@ export function relaySocketPath(
   return path.join(sessionBrokerDir(paths, sessionId), "relay.sock");
 }
 
-export function relayScriptPath(paths: PortsRuntimePaths): string {
-  return path.join(paths.relayDir, "port-relay.mjs");
+/**
+ * Each session gets its own copy of the relay script.
+ *
+ * The script is bind-mounted into the container as a single file, and Docker
+ * pins such a mount to the inode it resolved at create time. `copyRelayScript`
+ * publishes the script with a rename, which installs a *new* inode — so a
+ * shared path would leave every already-running container mounting a deleted
+ * inode as soon as the next session started, and its relay could never be
+ * exec'd again. Keeping one copy per session means no session ever replaces a
+ * file another session's container is mounting.
+ */
+export function sessionRelayDir(
+  paths: PortsRuntimePaths,
+  sessionId: string,
+): string {
+  return assertWithin(paths.relayDir, path.join(paths.relayDir, sessionId));
+}
+
+export function relayScriptPath(
+  paths: PortsRuntimePaths,
+  sessionId: string,
+): string {
+  const dir = sessionRelayDir(paths, sessionId);
+  return assertWithin(dir, path.join(dir, "port-relay.mjs"));
+}
+
+/**
+ * `gcRuntime` sweeps the directories every subsystem shares; the relay
+ * directories exist only here, so they need their own pass. A session that
+ * died without running its release never removed its script copy, and nothing
+ * else would ever reclaim it.
+ */
+export async function gcPortsRuntime(
+  paths: PortsRuntimePaths,
+): Promise<GcResult> {
+  const result = await gcRuntime<PortBindSessionEntry>(paths);
+  const liveSessionIds = new Set(
+    (await listPortBindSessions(paths)).map((entry) => entry.sessionId),
+  );
+  try {
+    for (const dirEntry of await readdir(paths.relayDir, {
+      withFileTypes: true,
+    })) {
+      if (!dirEntry.isDirectory()) continue;
+      if (liveSessionIds.has(dirEntry.name)) continue;
+      await safeRemove(sessionRelayDir(paths, dirEntry.name), {
+        recursive: true,
+      });
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return result;
 }
 
 export function listPortBindSessions(

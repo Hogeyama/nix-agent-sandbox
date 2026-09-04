@@ -1,5 +1,4 @@
 import { Cause, Context, Effect, Exit, Layer, Option } from "effect";
-import { gcRuntime } from "../../lib/runtime_registry.ts";
 import {
   connectUnix,
   readJsonLine,
@@ -16,6 +15,7 @@ import {
 import {
   brokerSocketPath,
   findSessionsByHostPort,
+  gcPortsRuntime,
   listPortBindSessions,
   type PortsRuntimePaths,
 } from "../../network/port_bind_registry.ts";
@@ -150,7 +150,7 @@ async function requireSession(
   paths: PortsRuntimePaths,
   sessionId: string,
 ): Promise<void> {
-  await gcRuntime<PortBindSessionEntry>(paths);
+  await gcPortsRuntime(paths);
   const sessions = await listReadySessions(paths);
   if (!sessions.some((session) => session.sessionId === sessionId)) {
     throw unreachable(sessionId);
@@ -173,7 +173,7 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
     list: (paths) =>
       Effect.tryPromise({
         try: async () => {
-          await gcRuntime<PortBindSessionEntry>(paths);
+          await gcPortsRuntime(paths);
           return await listReadySessions(paths);
         },
         catch: toError,
@@ -213,7 +213,7 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
           let sessionId: string;
           let request: ControlRequest;
           if ("hostPort" in key) {
-            await gcRuntime<PortBindSessionEntry>(paths);
+            await gcPortsRuntime(paths);
             const matches = await findSessionsByHostPort(paths, key.hostPort);
             if (matches.length === 0) {
               throw new NoSuchBindingError(

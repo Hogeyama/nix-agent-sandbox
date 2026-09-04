@@ -46,7 +46,7 @@ export interface BasePendingEntry {
  * forgets to validate its id, this refuses to read/write outside the
  * runtime directory.
  */
-function assertWithin(base: string, joined: string): string {
+export function assertWithin(base: string, joined: string): string {
   const rel = path.relative(base, joined);
   if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error(`path traversal detected: ${joined}`);

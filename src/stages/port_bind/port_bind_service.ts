@@ -1,13 +1,15 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
+import * as path from "node:path";
 import { Context, Effect, Layer } from "effect";
 import { resolveAsset } from "../../lib/asset.ts";
-import { safeRemove } from "../../lib/fs_utils.ts";
+import { ensureDir, safeRemove } from "../../lib/fs_utils.ts";
 import { startPortBindBroker } from "../../network/port_bind_broker.ts";
 import type { PortBinding } from "../../network/port_bind_protocol.ts";
 import {
   relayScriptPath,
   removeSessionRegistry,
   resolvePortsRuntimePaths,
+  sessionRelayDir,
   writeSessionRegistry,
 } from "../../network/port_bind_registry.ts";
 import {
@@ -39,6 +41,7 @@ async function copyRelayScript(target: string): Promise<void> {
     import.meta.url,
     "../../docker/embed/port-relay.mjs",
   );
+  await ensureDir(path.dirname(target));
   const tempPath = `${target}.${crypto.randomUUID()}.tmp`;
   try {
     const source = await readFile(sourcePath);
@@ -63,7 +66,7 @@ export const PortBindServiceLive: Layer.Layer<
         Effect.tryPromise({
           try: async () => {
             const paths = await resolvePortsRuntimePaths(plan.runtimeDir);
-            const scriptPath = relayScriptPath(paths);
+            const scriptPath = relayScriptPath(paths, plan.sessionId);
             await copyRelayScript(scriptPath);
             await writeSessionRegistry(paths, {
               sessionId: plan.sessionId,
@@ -145,7 +148,14 @@ export const PortBindServiceLive: Layer.Layer<
                       try {
                         await broker.close();
                       } finally {
-                        await removeSessionRegistry(paths, plan.sessionId);
+                        try {
+                          await removeSessionRegistry(paths, plan.sessionId);
+                        } finally {
+                          await safeRemove(
+                            sessionRelayDir(paths, plan.sessionId),
+                            { recursive: true },
+                          );
+                        }
                       }
                     },
                     catch: (error) =>
@@ -158,7 +168,13 @@ export const PortBindServiceLive: Layer.Layer<
               try {
                 if (gateway) await gateway.close();
               } finally {
-                await removeSessionRegistry(paths, plan.sessionId);
+                try {
+                  await removeSessionRegistry(paths, plan.sessionId);
+                } finally {
+                  await safeRemove(sessionRelayDir(paths, plan.sessionId), {
+                    recursive: true,
+                  });
+                }
               }
               throw error;
             }
