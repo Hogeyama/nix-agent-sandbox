@@ -27,8 +27,11 @@ import {
   generateSessionToken as defaultGenerateToken,
   hashToken,
 } from "../../network/protocol.ts";
-import type { NetworkRuntimePaths } from "../../network/registry.ts";
-import { brokerSocketPath } from "../../network/registry.ts";
+import {
+  brokerSocketPath,
+  caCertFilePath,
+  type NetworkRuntimePaths,
+} from "../../network/registry.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -206,7 +209,7 @@ export function planProxy(
 
   // CA cert mount for update-ca-certificates inside the agent container
   const caCertMount: MountSpec = {
-    source: `${runtimePaths.caCertDir}/mitmproxy-ca-cert.pem`,
+    source: caCertFilePath(runtimePaths),
     target: "/usr/local/share/ca-certificates/nas-proxy.crt",
     readOnly: true,
   };
@@ -233,6 +236,7 @@ export function planProxy(
   const proxy: ProxyState = {
     brokerSocket,
     proxyEndpoint: proxyUrl,
+    caCertPath: caCertFilePath(runtimePaths),
   };
 
   return {

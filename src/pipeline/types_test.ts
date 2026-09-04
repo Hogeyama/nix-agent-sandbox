@@ -210,6 +210,7 @@ test("ProxyState: can construct", () => {
   const p: ProxyState = {
     brokerSocket: "/run/nas/broker.sock",
     proxyEndpoint: "http://localhost:9901",
+    caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
   };
   expect(p.proxyEndpoint).toEqual("http://localhost:9901");
 });
@@ -326,6 +327,7 @@ test("PipelineState: can construct with all slices", () => {
     proxy: {
       brokerSocket: "/run/nas/broker.sock",
       proxyEndpoint: "http://localhost:9901",
+      caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
     },
     container: {
       image: "nas-sandbox:latest",

@@ -85,6 +85,7 @@ export interface PromptState {
 export interface ProxyState {
   readonly brokerSocket: string;
   readonly proxyEndpoint: string;
+  readonly caCertPath: string;
 }
 
 /**

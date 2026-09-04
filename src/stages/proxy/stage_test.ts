@@ -18,6 +18,7 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
+import { caCertFilePath } from "../../network/registry.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type {
   ContainerPlan,
@@ -361,7 +362,21 @@ test("ProxyStage: sets outputOverrides", () => {
   expect(result.outputOverrides.proxy).toEqual({
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123/sock",
     proxyEndpoint,
+    caCertPath: caCertFilePath(result.runtimePaths),
   });
+});
+
+test("planProxy: publishes the CA certificate file path, not its directory", () => {
+  const profile = makeProfile({
+    network: { scopes: ALLOW_EXAMPLE },
+  });
+  const { shared, container, observability } = makeInput(profile);
+  const plan = planProxy({ ...shared, container, observability });
+
+  const published = plan.outputOverrides.proxy?.caCertPath;
+  expect(published).toBe(caCertFilePath(plan.runtimePaths));
+  expect(published).toMatch(/\/mitmproxy-ca-cert\.pem$/);
+  expect(published).not.toBe(plan.runtimePaths.caCertDir);
 });
 
 test("ProxyStage: planner sets networkName in outputOverrides", () => {
@@ -888,6 +903,9 @@ test("createProxyStage().run(): calls services and returns merged output", async
   expect(result.proxy).toEqual({
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123/sock",
     proxyEndpoint,
+    caCertPath: caCertFilePath({
+      caCertDir: "/run/user/1000/nas/network/mitmproxy-ca",
+    }),
   });
 
   expect(result.container?.network).toEqual({
