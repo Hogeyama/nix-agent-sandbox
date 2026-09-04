@@ -18,6 +18,7 @@ import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { MaskFilterService, MaskFsService } from "../stages/maskfs.ts";
 import type { MountSetupService } from "../stages/mount.ts";
 import type { OtlpReceiverService } from "../stages/observability.ts";
+import type { PortBindService } from "../stages/port_bind.ts";
 import type {
   CaService,
   ForwardPortRelayService,
@@ -101,6 +102,7 @@ export type StageServices =
   | MountSetupService
   | NetworkRuntimeService
   | OtlpReceiverService
+  | PortBindService
   | ProcessService
   | DockerService
   | PromptService
