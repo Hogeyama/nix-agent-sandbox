@@ -51,6 +51,13 @@ export interface DindTeardownOpts {
   /** Session network the sidecar was attached to (shared teardown detaches). */
   readonly networkName: string;
   readonly shared: boolean;
+  /**
+   * Name of the agent container that joined this sidecar's network
+   * namespace (`--network container:<containerName>`). Teardown checks
+   * whether it is still running and skips removal while it is, since
+   * removing the sidecar would strip the agent's namespace owner.
+   */
+  readonly joinerContainerName: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +94,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
             sharedTmpVolume: opts.sharedTmpVolume,
             sessionNetworkName: opts.networkName,
             shared: opts.shared,
+            joinerContainerName: opts.joinerContainerName,
           }),
         catch: (e) =>
           new Error(

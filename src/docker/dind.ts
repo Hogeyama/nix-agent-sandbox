@@ -368,16 +368,60 @@ export interface TeardownDindSidecarParams {
    */
   sessionNetworkName: string;
   shared: boolean;
+  /**
+   * Name of the agent container that joined this sidecar's network
+   * namespace (`--network container:<containerName>`). If it is still
+   * running, removing the sidecar would strip its namespace owner and
+   * take its networking with it, so teardown skips removal entirely.
+   */
+  joinerContainerName: string;
+}
+
+/** Injectable Docker primitives, defaulted to the real client in production. */
+export interface TeardownDindDeps {
+  isRunning?: (name: string) => Promise<boolean>;
+  stop?: (name: string, opts?: { timeoutSeconds?: number }) => Promise<void>;
+  rm?: (name: string) => Promise<void>;
+  volumeRemove?: (name: string) => Promise<void>;
 }
 
 /**
  * Tear down a DinD sidecar: stop/rm container, remove volume.
- * Shared sidecars are kept alive.
+ * Shared sidecars are kept alive. Non-shared sidecars are also kept alive
+ * while the joining agent container is still running.
  */
 export async function teardownDindSidecar(
   params: TeardownDindSidecarParams,
+  deps: TeardownDindDeps = {},
 ): Promise<void> {
-  const { containerName, sharedTmpVolume, sessionNetworkName, shared } = params;
+  const isRunning = deps.isRunning ?? dockerIsRunning;
+  const stop = deps.stop ?? dockerStop;
+  const rm = deps.rm ?? dockerRm;
+  const volumeRemove = deps.volumeRemove ?? dockerVolumeRemove;
+  const {
+    containerName,
+    sharedTmpVolume,
+    sessionNetworkName,
+    shared,
+    joinerContainerName,
+  } = params;
+
+  // The agent joined this container's network namespace. If it outlived the
+  // nas process -- SIGTERM kills only the docker client -- removing the
+  // sidecar would strip its namespace owner out from under a running
+  // container, leaving it unable to reach anything at all, not even
+  // loopback. Skipping only defers that removal; it does not preserve the
+  // agent's networking otherwise, since the rest of this scope's finalizers
+  // (proxy disconnect, forward-port relays, session broker, authz document)
+  // still run. The sidecar, its tmp volume and the session network stay
+  // allocated until `nas container clean` collects them once the agent
+  // exits, and until then it recognizes the joiner as a user of this sidecar.
+  if (await isRunning(joinerContainerName)) {
+    logInfo(
+      `[nas] DinD: ${joinerContainerName} still shares this namespace; skipping teardown`,
+    );
+    return;
+  }
 
   if (shared) {
     logInfo(`[nas] DinD: keeping shared sidecar (${containerName})`);
@@ -397,7 +441,7 @@ export async function teardownDindSidecar(
 
   try {
     logInfo(`[nas] DinD: stopping sidecar ${containerName}`);
-    await dockerStop(containerName, { timeoutSeconds: 0 });
+    await stop(containerName, { timeoutSeconds: 0 });
   } catch (e: unknown) {
     logWarn(
       `[nas] DinD teardown: failed to stop container: ${
@@ -406,7 +450,7 @@ export async function teardownDindSidecar(
     );
   }
   try {
-    await dockerRm(containerName);
+    await rm(containerName);
   } catch (e: unknown) {
     logWarn(
       `[nas] DinD teardown: failed to remove container: ${
@@ -416,7 +460,7 @@ export async function teardownDindSidecar(
   }
   try {
     logInfo(`[nas] DinD: removing volume ${sharedTmpVolume}`);
-    await dockerVolumeRemove(sharedTmpVolume);
+    await volumeRemove(sharedTmpVolume);
   } catch (e: unknown) {
     logWarn(
       `[nas] DinD teardown: failed to remove volume: ${

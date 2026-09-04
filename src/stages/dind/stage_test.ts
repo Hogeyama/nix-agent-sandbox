@@ -19,6 +19,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
 import { buildDindSidecarEnv } from "../../docker/dind.ts";
+import { containerNameForSession } from "../../docker/nas_resources.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type {
@@ -367,6 +368,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
     containerName: string;
     sharedTmpVolume: string;
     shared: boolean;
+    joinerContainerName: string;
   }> = [];
 
   const fakeLayer = makeDindServiceFake({
@@ -442,6 +444,9 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(teardownCalls[0].containerName).toEqual("nas-dind-shared");
   expect(teardownCalls[0].sharedTmpVolume).toEqual("nas-dind-shared-tmp");
   expect(teardownCalls[0].shared).toEqual(true);
+  expect(teardownCalls[0]?.joinerContainerName).toBe(
+    containerNameForSession("test-session-1234"),
+  );
 });
 
 // ============================================================

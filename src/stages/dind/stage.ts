@@ -25,6 +25,7 @@ import {
   SHARED_CONTAINER_NAME,
   SHARED_TMP_MOUNT_PATH,
 } from "../../docker/dind.ts";
+import { containerNameForSession } from "../../docker/nas_resources.ts";
 import { logInfo } from "../../log.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
@@ -64,6 +65,12 @@ export interface DindPlan {
   readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
+  /**
+   * Name of the agent container that will join this sidecar's network
+   * namespace. Teardown uses it to check whether the agent is still
+   * running before removing the sidecar out from under it.
+   */
+  readonly joinerContainerName: string;
   readonly outputOverrides: Pick<StageResult, "container" | "dind">;
 }
 
@@ -122,6 +129,7 @@ export function planDind(
     shared,
     disableCache,
     readinessTimeoutMs,
+    joinerContainerName: containerNameForSession(input.sessionId),
     outputOverrides: {
       dind: {
         containerName,
@@ -214,6 +222,7 @@ function runDind(
             sharedTmpVolume: plan.sharedTmpVolume,
             networkName: plan.networkName,
             shared: plan.shared,
+            joinerContainerName: plan.joinerContainerName,
           })
           .pipe(Effect.ignoreLogged),
     );
