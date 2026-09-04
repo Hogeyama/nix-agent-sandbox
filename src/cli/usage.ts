@@ -11,7 +11,7 @@ Usage:
   nas worktree [list|clean] [options]
   nas container [list|clean]
   nas session [list|attach <session-id>]
-  nas network [pending|approve|deny|review|gc]
+  nas network [pending|approve|deny|review|gc|bind|unbind]
   nas hostexec [pending|approve|deny|review|test] [options]
   nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
@@ -76,6 +76,13 @@ Network options:
   deny            拒否する
   review          fzf で対話的に承認/拒否する
   gc              stale runtime state を掃除する
+  bind <session-id>:<container-port> [<host-port>]
+                  コンテナのポートを localhost で開く（引数なしで一覧表示）
+  unbind [<session-id>:<container-port> | <host-port>]
+                  開いたポートを閉じる（引数なしで fzf 選択）
+  --runtime-dir DIR
+                  bind/unbind では ports runtime root、それ以外では network runtime root
+  --format json   bind の一覧を JSON 形式で表示
 
 HostExec options:
   pending         保留中の hostexec 承認要求を表示
@@ -104,6 +111,8 @@ Examples:
   nas container clean                    # Remove unused nas sidecars
   nas network pending                    # Show pending approvals
   nas network approve <session> <request> --scope host-port
+  nas network bind <session>:3000        # Open a container port on localhost
+  nas network unbind <session>:3000      # Close an open port binding
   nas hostexec pending                   # Show pending hostexec approvals
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
