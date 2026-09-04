@@ -565,7 +565,7 @@ function buildContainerState(
 ): ContainerPlan {
   return mergeContainerPlan(resolveContainerBase(input), {
     env: { static: config.envVars },
-    network: { name: config.sessionNetworkName },
+    network: { mode: "network", name: config.sessionNetworkName },
     // Skip the mounts patch entirely when there's nothing to add; passing an
     // empty array still triggers mergeContainerPlan's append branch (a no-op
     // here), but keeping the patch keyless makes intent clearer.

@@ -271,7 +271,7 @@ test("DindStage: planner merges into existing container slice and preserves exis
         ...emptyContainerPlan("slice-image", "/slice-workdir"),
         env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
         extraRunArgs: ["--shm-size", "2g"],
-        network: { name: "stale-net" },
+        network: { mode: "network", name: "stale-net" },
         command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
         labels: { "nas.managed": "true" },
       },
@@ -302,7 +302,7 @@ test("DindStage: planner merges into existing container slice and preserves exis
       "-v",
       "nas-dind-tmp-abcdef12:/tmp/nas-shared",
     ],
-    network: { name: "stale-net" },
+    network: { mode: "network", name: "stale-net" },
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
     labels: { "nas.managed": "true" },
   });

@@ -477,7 +477,7 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
       dynamicOps: [],
     },
     extraRunArgs: ["--shm-size", "2g"],
-    network: { name: "nas-session-net-test-session-123" },
+    network: { mode: "network", name: "nas-session-net-test-session-123" },
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
     labels: { "nas.managed": "true" },
   });
@@ -795,6 +795,7 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
   });
   expect(result.prompt?.promptToken).toBeDefined();
   expect(result.container?.network).toEqual({
+    mode: "network",
     name: "nas-session-net-test-session-123",
   });
 });
@@ -878,6 +879,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
   });
 
   expect(result.container?.network).toEqual({
+    mode: "network",
     name: "nas-session-net-test-session-123",
   });
   expect(result.container?.env.static.http_proxy).toEqual(

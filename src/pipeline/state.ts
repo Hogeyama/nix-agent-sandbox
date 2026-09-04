@@ -132,11 +132,18 @@ export interface DynamicEnvOp {
   readonly separator: string;
 }
 
-/** Container network attachment (name + optional DNS alias). */
-export interface NetworkAttachment {
-  readonly name: string;
-  readonly alias?: string;
-}
+/**
+ * Container network attachment.
+ *
+ * `network` mode joins a named Docker network. `container` mode joins another
+ * container's network namespace (`--network container:<name>`), which Docker
+ * rejects in combination with `--add-host`, `--hostname` and
+ * `--network-alias`; those flags belong to the container that owns the
+ * namespace.
+ */
+export type NetworkAttachment =
+  | { readonly mode: "network"; readonly name: string; readonly alias?: string }
+  | { readonly mode: "container"; readonly containerName: string };
 
 /** Agent command with optional extra args. */
 export interface CommandSpec {

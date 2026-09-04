@@ -439,6 +439,7 @@ test("planProxy: network proxy cannot be opted out", () => {
 
   expect(result.document.scopes).toEqual([]);
   expect(result.container.network).toEqual({
+    mode: "network",
     name: "nas-session-net-sess_test123",
   });
   expect(result.container.env.static.http_proxy).toEqual(

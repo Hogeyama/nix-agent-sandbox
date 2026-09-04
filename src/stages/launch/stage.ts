@@ -97,9 +97,13 @@ export function compileLaunchOpts(
   }
 
   if (plan.network) {
-    args.push("--network", plan.network.name);
-    if (plan.network.alias) {
-      args.push("--network-alias", plan.network.alias);
+    if (plan.network.mode === "container") {
+      args.push("--network", `container:${plan.network.containerName}`);
+    } else {
+      args.push("--network", plan.network.name);
+      if (plan.network.alias) {
+        args.push("--network-alias", plan.network.alias);
+      }
     }
   }
 

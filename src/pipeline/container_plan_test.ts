@@ -121,19 +121,23 @@ test("mergeContainerPlan: labels are key-merged (patch wins)", () => {
 });
 
 test("mergeContainerPlan: network is replaced", () => {
-  const base = makeBasePlan({ network: { name: "base-net" } });
+  const base = makeBasePlan({ network: { mode: "network", name: "base-net" } });
   const patch: ContainerPatch = {
-    network: { name: "patch-net", alias: "alias1" },
+    network: { mode: "network", name: "patch-net", alias: "alias1" },
   };
   const result = mergeContainerPlan(base, patch);
-  expect(result.network).toEqual({ name: "patch-net", alias: "alias1" });
+  expect(result.network).toEqual({
+    mode: "network",
+    name: "patch-net",
+    alias: "alias1",
+  });
 });
 
 test("mergeContainerPlan: undefined network patch keeps base network", () => {
-  const base = makeBasePlan({ network: { name: "base-net" } });
+  const base = makeBasePlan({ network: { mode: "network", name: "base-net" } });
   const patch: ContainerPatch = {};
   const result = mergeContainerPlan(base, patch);
-  expect(result.network).toEqual({ name: "base-net" });
+  expect(result.network).toEqual({ mode: "network", name: "base-net" });
 });
 
 test("mergeContainerPlan: command is replaced", () => {
