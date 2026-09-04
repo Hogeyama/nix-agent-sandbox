@@ -32,8 +32,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | **P1** | §3-B1 zod 削除 / §3-B3 CI 重複・抜け | Chore | 小 | 未使用依存の削除とCI修正が必要 |
 | **P2** | M10 secret パスガードが HOME 全域許可 denylist | Sec | 小 | trust ゲート後なので severity 低。defense-in-depth |
 | **P2** | M11 `unsafe-inherit-all` が NAS_*/proxy トークンまで露出 | Sec | 小 | opt-in だが除外リスト追加で緩和 |
-| **P2** | H7 DinD `shared=true` トークン寿命（可用性） | Sec(可用性) | 小〜中 | 起動時警告 or 長寿命クレデンシャル |
 | **P2** | DinD sidecar `--privileged` / L1 ソケット無制限蓄積 OOM | Sec | 中 | |
+| **P2** | DinD dockerd の `0.0.0.0:2375` publish（多層防御） | Sec | 小 | publish を `127.0.0.1:2375:2375` に絞れば内側コンテナからの経路が塞がる |
 | **P2** | §3-B2 migrate.ts ~1900行 整理 | Refactor | 中 | Pkl-only 宣言済み |
 | **P3** | L3〜L8, §3-C/D/E2-4/F 各種リファクタ・堅牢化 | 各種 | — | 下記 |
 
@@ -78,7 +78,6 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | 危険設定削除 (gcloud/aws/gpg) | ⬜ 残 **P0** | 型+mount+probe+Pkl から削除する |
 | H2 認証情報ディレクトリ RW | ⬜ 残 **P1** | [検証] CONFIRMED。`~/.claude`/`~/.copilot`/`~/.codex` すべて `:ro` 無し |
 | コンテナ権限ハードニング | ⬜ 残 **P1** | `no-new-privileges` + `cap-drop ALL` の追加が必要 |
-| H7 DinD `shared=true` トークン寿命 | ⬜ 残 **P2** | [検証] CONFIRMED（可用性、漏れはしない） |
 | M9 argv0 表示/実行不一致 | ⬜ 残 **P1** | 承認表示と実行を同じ `capability.argv0` に統一する |
 | fallback 死蔵フィールド | ⬜ 残 **P1** | 型+Schema+テストから削除する |
 | M8 / M10〜M11 / L1〜L8 | ⬜ 残 | 下記（大半 CONFIRMED、L2 のみ STALE 訂正） |
@@ -162,17 +161,22 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
   `NAS_*`/proxy トークンを除外するフィルタ無し。opt-in かつ "unsafe" 命名で半ば受容だが、
   **対応**: `NAS_*` / proxy 資格情報だけは除外。
 
-### H7. DinD `shared=true` のトークン寿命問題（可用性）
-- **[検証] CONFIRMED**: proxy endpoint は per-session token URL（`src/stages/proxy/stage.ts:141`）で、
-  sidecar 起動時（`src/docker/dind.ts:463-475`）にのみ dockerd env へ焼かれる。共有 sidecar 再利用時は
-  `startDindSidecar` を skip（`dind.ts:211-217`）し network 再接続のみ → 作成元セッション終了で token 失効、
-  `docker pull` 破損（fail-safe: 漏れはしない）。`docker.shared=true` に警告/バリデーション無し。
-- **対応案**: 短期 = 起動時警告 or バリデーションエラー。長期 = auth-router に長寿命「dind 用クレデンシャル」。
-
 ### その他 P2
 - [ ] **DinD サイドカーが `--privileged`** — [検証] CONFIRMED `src/docker/dind.ts:484`。rootless なら通常不要。
 - [ ] **L1: broker/hostexec ソケットに schema 検証・サイズ上限が無い** — [検証] CONFIRMED
   `src/lib/unix_socket.ts:34-49`（`readJsonLine` が `\n` まで無制限蓄積）→ ホスト側 OOM DoS。
+- [ ] **DinD sidecar の dockerd が namespace 内で `0.0.0.0:2375` に publish される** —
+  [検証] CONFIRMED。`rootlesskit ... -p 0.0.0.0:2375:2375/tcp`（実測した起動引数）。
+  DinD の内側で起動したコンテナが sidecar の session network アドレス経由で
+  Docker API 全体に到達できる（内側の alpine から `/v1.44/containers/json` で
+  コンテナ一覧を取得できることを確認済み）。
+  権限昇格ではなく多層防御の話である。agent は `DOCKER_HOST` で既に同じデーモンへ
+  無制限にアクセスでき、到達できるようになるのは agent 自身が起動したコンテナである。
+  問題になるのは agent が自分で制御していない第三者イメージを実行する場合に限られる。
+  rootless デーモンの root は sidecar 内の uid 1000 に写像され、sidecar の外側の
+  `--privileged` はその uid には及ばないため、ホストへの経路は実証されていない。
+  対応: agent が `127.0.0.1:2375` で到達するようになったので、publish を
+  `127.0.0.1:2375:2375` に絞れば内側からの経路は消える。
 
 ## 残 (Low / 設計受容)
 
@@ -349,7 +353,6 @@ direnv 風 workspace-trust ゲート。`.nas/` 配下ユーザ `.pkl` の内容�
 4. 非 internal な `nas-dind-<sid>` を廃止。
 
 実機検証（2026-06-12）: 内側コンテナは egress 完全不通、デーモン pull は allowlist 内=成功/外=Forbidden。
-残: `shared=true` トークン寿命（§1 H7）。
 
 ---
 
