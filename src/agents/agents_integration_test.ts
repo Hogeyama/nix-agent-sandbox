@@ -131,7 +131,11 @@ test("configureAgent: dispatches codex configuration", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.agentCommand).toEqual(["codex"]);
+  expect(result.agentCommand).toEqual([
+    "codex",
+    "-c",
+    "shell_environment_policy.inherit=all",
+  ]);
 });
 
 test("resolveAgentProbes: dispatches claude probe resolver", async () => {
@@ -550,7 +554,7 @@ test("resolveCopilotProbes: reports missing ~/.copilot", async () => {
 // configureCodex (pure function tests)
 // ============================================================
 
-test("configureCodex: uses ['codex'] when binary found", () => {
+test("configureCodex: inherits the complete container environment when binary found", () => {
   const probes: CodexProbes = {
     codexDirExists: false,
     codexBinPath: "/usr/bin/codex",
@@ -563,7 +567,11 @@ test("configureCodex: uses ['codex'] when binary found", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.agentCommand).toEqual(["codex"]);
+  expect(result.agentCommand).toEqual([
+    "codex",
+    "-c",
+    "shell_environment_policy.inherit=all",
+  ]);
   const hasBinaryMount = result.dockerArgs.some((a) => a.includes("/codex:ro"));
   expect(hasBinaryMount).toEqual(true);
 });
@@ -581,10 +589,11 @@ test("configureCodex: uses error command when codex binary not found", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.agentCommand[0]).toEqual("bash");
-  expect(result.agentCommand[2]?.includes("codex binary not found")).toEqual(
-    true,
-  );
+  expect(result.agentCommand).toEqual([
+    "bash",
+    "-c",
+    "echo 'codex binary not found'; exit 1",
+  ]);
 });
 
 test("configureCodex: mounts ~/.codex when directory exists", () => {

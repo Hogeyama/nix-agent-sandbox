@@ -67,7 +67,7 @@ export function configureCodex(input: CodexConfigInput): AgentConfigResult {
   }
 
   const agentCommand: string[] = probes.codexBinPath
-    ? ["codex"]
+    ? ["codex", "-c", "shell_environment_policy.inherit=all"]
     : ["bash", "-c", "echo 'codex binary not found'; exit 1"];
 
   return { dockerArgs: [...args], envVars, agentCommand };

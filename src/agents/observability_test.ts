@@ -207,7 +207,12 @@ test("buildAgentObservabilityContainerPatch: codex inserts trace config into age
       sessionId: "s",
       profileName: "p",
       port: 4318,
-      agentCommand: ["codex", "exec"],
+      agentCommand: [
+        "codex",
+        "-c",
+        "shell_environment_policy.inherit=all",
+        "exec",
+      ],
       extraArgs: ["--cli"],
     }),
   ).toEqual({
@@ -216,6 +221,8 @@ test("buildAgentObservabilityContainerPatch: codex inserts trace config into age
         "codex",
         "-c",
         'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+        "-c",
+        "shell_environment_policy.inherit=all",
         "exec",
       ],
       extraArgs: ["--cli"],

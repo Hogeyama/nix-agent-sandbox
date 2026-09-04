@@ -1094,7 +1094,11 @@ test("MountStage: codex agent sets agentCommand", () => {
   const mountProbes = makeMountProbes({ agentProbes: codexProbes });
   const { input } = makeInput({ profile, mountProbes });
   const plan = planMount(input, mountProbes);
-  expect(plan.containerPatch.command!.agentCommand).toEqual(["codex"]);
+  expect(plan.containerPatch.command!.agentCommand).toEqual([
+    "codex",
+    "-c",
+    "shell_environment_policy.inherit=all",
+  ]);
 });
 
 // ============================================================

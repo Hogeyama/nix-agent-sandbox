@@ -896,6 +896,7 @@ async function withFakeCodexProject(
       fakeCodexPath,
       [
         "#!/bin/sh",
+        'while [ "$#" -ge 2 ] && [ "$1" = "-c" ]; do shift 2; done',
         'printf "PWD=%s\\n" "$PWD"',
         'printf "ARGS=%s\\n" "$*"',
         'if [ -n "$MY_VAR" ]; then printf "MY_VAR=%s\\n" "$MY_VAR"; fi',
