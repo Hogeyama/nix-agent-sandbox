@@ -15,6 +15,7 @@ import type {
   ModelTokenTotalsRow,
 } from "../../history/store.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
+import type { PortsRuntimePaths } from "../../network/port_bind_registry.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import type { SessionRuntimePaths } from "../../sessions/store.ts";
 import type { UiDataContext, UiHistoryReader } from "../data.ts";
@@ -169,9 +170,17 @@ function makeCtx(reader: UiHistoryReader): UiDataContext {
     runtimeDir: "/tmp/sessions",
     sessionsDir: "/tmp/sessions/sessions",
   };
+  const portsPaths: PortsRuntimePaths = {
+    runtimeDir: "/tmp/ports",
+    sessionsDir: "/tmp/ports/sessions",
+    pendingDir: "/tmp/ports/pending",
+    brokersDir: "/tmp/ports/brokers",
+    relayDir: "/tmp/ports/relay",
+  };
   return {
     networkPaths,
     hostExecPaths,
+    portsPaths,
     sessionPaths,
     auditDir: "/tmp/audit",
     terminalRuntimeDir: "/tmp/dtach",

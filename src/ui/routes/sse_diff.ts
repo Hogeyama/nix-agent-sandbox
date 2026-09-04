@@ -10,9 +10,9 @@
  *   optimization.
  * - Event names are fixed and ordered: `network:pending` →
  *   `hostexec:pending` → `sessions` → `terminal:sessions` → `containers` →
- *   `audit:logs`.
+ *   `port-bindings` → `audit:logs`.
  * - Payload shapes are non-symmetric: `sessions` emits the raw `SessionsData`
- *   object as the SSE `data` field, while the other five events wrap their
+ *   object as the SSE `data` field, while the other events wrap their
  *   array in `{ items: [...] }`.
  * - When `audit` is `undefined` (i.e. the audit fetch failed in the caller),
  *   the `audit:logs` event is suppressed and `nextState.audit` is preserved
@@ -26,6 +26,7 @@
 import type { AuditLogEntry } from "../../audit/types.ts";
 import type { NasContainerInfo } from "../../domain/container.ts";
 import type { HostExecPendingEntry } from "../../hostexec/types.ts";
+import type { PortBindSessionEntry } from "../../network/port_bind_protocol.ts";
 import type { PendingEntry } from "../../network/protocol.ts";
 import type { SessionsData, TerminalSessionInfo } from "../data.ts";
 
@@ -39,6 +40,7 @@ export type SnapshotState = Readonly<{
   sessions: string;
   terminalSessions: string;
   containers: string;
+  portBindings: string;
   audit: string;
 }>;
 
@@ -53,6 +55,7 @@ export type SnapshotInputs = {
   sessions: SessionsData;
   terminalSessions: TerminalSessionInfo[];
   containers: NasContainerInfo[];
+  portBindings: PortBindSessionEntry[];
   audit?: AuditLogEntry[];
 };
 
@@ -67,6 +70,7 @@ export const SSE_EVENT_NAMES = [
   "sessions",
   "terminal:sessions",
   "containers",
+  "port-bindings",
   "audit:logs",
 ] as const;
 
@@ -75,7 +79,7 @@ export type SseEventName = (typeof SSE_EVENT_NAMES)[number];
 /**
  * One SSE event ready to be `send(event, data)`-ed. Note the deliberate
  * payload-shape asymmetry: `sessions` carries the raw `SessionsData`
- * object, while the other five events wrap their array in `{ items }`.
+ * object, while the other events wrap their array in `{ items }`.
  */
 export type SseEvent =
   | { event: "network:pending"; data: { items: PendingEntry[] } }
@@ -83,6 +87,7 @@ export type SseEvent =
   | { event: "sessions"; data: SessionsData }
   | { event: "terminal:sessions"; data: { items: TerminalSessionInfo[] } }
   | { event: "containers"; data: { items: NasContainerInfo[] } }
+  | { event: "port-bindings"; data: { items: PortBindSessionEntry[] } }
   | { event: "audit:logs"; data: { items: AuditLogEntry[] } };
 
 /** Initial state to seed `diffSnapshots` on the first poll of a connection. */
@@ -93,6 +98,7 @@ export function initialSnapshotState(): SnapshotState {
     sessions: "",
     terminalSessions: "",
     containers: "",
+    portBindings: "",
     audit: "",
   };
 }
@@ -148,6 +154,23 @@ export function diffSnapshots(
     events.push({ event: "containers", data: { items: next.containers } });
   }
 
+  const portBindingsJson = JSON.stringify(
+    next.portBindings.flatMap((session) =>
+      session.bindings.map((binding) => [
+        session.sessionId,
+        binding.containerPort,
+        binding.hostPort,
+      ]),
+    ),
+  );
+  const portBindingsChanged = portBindingsJson !== prev.portBindings;
+  if (portBindingsChanged) {
+    events.push({
+      event: "port-bindings",
+      data: { items: next.portBindings },
+    });
+  }
+
   // Audit is optional: undefined means the caller's audit fetch failed and
   // we must suppress the event AND keep prev.audit so a later successful
   // fetch with the same payload still counts as "no change" (rather than
@@ -169,6 +192,7 @@ export function diffSnapshots(
       ? terminalSessionsJson
       : prev.terminalSessions,
     containers: containersChanged ? containersJson : prev.containers,
+    portBindings: portBindingsChanged ? portBindingsJson : prev.portBindings,
     audit: auditJson,
   };
 

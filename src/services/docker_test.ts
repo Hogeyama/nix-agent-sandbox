@@ -238,3 +238,27 @@ test(".orDie was retracted: Fake errors land in Fail, not Die", async () => {
   if (failure._tag !== "Some") return;
   expect(failure.value.message).toEqual("boom");
 });
+
+test("the fake's execDetached succeeds by default", async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const docker = yield* DockerService;
+      return yield* docker.execDetached("c", ["bun", "x.mjs"]);
+    }).pipe(Effect.provide(makeDockerServiceFake())),
+  );
+  expect(result).toEqual({ code: 0, stderr: "" });
+});
+
+test("execDetached surfaces the override's stderr", async () => {
+  const layer = makeDockerServiceFake({
+    execDetached: () =>
+      Effect.succeed({ code: 1, stderr: "No such container: c" }),
+  });
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const docker = yield* DockerService;
+      return yield* docker.execDetached("c", ["bun", "x.mjs"]);
+    }).pipe(Effect.provide(layer)),
+  );
+  expect(result.stderr).toContain("No such container");
+});

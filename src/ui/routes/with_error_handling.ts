@@ -7,6 +7,15 @@ import {
   ContainerNotRunningError,
   NotNasManagedContainerError,
 } from "../../domain/container.ts";
+import {
+  AmbiguousHostPortError,
+  BindingConflictError,
+  HostPortTakenError,
+  InternalBrokerError,
+  InvalidRequestError,
+  NoSuchBindingError,
+  SessionUnreachableError,
+} from "../../domain/port_bind/types.ts";
 import { LaunchValidationError } from "../launch.ts";
 import { json } from "../router.ts";
 
@@ -15,9 +24,14 @@ import { json } from "../router.ts";
  *
  * Mapping:
  * - LaunchValidationError → 400
+ * - InvalidRequestError → 400
  * - ContainerNotRunningError → 409
+ * - HostPortTakenError / BindingConflictError / AmbiguousHostPortError → 409
  * - NotNasManagedContainerError → 403
+ * - NoSuchBindingError → 404
  * - Error message starts with "Session not found:" → 404
+ * - SessionUnreachableError → 503
+ * - InternalBrokerError → 500
  * - default → 500
  *
  * Note: the "Cannot acknowledge turn in state:" prefix is intentionally NOT
@@ -39,6 +53,25 @@ export function mapErrorToResponse(e: unknown): Response {
   }
   if (e instanceof NotNasManagedContainerError) {
     return json({ error: e.message }, 403);
+  }
+  if (e instanceof InvalidRequestError) {
+    return json({ error: e.message }, 400);
+  }
+  if (
+    e instanceof HostPortTakenError ||
+    e instanceof BindingConflictError ||
+    e instanceof AmbiguousHostPortError
+  ) {
+    return json({ error: e.message }, 409);
+  }
+  if (e instanceof NoSuchBindingError) {
+    return json({ error: e.message }, 404);
+  }
+  if (e instanceof SessionUnreachableError) {
+    return json({ error: e.message }, 503);
+  }
+  if (e instanceof InternalBrokerError) {
+    return json({ error: e.message }, 500);
   }
   if (e instanceof Error && e.message.startsWith("Session not found:")) {
     return json({ error: e.message }, 404);

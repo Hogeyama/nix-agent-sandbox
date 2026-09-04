@@ -18,6 +18,7 @@ import {
   ackSessionTurn,
   approveHostExec,
   approveNetwork,
+  bindPort,
   denyHostExec,
   denyNetwork,
   fetchPricingSnapshot,
@@ -32,6 +33,7 @@ import {
   request,
   startShell,
   stopContainer,
+  unbindPort,
 } from "./client";
 
 type FetchFn = typeof globalThis.fetch;
@@ -492,6 +494,40 @@ describe("denyNetwork", () => {
     const body = parseBody(init);
     expect(body).toEqual({ sessionId: "sess-1", requestId: "req-1" });
     expect(body).not.toHaveProperty("scope");
+  });
+});
+
+describe("port bindings", () => {
+  test("bindPort requests an automatically selected host port", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({ hostPort: 49152, probe: "ok" }),
+    );
+
+    const result = await bindPort("sess-1", 3000);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/network/bind");
+    expect(init.method).toBe("POST");
+    expect(parseBody(init)).toEqual({
+      sessionId: "sess-1",
+      containerPort: 3000,
+      hostPort: null,
+    });
+    expect(result).toEqual({ hostPort: 49152, probe: "ok" });
+  });
+
+  test("unbindPort identifies the binding by session and container port", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+
+    await unbindPort("sess-1", 3000);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/network/unbind");
+    expect(init.method).toBe("POST");
+    expect(parseBody(init)).toEqual({
+      sessionId: "sess-1",
+      containerPort: 3000,
+    });
   });
 });
 

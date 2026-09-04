@@ -9,8 +9,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { appendAuditLog, storeRequestBody } from "../../audit/store.ts";
 import { useRepoSchemaAsset } from "../../config/schema_asset_testing.ts";
+import {
+  AmbiguousHostPortError,
+  BindingConflictError,
+  HostPortTakenError,
+  InternalBrokerError,
+  InvalidRequestError,
+  NoSuchBindingError,
+  SessionUnreachableError,
+} from "../../domain/port_bind/types.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import { resolveAsset } from "../../lib/asset.ts";
+import type { PortsRuntimePaths } from "../../network/port_bind_registry.ts";
 import { APPROVAL_SCOPES } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
@@ -23,6 +33,7 @@ import type { UiDataContext } from "../data.ts";
 import type { PricingSnapshot } from "../pricing.ts";
 import { Router } from "../router.ts";
 import { createApiRoutes } from "./api.ts";
+import { mapErrorToResponse } from "./with_error_handling.ts";
 
 let restoreSchemaAsset: (() => Promise<void>) | undefined;
 
@@ -56,9 +67,17 @@ function createTestContext(dir: string): UiDataContext {
     runtimeDir: `${dir}/sessions-root`,
     sessionsDir: `${dir}/sessions-root/sessions`,
   };
+  const portsPaths: PortsRuntimePaths = {
+    runtimeDir: `${dir}/ports`,
+    sessionsDir: `${dir}/ports/sessions`,
+    pendingDir: `${dir}/ports/pending`,
+    brokersDir: `${dir}/ports/brokers`,
+    relayDir: `${dir}/ports/relay`,
+  };
   return {
     networkPaths,
     hostExecPaths,
+    portsPaths,
     sessionPaths,
     auditDir: `${dir}/audit`,
     terminalRuntimeDir: `${dir}/dtach`,
@@ -335,6 +354,117 @@ test("POST /network/approve returns 400 without required fields", async () => {
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+test("POST /network/bind returns 400 without required fields", async () => {
+  const ctx = createTestContext("/tmp/nas-ui-port-bind-test-unused");
+  const api = createApiRoutes(ctx);
+  const app = new Router();
+  app.route("/api", api);
+
+  const res = await app.request("/api/network/bind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: "s1" }),
+  });
+
+  expect(res.status).toEqual(400);
+});
+
+test("port-bind routes reject malformed and non-object JSON with 400", async () => {
+  const ctx = createTestContext("/tmp/nas-ui-port-bind-test-unused");
+  const api = createApiRoutes(ctx);
+  const app = new Router();
+  app.route("/api", api);
+
+  const malformed = await app.request("/api/network/bind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{",
+  });
+  const nullBody = await app.request("/api/network/unbind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+
+  expect(malformed.status).toEqual(400);
+  expect(nullBody.status).toEqual(400);
+});
+
+test("POST /network/bind rejects an unsafe session id", async () => {
+  const ctx = createTestContext("/tmp/nas-ui-port-bind-test-unused");
+  const api = createApiRoutes(ctx);
+  const app = new Router();
+  app.route("/api", api);
+
+  const res = await app.request("/api/network/bind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: "../etc", containerPort: 3000 }),
+  });
+
+  expect(res.status).toEqual(400);
+});
+
+test("POST /network/bind rejects a port outside 1-65535", async () => {
+  const ctx = createTestContext("/tmp/nas-ui-port-bind-test-unused");
+  const api = createApiRoutes(ctx);
+  const app = new Router();
+  app.route("/api", api);
+
+  const res = await app.request("/api/network/bind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: "s1", containerPort: 70_000 }),
+  });
+
+  expect(res.status).toEqual(400);
+});
+
+test("POST /network/unbind validates its session id and container port", async () => {
+  const ctx = createTestContext("/tmp/nas-ui-port-bind-test-unused");
+  const api = createApiRoutes(ctx);
+  const app = new Router();
+  app.route("/api", api);
+
+  const unsafeId = await app.request("/api/network/unbind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: "../etc", containerPort: 3000 }),
+  });
+  const invalidPort = await app.request("/api/network/unbind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: "s1", containerPort: 0 }),
+  });
+
+  expect(unsafeId.status).toEqual(400);
+  expect(invalidPort.status).toEqual(400);
+});
+
+test("port-bind errors surface with their specified statuses", () => {
+  expect(mapErrorToResponse(new HostPortTakenError("taken")).status).toEqual(
+    409,
+  );
+  expect(mapErrorToResponse(new BindingConflictError("conflict")).status).toBe(
+    409,
+  );
+  expect(
+    mapErrorToResponse(new AmbiguousHostPortError(3000, ["s1", "s2"])).status,
+  ).toBe(409);
+  expect(mapErrorToResponse(new NoSuchBindingError("missing")).status).toBe(
+    404,
+  );
+  expect(mapErrorToResponse(new InvalidRequestError("invalid")).status).toBe(
+    400,
+  );
+  expect(
+    mapErrorToResponse(new SessionUnreachableError("unreachable")).status,
+  ).toBe(503);
+  expect(mapErrorToResponse(new InternalBrokerError("internal")).status).toBe(
+    500,
+  );
 });
 
 test("POST /network/deny returns 400 without required fields", async () => {

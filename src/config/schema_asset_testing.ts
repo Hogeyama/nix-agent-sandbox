@@ -9,6 +9,7 @@
  */
 
 import {
+  copyFile,
   cp,
   mkdir,
   mkdtemp,
@@ -37,6 +38,16 @@ export async function useRepoSchemaAsset(): Promise<() => Promise<void>> {
   if (previous !== undefined) {
     for (const entry of await readdir(previous).catch(() => [])) {
       if (entry === "config") continue;
+      if (entry === "docker") {
+        await cp(path.join(previous, entry), path.join(assetDir, entry), {
+          recursive: true,
+        });
+        await copyFile(
+          new URL("../docker/embed/port-relay.mjs", import.meta.url),
+          path.join(assetDir, "docker", "embed", "port-relay.mjs"),
+        );
+        continue;
+      }
       await symlink(path.join(previous, entry), path.join(assetDir, entry));
     }
   } else {

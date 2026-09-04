@@ -155,6 +155,17 @@ export type DtachSessionLike = {
   createdAt: number;
 };
 
+export type PortBindingLike = {
+  containerPort: number;
+  hostPort: number;
+  createdAt: string;
+};
+
+export type PortBindSessionLike = {
+  sessionId: string;
+  bindings: PortBindingLike[];
+};
+
 // SSE-received payload subset describing one audit log entry, mirroring
 // the wire shape of `AuditLogEntry` in `src/audit/types.ts`. Optional
 // fields are typed as `T | null | undefined` so the store's normalizer

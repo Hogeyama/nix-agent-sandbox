@@ -6,6 +6,7 @@ import type {
   HostExecPendingRow,
   NetworkPendingRow,
 } from "../stores/pendingStore";
+import type { PortBindSessionLike } from "../stores/types";
 import { formatAuditEntry, summaryFor } from "./auditEntryView";
 import type { HostExecApprovalScope } from "./pendingCardView";
 import {
@@ -21,6 +22,7 @@ import {
   sessionLabel,
 } from "./pendingCardView";
 import { filterPendingForSession } from "./pendingNotificationView";
+import { PortBindingsPanel } from "./ports/PortBindingsPanel";
 import { RequestBodyPanel } from "./RequestBodyPanel";
 
 // Network scope chips. The label is what the user reads; the hint is the
@@ -64,6 +66,7 @@ type Props = {
   hostexec: () => HostExecPendingRow[];
   sessionNameFor: (sessionId: string) => string | undefined;
   activeSessionId: () => string | null;
+  portBindings: () => PortBindSessionLike[];
   showAllSessions: () => boolean;
   setShowAllSessions: (showAll: boolean) => void;
   collapsed: () => boolean;
@@ -200,6 +203,10 @@ export function PendingPane(props: Props) {
               {visiblePending()} shown
             </span>
           </fieldset>
+          <PortBindingsPanel
+            sessionId={props.activeSessionId}
+            portBindings={props.portBindings}
+          />
           <div class="section-label">
             <span>Network · out</span>
             <span class="section-sub">

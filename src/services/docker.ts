@@ -21,6 +21,7 @@ import {
   dockerContainerIpOnNetwork,
   dockerEnsureImage,
   dockerExec,
+  dockerExecDetached,
   dockerInspectContainer,
   dockerInspectNetwork,
   dockerInspectVolume,
@@ -137,6 +138,11 @@ export class DockerService extends Context.Tag("nas/DockerService")<
       cmd: string[],
       opts?: { user?: string },
     ) => Effect.Effect<string, Error>;
+    readonly execDetached: (
+      container: string,
+      cmd: string[],
+      opts?: { user?: string; env?: Record<string, string> },
+    ) => Effect.Effect<{ code: number; stderr: string }, Error>;
     readonly containerIp: (name: string) => Effect.Effect<string, Error>;
     readonly containerIpOnNetwork: (
       container: string,
@@ -272,6 +278,12 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
         catch: wrapError("docker exec failed"),
       }),
 
+    execDetached: (container, cmd, opts) =>
+      Effect.tryPromise({
+        try: () => dockerExecDetached(container, cmd, opts),
+        catch: wrapError("docker exec -d failed"),
+      }),
+
     containerIp: (name) =>
       Effect.tryPromise({
         try: async () => {
@@ -387,6 +399,11 @@ export interface DockerServiceFakeConfig {
     cmd: string[],
     opts?: { user?: string },
   ) => Effect.Effect<string, Error>;
+  readonly execDetached?: (
+    container: string,
+    cmd: string[],
+    opts?: { user?: string; env?: Record<string, string> },
+  ) => Effect.Effect<{ code: number; stderr: string }, Error>;
   readonly containerIp?: (name: string) => Effect.Effect<string, Error>;
   readonly containerIpOnNetwork?: (
     container: string,
@@ -433,6 +450,9 @@ export function makeDockerServiceFake(
       networkRemove: overrides.networkRemove ?? (() => Effect.void),
       stop: overrides.stop ?? (() => Effect.void),
       exec: overrides.exec ?? (() => Effect.succeed("")),
+      execDetached:
+        overrides.execDetached ??
+        (() => Effect.succeed({ code: 0, stderr: "" })),
       containerIp: overrides.containerIp ?? (() => Effect.succeed("")),
       containerIpOnNetwork:
         overrides.containerIpOnNetwork ?? (() => Effect.succeed("172.18.0.2")),

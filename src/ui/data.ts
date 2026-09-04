@@ -15,6 +15,8 @@ import {
 } from "../domain/container.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
+import { makePortBindClient } from "../domain/port_bind/service.ts";
+import type { PortBindKey } from "../domain/port_bind/types.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
 import { getSocketDir } from "../dtach/client.ts";
@@ -35,6 +37,14 @@ import type {
   HostExecPendingEntry,
   HostExecSessionRegistryEntry,
 } from "../hostexec/types.ts";
+import type {
+  PortBindSessionEntry,
+  ProbeResult,
+} from "../network/port_bind_protocol.ts";
+import {
+  type PortsRuntimePaths,
+  resolvePortsRuntimePaths,
+} from "../network/port_bind_registry.ts";
 import type {
   ApprovalScope,
   PendingEntry,
@@ -107,6 +117,7 @@ export interface UiPricingReader {
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
+  portsPaths: PortsRuntimePaths;
   sessionPaths: SessionRuntimePaths;
   auditDir: string;
   terminalRuntimeDir: string;
@@ -147,9 +158,10 @@ function makePricingReader(): UiPricingReader {
 }
 
 export async function createDataContext(): Promise<UiDataContext> {
-  const [networkPaths, hostExecPaths] = await Promise.all([
+  const [networkPaths, hostExecPaths, portsPaths] = await Promise.all([
     resolveNetworkRuntimePaths(),
     resolveHostExecRuntimePaths(),
+    resolvePortsRuntimePaths(),
   ]);
   const sessionPaths = resolveSessionRuntimePaths();
   // 起動時に stale な session/pending を掃除
@@ -176,6 +188,7 @@ export async function createDataContext(): Promise<UiDataContext> {
   return {
     networkPaths,
     hostExecPaths,
+    portsPaths,
     sessionPaths,
     auditDir,
     terminalRuntimeDir,
@@ -211,6 +224,35 @@ export async function denyNetwork(
   scope?: ApprovalScope,
 ): Promise<void> {
   await networkClient.deny(ctx.networkPaths, sessionId, requestId, scope);
+}
+
+const portBindClient = makePortBindClient();
+
+export async function bindPort(
+  ctx: UiDataContext,
+  sessionId: string,
+  containerPort: number,
+  hostPort: number | null,
+): Promise<{ hostPort: number; probe: ProbeResult }> {
+  return await portBindClient.bind(
+    ctx.portsPaths,
+    sessionId,
+    containerPort,
+    hostPort,
+  );
+}
+
+export async function unbindPort(
+  ctx: UiDataContext,
+  key: PortBindKey,
+): Promise<void> {
+  await portBindClient.unbindByKey(ctx.portsPaths, key);
+}
+
+export async function getPortBindings(
+  ctx: UiDataContext,
+): Promise<PortBindSessionEntry[]> {
+  return await portBindClient.list(ctx.portsPaths);
 }
 
 export interface NetworkRequestBodyItem {

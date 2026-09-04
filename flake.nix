@@ -173,6 +173,7 @@
           cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
           cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
           cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
+          cp ${self}/src/docker/embed/port-relay.mjs $out/docker/embed/
           cp ${self}/src/docker/mitmproxy/nas_addon.py $out/docker/mitmproxy/
           cp ${self}/scripts/notify-send-wsl $out/scripts/
           cp -r ${nasUnwrapped}/share/nas/dist $out/ui/

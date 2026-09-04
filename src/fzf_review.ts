@@ -14,27 +14,37 @@ export interface ReviewResult {
   scope?: string;
 }
 
+function spawnFzf(args: string[]): ReturnType<typeof Bun.spawn> | null {
+  try {
+    return Bun.spawn(["fzf", ...args], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Spawns fzf for a simple single-selection from a list of options.
  * Returns null if the user cancelled.
  */
-async function fzfSelect(
-  options: string[],
-  prompt: string,
-  header?: string,
+export async function runFzfSelect(
+  items: string[],
+  opts: { prompt: string; header?: string; missingMessage: string },
 ): Promise<string | null> {
-  const input = `${options.join("\n")}\n`;
-  const args = [`--prompt=${prompt}`, "--no-sort"];
-  if (header) args.push(`--header=${header}`);
-
-  const child = Bun.spawn(["fzf", ...args], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "inherit",
-  });
+  const args = [`--prompt=${opts.prompt}`, "--no-sort"];
+  if (opts.header) args.push(`--header=${opts.header}`);
+  const child = spawnFzf(args);
+  if (!child) {
+    for (const item of items) console.log(item);
+    console.error(opts.missingMessage);
+    return null;
+  }
 
   (child.stdin as import("bun").FileSink).write(
-    new TextEncoder().encode(input),
+    new TextEncoder().encode(`${items.join("\n")}\n`),
   );
   (child.stdin as import("bun").FileSink).end();
 
@@ -43,8 +53,8 @@ async function fzfSelect(
   if (code === 130 || code === 1) return null;
   if (code !== 0) throw new Error(`fzf exited with code ${code}`);
 
-  const result = stdoutText.trimEnd();
-  return result || null;
+  const selected = stdoutText.trimEnd();
+  return items.includes(selected) ? selected : null;
 }
 
 /**
@@ -70,24 +80,14 @@ export async function runFzfReview(
     lookup.set(item.displayLine, item);
   }
 
-  let child: ReturnType<typeof Bun.spawn>;
-  try {
-    child = Bun.spawn(
-      [
-        "fzf",
-        "--multi",
-        "--expect=enter,ctrl-d",
-        "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
-        "--prompt=review> ",
-        "--no-sort",
-      ],
-      {
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "inherit",
-      },
-    );
-  } catch {
+  const child = spawnFzf([
+    "--multi",
+    "--expect=enter,ctrl-d",
+    "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
+    "--prompt=review> ",
+    "--no-sort",
+  ]);
+  if (!child) {
     throw new Error("fzf is not installed. Install it to use 'review'.");
   }
 
@@ -126,11 +126,11 @@ export async function runFzfReview(
   // If approving and scope options are available, prompt for scope
   let scope: string | undefined;
   if (action === "approve" && scopeOptions && scopeOptions.length > 0) {
-    const selected = await fzfSelect(
-      scopeOptions,
-      "scope> ",
-      "Select approval scope (Esc: cancel)",
-    );
+    const selected = await runFzfSelect(scopeOptions, {
+      prompt: "scope> ",
+      header: "Select approval scope (Esc: cancel)",
+      missingMessage: "fzf is not installed. Install it to use 'review'.",
+    });
     if (selected === null) return null;
     scope = selected;
   }

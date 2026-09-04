@@ -93,6 +93,10 @@ import {
   OtlpReceiverServiceLive,
 } from "./stages/observability.ts";
 import {
+  createPortBindStage,
+  PortBindServiceLive,
+} from "./stages/port_bind.ts";
+import {
   CaServiceLive,
   createProxyStage,
   ForwardPortRelayServiceLive,
@@ -357,6 +361,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       NetworkRuntimeServiceLive.pipe(Layer.provide(hostServiceLayer)),
       OtlpReceiverServiceLive,
+      PortBindServiceLive.pipe(Layer.provide(dockerLayer)),
       ProcessServiceLive,
       DockerServiceLive,
       PromptServiceLive,
@@ -465,6 +470,7 @@ export function createCliPipelineBuilder({
       )
       .add(createProxyStage(input))
       .add(createDindStage(input))
+      .add(createPortBindStage(input))
       .add(createLaunchStage(input, agentExtraArgs))
   );
 }
