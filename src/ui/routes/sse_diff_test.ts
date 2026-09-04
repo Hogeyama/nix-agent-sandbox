@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { AuditLogEntry } from "../../audit/types.ts";
 import type { NasContainerInfo } from "../../domain/container.ts";
 import type { HostExecPendingEntry } from "../../hostexec/types.ts";
+import type { PortBindSessionEntry } from "../../network/port_bind_protocol.ts";
 import type { PendingEntry } from "../../network/protocol.ts";
 import type { SessionsData, TerminalSessionInfo } from "../data.ts";
 import {
@@ -75,6 +76,26 @@ function makeAudit(suffix = "a1"): AuditLogEntry {
   };
 }
 
+function makePortBindings(
+  hostPort: number,
+  containerPort = 3000,
+): PortBindSessionEntry[] {
+  return [
+    {
+      sessionId: "sess-ports",
+      brokerSocket: "/tmp/ports/sess-ports/sock",
+      pid: process.pid,
+      bindings: [
+        {
+          containerPort,
+          hostPort,
+          createdAt: "2025-01-01T00:00:00Z",
+        },
+      ],
+    },
+  ];
+}
+
 const EMPTY_SESSIONS: SessionsData = { network: [], hostexec: [] };
 
 function makeInputs(overrides: Partial<SnapshotInputs> = {}): SnapshotInputs {
@@ -84,6 +105,7 @@ function makeInputs(overrides: Partial<SnapshotInputs> = {}): SnapshotInputs {
     sessions: EMPTY_SESSIONS,
     terminalSessions: [],
     containers: [],
+    portBindings: [],
     audit: [],
     ...overrides,
   };
@@ -93,7 +115,7 @@ function makeInputs(overrides: Partial<SnapshotInputs> = {}): SnapshotInputs {
 // Tests
 // ---------------------------------------------------------------------------
 
-test("1. initial state (all '') emits all 6 events in fixed order", () => {
+test("1. initial state (all '') emits all 7 events in fixed order", () => {
   const prev = initialSnapshotState();
   const inputs = makeInputs();
   const { events, nextState } = diffSnapshots(prev, inputs);
@@ -104,6 +126,7 @@ test("1. initial state (all '') emits all 6 events in fixed order", () => {
     "sessions",
     "terminal:sessions",
     "containers",
+    "port-bindings",
     "audit:logs",
   ]);
   // nextState fields are populated with the JSON of the empty inputs (not "").
@@ -112,6 +135,7 @@ test("1. initial state (all '') emits all 6 events in fixed order", () => {
   expect(nextState.sessions).toBe('{"network":[],"hostexec":[]}');
   expect(nextState.terminalSessions).toBe("[]");
   expect(nextState.containers).toBe("[]");
+  expect(nextState.portBindings).toBe("[]");
   expect(nextState.audit).toBe("[]");
 });
 
@@ -309,8 +333,8 @@ test("14. nextState round-trip: feeding nextState + same inputs yields no events
   expect(second.events).toEqual([]);
 });
 
-test("15. event ordering is deterministic when all 6 change", () => {
-  // Seed prev with a non-trivial baseline so all 6 are guaranteed to differ.
+test("15. event ordering is deterministic when all 7 change", () => {
+  // Seed prev with a non-trivial baseline so all 7 are guaranteed to differ.
   const seed = initialSnapshotState();
   const baseline = makeInputs({
     network: [makeNetworkEntry("base-n")],
@@ -321,6 +345,7 @@ test("15. event ordering is deterministic when all 6 change", () => {
     },
     terminalSessions: [makeTerminalSession("base-t")],
     containers: [makeContainer("base-c")],
+    portBindings: makePortBindings(3000),
     audit: [makeAudit("base-a")],
   });
   const { nextState: prev } = diffSnapshots(seed, baseline);
@@ -334,6 +359,7 @@ test("15. event ordering is deterministic when all 6 change", () => {
     },
     terminalSessions: [makeTerminalSession("new-t")],
     containers: [makeContainer("new-c")],
+    portBindings: makePortBindings(3001),
     audit: [makeAudit("new-a")],
   });
   const { events } = diffSnapshots(prev, next);
@@ -344,6 +370,36 @@ test("15. event ordering is deterministic when all 6 change", () => {
     "sessions",
     "terminal:sessions",
     "containers",
+    "port-bindings",
     "audit:logs",
+  ]);
+});
+
+test("adding and removing a binding each emit one port-bindings event", () => {
+  const empty = makeInputs();
+  const { nextState: emptyState } = diffSnapshots(
+    initialSnapshotState(),
+    empty,
+  );
+
+  const added = makeInputs({ portBindings: makePortBindings(3000) });
+  const addition = diffSnapshots(emptyState, added);
+  expect(addition.events).toEqual([
+    { event: "port-bindings", data: { items: makePortBindings(3000) } },
+  ]);
+
+  const removal = diffSnapshots(addition.nextState, empty);
+  expect(removal.events).toEqual([
+    { event: "port-bindings", data: { items: [] } },
+  ]);
+});
+
+test("rebinding one host port to another container port emits", () => {
+  const initial = makeInputs({ portBindings: makePortBindings(3000, 3000) });
+  const { nextState } = diffSnapshots(initialSnapshotState(), initial);
+  const rebound = makeInputs({ portBindings: makePortBindings(3000, 5173) });
+
+  expect(diffSnapshots(nextState, rebound).events).toEqual([
+    { event: "port-bindings", data: { items: makePortBindings(3000, 5173) } },
   ]);
 });

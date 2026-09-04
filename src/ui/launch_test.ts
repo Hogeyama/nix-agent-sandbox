@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { useRepoSchemaAsset } from "../config/schema_asset_testing.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import { resolveAsset } from "../lib/asset.ts";
+import type { PortsRuntimePaths } from "../network/port_bind_registry.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
 import type { UiDataContext } from "./data.ts";
@@ -74,9 +75,17 @@ function createDummyCtx(): UiDataContext {
     runtimeDir: "/tmp/nas-launch-test-unused/sessions-root",
     sessionsDir: "/tmp/nas-launch-test-unused/sessions-root/sessions",
   };
+  const portsPaths: PortsRuntimePaths = {
+    runtimeDir: "/tmp/nas-launch-test-unused/ports",
+    sessionsDir: "/tmp/nas-launch-test-unused/ports/sessions",
+    pendingDir: "/tmp/nas-launch-test-unused/ports/pending",
+    brokersDir: "/tmp/nas-launch-test-unused/ports/brokers",
+    relayDir: "/tmp/nas-launch-test-unused/ports/relay",
+  };
   return {
     networkPaths,
     hostExecPaths,
+    portsPaths,
     sessionPaths,
     auditDir: "/tmp/nas-launch-test-unused/audit",
     terminalRuntimeDir: "/tmp/nas-launch-test-unused/dtach",

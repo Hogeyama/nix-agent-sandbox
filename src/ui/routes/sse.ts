@@ -9,6 +9,7 @@ import {
   getHostExecPending,
   getNasContainers,
   getNetworkPending,
+  getPortBindings,
   getSessions,
   getTerminalSessions,
 } from "../data.ts";
@@ -69,16 +70,18 @@ export function createSseRoutes(ctx: UiDataContext): Router {
               sessions,
               terminalSessions,
               containers,
+              portBindings,
             ] = await Promise.all([
               getNetworkPending(ctx).catch(() => []),
               getHostExecPending(ctx).catch(() => []),
               getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
               getTerminalSessions(ctx).catch(() => []),
               getNasContainers(ctx).catch(() => []),
+              getPortBindings(ctx).catch(() => []),
             ]);
 
             // Audit logs — fetched separately so a failure does not affect
-            // the other 5 snapshots. `undefined` is a sentinel for
+            // the other 6 snapshots. `undefined` is a sentinel for
             // `diffSnapshots` to suppress the audit:logs event.
             let auditLogs: AuditLogEntry[] | undefined;
             try {
@@ -93,6 +96,7 @@ export function createSseRoutes(ctx: UiDataContext): Router {
               sessions,
               terminalSessions,
               containers,
+              portBindings,
               audit: auditLogs,
             });
             state = nextState;

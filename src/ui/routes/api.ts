@@ -11,6 +11,7 @@ import {
   acknowledgeSessionTurn,
   approveHostExec,
   approveNetwork,
+  bindPort,
   cleanContainers,
   denyHostExec,
   denyNetwork,
@@ -24,6 +25,7 @@ import {
   renameSession,
   startShellSession,
   stopContainer,
+  unbindPort,
 } from "../data.ts";
 import { getInfo } from "../info.ts";
 import {
@@ -69,6 +71,15 @@ function validateHostExecScope(
     );
   }
   return raw as HostExecPromptScope;
+}
+
+function isPort(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 65_535
+  );
 }
 
 /**
@@ -231,6 +242,75 @@ export function createApiRoutes(ctx: UiDataContext): Router {
         return json({ error: validatedScope.message }, 400);
       }
       await denyNetwork(ctx, sessionId, requestId, validatedScope);
+      return json({ ok: true });
+    }),
+  );
+
+  api.post("/network/bind", ({ req }) =>
+    withErrorHandling(async () => {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        return json({ error: "JSON body must be an object" }, 400);
+      }
+      const { sessionId, containerPort, hostPort } = body as Record<
+        string,
+        unknown
+      >;
+      if (!sessionId || containerPort === undefined) {
+        return json({ error: "sessionId and containerPort are required" }, 400);
+      }
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isPort(containerPort)) {
+        return json(
+          { error: "containerPort must be between 1 and 65535" },
+          400,
+        );
+      }
+      if (hostPort !== undefined && hostPort !== null && !isPort(hostPort)) {
+        return json({ error: "hostPort must be between 1 and 65535" }, 400);
+      }
+      const result = await bindPort(
+        ctx,
+        sessionId,
+        containerPort,
+        hostPort ?? null,
+      );
+      return json(result);
+    }),
+  );
+
+  api.post("/network/unbind", ({ req }) =>
+    withErrorHandling(async () => {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        return json({ error: "JSON body must be an object" }, 400);
+      }
+      const { sessionId, containerPort } = body as Record<string, unknown>;
+      if (!sessionId || containerPort === undefined) {
+        return json({ error: "sessionId and containerPort are required" }, 400);
+      }
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isPort(containerPort)) {
+        return json(
+          { error: "containerPort must be between 1 and 65535" },
+          400,
+        );
+      }
+      await unbindPort(ctx, { sessionId, containerPort });
       return json({ ok: true });
     }),
   );
