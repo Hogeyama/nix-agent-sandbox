@@ -212,6 +212,37 @@ test("planDind: sets the Testcontainers socket override", () => {
   ).toBe("/run/user/1000/docker.sock");
 });
 
+test("planDind: points Testcontainers at the loopback the published ports answer on", () => {
+  const plan = planDind(makeDindInput({ dockerEnable: true }));
+  const env = plan?.outputOverrides.container?.env.static;
+
+  expect(env?.TESTCONTAINERS_CONNECTION_MODE).toBe("docker_host");
+  expect(env?.TESTCONTAINERS_HOST_OVERRIDE).toBe("127.0.0.1");
+});
+
+test("planDind: does not override a user-supplied connection mode", () => {
+  const input = makeDindInput({ dockerEnable: true });
+  const withUserValue = {
+    ...input,
+    container: {
+      ...input.container,
+      env: {
+        ...input.container.env,
+        static: {
+          ...input.container.env.static,
+          TESTCONTAINERS_CONNECTION_MODE: "bridge_ip",
+        },
+      },
+    },
+  };
+
+  const plan = planDind(withUserValue);
+
+  expect(
+    plan?.outputOverrides.container?.env.static.TESTCONTAINERS_CONNECTION_MODE,
+  ).toBe("bridge_ip");
+});
+
 test("planDind: does not override a user-supplied socket path", () => {
   const input = makeDindInput({ dockerEnable: true });
   const withUserValue = {
@@ -387,6 +418,8 @@ test("DindStage: planner merges into existing container slice and overrides a st
         DOCKER_HOST: "tcp://127.0.0.1:2375",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
         TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
+        TESTCONTAINERS_CONNECTION_MODE: "docker_host",
+        TESTCONTAINERS_HOST_OVERRIDE: "127.0.0.1",
       },
       dynamicOps: [],
     },

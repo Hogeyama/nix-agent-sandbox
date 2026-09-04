@@ -285,13 +285,27 @@ function buildContainerState(
     DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
     NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
   };
-  // env.static is a key-merge in which the patch wins, so writing this
+  const testcontainersDefaults: Record<string, string> = {
+    TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: DIND_ROOTLESS_SOCKET_PATH,
+    /*
+     * Left to itself, Testcontainers recognises a local daemon reached from
+     * inside a container as DinD and hands out that daemon's bridge gateway
+     * (172.17.0.1) as the host of every published port. The daemon here is
+     * rootless, so its bridge lives in the network namespace rootlesskit
+     * owns and nothing in the agent's namespace can route to it -- which
+     * fails the Ryuk reaper's own connection and takes the whole run down
+     * before a test ever gets its connection URL. The published ports do
+     * answer on this namespace's loopback, and that is what these two
+     * announce: the mode for testcontainers-python, the host override for
+     * the JVM and Node implementations that have no such mode.
+     */
+    TESTCONTAINERS_CONNECTION_MODE: "docker_host",
+    TESTCONTAINERS_HOST_OVERRIDE: "127.0.0.1",
+  };
+  // env.static is a key-merge in which the patch wins, so writing these
   // unconditionally would silently replace a value set through profile env.
-  if (
-    input.container.env.static.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE ===
-    undefined
-  ) {
-    staticEnv.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE = DIND_ROOTLESS_SOCKET_PATH;
+  for (const [key, value] of Object.entries(testcontainersDefaults)) {
+    if (input.container.env.static[key] === undefined) staticEnv[key] = value;
   }
   return mergeContainerPlan(input.container, {
     network: { mode: "container", containerName: config.containerName },
