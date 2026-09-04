@@ -331,6 +331,19 @@ test("DindStage: derives sidecar and volume names from the session", () => {
   );
 });
 
+test("DindStage: registry mirror name is valid for a generated session ID", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const input = {
+    ...makeSharedInput(profile, "sess_edf4dd6e5aeb"),
+    ...makeStageState(),
+  };
+  const plan = planDind(input);
+
+  expect(plan?.registryMirrorName).toBe(
+    "nas-registry-mirror-sess-edf4dd6e5aeb",
+  );
+});
+
 test("DindStage: default options", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
   const input = { ...makeSharedInput(profile), ...makeStageState() };

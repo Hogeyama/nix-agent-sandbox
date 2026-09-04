@@ -141,7 +141,7 @@ export function planDind(
   const containerName = `nas-dind-${input.sessionId}`;
   const dindDataVolume = `nas-dind-data-${input.sessionId}`;
   const sharedTmpVolume = `nas-dind-tmp-${input.sessionId}`;
-  const registryMirrorName = `nas-registry-mirror-${input.sessionId}`;
+  const registryMirrorName = `nas-registry-mirror-${input.sessionId.replaceAll("_", "-")}`;
   const registryCacheVolume =
     options.registryCacheVolume ?? REGISTRY_CACHE_VOLUME;
   const disablePullCache = options.disablePullCache ?? false;
