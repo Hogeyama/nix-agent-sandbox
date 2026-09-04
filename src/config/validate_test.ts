@@ -541,6 +541,41 @@ test("validate: forwardPorts accepts valid ports", () => {
   expect(config.profiles.test.network.proxy.forwardPorts).toEqual([8080, 5432]);
 });
 
+test("validate: forwardPorts rejects 2375 when docker.enable is true", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            docker: { ...DEFAULT_DOCKER_CONFIG, enable: true },
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              proxy: { forwardPorts: [2375] },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow(/2375.*reserved.*Docker daemon/);
+});
+
+test("validate: forwardPorts accepts 2375 when docker.enable is false", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          docker: { ...DEFAULT_DOCKER_CONFIG, enable: false },
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            proxy: { forwardPorts: [2375] },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.network.proxy.forwardPorts).toEqual([2375]);
+});
+
 // ---------------------------------------------------------------------------
 // env の mode/separator 相互依存
 // ---------------------------------------------------------------------------
