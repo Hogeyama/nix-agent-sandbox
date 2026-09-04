@@ -4,10 +4,13 @@ export const NAS_MANAGED_VALUE = "true";
 
 export const NAS_KIND_DIND = "dind";
 export const NAS_KIND_PROXY = "proxy";
+export const NAS_KIND_REGISTRY_MIRROR = "registry-mirror";
 export const NAS_KIND_DIND_NETWORK = "dind-network";
 export const NAS_KIND_PROXY_NETWORK = "proxy-network";
 export const NAS_KIND_SESSION_NETWORK = "session-network";
 export const NAS_KIND_DIND_TMP = "dind-tmp";
+export const NAS_KIND_DIND_DATA = "dind-data";
+export const NAS_KIND_REGISTRY_CACHE = "registry-cache";
 export const NAS_KIND_AGENT = "agent";
 export const NAS_PWD_LABEL = "nas.pwd";
 export const NAS_SESSION_ID_LABEL = "nas.session_id";
@@ -31,7 +34,8 @@ export function isNasManagedSidecar(
   if (isNasManagedLabel(labels)) {
     return (
       labels[NAS_KIND_LABEL] === NAS_KIND_DIND ||
-      labels[NAS_KIND_LABEL] === NAS_KIND_PROXY
+      labels[NAS_KIND_LABEL] === NAS_KIND_PROXY ||
+      labels[NAS_KIND_LABEL] === NAS_KIND_REGISTRY_MIRROR
     );
   }
   return isLegacyNasSidecarName(name);
@@ -51,14 +55,15 @@ export function isNasManagedNetwork(
   return isLegacyNasNetworkName(name);
 }
 
-export function isNasManagedTmpVolume(
+export function isNasManagedEphemeralVolume(
   labels: DockerLabels,
   name: string,
 ): boolean {
   if (isNasManagedLabel(labels)) {
-    return labels[NAS_KIND_LABEL] === NAS_KIND_DIND_TMP;
+    const kind = labels[NAS_KIND_LABEL];
+    return kind === NAS_KIND_DIND_TMP || kind === NAS_KIND_DIND_DATA;
   }
-  return isLegacyNasTmpVolumeName(name);
+  return isLegacyNasEphemeralVolumeName(name);
 }
 
 export function isNasManagedAgent(labels: DockerLabels): boolean {
@@ -92,6 +97,10 @@ export function isLegacyNasNetworkName(name: string): boolean {
   );
 }
 
-export function isLegacyNasTmpVolumeName(name: string): boolean {
-  return name === "nas-dind-shared-tmp" || name.startsWith("nas-dind-tmp-");
+export function isLegacyNasEphemeralVolumeName(name: string): boolean {
+  return (
+    name === "nas-docker-cache" ||
+    name === "nas-dind-shared-tmp" ||
+    name.startsWith("nas-dind-tmp-")
+  );
 }

@@ -23,6 +23,7 @@ import {
 } from "../../config/types.ts";
 import {
   dockerExec,
+  dockerInspectVolume,
   dockerIsRunning,
   dockerLogs,
   dockerNetworkConnect,
@@ -40,6 +41,7 @@ import {
   buildDindSidecarEnv,
   DIND_IMAGE,
 } from "../../docker/dind.ts";
+import { REGISTRY_MIRROR_IMAGE } from "../../docker/registry_mirror.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type {
@@ -158,7 +160,7 @@ function makeStageState(
  * コンテナを起動して数秒待ち、まだ running なら OK。
  */
 async function canRunDindRootless(): Promise<boolean> {
-  const name = "nas-test-dind-probe";
+  const name = `nas-test-dind-probe-${crypto.randomUUID()}`;
   try {
     const exitCode = await Bun.spawn(
       [
@@ -429,16 +431,44 @@ async function sidecarNetworks(sidecar: string): Promise<string[]> {
 // side-load it post-severance. Gated on Docker being usable at all.
 const innerImageReady =
   dindAvailable && RUNNING_ON_HOST_DOCKER ? await hostPull(INNER_IMAGE) : false;
+const registryImageReady =
+  dindAvailable && RUNNING_ON_HOST_DOCKER
+    ? await hostPull(REGISTRY_MIRROR_IMAGE)
+    : false;
+
+async function volumeExists(name: string): Promise<boolean> {
+  try {
+    await dockerInspectVolume(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function cleanupDindPlan(
+  plan: NonNullable<ReturnType<typeof planDind>>,
+): Promise<void> {
+  await dockerStop(plan.containerName, { timeoutSeconds: 0 }).catch(() => {});
+  await dockerRm(plan.containerName).catch(() => {});
+  await dockerStop(plan.registryMirrorName, { timeoutSeconds: 0 }).catch(
+    () => {},
+  );
+  await dockerRm(plan.registryMirrorName).catch(() => {});
+  await dockerVolumeRemove(plan.sharedTmpVolume).catch(() => {});
+  await dockerVolumeRemove(plan.dindDataVolume).catch(() => {});
+}
 
 async function forceCleanup(
   containerName: string,
   networkName: string,
-  volumeName: string,
+  sharedTmpVolume: string,
+  dindDataVolume: string,
 ): Promise<void> {
   await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
   await dockerRm(containerName).catch(() => {});
   await dockerNetworkRemove(networkName).catch(() => {});
-  await dockerVolumeRemove(volumeName).catch(() => {});
+  await dockerVolumeRemove(sharedTmpVolume).catch(() => {});
+  await dockerVolumeRemove(dindDataVolume).catch(() => {});
 }
 
 async function waitForContainerTcp(
@@ -506,16 +536,18 @@ async function waitForDindReadyForTest(containerName: string): Promise<void> {
 
 async function startDindWithoutCa(
   containerName: string,
-  volumeName: string,
+  dindDataVolume: string,
+  sharedTmpVolume: string,
   networkName: string,
   proxyEndpoint: string,
 ): Promise<void> {
-  await dockerVolumeCreate(volumeName);
+  await dockerVolumeCreate(dindDataVolume);
+  await dockerVolumeCreate(sharedTmpVolume);
   await dockerRunDetached({
     name: containerName,
     image: DIND_IMAGE,
-    args: buildDindSidecarArgs(volumeName, [], { disableCache: true }),
-    envVars: buildDindSidecarEnv({ proxyEndpoint, caCertPath: "" }),
+    args: buildDindSidecarArgs(dindDataVolume, sharedTmpVolume, []),
+    envVars: buildDindSidecarEnv({ proxyEndpoint, caCertPath: "" }, null),
   });
   await waitForDindReadyForTest(containerName);
   await dockerNetworkConnect(networkName, containerName);
@@ -589,7 +621,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       });
       withoutCaPlan = planDind(
         { ...withoutCaSharedInput, ...withoutCaStageState },
-        { disableCache: true, readinessTimeoutMs: 30_000 },
+        { disablePullCache: true, readinessTimeoutMs: 30_000 },
       );
       expect(withoutCaPlan).not.toBeNull();
 
@@ -607,7 +639,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       });
       withCaPlan = planDind(
         { ...withCaSharedInput, ...withCaStageState },
-        { disableCache: true, readinessTimeoutMs: 30_000 },
+        { disablePullCache: true, readinessTimeoutMs: 30_000 },
       );
       expect(withCaPlan).not.toBeNull();
 
@@ -639,6 +671,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       // mounted certificate.
       await startDindWithoutCa(
         withoutCaPlan!.containerName,
+        withoutCaPlan!.dindDataVolume,
         withoutCaPlan!.sharedTmpVolume,
         networkName,
         proxyEndpoint,
@@ -651,7 +684,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       expect(without.output).toMatch(/x509|certificate/i);
 
       const stage = createDindStageWithOptions(withCaSharedInput, {
-        disableCache: true,
+        disablePullCache: true,
         readinessTimeoutMs: 30_000,
       });
       await Effect.runPromise(
@@ -681,9 +714,11 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
       if (withoutCaPlan !== null) {
         await dockerVolumeRemove(withoutCaPlan.sharedTmpVolume).catch(() => {});
+        await dockerVolumeRemove(withoutCaPlan.dindDataVolume).catch(() => {});
       }
       if (withCaPlan !== null) {
         await dockerVolumeRemove(withCaPlan.sharedTmpVolume).catch(() => {});
+        await dockerVolumeRemove(withCaPlan.dindDataVolume).catch(() => {});
       }
       await dockerNetworkRemove(networkName).catch(() => {});
       await rm(proxyConfDir, { recursive: true, force: true }).catch(() => {});
@@ -696,17 +731,28 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
   async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const sharedInput = makeSharedInput(profile);
-    const stageState = makeStageState();
+    const sessionId = `execute-${crypto.randomUUID()}`;
+    const sharedInput = makeSharedInput(profile, sessionId);
+    const stageState = makeStageState({
+      network: {
+        networkName: `nas-session-net-${sessionId}`,
+        runtimeDir: "/run/user/1000/nas/network",
+      },
+    });
     const input = { ...sharedInput, ...stageState };
     const plan = planDind(input, {
-      disableCache: true,
+      disablePullCache: true,
       readinessTimeoutMs: 60_000,
     });
     expect(plan).not.toBeNull();
 
     const containerName = plan!.containerName;
-    await forceCleanup(containerName, plan!.networkName, plan!.sharedTmpVolume);
+    await forceCleanup(
+      containerName,
+      plan!.networkName,
+      plan!.sharedTmpVolume,
+      plan!.dindDataVolume,
+    );
 
     // In production the (internal) session network is created by the preceding
     // ProxyStage; running DindStage standalone here we must create it ourselves
@@ -718,7 +764,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
     const scope = Effect.runSync(Scope.make());
     try {
       const stage = createDindStageWithOptions(sharedInput, {
-        disableCache: true,
+        disablePullCache: true,
         readinessTimeoutMs: 60_000,
       });
       const result = await Effect.runPromise(
@@ -754,6 +800,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
           containerName,
           plan!.networkName,
           plan!.sharedTmpVolume,
+          plan!.dindDataVolume,
         );
       }
     }
@@ -777,16 +824,27 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
   "DindStage: inner container egress is confined to the session network (no NAT path out)",
   async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const sharedInput = makeSharedInput(profile);
-    const stageState = makeStageState();
+    const sessionId = `egress-${crypto.randomUUID()}`;
+    const sharedInput = makeSharedInput(profile, sessionId);
+    const stageState = makeStageState({
+      network: {
+        networkName: `nas-session-net-${sessionId}`,
+        runtimeDir: "/run/user/1000/nas/network",
+      },
+    });
     const plan = planDind(
       { ...sharedInput, ...stageState },
-      { disableCache: true, readinessTimeoutMs: 20_000 },
+      { disablePullCache: true, readinessTimeoutMs: 20_000 },
     );
     expect(plan).not.toBeNull();
 
     const containerName = plan!.containerName;
-    await forceCleanup(containerName, plan!.networkName, plan!.sharedTmpVolume);
+    await forceCleanup(
+      containerName,
+      plan!.networkName,
+      plan!.sharedTmpVolume,
+      plan!.dindDataVolume,
+    );
 
     // Same standalone-wiring caveat as the test above: create the internal
     // session network ourselves so ensureDindSidecar's connect/sever has a
@@ -796,7 +854,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
     const scope = Effect.runSync(Scope.make());
     try {
       const stage = createDindStageWithOptions(sharedInput, {
-        disableCache: true,
+        disablePullCache: true,
         readinessTimeoutMs: 20_000,
       });
       await Effect.runPromise(
@@ -907,10 +965,137 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
         containerName,
         plan!.networkName,
         plan!.sharedTmpVolume,
+        plan!.dindDataVolume,
       );
     }
   },
   90_000,
+);
+
+test.skipIf(
+  !dindAvailable ||
+    !RUNNING_ON_HOST_DOCKER ||
+    !innerImageReady ||
+    !registryImageReady,
+)(
+  "DindStage: concurrent daemons isolate state and reuse the shared registry cache",
+  async () => {
+    const id = crypto.randomUUID();
+    const sessionKey = id.replaceAll("-", "").slice(0, 20);
+    const cacheVolume = `nas-test-registry-cache-${id}`;
+    const proxyName = `nas-test-registry-proxy-${id}`;
+    const proxyConfDir = await mkdtemp(
+      path.join(tmpdir(), "nas-registry-cache-"),
+    );
+    const profile = makeProfile({ docker: { enable: true, shared: false } });
+    const plans: Array<NonNullable<ReturnType<typeof planDind>>> = [];
+    const scopes: Scope.CloseableScope[] = [];
+    const networkNames: string[] = [];
+
+    try {
+      await chmod(proxyConfDir, 0o777);
+      await dockerRunDetached({
+        name: proxyName,
+        image: "mitmproxy/mitmproxy:11",
+        args: [],
+        envVars: {},
+        mounts: [{ source: proxyConfDir, target: "/nas-ca", mode: "rw" }],
+        command: [
+          "mitmdump",
+          "--mode",
+          "regular@8080",
+          "--set",
+          "connection_strategy=lazy",
+          "--set",
+          "confdir=/nas-ca",
+        ],
+      });
+      await waitForContainerTcp(proxyName, 8080);
+      const caCertPath = path.join(proxyConfDir, "mitmproxy-ca-cert.pem");
+      await waitForFile(caCertPath);
+
+      for (const suffix of ["a", "b"]) {
+        const sessionId = `cache-${suffix}-${sessionKey}`;
+        const networkName = `nas-session-net-${sessionId}`;
+        await dockerNetworkCreateInternal(networkName);
+        networkNames.push(networkName);
+        await dockerNetworkConnect(networkName, proxyName);
+        const sharedInput = makeSharedInput(profile, sessionId);
+        const state = makeStageState({
+          network: { networkName, runtimeDir: "/run/user/1000/nas/network" },
+          proxy: {
+            brokerSocket: `/tmp/${sessionId}.sock`,
+            proxyEndpoint: `http://${proxyName}:8080`,
+            caCertPath,
+          },
+        });
+        const plan = planDind(
+          { ...sharedInput, ...state },
+          { registryCacheVolume: cacheVolume, readinessTimeoutMs: 60_000 },
+        );
+        expect(plan).not.toBeNull();
+        plans.push(plan!);
+        const scope = Effect.runSync(Scope.make());
+        scopes.push(scope);
+        const stage = createDindStageWithOptions(sharedInput, {
+          registryCacheVolume: cacheVolume,
+          readinessTimeoutMs: 60_000,
+        });
+        await Effect.runPromise(
+          stage
+            .run(state)
+            .pipe(
+              Effect.provideService(Scope.Scope, scope),
+              Effect.provide(DindServiceLive),
+            ),
+        );
+      }
+
+      expect(plans[0]!.dindDataVolume).not.toBe(plans[1]!.dindDataVolume);
+      expect(await dockerIsRunning(plans[0]!.containerName)).toBe(true);
+      expect(await dockerIsRunning(plans[1]!.containerName)).toBe(true);
+
+      const firstPull = await pullInSidecar(
+        plans[0]!.containerName,
+        INNER_IMAGE,
+      );
+      expect(firstPull.exitCode, firstPull.output).toBe(0);
+
+      await dockerStop(proxyName, { timeoutSeconds: 0 });
+      expect(await dockerIsRunning(proxyName)).toBe(false);
+      const secondPull = await pullInSidecar(
+        plans[1]!.containerName,
+        INNER_IMAGE,
+      );
+      expect(
+        secondPull.exitCode,
+        `second pull could not use shared cache with upstream disabled:\n${secondPull.output}`,
+      ).toBe(0);
+
+      for (const scope of scopes.splice(0).reverse()) {
+        await Effect.runPromise(Scope.close(scope, Exit.void));
+      }
+      expect(await volumeExists(cacheVolume)).toBe(true);
+      for (const plan of plans) {
+        expect(await dockerIsRunning(plan.containerName)).toBe(false);
+        expect(await dockerIsRunning(plan.registryMirrorName)).toBe(false);
+        expect(await volumeExists(plan.dindDataVolume)).toBe(false);
+      }
+    } finally {
+      for (const scope of scopes.splice(0).reverse()) {
+        await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
+      }
+      for (const plan of plans) await cleanupDindPlan(plan);
+      await dockerStop(proxyName, { timeoutSeconds: 0 }).catch(() => {});
+      await dockerRm(proxyName).catch(() => {});
+      for (const networkName of networkNames) {
+        await dockerNetworkRemove(networkName).catch(() => {});
+      }
+      await dockerVolumeRemove(cacheVolume).catch(() => {});
+      await rm(proxyConfDir, { recursive: true, force: true }).catch(() => {});
+    }
+  },
+  180_000,
 );
 
 test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
@@ -929,19 +1114,24 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
     });
     const plan = planDind(
       { ...sharedInput, ...stageState },
-      { disableCache: true, readinessTimeoutMs: 20_000 },
+      { disablePullCache: true, readinessTimeoutMs: 20_000 },
     );
     expect(plan).not.toBeNull();
 
     const containerName = plan!.containerName;
     const innerName = `inner-pub-${crypto.randomUUID().slice(0, 8)}`;
-    await forceCleanup(containerName, plan!.networkName, plan!.sharedTmpVolume);
+    await forceCleanup(
+      containerName,
+      plan!.networkName,
+      plan!.sharedTmpVolume,
+      plan!.dindDataVolume,
+    );
     await dockerNetworkCreateInternal(plan!.networkName);
 
     const scope = Effect.runSync(Scope.make());
     try {
       const stage = createDindStageWithOptions(sharedInput, {
-        disableCache: true,
+        disablePullCache: true,
         readinessTimeoutMs: 20_000,
       });
       await Effect.runPromise(
@@ -988,6 +1178,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
         containerName,
         plan!.networkName,
         plan!.sharedTmpVolume,
+        plan!.dindDataVolume,
       );
     }
   },

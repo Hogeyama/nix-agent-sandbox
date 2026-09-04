@@ -21,11 +21,18 @@ import {
 } from "./client.ts";
 import {
   NAS_KIND_DIND,
+  NAS_KIND_DIND_DATA,
   NAS_KIND_DIND_TMP,
   NAS_KIND_LABEL,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
 } from "./nas_resources.ts";
+import {
+  PROXY_CA_MOUNT_DIR,
+  type ProxyCaCertMount,
+  proxyCaCertMount,
+} from "./proxy_ca_mount.ts";
+import { registryMirrorUrl, startRegistryMirror } from "./registry_mirror.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,7 +45,7 @@ export const DIND_IMAGE = "docker:dind-rootless";
  * SSL_CERT_DIR makes Go read every file in this directory, so it must hold
  * nothing else. A path the image does not otherwise use satisfies that.
  */
-export const DIND_CA_MOUNT_PATH = "/etc/nas-ca";
+export const DIND_CA_MOUNT_PATH = PROXY_CA_MOUNT_DIR;
 /**
  * Where `docker:dind-rootless` puts its Unix socket.
  *
@@ -49,7 +56,6 @@ export const DIND_CA_MOUNT_PATH = "/etc/nas-ca";
  */
 export const DIND_ROOTLESS_SOCKET_PATH = "/run/user/1000/docker.sock";
 export const DIND_INTERNAL_PORT = 2375;
-export const DIND_CACHE_VOLUME = "nas-docker-cache";
 export const DIND_DATA_DIR = "/home/rootless/.local/share/docker";
 export const SHARED_TMP_MOUNT_PATH = "/tmp/nas-shared";
 export const READINESS_TIMEOUT_MS = 30_000;
@@ -64,19 +70,18 @@ export const READINESS_POLL_INTERVAL_MS = 500;
  * `mitmproxy-ca-cert.pem` behind — enough for the CA service's existence check
  * to treat the certificate as present forever.
  */
-export function buildDindSidecarMounts(caCertPath: string): Array<{
-  source: string;
-  target: string;
-  mode: "ro";
-  type: "bind";
-}> {
+export function buildDindSidecarMounts(caCertPath: string): ProxyCaCertMount[] {
+  return [proxyCaCertMount(caCertPath)];
+}
+
+export function buildDindDaemonArgs(
+  registryMirrorName: string | null,
+): string[] {
+  if (registryMirrorName === null) return [];
+  const url = registryMirrorUrl(registryMirrorName);
   return [
-    {
-      source: caCertPath,
-      target: `${DIND_CA_MOUNT_PATH}/nas-proxy.crt`,
-      mode: "ro",
-      type: "bind",
-    },
+    `--registry-mirror=${url}`,
+    `--insecure-registry=${registryMirrorName}:5000`,
   ];
 }
 
@@ -85,7 +90,6 @@ export function buildDindSidecarMounts(caCertPath: string): Array<{
 // ---------------------------------------------------------------------------
 
 export interface DindStageOptions {
-  disableCache?: boolean;
   readinessTimeoutMs?: number;
 }
 
@@ -104,108 +108,82 @@ export async function ensureSharedTmpWritable(
   }
 }
 
-/**
- * Start the DinD sidecar.
- * Tries with cache volume first; on failure retries without cache.
- *
- * The proxy endpoint is injected into dockerd's HTTP(S)_PROXY env and its CA
- * certificate is mounted for Go's trust search. This is independent of
- * `DindStageOptions` (which only controls cache/readiness) so cache-reset
- * retry paths below re-pass the same proxy config verbatim.
- */
+export interface StartDindSidecarParams {
+  readonly containerName: string;
+  readonly dindDataVolume: string;
+  readonly sharedTmpVolume: string;
+  readonly registryMirrorName: string | null;
+  readonly proxy: {
+    readonly proxyEndpoint: string;
+    readonly caCertPath: string;
+  };
+  readonly extraHosts: readonly {
+    readonly host: string;
+    readonly ip: string;
+  }[];
+  readonly readinessTimeoutMs: number;
+}
+
+export interface StartDindSidecarDeps {
+  readonly runSidecar: (params: StartDindSidecarParams) => Promise<void>;
+  readonly waitReady: (
+    containerName: string,
+    timeoutMs: number,
+  ) => Promise<void>;
+  readonly stop: (name: string) => Promise<void>;
+  readonly rm: (name: string) => Promise<void>;
+  readonly volumeRemove: (name: string) => Promise<void>;
+  readonly volumeCreate: (
+    name: string,
+    labels: Record<string, string>,
+  ) => Promise<void>;
+}
+
+const liveStartDindSidecarDeps: StartDindSidecarDeps = {
+  runSidecar: runDindSidecar,
+  waitReady: waitForDindReady,
+  stop: (name) => dockerStop(name, { timeoutSeconds: 0 }),
+  rm: dockerRm,
+  volumeRemove: dockerVolumeRemove,
+  volumeCreate: dockerVolumeCreate,
+};
+
+/** Start the DinD sidecar, resetting only this session's data on failure. */
 export async function startDindSidecar(
-  containerName: string,
-  sharedTmpVolume: string,
-  proxy: { proxyEndpoint: string; caCertPath: string },
-  extraHosts: readonly { readonly host: string; readonly ip: string }[],
-  options: DindStageOptions = {},
+  params: StartDindSidecarParams,
+  deps: StartDindSidecarDeps = liveStartDindSidecarDeps,
 ): Promise<void> {
   logInfo(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
-  await dockerVolumeCreate(sharedTmpVolume, {
-    [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-    [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
-  }).catch((e) =>
-    logInfo(`[nas] DinD: failed to create shared tmp volume: ${e}`),
-  );
-
-  await runDindSidecar(
-    containerName,
-    sharedTmpVolume,
-    proxy,
-    extraHosts,
-    options,
-  );
+  await deps.runSidecar(params);
   logInfo("[nas] DinD: waiting for daemon to be ready...");
   try {
-    await waitForDindReady(
-      containerName,
-      options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
-    );
+    await deps.waitReady(params.containerName, params.readinessTimeoutMs);
     logInfo("[nas] DinD: daemon is ready");
-  } catch (e) {
-    if (options.disableCache) {
-      throw e;
-    }
+    return;
+  } catch (firstError) {
     logWarn(
-      `[nas] DinD: failed to start with cache volume (${DIND_CACHE_VOLUME}), resetting cache and retrying...`,
+      "[nas] DinD: startup failed; resetting this session's data volume and retrying...",
     );
-    // rootless DinD の状態ディレクトリが壊れていると起動できないため、
-    // まずキャッシュ volume を作り直してから再試行する。
-    await dockerStop(containerName, { timeoutSeconds: 0 }).catch((e) =>
-      logInfo(`[nas] DinD: failed to stop container for cache reset: ${e}`),
-    );
-    await dockerRm(containerName).catch((e) =>
-      logInfo(`[nas] DinD: failed to remove container for cache reset: ${e}`),
-    );
-    await dockerVolumeRemove(DIND_CACHE_VOLUME).catch((e) =>
-      logInfo(`[nas] DinD: failed to remove cache volume: ${e}`),
-    );
-
-    await runDindSidecar(
-      containerName,
-      sharedTmpVolume,
-      proxy,
-      extraHosts,
-      options,
-    );
-    logInfo("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
+    await deps.stop(params.containerName).catch(() => {});
+    await deps.rm(params.containerName).catch(() => {});
+    await deps.volumeRemove(params.dindDataVolume);
+    await deps.volumeCreate(params.dindDataVolume, {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_DIND_DATA,
+    });
+    await deps.runSidecar(params);
     try {
-      await waitForDindReady(
-        containerName,
-        options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
-      );
-      logInfo("[nas] DinD: daemon is ready (fresh cache)");
-      return;
-    } catch (e) {
-      logWarn(
-        `[nas] DinD: fresh cache retry also failed (${
-          e instanceof Error ? e.message : String(e)
-        }), retrying without cache...`,
-      );
-      await dockerStop(containerName, { timeoutSeconds: 0 }).catch((e) =>
-        logInfo(
-          `[nas] DinD: failed to stop container for no-cache retry: ${e}`,
-        ),
-      );
-      await dockerRm(containerName).catch((e) =>
-        logInfo(
-          `[nas] DinD: failed to remove container for no-cache retry: ${e}`,
-        ),
+      await deps.waitReady(params.containerName, params.readinessTimeoutMs);
+    } catch (secondError) {
+      throw new Error(
+        `DinD failed after resetting session data: ${
+          secondError instanceof Error
+            ? secondError.message
+            : String(secondError)
+        }`,
+        { cause: firstError },
       );
     }
-
-    await runDindSidecar(containerName, sharedTmpVolume, proxy, extraHosts, {
-      ...options,
-      disableCache: true,
-    });
-    logInfo("[nas] DinD: waiting for daemon to be ready (no cache)...");
-    await waitForDindReady(
-      containerName,
-      options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
-    );
-    logInfo("[nas] DinD: daemon is ready (without cache)");
-
-    void e;
   }
 }
 
@@ -216,7 +194,10 @@ export async function startDindSidecar(
 /** Parameters for ensureDindSidecar (decoupled from effect types). */
 export interface EnsureDindSidecarParams {
   containerName: string;
+  dindDataVolume: string;
   sharedTmpVolume: string;
+  readonly registryMirrorName: string;
+  readonly registryCacheVolume: string;
   /**
    * Name of the (internal) session network the sidecar is attached to. After
    * the sidecar boots on the default bridge, it is connected to this network
@@ -235,8 +216,65 @@ export interface EnsureDindSidecarParams {
    * joiner, so these entries must land on the sidecar instead.
    */
   extraHosts: readonly { readonly host: string; readonly ip: string }[];
-  disableCache?: boolean;
+  readonly disablePullCache: boolean;
   readinessTimeoutMs?: number;
+}
+
+export interface DindSidecarHandle {
+  readonly registryMirrorName: string | null;
+}
+
+export interface EnsureDindSidecarDeps {
+  readonly volumeCreate: (
+    name: string,
+    labels: Record<string, string>,
+  ) => Promise<void>;
+  readonly startRegistryMirror: typeof startRegistryMirror;
+  readonly startDind: (params: StartDindSidecarParams) => Promise<void>;
+  readonly ensureSharedTmpWritable: (containerName: string) => Promise<void>;
+  readonly networkConnect: (
+    networkName: string,
+    containerName: string,
+  ) => Promise<void>;
+  readonly networkDisconnect: (
+    networkName: string,
+    containerName: string,
+  ) => Promise<void>;
+  readonly stop: (containerName: string) => Promise<void>;
+  readonly rm: (containerName: string) => Promise<void>;
+  readonly volumeRemove: (name: string) => Promise<void>;
+}
+
+const liveEnsureDindSidecarDeps: EnsureDindSidecarDeps = {
+  volumeCreate: dockerVolumeCreate,
+  startRegistryMirror,
+  startDind: startDindSidecar,
+  ensureSharedTmpWritable,
+  networkConnect: dockerNetworkConnect,
+  networkDisconnect: dockerNetworkDisconnect,
+  stop: (name) => dockerStop(name, { timeoutSeconds: 0 }),
+  rm: dockerRm,
+  volumeRemove: dockerVolumeRemove,
+};
+
+async function createSessionVolume(
+  kindLabel: "shared tmp volume" | "DinD data volume",
+  name: string,
+  nasKind: string,
+  deps: EnsureDindSidecarDeps,
+): Promise<void> {
+  try {
+    await deps.volumeCreate(name, {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: nasKind,
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to create ${kindLabel} ${name}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 /**
@@ -245,47 +283,80 @@ export interface EnsureDindSidecarParams {
  */
 export async function ensureDindSidecar(
   params: EnsureDindSidecarParams,
-): Promise<void> {
+  deps: EnsureDindSidecarDeps = liveEnsureDindSidecarDeps,
+): Promise<DindSidecarHandle> {
   const {
     containerName,
+    dindDataVolume,
     sharedTmpVolume,
+    registryMirrorName,
+    registryCacheVolume,
     sessionNetworkName,
     proxyEndpoint,
     caCertPath,
     extraHosts,
-    disableCache,
+    disablePullCache,
     readinessTimeoutMs,
   } = params;
+  const timeoutMs = readinessTimeoutMs ?? READINESS_TIMEOUT_MS;
+  let activeRegistryMirrorName: string | null = null;
 
-  // DinD rootless サイドカーをデフォルト bridge で起動
-  await startDindSidecar(
-    containerName,
-    sharedTmpVolume,
-    { proxyEndpoint, caCertPath },
-    extraHosts,
-    {
-      disableCache,
-      readinessTimeoutMs,
-    },
-  );
-
-  // Post-start setup. Any failure here cleans up the sidecar we just started
-  // before re-throwing, so a half-wired sidecar — e.g. one still attached to
-  // the default bridge after a failed disconnect — is never left running as
-  // an egress hole.
   try {
+    await createSessionVolume(
+      "shared tmp volume",
+      sharedTmpVolume,
+      NAS_KIND_DIND_TMP,
+      deps,
+    );
+    await createSessionVolume(
+      "DinD data volume",
+      dindDataVolume,
+      NAS_KIND_DIND_DATA,
+      deps,
+    );
+
+    if (!disablePullCache) {
+      try {
+        await deps.startRegistryMirror({
+          containerName: registryMirrorName,
+          cacheVolumeName: registryCacheVolume,
+          networkName: sessionNetworkName,
+          proxyEndpoint,
+          caCertPath,
+          readinessTimeoutMs: timeoutMs,
+        });
+        activeRegistryMirrorName = registryMirrorName;
+      } catch {
+        logWarn(
+          "[nas] DinD: registry pull cache unavailable; continuing with direct Docker Hub pulls",
+        );
+        await deps.stop(registryMirrorName).catch(() => {});
+        await deps.rm(registryMirrorName).catch(() => {});
+      }
+    }
+
+    await deps.startDind({
+      containerName,
+      dindDataVolume,
+      sharedTmpVolume,
+      registryMirrorName: activeRegistryMirrorName,
+      proxy: { proxyEndpoint, caCertPath },
+      extraHosts,
+      readinessTimeoutMs: timeoutMs,
+    });
+
     // 共有 tmp を全ユーザーから書き込み可能にする
-    await ensureSharedTmpWritable(containerName);
+    await deps.ensureSharedTmpWritable(containerName);
 
     // Attach the sidecar to the internal session network and only then sever
     // the default bridge. Order matters: connecting first guarantees the
     // sidecar always has at least one reachable network (so the agent's
     // DOCKER_HOST DNS resolution never breaks), and severing the bridge
     // afterwards is what actually confines the sidecar's egress to the proxy.
-    await dockerNetworkConnect(sessionNetworkName, containerName);
+    await deps.networkConnect(sessionNetworkName, containerName);
 
     try {
-      await dockerNetworkDisconnect("bridge", containerName);
+      await deps.networkDisconnect("bridge", containerName);
     } catch (bridgeErr) {
       // SECURITY: a residual bridge attachment would let the sidecar (and
       // therefore the inner containers it runs) reach the host network
@@ -299,11 +370,12 @@ export async function ensureDindSidecar(
         }`,
       );
     }
+    return { registryMirrorName: activeRegistryMirrorName };
   } catch (error) {
     // 途中で失敗した場合、この呼び出しで起動したサイドカーをクリーンアップ
     // してから再 throw する。
     try {
-      await dockerStop(containerName, { timeoutSeconds: 0 });
+      await deps.stop(containerName);
     } catch (cleanupErr) {
       logWarn(
         `[nas] DinD: cleanup failed (stop): ${
@@ -312,13 +384,50 @@ export async function ensureDindSidecar(
       );
     }
     try {
-      await dockerRm(containerName);
+      await deps.rm(containerName);
     } catch (cleanupErr) {
       logWarn(
         `[nas] DinD: cleanup failed (rm): ${
           cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
         }`,
       );
+    }
+    if (activeRegistryMirrorName !== null) {
+      try {
+        await deps.stop(activeRegistryMirrorName);
+      } catch (cleanupErr) {
+        logWarn(
+          `[nas] DinD: cleanup failed (stop mirror): ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
+      try {
+        await deps.rm(activeRegistryMirrorName);
+      } catch (cleanupErr) {
+        logWarn(
+          `[nas] DinD: cleanup failed (rm mirror): ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
+    }
+    for (const volumeName of [sharedTmpVolume, dindDataVolume]) {
+      try {
+        await deps.volumeRemove(volumeName);
+      } catch (cleanupErr) {
+        logWarn(
+          `[nas] DinD: cleanup failed (volume ${volumeName}): ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
     }
     throw error;
   }
@@ -327,7 +436,9 @@ export async function ensureDindSidecar(
 /** Parameters for teardownDindSidecar (decoupled from effect types). */
 export interface TeardownDindSidecarParams {
   containerName: string;
+  dindDataVolume: string;
   sharedTmpVolume: string;
+  registryMirrorName: string | null;
   /**
    * Name of the agent container that joined this sidecar's network
    * namespace (`--network container:<containerName>`). If it is still
@@ -357,7 +468,13 @@ export async function teardownDindSidecar(
   const stop = deps.stop ?? dockerStop;
   const rm = deps.rm ?? dockerRm;
   const volumeRemove = deps.volumeRemove ?? dockerVolumeRemove;
-  const { containerName, sharedTmpVolume, joinerContainerName } = params;
+  const {
+    containerName,
+    dindDataVolume,
+    sharedTmpVolume,
+    registryMirrorName,
+    joinerContainerName,
+  } = params;
 
   // The agent joined this container's network namespace. If it outlived the
   // nas process -- SIGTERM kills only the docker client -- removing the
@@ -395,9 +512,40 @@ export async function teardownDindSidecar(
       }`,
     );
   }
+  if (registryMirrorName !== null) {
+    try {
+      logInfo(`[nas] DinD: stopping registry mirror ${registryMirrorName}`);
+      await stop(registryMirrorName, { timeoutSeconds: 0 });
+    } catch (e: unknown) {
+      logWarn(
+        `[nas] DinD teardown: failed to stop registry mirror: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+    try {
+      await rm(registryMirrorName);
+    } catch (e: unknown) {
+      logWarn(
+        `[nas] DinD teardown: failed to remove registry mirror: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  }
   try {
     logInfo(`[nas] DinD: removing volume ${sharedTmpVolume}`);
     await volumeRemove(sharedTmpVolume);
+  } catch (e: unknown) {
+    logWarn(
+      `[nas] DinD teardown: failed to remove volume: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
+  try {
+    logInfo(`[nas] DinD: removing volume ${dindDataVolume}`);
+    await volumeRemove(dindDataVolume);
   } catch (e: unknown) {
     logWarn(
       `[nas] DinD teardown: failed to remove volume: ${
@@ -411,19 +559,18 @@ export async function teardownDindSidecar(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-async function runDindSidecar(
-  containerName: string,
-  sharedTmpVolume: string,
-  proxy: { proxyEndpoint: string; caCertPath: string },
-  extraHosts: readonly { readonly host: string; readonly ip: string }[],
-  options: DindStageOptions,
-): Promise<void> {
+async function runDindSidecar(params: StartDindSidecarParams): Promise<void> {
   await dockerRunDetached({
-    name: containerName,
+    name: params.containerName,
     image: DIND_IMAGE,
-    args: buildDindSidecarArgs(sharedTmpVolume, extraHosts, options),
-    envVars: buildDindSidecarEnv(proxy),
-    mounts: buildDindSidecarMounts(proxy.caCertPath),
+    args: buildDindSidecarArgs(
+      params.dindDataVolume,
+      params.sharedTmpVolume,
+      params.extraHosts,
+    ),
+    envVars: buildDindSidecarEnv(params.proxy, params.registryMirrorName),
+    mounts: buildDindSidecarMounts(params.proxy.caCertPath),
+    command: buildDindDaemonArgs(params.registryMirrorName),
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_DIND,
@@ -440,19 +587,26 @@ async function runDindSidecar(
  * listener / local socket) direct. DOCKER_TLS_CERTDIR is cleared so dockerd
  * listens on plain TCP 2375.
  */
-export function buildDindSidecarEnv(proxy: {
-  proxyEndpoint: string;
-  caCertPath: string;
-}): Record<string, string> {
+export function buildDindSidecarEnv(
+  proxy: {
+    proxyEndpoint: string;
+    caCertPath: string;
+  },
+  registryMirrorName: string | null,
+): Record<string, string> {
+  const noProxy =
+    registryMirrorName === null
+      ? "localhost,127.0.0.1"
+      : `localhost,127.0.0.1,${registryMirrorName}`;
   return {
     DOCKER_TLS_CERTDIR: "",
     HTTP_PROXY: proxy.proxyEndpoint,
     HTTPS_PROXY: proxy.proxyEndpoint,
-    NO_PROXY: "localhost,127.0.0.1",
+    NO_PROXY: noProxy,
     SSL_CERT_DIR: DIND_CA_MOUNT_PATH,
     http_proxy: proxy.proxyEndpoint,
     https_proxy: proxy.proxyEndpoint,
-    no_proxy: "localhost,127.0.0.1",
+    no_proxy: noProxy,
   };
 }
 
@@ -460,15 +614,17 @@ export function buildDindSidecarEnv(proxy: {
  * Build docker run arguments for the DinD sidecar container.
  */
 export function buildDindSidecarArgs(
+  dindDataVolume: string,
   sharedTmpVolume: string,
   extraHosts: readonly { readonly host: string; readonly ip: string }[],
-  options: DindStageOptions = {},
 ): string[] {
-  const args = ["--privileged"];
-  if (!options.disableCache) {
-    args.push("-v", `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`);
-  }
-  args.push("-v", `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`);
+  const args = [
+    "--privileged",
+    "-v",
+    `${dindDataVolume}:${DIND_DATA_DIR}`,
+    "-v",
+    `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
+  ];
   // The agent joins this container's network namespace and so cannot carry
   // --add-host itself; Docker shares the owner's /etc/hosts with the joiner.
   for (const entry of extraHosts) {

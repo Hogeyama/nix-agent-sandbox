@@ -8,21 +8,24 @@
 import { expect, test } from "bun:test";
 import {
   containerNameForSession,
+  isLegacyNasEphemeralVolumeName,
   isLegacyNasSidecarName,
-  isLegacyNasTmpVolumeName,
   isNasManagedAgent,
   isNasManagedContainer,
+  isNasManagedEphemeralVolume,
   isNasManagedLabel,
   isNasManagedNetwork,
   isNasManagedSidecar,
-  isNasManagedTmpVolume,
   NAS_KIND_AGENT,
   NAS_KIND_DIND,
+  NAS_KIND_DIND_DATA,
   NAS_KIND_DIND_NETWORK,
   NAS_KIND_DIND_TMP,
   NAS_KIND_LABEL,
   NAS_KIND_PROXY,
   NAS_KIND_PROXY_NETWORK,
+  NAS_KIND_REGISTRY_CACHE,
+  NAS_KIND_REGISTRY_MIRROR,
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
@@ -64,6 +67,18 @@ test("isNasManagedSidecar: managed + dind/proxy kind → true", () => {
       ),
     ).toEqual(true);
   }
+});
+
+test("isNasManagedSidecar: registry mirror is a managed sidecar", () => {
+  expect(
+    isNasManagedSidecar(
+      {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_REGISTRY_MIRROR,
+      },
+      "nas-registry-mirror-session-a",
+    ),
+  ).toBe(true);
 });
 
 test("isNasManagedSidecar: managed but agent kind → false", () => {
@@ -128,29 +143,48 @@ test("isNasManagedNetwork: false for unrelated network name", () => {
 });
 
 // ---------------------------------------------------------------------------
-// isNasManagedTmpVolume
+// isNasManagedEphemeralVolume
 // ---------------------------------------------------------------------------
 
-test("isNasManagedTmpVolume: managed + DIND_TMP kind → true", () => {
+test("isNasManagedEphemeralVolume: dind tmp and data are removable", () => {
+  for (const kind of [NAS_KIND_DIND_TMP, NAS_KIND_DIND_DATA]) {
+    expect(
+      isNasManagedEphemeralVolume(
+        {
+          [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+          [NAS_KIND_LABEL]: kind,
+        },
+        "any",
+      ),
+    ).toBe(true);
+  }
+});
+
+test("isNasManagedEphemeralVolume: registry cache is persistent", () => {
   expect(
-    isNasManagedTmpVolume(
+    isNasManagedEphemeralVolume(
       {
         [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
+        [NAS_KIND_LABEL]: NAS_KIND_REGISTRY_CACHE,
       },
-      "any",
+      "nas-registry-cache",
     ),
-  ).toEqual(true);
+  ).toBe(false);
 });
 
-test("isLegacyNasTmpVolumeName: matches -shared-tmp and -tmp- prefix", () => {
-  expect(isLegacyNasTmpVolumeName("nas-dind-shared-tmp")).toEqual(true);
-  expect(isLegacyNasTmpVolumeName("nas-dind-tmp-xyz")).toEqual(true);
+test("isNasManagedEphemeralVolume: unused legacy global dind cache is retired", () => {
+  expect(isNasManagedEphemeralVolume({}, "nas-docker-cache")).toBe(true);
+  expect(isLegacyNasEphemeralVolumeName("nas-docker-cache")).toBe(true);
 });
 
-test("isLegacyNasTmpVolumeName: false for non-tmp volumes", () => {
-  expect(isLegacyNasTmpVolumeName("nas-dind-shared")).toEqual(false);
-  expect(isLegacyNasTmpVolumeName("other-vol")).toEqual(false);
+test("isLegacyNasEphemeralVolumeName: matches tmp volume names", () => {
+  expect(isLegacyNasEphemeralVolumeName("nas-dind-shared-tmp")).toEqual(true);
+  expect(isLegacyNasEphemeralVolumeName("nas-dind-tmp-xyz")).toEqual(true);
+});
+
+test("isLegacyNasEphemeralVolumeName: false for persistent or unrelated volumes", () => {
+  expect(isLegacyNasEphemeralVolumeName("nas-dind-shared")).toEqual(false);
+  expect(isLegacyNasEphemeralVolumeName("other-vol")).toEqual(false);
 });
 
 // ---------------------------------------------------------------------------

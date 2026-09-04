@@ -3,9 +3,9 @@ import type {
   DockerNetworkDetails,
 } from "./docker/client.ts";
 import {
+  isNasManagedEphemeralVolume,
   isNasManagedNetwork,
   isNasManagedSidecar,
-  isNasManagedTmpVolume,
 } from "./docker/nas_resources.ts";
 import { formatElapsed, logDebug } from "./log.ts";
 
@@ -248,7 +248,7 @@ async function removeUnusedVolumes(
 
   for (const name of names) {
     const volume = await backend.inspectVolume(name);
-    if (!isNasManagedTmpVolume(volume.labels, volume.name)) continue;
+    if (!isNasManagedEphemeralVolume(volume.labels, volume.name)) continue;
     if (volume.containers.length > 0) continue;
     await backend.removeVolume(name);
     removed.push(name);

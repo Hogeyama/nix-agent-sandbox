@@ -7,6 +7,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
+import type { DindSidecarHandle } from "../../docker/dind.ts";
 import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
 import type { ExtraHost } from "../../pipeline/state.ts";
 
@@ -16,7 +17,10 @@ import type { ExtraHost } from "../../pipeline/state.ts";
 
 export interface DindSidecarOpts {
   readonly containerName: string;
+  readonly dindDataVolume: string;
   readonly sharedTmpVolume: string;
+  readonly registryMirrorName: string;
+  readonly registryCacheVolume: string;
   /** Session network the sidecar attaches to (replaces the old private net). */
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
@@ -30,7 +34,7 @@ export interface DindSidecarOpts {
    * the agent container's own --add-host.
    */
   readonly extraHosts: readonly ExtraHost[];
-  readonly disableCache: boolean;
+  readonly disablePullCache: boolean;
   readonly readinessTimeoutMs: number;
 }
 
@@ -41,14 +45,18 @@ export interface DindSidecarOpts {
 export class DindService extends Context.Tag("nas/DindService")<
   DindService,
   {
-    readonly ensureSidecar: (opts: DindSidecarOpts) => Effect.Effect<void>;
+    readonly ensureSidecar: (
+      opts: DindSidecarOpts,
+    ) => Effect.Effect<DindSidecarHandle>;
     readonly teardownSidecar: (opts: DindTeardownOpts) => Effect.Effect<void>;
   }
 >() {}
 
 export interface DindTeardownOpts {
   readonly containerName: string;
+  readonly dindDataVolume: string;
   readonly sharedTmpVolume: string;
+  readonly registryMirrorName: string | null;
   /**
    * Name of the agent container that joined this sidecar's network
    * namespace (`--network container:<containerName>`). Teardown checks
@@ -70,26 +78,31 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
         try: () =>
           ensureDindSidecar({
             containerName: opts.containerName,
+            dindDataVolume: opts.dindDataVolume,
             sharedTmpVolume: opts.sharedTmpVolume,
+            registryMirrorName: opts.registryMirrorName,
+            registryCacheVolume: opts.registryCacheVolume,
             sessionNetworkName: opts.networkName,
             proxyEndpoint: opts.proxyEndpoint,
             caCertPath: opts.caCertPath,
             extraHosts: opts.extraHosts,
-            disableCache: opts.disableCache,
+            disablePullCache: opts.disablePullCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,
           }),
         catch: (e) =>
           new Error(
             `ensureDindSidecar failed: ${e instanceof Error ? e.message : String(e)}`,
           ),
-      }).pipe(Effect.asVoid, Effect.orDie),
+      }).pipe(Effect.orDie),
 
     teardownSidecar: (opts) =>
       Effect.tryPromise({
         try: () =>
           teardownDindSidecar({
             containerName: opts.containerName,
+            dindDataVolume: opts.dindDataVolume,
             sharedTmpVolume: opts.sharedTmpVolume,
+            registryMirrorName: opts.registryMirrorName,
             joinerContainerName: opts.joinerContainerName,
           }),
         catch: (e) =>
@@ -105,7 +118,9 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
 // ---------------------------------------------------------------------------
 
 export interface DindServiceFakeConfig {
-  readonly ensureSidecar?: (opts: DindSidecarOpts) => Effect.Effect<void>;
+  readonly ensureSidecar?: (
+    opts: DindSidecarOpts,
+  ) => Effect.Effect<DindSidecarHandle>;
   readonly teardownSidecar?: (opts: DindTeardownOpts) => Effect.Effect<void>;
 }
 
@@ -115,7 +130,9 @@ export function makeDindServiceFake(
   return Layer.succeed(
     DindService,
     DindService.of({
-      ensureSidecar: overrides.ensureSidecar ?? (() => Effect.void),
+      ensureSidecar:
+        overrides.ensureSidecar ??
+        (() => Effect.succeed({ registryMirrorName: null })),
       teardownSidecar: overrides.teardownSidecar ?? (() => Effect.void),
     }),
   );

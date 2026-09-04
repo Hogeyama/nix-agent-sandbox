@@ -23,6 +23,7 @@ import {
   SHARED_TMP_MOUNT_PATH,
 } from "../../docker/dind.ts";
 import { containerNameForSession } from "../../docker/nas_resources.ts";
+import { REGISTRY_CACHE_VOLUME } from "../../docker/registry_mirror.ts";
 import { logInfo } from "../../log.ts";
 import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
@@ -43,7 +44,11 @@ export type { DindStageOptions } from "../../docker/dind.ts";
 
 export interface DindPlan {
   readonly containerName: string;
+  readonly dindDataVolume: string;
   readonly sharedTmpVolume: string;
+  readonly registryMirrorName: string;
+  readonly registryCacheVolume: string;
+  readonly disablePullCache: boolean;
   /**
    * Session network name the sidecar attaches to (e.g. `nas-session-net-<sid>`).
    * Sourced from the `network` slice produced by ProxyStage, replacing the old
@@ -60,7 +65,6 @@ export interface DindPlan {
    * its own --add-host, so these entries are wired onto the sidecar instead.
    */
   readonly extraHosts: readonly ExtraHost[];
-  readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
   /**
    * Name of the agent container that will join this sidecar's network
@@ -101,8 +105,9 @@ type DindStageState = Pick<
 >;
 type DindStageInput = StageInput & DindStageState;
 export interface DindStagePlanOptions {
-  disableCache?: boolean;
-  readinessTimeoutMs?: number;
+  readonly disablePullCache?: boolean;
+  readonly registryCacheVolume?: string;
+  readonly readinessTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +123,6 @@ export function planDind(
     return null;
   }
 
-  const disableCache = options.disableCache ?? false;
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
 
   // The session network and proxy endpoint are produced by ProxyStage, which
@@ -135,16 +139,24 @@ export function planDind(
   // --name` outright, and both sessions would contend for one shared tmp
   // volume. Use the session id untruncated, matching `containerNameForSession`.
   const containerName = `nas-dind-${input.sessionId}`;
+  const dindDataVolume = `nas-dind-data-${input.sessionId}`;
   const sharedTmpVolume = `nas-dind-tmp-${input.sessionId}`;
+  const registryMirrorName = `nas-registry-mirror-${input.sessionId.replaceAll("_", "-")}`;
+  const registryCacheVolume =
+    options.registryCacheVolume ?? REGISTRY_CACHE_VOLUME;
+  const disablePullCache = options.disablePullCache ?? false;
 
   return {
     containerName,
+    dindDataVolume,
     sharedTmpVolume,
+    registryMirrorName,
+    registryCacheVolume,
+    disablePullCache,
     networkName,
     proxyEndpoint,
     caCertPath,
     extraHosts: input.container.extraHosts,
-    disableCache,
     readinessTimeoutMs,
     joinerContainerName: containerNameForSession(input.sessionId),
     reservedPorts: reservedNamespacePorts(
@@ -230,19 +242,24 @@ function runDind(
     yield* Effect.acquireRelease(
       dind.ensureSidecar({
         containerName: plan.containerName,
+        dindDataVolume: plan.dindDataVolume,
         sharedTmpVolume: plan.sharedTmpVolume,
+        registryMirrorName: plan.registryMirrorName,
+        registryCacheVolume: plan.registryCacheVolume,
         networkName: plan.networkName,
         proxyEndpoint: plan.proxyEndpoint,
         caCertPath: plan.caCertPath,
         extraHosts: plan.extraHosts,
-        disableCache: plan.disableCache,
+        disablePullCache: plan.disablePullCache,
         readinessTimeoutMs: plan.readinessTimeoutMs,
       }),
-      () =>
+      (handle) =>
         dind
           .teardownSidecar({
             containerName: plan.containerName,
+            dindDataVolume: plan.dindDataVolume,
             sharedTmpVolume: plan.sharedTmpVolume,
+            registryMirrorName: handle.registryMirrorName,
             joinerContainerName: plan.joinerContainerName,
           })
           .pipe(Effect.ignoreLogged),

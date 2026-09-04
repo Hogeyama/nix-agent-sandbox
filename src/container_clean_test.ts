@@ -14,10 +14,13 @@ import {
   isNasManagedNetwork,
   isNasManagedSidecar,
   NAS_KIND_DIND,
+  NAS_KIND_DIND_DATA,
   NAS_KIND_DIND_NETWORK,
   NAS_KIND_DIND_TMP,
   NAS_KIND_LABEL,
   NAS_KIND_PROXY,
+  NAS_KIND_REGISTRY_CACHE,
+  NAS_KIND_REGISTRY_MIRROR,
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
@@ -380,6 +383,48 @@ test("cleanNasContainers: removes stopped sidecar and orphaned managed resources
   expect(backend.stopped).toEqual([]);
 });
 
+test("cleanNasContainers: removes session data and legacy cache but keeps registry cache", async () => {
+  const backend = new FakeBackend();
+  backend.containers.set(
+    "nas-registry-mirror-orphan",
+    createManagedContainer(
+      "nas-registry-mirror-orphan",
+      NAS_KIND_REGISTRY_MIRROR,
+      { running: false },
+    ),
+  );
+  backend.volumes.set("nas-dind-data-orphan", {
+    name: "nas-dind-data-orphan",
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_DIND_DATA,
+    },
+    containers: [],
+  });
+  backend.volumes.set("nas-docker-cache", {
+    name: "nas-docker-cache",
+    labels: {},
+    containers: [],
+  });
+  backend.volumes.set("nas-registry-cache", {
+    name: "nas-registry-cache",
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_REGISTRY_CACHE,
+    },
+    containers: [],
+  });
+
+  const result = await cleanNasContainers(backend);
+
+  expect(result.removedContainers).toEqual(["nas-registry-mirror-orphan"]);
+  expect(result.removedVolumes).toEqual([
+    "nas-dind-data-orphan",
+    "nas-docker-cache",
+  ]);
+  expect(backend.volumes.has("nas-registry-cache")).toBe(true);
+});
+
 test("isUnusedNasSidecar: a namespace joiner keeps its owner alive", () => {
   const dind = createManagedContainer("nas-dind-abc12345", "dind", {
     id: "dindid",
@@ -448,6 +493,47 @@ test("isUnusedNasSidecar: a namespace joiner keeps the shared proxy alive", () =
   expect(
     isUnusedNasSidecar(
       proxy,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(false);
+});
+
+test("isUnusedNasSidecar: a namespace joiner keeps its session mirror alive", () => {
+  const networkName = "nas-session-net-abc12345";
+  const dind = createManagedContainer("nas-dind-abc12345", NAS_KIND_DIND, {
+    id: "dindid",
+    networks: [networkName],
+  });
+  const mirror = createManagedContainer(
+    "nas-registry-mirror-abc12345",
+    NAS_KIND_REGISTRY_MIRROR,
+    { id: "mirrorid", networks: [networkName] },
+  );
+  const agent = createManagedContainer("nas-agent-sess_abc12345", "agent", {
+    id: "agentid",
+    networks: [],
+    networkMode: "container:dindid",
+  });
+  const containers = new Map([
+    [dind.name, dind],
+    [mirror.name, mirror],
+    [agent.name, agent],
+  ]);
+  const networks = new Map([
+    [
+      networkName,
+      createManagedNetwork(networkName, NAS_KIND_SESSION_NETWORK, [
+        dind.name,
+        mirror.name,
+      ]),
+    ],
+  ]);
+
+  expect(
+    isUnusedNasSidecar(
+      mirror,
       containers,
       networks,
       buildSidecarUsageIndex(containers.values()),

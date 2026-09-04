@@ -19,6 +19,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
 import {
+  buildDindDaemonArgs,
   buildDindSidecarEnv,
   buildDindSidecarMounts,
   DIND_CA_MOUNT_PATH,
@@ -278,9 +279,11 @@ test("planDind: reservedPorts omits forwarded ports when NAS_FORWARD_PORTS is ab
 });
 
 test("buildDindSidecarArgs: expands extraHosts", () => {
-  const args = buildDindSidecarArgs("nas-dind-tmp-abc12345", [
-    { host: "nas-envoy", ip: "172.20.0.2" },
-  ]);
+  const args = buildDindSidecarArgs(
+    "nas-dind-data-abc12345",
+    "nas-dind-tmp-abc12345",
+    [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  );
 
   expect(args).toContain("--add-host=nas-envoy:172.20.0.2");
 });
@@ -310,6 +313,14 @@ test("DindStage: derives sidecar and volume names from the session", () => {
   expect(p.sharedTmpVolume).toEqual(
     "nas-dind-tmp-abcdef12-3456-7890-abcd-ef1234567890",
   );
+  expect(p.dindDataVolume).toEqual(
+    "nas-dind-data-abcdef12-3456-7890-abcd-ef1234567890",
+  );
+  expect(p.registryMirrorName).toEqual(
+    "nas-registry-mirror-abcdef12-3456-7890-abcd-ef1234567890",
+  );
+  expect(p.registryCacheVolume).toBe("nas-registry-cache");
+  expect(p.disablePullCache).toBe(false);
 
   expect(p.outputOverrides.container?.network).toEqual({
     mode: "container",
@@ -320,6 +331,19 @@ test("DindStage: derives sidecar and volume names from the session", () => {
   );
 });
 
+test("DindStage: registry mirror name is valid for a generated session ID", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const input = {
+    ...makeSharedInput(profile, "sess_edf4dd6e5aeb"),
+    ...makeStageState(),
+  };
+  const plan = planDind(input);
+
+  expect(plan?.registryMirrorName).toBe(
+    "nas-registry-mirror-sess-edf4dd6e5aeb",
+  );
+});
+
 test("DindStage: default options", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
   const input = { ...makeSharedInput(profile), ...makeStageState() };
@@ -327,7 +351,6 @@ test("DindStage: default options", () => {
 
   expect(plan).not.toBeNull();
   const p = plan as DindPlan;
-  expect(p.disableCache).toEqual(false);
   expect(p.readinessTimeoutMs).toEqual(30_000);
 });
 
@@ -426,14 +449,16 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   const ensureCalls: DindSidecarOpts[] = [];
   const teardownCalls: Array<{
     containerName: string;
+    dindDataVolume: string;
     sharedTmpVolume: string;
+    registryMirrorName: string | null;
     joinerContainerName: string;
   }> = [];
 
   const fakeLayer = makeDindServiceFake({
     ensureSidecar: (opts) => {
       ensureCalls.push(opts);
-      return Effect.void;
+      return Effect.succeed({ registryMirrorName: opts.registryMirrorName });
     },
     teardownSidecar: (opts) => {
       teardownCalls.push(opts);
@@ -454,7 +479,6 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
     },
   });
   const stage = createDindStageWithOptions(sharedInput, {
-    disableCache: true,
     readinessTimeoutMs: 5000,
   });
 
@@ -482,7 +506,14 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(ensureCalls[0].sharedTmpVolume).toEqual(
     "nas-dind-tmp-test-session-1234",
   );
-  expect(ensureCalls[0].disableCache).toEqual(true);
+  expect(ensureCalls[0].dindDataVolume).toEqual(
+    "nas-dind-data-test-session-1234",
+  );
+  expect(ensureCalls[0].registryMirrorName).toEqual(
+    "nas-registry-mirror-test-session-1234",
+  );
+  expect(ensureCalls[0].registryCacheVolume).toBe("nas-registry-cache");
+  expect(ensureCalls[0].disablePullCache).toBe(false);
   expect(ensureCalls[0].readinessTimeoutMs).toEqual(5000);
   expect(ensureCalls[0].extraHosts).toEqual(seededExtraHosts);
 
@@ -507,6 +538,12 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(teardownCalls[0].containerName).toEqual("nas-dind-test-session-1234");
   expect(teardownCalls[0].sharedTmpVolume).toEqual(
     "nas-dind-tmp-test-session-1234",
+  );
+  expect(teardownCalls[0].dindDataVolume).toEqual(
+    "nas-dind-data-test-session-1234",
+  );
+  expect(teardownCalls[0].registryMirrorName).toBe(
+    "nas-registry-mirror-test-session-1234",
   );
   expect(teardownCalls[0]?.joinerContainerName).toBe(
     containerNameForSession("test-session-1234"),
@@ -549,20 +586,31 @@ test("buildDindSidecarMounts: never binds the certificate's parent directory", (
 // buildDindSidecarArgs tests
 // ============================================================
 
-test("buildDindSidecarArgs: cache enabled keeps both volume specs valid", () => {
-  expect(buildDindSidecarArgs("nas-dind-shared-tmp", [])).toEqual([
+test("buildDindSidecarArgs: always mounts session data and shared tmp", () => {
+  expect(
+    buildDindSidecarArgs(
+      "nas-dind-data-session-a",
+      "nas-dind-tmp-session-a",
+      [],
+    ),
+  ).toEqual([
     "--privileged",
     "-v",
-    "nas-docker-cache:/home/rootless/.local/share/docker",
+    "nas-dind-data-session-a:/home/rootless/.local/share/docker",
     "-v",
-    "nas-dind-shared-tmp:/tmp/nas-shared",
+    "nas-dind-tmp-session-a:/tmp/nas-shared",
   ]);
 });
 
-test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
-  expect(
-    buildDindSidecarArgs("nas-dind-shared-tmp", [], { disableCache: true }),
-  ).toEqual(["--privileged", "-v", "nas-dind-shared-tmp:/tmp/nas-shared"]);
+test("buildDindDaemonArgs: points only at the session mirror", () => {
+  expect(buildDindDaemonArgs("nas-registry-mirror-session-a")).toEqual([
+    "--registry-mirror=http://nas-registry-mirror-session-a:5000",
+    "--insecure-registry=nas-registry-mirror-session-a:5000",
+  ]);
+});
+
+test("buildDindDaemonArgs: direct fallback has no mirror flags", () => {
+  expect(buildDindDaemonArgs(null)).toEqual([]);
 });
 
 // ============================================================
@@ -571,10 +619,13 @@ test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
 
 test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", () => {
   const proxyEndpoint = "http://test-session:tok@nas-proxy:8080";
-  const env = buildDindSidecarEnv({
-    proxyEndpoint,
-    caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
-  });
+  const env = buildDindSidecarEnv(
+    {
+      proxyEndpoint,
+      caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+    },
+    null,
+  );
 
   // dockerd's outbound pulls are forced through the proxy in both casings so
   // tooling inside the sidecar sees a consistent proxy config.
@@ -592,11 +643,31 @@ test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", (
 });
 
 test("buildDindSidecarEnv: points Go's trust search at the mount directory", () => {
-  const env = buildDindSidecarEnv({
-    proxyEndpoint: "http://sid:tok@nas-proxy:8080",
-    caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
-  });
+  const env = buildDindSidecarEnv(
+    {
+      proxyEndpoint: "http://sid:tok@nas-proxy:8080",
+      caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+    },
+    null,
+  );
 
   expect(env.SSL_CERT_DIR).toBe(DIND_CA_MOUNT_PATH);
   expect(env.SSL_CERT_FILE).toBeUndefined();
+});
+
+test("buildDindSidecarEnv: bypasses the proxy for the active registry mirror", () => {
+  const env = buildDindSidecarEnv(
+    {
+      proxyEndpoint: "http://sid:tok@nas-proxy:8080",
+      caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+    },
+    "nas-registry-mirror-session-a",
+  );
+
+  expect(env.NO_PROXY).toBe(
+    "localhost,127.0.0.1,nas-registry-mirror-session-a",
+  );
+  expect(env.no_proxy).toBe(
+    "localhost,127.0.0.1,nas-registry-mirror-session-a",
+  );
 });
