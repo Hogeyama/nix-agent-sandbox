@@ -547,6 +547,17 @@ async function pullInSidecar(
   return { exitCode, output: `${stdout}\n${stderr}` };
 }
 
+async function removeContainerWithAnonymousVolumes(
+  containerName: string,
+): Promise<void> {
+  try {
+    await Bun.spawn(["docker", "rm", "--force", "--volumes", containerName], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
+  } catch {}
+}
+
 test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   "DindStage: the sidecar pulls through the proxy with the CA mounted, and fails without it",
   async () => {
@@ -660,23 +671,20 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
         `pull failed with the CA mounted. Output:\n${withCa.output}`,
       ).toEqual(0);
     } finally {
+      if (withoutCaPlan !== null) {
+        await removeContainerWithAnonymousVolumes(withoutCaPlan.containerName);
+      }
+      if (withCaPlan !== null) {
+        await removeContainerWithAnonymousVolumes(withCaPlan.containerName);
+      }
+      await removeContainerWithAnonymousVolumes(proxyName);
       await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
       if (withoutCaPlan !== null) {
-        await dockerStop(withoutCaPlan.containerName, {
-          timeoutSeconds: 0,
-        }).catch(() => {});
-        await dockerRm(withoutCaPlan.containerName).catch(() => {});
         await dockerVolumeRemove(withoutCaPlan.sharedTmpVolume).catch(() => {});
       }
       if (withCaPlan !== null) {
-        await dockerStop(withCaPlan.containerName, {
-          timeoutSeconds: 0,
-        }).catch(() => {});
-        await dockerRm(withCaPlan.containerName).catch(() => {});
         await dockerVolumeRemove(withCaPlan.sharedTmpVolume).catch(() => {});
       }
-      await dockerStop(proxyName, { timeoutSeconds: 0 }).catch(() => {});
-      await dockerRm(proxyName).catch(() => {});
       await dockerNetworkRemove(networkName).catch(() => {});
       await rm(proxyConfDir, { recursive: true, force: true }).catch(() => {});
     }
