@@ -134,8 +134,9 @@ class DockerConfig {
   /// DinD rootless サイドカーを起動して隔離された Docker 環境を提供する。
   enable: Boolean = false
 
-  /// サイドカーをセッション間で共有する。
-  /// `false` ではセッションごとに起動・破棄。
+  /// 非推奨。`enable` と併用すると設定エラーになる。
+  /// エージェントは sidecar の network namespace に join するため、
+  /// 複数セッションで sidecar を共有すると分離が失われる。
   shared: Boolean = false
 }
 

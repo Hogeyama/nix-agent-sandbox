@@ -15,8 +15,6 @@ function teardownParams(): TeardownDindSidecarParams {
   return {
     containerName: "nas-dind-abc12345",
     sharedTmpVolume: "nas-dind-tmp-abc12345",
-    sessionNetworkName: "nas-session-net-abc12345",
-    shared: false,
     joinerContainerName: "nas-agent-sess_abc12345",
   };
 }

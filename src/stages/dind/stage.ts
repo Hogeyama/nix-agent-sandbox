@@ -3,10 +3,7 @@
  *
  * docker:dind-rootless コンテナをサイドカーとして起動し、
  * エージェントコンテナから隔離された Docker デーモンを利用可能にする。
- *
- * 動作モード:
- * - shared=false (デフォルト): セッションごとに専用サイドカーを起動・破棄
- * - shared=true: 固定名 "nas-dind-shared" のサイドカーを使い回し、teardown で削除しない
+ * サイドカーはセッションごとに専用の名前で起動し、teardown で破棄する。
  *
  * 起動手順:
  * 1. dind-rootless をデフォルト bridge で起動（rootlesskit が vpnkit + copy-up で
@@ -23,7 +20,6 @@ import { Effect, type Scope } from "effect";
 import {
   DIND_INTERNAL_PORT,
   DIND_ROOTLESS_SOCKET_PATH,
-  SHARED_CONTAINER_NAME,
   SHARED_TMP_MOUNT_PATH,
 } from "../../docker/dind.ts";
 import { containerNameForSession } from "../../docker/nas_resources.ts";
@@ -38,8 +34,6 @@ import type {
 } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { DindService } from "./dind_service.ts";
-
-const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
 
 export type { DindStageOptions } from "../../docker/dind.ts";
 
@@ -64,7 +58,6 @@ export interface DindPlan {
    * its own --add-host, so these entries are wired onto the sidecar instead.
    */
   readonly extraHosts: readonly ExtraHost[];
-  readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
   /**
@@ -125,7 +118,6 @@ export function planDind(
 
   const disableCache = options.disableCache ?? false;
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
-  const shared = input.profile.docker.shared;
 
   // The session network and proxy endpoint are produced by ProxyStage, which
   // now runs before DindStage. The sidecar attaches to this internal session
@@ -134,17 +126,9 @@ export function planDind(
   const networkName = input.network.networkName;
   const proxyEndpoint = input.proxy.proxyEndpoint;
 
-  let containerName: string;
-  let sharedTmpVolume: string;
-
-  if (shared) {
-    containerName = SHARED_CONTAINER_NAME;
-    sharedTmpVolume = SHARED_TMP_VOLUME;
-  } else {
-    const sessionId = input.sessionId.slice(0, 8);
-    containerName = `nas-dind-${sessionId}`;
-    sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
-  }
+  const sessionId = input.sessionId.slice(0, 8);
+  const containerName = `nas-dind-${sessionId}`;
+  const sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
 
   return {
     containerName,
@@ -152,7 +136,6 @@ export function planDind(
     networkName,
     proxyEndpoint,
     extraHosts: input.container.extraHosts,
-    shared,
     disableCache,
     readinessTimeoutMs,
     joinerContainerName: containerNameForSession(input.sessionId),
@@ -243,7 +226,6 @@ function runDind(
         networkName: plan.networkName,
         proxyEndpoint: plan.proxyEndpoint,
         extraHosts: plan.extraHosts,
-        shared: plan.shared,
         disableCache: plan.disableCache,
         readinessTimeoutMs: plan.readinessTimeoutMs,
       }),
@@ -252,8 +234,6 @@ function runDind(
           .teardownSidecar({
             containerName: plan.containerName,
             sharedTmpVolume: plan.sharedTmpVolume,
-            networkName: plan.networkName,
-            shared: plan.shared,
             joinerContainerName: plan.joinerContainerName,
           })
           .pipe(Effect.ignoreLogged),

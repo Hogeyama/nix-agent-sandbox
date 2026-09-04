@@ -53,6 +53,15 @@ function validateProfile(name: string, profile: Profile): string[] {
   errors.push(...validateSecretRegistry(name, profile.secrets));
   errors.push(...validateAuthz(name, profile));
 
+  // --- docker.shared は docker.enable と併用不可 ---
+  if (profile.docker.enable && profile.docker.shared) {
+    errors.push(
+      `profile "${name}": docker.shared is no longer supported with docker.enable. ` +
+        `The agent now joins the sidecar's network namespace, and sessions sharing ` +
+        `one namespace would see each other's loopback services. Remove docker.shared.`,
+    );
+  }
+
   // --- forwardPorts の予約ポート(18080)・重複検出 ---
   errors.push(
     ...validateForwardPorts(name, profile.network.proxy.forwardPorts),

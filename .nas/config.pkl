@@ -360,7 +360,6 @@ local baseProfile: Profile = new {
   }
   docker {
     enable = false
-    shared = true
   }
   gcloud {
     mountConfig = false

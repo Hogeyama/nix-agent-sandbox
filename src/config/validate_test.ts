@@ -124,6 +124,34 @@ test("validate: no default is ok", () => {
 });
 
 // ---------------------------------------------------------------------------
+// docker.shared
+// ---------------------------------------------------------------------------
+
+test("validate: docker.enable with docker.shared is rejected", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({ docker: { enable: true, shared: true } }),
+        },
+      }),
+    ),
+  ).toThrow("docker.shared");
+});
+
+test("validate: docker.shared without docker.enable is accepted", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({ docker: { enable: false, shared: true } }),
+        },
+      }),
+    ),
+  ).not.toThrow();
+});
+
+// ---------------------------------------------------------------------------
 // request body audit
 // ---------------------------------------------------------------------------
 

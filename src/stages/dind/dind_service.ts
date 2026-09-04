@@ -28,7 +28,6 @@ export interface DindSidecarOpts {
    * the agent container's own --add-host.
    */
   readonly extraHosts: readonly ExtraHost[];
-  readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
 }
@@ -48,9 +47,6 @@ export class DindService extends Context.Tag("nas/DindService")<
 export interface DindTeardownOpts {
   readonly containerName: string;
   readonly sharedTmpVolume: string;
-  /** Session network the sidecar was attached to (shared teardown detaches). */
-  readonly networkName: string;
-  readonly shared: boolean;
   /**
    * Name of the agent container that joined this sidecar's network
    * namespace (`--network container:<containerName>`). Teardown checks
@@ -76,7 +72,6 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
             sessionNetworkName: opts.networkName,
             proxyEndpoint: opts.proxyEndpoint,
             extraHosts: opts.extraHosts,
-            shared: opts.shared,
             disableCache: opts.disableCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,
           }),
@@ -92,8 +87,6 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
           teardownDindSidecar({
             containerName: opts.containerName,
             sharedTmpVolume: opts.sharedTmpVolume,
-            sessionNetworkName: opts.networkName,
-            shared: opts.shared,
             joinerContainerName: opts.joinerContainerName,
           }),
         catch: (e) =>
