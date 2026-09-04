@@ -32,6 +32,14 @@ import { CONTAINER_RELAY_SCRIPT, CONTAINER_RELAY_SOCKET } from "./stage.ts";
 
 const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const canBindMount = SHARED_TMP !== undefined || !process.env.DOCKER_HOST;
+/**
+ * This test needs the real image, and building it needs the network for
+ * `apt-get`. A DinD sidecar's build containers have no route out, so the
+ * build dies at the install step; only a host daemon can produce the image.
+ */
+const imageBuildable = !(
+  SHARED_TMP !== undefined && process.env.DOCKER_HOST !== undefined
+);
 const dockerAvailable = (() => {
   try {
     return Bun.spawnSync(["docker", "info"], {
@@ -78,7 +86,7 @@ async function waitForRelay(gateway: RelayGateway): Promise<void> {
   }
 }
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
   "binds a host port to a non-root relay in the container",
   async () => {
     const containerName = `nas-port-bind-${crypto.randomUUID()}`;
