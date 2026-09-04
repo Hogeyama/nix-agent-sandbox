@@ -22,6 +22,7 @@ import {
   resolveAuthzConfig,
 } from "../../network/authz/resolve.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
+import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
 import {
   generateSessionToken as defaultGenerateToken,
   hashToken,
@@ -56,7 +57,8 @@ const PROXY_CONTAINER_NAME = "nas-proxy-shared";
 const PROXY_ALIAS = "nas-proxy";
 const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
-export const LOCAL_PROXY_PORT = 18080;
+
+export { LOCAL_PROXY_PORT };
 
 /**
  * Mount target directory inside the agent container where per-port forward-port

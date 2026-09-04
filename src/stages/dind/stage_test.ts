@@ -34,6 +34,7 @@ import {
   createDindStageWithOptions,
   type DindPlan,
   planDind,
+  reservedNamespacePorts,
 } from "./stage.ts";
 
 type NetworkOverrides = Partial<Profile["network"]>;
@@ -229,6 +230,48 @@ test("planDind: does not override a user-supplied socket path", () => {
   ).toBe("/custom.sock");
 });
 
+test("planDind: reservedPorts reads NAS_FORWARD_PORTS from env.static, not profile.network.proxy.forwardPorts", () => {
+  // ProxyStage unions the profile's forwardPorts with the observability
+  // receiver port before writing NAS_FORWARD_PORTS, so the two sources can
+  // legitimately disagree. Set them to disjoint values here so the
+  // assertion below can only pass if the env is the one being read.
+  const profile = makeProfile({
+    docker: { enable: true, shared: false },
+    network: { proxy: { forwardPorts: [9999] } },
+  });
+  const workspace = { workDir: "/tmp", imageName: "nas:latest" };
+  const container = {
+    ...emptyContainerPlan(workspace.imageName, workspace.workDir),
+    command: { agentCommand: ["claude"], extraArgs: [] },
+    env: {
+      static: { NAS_FORWARD_PORTS: "8080,5432" },
+      dynamicOps: [],
+    },
+  };
+  const input = {
+    ...makeSharedInput(profile),
+    ...makeStageState({ workspace, container }),
+  };
+
+  const plan = planDind(input);
+
+  expect(plan?.reservedPorts).toEqual([2375, 18080, 8080, 5432]);
+});
+
+test("planDind: reservedPorts omits forwarded ports when NAS_FORWARD_PORTS is absent from env.static", () => {
+  // ProxyStage only writes NAS_FORWARD_PORTS when the forwarded set is
+  // non-empty, so it can be missing even though the profile lists ports.
+  const profile = makeProfile({
+    docker: { enable: true, shared: false },
+    network: { proxy: { forwardPorts: [9999] } },
+  });
+  const input = { ...makeSharedInput(profile), ...makeStageState() };
+
+  const plan = planDind(input);
+
+  expect(plan?.reservedPorts).toEqual([2375, 18080]);
+});
+
 test("buildDindSidecarArgs: expands extraHosts", () => {
   const args = buildDindSidecarArgs("nas-dind-tmp-abc12345", [
     { host: "nas-envoy", ip: "172.20.0.2" },
@@ -370,6 +413,20 @@ test("DindStage: planner merges into existing container slice and overrides a st
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
     labels: { "nas.managed": "true" },
   });
+});
+
+// ============================================================
+// reservedNamespacePorts tests
+// ============================================================
+
+test("reservedNamespacePorts: unions forwarded ports with the fixed ones", () => {
+  expect(reservedNamespacePorts("8080,5432")).toEqual([
+    2375, 18080, 8080, 5432,
+  ]);
+});
+
+test("reservedNamespacePorts: tolerates no forwarded ports", () => {
+  expect(reservedNamespacePorts(undefined)).toEqual([2375, 18080]);
 });
 
 // ============================================================

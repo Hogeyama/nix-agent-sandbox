@@ -28,6 +28,7 @@ import {
 } from "../../docker/dind.ts";
 import { containerNameForSession } from "../../docker/nas_resources.ts";
 import { logInfo } from "../../log.ts";
+import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -72,7 +73,31 @@ export interface DindPlan {
    * running before removing the sidecar out from under it.
    */
   readonly joinerContainerName: string;
+  /**
+   * Ports already bound inside the shared network namespace (the DinD daemon
+   * port, the local proxy, and every forwarded port). Publishing an inner
+   * container on one of these fails with EADDRINUSE once the agent joins the
+   * sidecar's namespace.
+   */
+  readonly reservedPorts: readonly number[];
   readonly outputOverrides: Pick<StageResult, "container" | "dind">;
+}
+
+/**
+ * Ports already bound inside the shared network namespace.
+ *
+ * Reads the forwarded set from the env ProxyStage seeded rather than from the
+ * profile: ProxyStage unions the profile's ports with the observability
+ * receiver port before binding them, so the profile alone under-reports.
+ */
+export function reservedNamespacePorts(
+  forwardPortsEnv: string | undefined,
+): number[] {
+  const forwarded = (forwardPortsEnv ?? "")
+    .split(",")
+    .map((part) => Number.parseInt(part, 10))
+    .filter((port) => Number.isInteger(port));
+  return [DIND_INTERNAL_PORT, LOCAL_PROXY_PORT, ...forwarded];
 }
 
 type DindStageState = Pick<
@@ -131,6 +156,9 @@ export function planDind(
     disableCache,
     readinessTimeoutMs,
     joinerContainerName: containerNameForSession(input.sessionId),
+    reservedPorts: reservedNamespacePorts(
+      input.container.env.static.NAS_FORWARD_PORTS,
+    ),
     outputOverrides: {
       dind: {
         containerName,
@@ -186,6 +214,9 @@ export function createDindStageWithOptions(
       if (plan === null) {
         return Effect.succeed({});
       }
+      logInfo(
+        `[nas] DinD: ports already bound in the shared namespace: ${plan.reservedPorts.join(", ")} — publishing a container on one of these fails with EADDRINUSE`,
+      );
       return runDind(plan);
     },
   };

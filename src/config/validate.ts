@@ -8,6 +8,7 @@
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
 import { validateAuthzConfig } from "../network/authz/validate.ts";
+import { LOCAL_PROXY_PORT } from "../network/ports.ts";
 import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
 
 export class ConfigValidationError extends Error {
@@ -204,9 +205,9 @@ function validateForwardPorts(profileName: string, ports: number[]): string[] {
   const errors: string[] = [];
   const seen = new Set<number>();
   for (const [i, port] of ports.entries()) {
-    if (port === 18080) {
+    if (port === LOCAL_PROXY_PORT) {
       errors.push(
-        `profile "${profileName}": proxy.forwardPorts[${i}] port 18080 is reserved for the internal authentication proxy`,
+        `profile "${profileName}": proxy.forwardPorts[${i}] port ${LOCAL_PROXY_PORT} is reserved for the internal authentication proxy`,
       );
     }
     if (seen.has(port)) {
