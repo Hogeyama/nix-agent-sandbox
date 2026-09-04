@@ -452,13 +452,25 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
     dindDataVolume: string;
     sharedTmpVolume: string;
     registryMirrorName: string | null;
+    readinessMonitor: {
+      readonly finished: Promise<void>;
+      readonly cancel: () => void;
+    };
     joinerContainerName: string;
   }> = [];
+
+  const readinessMonitor = {
+    finished: Promise.resolve(),
+    cancel: () => {},
+  };
 
   const fakeLayer = makeDindServiceFake({
     ensureSidecar: (opts) => {
       ensureCalls.push(opts);
-      return Effect.succeed({ registryMirrorName: opts.registryMirrorName });
+      return Effect.succeed({
+        registryMirrorName: opts.registryMirrorName,
+        readinessMonitor,
+      });
     },
     teardownSidecar: (opts) => {
       teardownCalls.push(opts);
@@ -545,6 +557,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(teardownCalls[0].registryMirrorName).toBe(
     "nas-registry-mirror-test-session-1234",
   );
+  expect(teardownCalls[0].readinessMonitor).toBe(readinessMonitor);
   expect(teardownCalls[0]?.joinerContainerName).toBe(
     containerNameForSession("test-session-1234"),
   );

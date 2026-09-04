@@ -260,6 +260,7 @@ function runDind(
             dindDataVolume: plan.dindDataVolume,
             sharedTmpVolume: plan.sharedTmpVolume,
             registryMirrorName: handle.registryMirrorName,
+            readinessMonitor: handle.readinessMonitor,
             joinerContainerName: plan.joinerContainerName,
           })
           .pipe(Effect.ignoreLogged),

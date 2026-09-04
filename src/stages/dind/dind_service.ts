@@ -7,7 +7,10 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { DindSidecarHandle } from "../../docker/dind.ts";
+import type {
+  DindReadinessMonitor,
+  DindSidecarHandle,
+} from "../../docker/dind.ts";
 import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
 import type { ExtraHost } from "../../pipeline/state.ts";
 
@@ -57,6 +60,7 @@ export interface DindTeardownOpts {
   readonly dindDataVolume: string;
   readonly sharedTmpVolume: string;
   readonly registryMirrorName: string | null;
+  readonly readinessMonitor: DindReadinessMonitor;
   /**
    * Name of the agent container that joined this sidecar's network
    * namespace (`--network container:<containerName>`). Teardown checks
@@ -103,6 +107,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
             dindDataVolume: opts.dindDataVolume,
             sharedTmpVolume: opts.sharedTmpVolume,
             registryMirrorName: opts.registryMirrorName,
+            readinessMonitor: opts.readinessMonitor,
             joinerContainerName: opts.joinerContainerName,
           }),
         catch: (e) =>
@@ -132,7 +137,14 @@ export function makeDindServiceFake(
     DindService.of({
       ensureSidecar:
         overrides.ensureSidecar ??
-        (() => Effect.succeed({ registryMirrorName: null })),
+        (() =>
+          Effect.succeed({
+            registryMirrorName: null,
+            readinessMonitor: {
+              finished: Promise.resolve(),
+              cancel: () => {},
+            },
+          })),
       teardownSidecar: overrides.teardownSidecar ?? (() => Effect.void),
     }),
   );

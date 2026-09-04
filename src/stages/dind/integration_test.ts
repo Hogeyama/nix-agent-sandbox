@@ -695,6 +695,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
             Effect.provide(DindServiceLive),
           ),
       );
+      await waitForDindReadyForTest(withCaPlan!.containerName);
       const withCa = await pullInSidecar(
         withCaPlan!.containerName,
         INNER_IMAGE,
@@ -865,6 +866,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
             Effect.provide(DindServiceLive),
           ),
       );
+      await waitForDindReadyForTest(containerName);
 
       // NETWORK-STATE assertion (#4): make the confinement claim self-contained.
       // The sidecar must be attached to the internal session network and NOT to
@@ -1049,6 +1051,7 @@ test.skipIf(
               Effect.provide(DindServiceLive),
             ),
         );
+        await waitForDindReadyForTest(plan!.containerName);
       }
 
       expect(plans[0]!.dindDataVolume).not.toBe(plans[1]!.dindDataVolume);
@@ -1142,6 +1145,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
             Effect.provide(DindServiceLive),
           ),
       );
+      await waitForDindReadyForTest(containerName);
 
       expect(await loadImageIntoSidecar(containerName, INNER_IMAGE)).toEqual(
         true,

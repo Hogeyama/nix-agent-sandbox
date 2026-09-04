@@ -5,9 +5,8 @@
  * runtime helpers live in separate modules.
  */
 
-import { logInfo, logWarn } from "../log.ts";
+import { logError, logInfo, logWarn } from "../log.ts";
 import {
-  dockerContainerIp,
   dockerExec,
   dockerIsRunning,
   dockerLogs,
@@ -93,6 +92,17 @@ export interface DindStageOptions {
   readinessTimeoutMs?: number;
 }
 
+export interface WaitForDindReadyDeps {
+  readonly isRunning: (containerName: string) => Promise<boolean>;
+  readonly logs: (containerName: string) => Promise<string>;
+  readonly exec: (
+    containerName: string,
+    command: string[],
+  ) => Promise<{ code: number }>;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
+}
+
 export async function ensureSharedTmpWritable(
   containerName: string,
 ): Promise<void> {
@@ -126,65 +136,74 @@ export interface StartDindSidecarParams {
 
 export interface StartDindSidecarDeps {
   readonly runSidecar: (params: StartDindSidecarParams) => Promise<void>;
-  readonly waitReady: (
-    containerName: string,
-    timeoutMs: number,
-  ) => Promise<void>;
-  readonly stop: (name: string) => Promise<void>;
-  readonly rm: (name: string) => Promise<void>;
-  readonly volumeRemove: (name: string) => Promise<void>;
-  readonly volumeCreate: (
-    name: string,
-    labels: Record<string, string>,
-  ) => Promise<void>;
 }
 
 const liveStartDindSidecarDeps: StartDindSidecarDeps = {
   runSidecar: runDindSidecar,
-  waitReady: waitForDindReady,
-  stop: (name) => dockerStop(name, { timeoutSeconds: 0 }),
-  rm: dockerRm,
-  volumeRemove: dockerVolumeRemove,
-  volumeCreate: dockerVolumeCreate,
 };
 
-/** Start the DinD sidecar, resetting only this session's data on failure. */
+/** Start the DinD container without waiting for dockerd readiness. */
 export async function startDindSidecar(
   params: StartDindSidecarParams,
   deps: StartDindSidecarDeps = liveStartDindSidecarDeps,
 ): Promise<void> {
   logInfo(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
   await deps.runSidecar(params);
-  logInfo("[nas] DinD: waiting for daemon to be ready...");
-  try {
-    await deps.waitReady(params.containerName, params.readinessTimeoutMs);
-    logInfo("[nas] DinD: daemon is ready");
-    return;
-  } catch (firstError) {
-    logWarn(
-      "[nas] DinD: startup failed; resetting this session's data volume and retrying...",
+}
+
+export interface DindReadinessMonitor {
+  readonly finished: Promise<void>;
+  readonly cancel: () => void;
+}
+
+export interface StartDindReadinessMonitorDeps {
+  readonly waitReady: (
+    containerName: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<void>;
+  readonly ready: () => void;
+  readonly failed: (message: string) => void;
+}
+
+const liveStartDindReadinessMonitorDeps: StartDindReadinessMonitorDeps = {
+  waitReady: (containerName, timeoutMs, signal) =>
+    waitForDindReady(
+      containerName,
+      timeoutMs,
+      liveWaitForDindReadyDeps,
+      signal,
+    ),
+  ready: () => {},
+  failed: logError,
+};
+
+/** Monitor dockerd in the background and report a terminal failure once. */
+export function startDindReadinessMonitor(
+  containerName: string,
+  timeoutMs: number,
+  deps: StartDindReadinessMonitorDeps = liveStartDindReadinessMonitorDeps,
+): DindReadinessMonitor {
+  const controller = new AbortController();
+  const finished = Promise.resolve()
+    .then(() => deps.waitReady(containerName, timeoutMs, controller.signal))
+    .then(
+      () => {
+        if (!controller.signal.aborted) deps.ready();
+      },
+      (error) => {
+        if (controller.signal.aborted) return;
+        deps.failed(
+          `[nas] DinD: daemon failed to become ready: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      },
     );
-    await deps.stop(params.containerName).catch(() => {});
-    await deps.rm(params.containerName).catch(() => {});
-    await deps.volumeRemove(params.dindDataVolume);
-    await deps.volumeCreate(params.dindDataVolume, {
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_DIND_DATA,
-    });
-    await deps.runSidecar(params);
-    try {
-      await deps.waitReady(params.containerName, params.readinessTimeoutMs);
-    } catch (secondError) {
-      throw new Error(
-        `DinD failed after resetting session data: ${
-          secondError instanceof Error
-            ? secondError.message
-            : String(secondError)
-        }`,
-        { cause: firstError },
-      );
-    }
-  }
+  return {
+    finished,
+    cancel: () => controller.abort(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +241,7 @@ export interface EnsureDindSidecarParams {
 
 export interface DindSidecarHandle {
   readonly registryMirrorName: string | null;
+  readonly readinessMonitor: DindReadinessMonitor;
 }
 
 export interface EnsureDindSidecarDeps {
@@ -231,6 +251,10 @@ export interface EnsureDindSidecarDeps {
   ) => Promise<void>;
   readonly startRegistryMirror: typeof startRegistryMirror;
   readonly startDind: (params: StartDindSidecarParams) => Promise<void>;
+  readonly startReadinessMonitor: (
+    containerName: string,
+    timeoutMs: number,
+  ) => DindReadinessMonitor;
   readonly ensureSharedTmpWritable: (containerName: string) => Promise<void>;
   readonly networkConnect: (
     networkName: string,
@@ -249,6 +273,7 @@ const liveEnsureDindSidecarDeps: EnsureDindSidecarDeps = {
   volumeCreate: dockerVolumeCreate,
   startRegistryMirror,
   startDind: startDindSidecar,
+  startReadinessMonitor: startDindReadinessMonitor,
   ensureSharedTmpWritable,
   networkConnect: dockerNetworkConnect,
   networkDisconnect: dockerNetworkDisconnect,
@@ -300,6 +325,7 @@ export async function ensureDindSidecar(
   } = params;
   const timeoutMs = readinessTimeoutMs ?? READINESS_TIMEOUT_MS;
   let activeRegistryMirrorName: string | null = null;
+  let readinessMonitor: DindReadinessMonitor | null = null;
 
   try {
     await createSessionVolume(
@@ -370,8 +396,13 @@ export async function ensureDindSidecar(
         }`,
       );
     }
-    return { registryMirrorName: activeRegistryMirrorName };
+    readinessMonitor = deps.startReadinessMonitor(containerName, timeoutMs);
+    return {
+      registryMirrorName: activeRegistryMirrorName,
+      readinessMonitor,
+    };
   } catch (error) {
+    readinessMonitor?.cancel();
     // 途中で失敗した場合、この呼び出しで起動したサイドカーをクリーンアップ
     // してから再 throw する。
     try {
@@ -439,6 +470,7 @@ export interface TeardownDindSidecarParams {
   dindDataVolume: string;
   sharedTmpVolume: string;
   registryMirrorName: string | null;
+  readinessMonitor: DindReadinessMonitor;
   /**
    * Name of the agent container that joined this sidecar's network
    * namespace (`--network container:<containerName>`). If it is still
@@ -473,8 +505,11 @@ export async function teardownDindSidecar(
     dindDataVolume,
     sharedTmpVolume,
     registryMirrorName,
+    readinessMonitor,
     joinerContainerName,
   } = params;
+
+  readinessMonitor.cancel();
 
   // The agent joined this container's network namespace. If it outlived the
   // nas process -- SIGTERM kills only the docker client -- removing the
@@ -642,59 +677,52 @@ export function buildDindSidecarArgs(
  * rootlesskit's --port-driver=builtin forwards the TCP port to the
  * container namespace, so tcp://127.0.0.1:2375 works.
  */
-async function waitForDindReady(
+const liveWaitForDindReadyDeps: WaitForDindReadyDeps = {
+  isRunning: dockerIsRunning,
+  logs: (containerName) => dockerLogs(containerName, { tail: 50 }),
+  exec: dockerExec,
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref();
+    }),
+  now: Date.now,
+};
+
+export async function waitForDindReady(
   containerName: string,
   timeoutMs: number,
+  deps: WaitForDindReadyDeps = liveWaitForDindReadyDeps,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const start = Date.now();
-  let containerIp: string | null = null;
-  while (Date.now() - start < timeoutMs) {
+  const start = deps.now();
+  while (deps.now() - start < timeoutMs) {
+    if (signal?.aborted) return;
     // Check container is alive (fail fast on startup failure)
-    const running = await dockerIsRunning(containerName);
+    const running = await deps.isRunning(containerName);
     if (!running) {
-      const logs = await dockerLogs(containerName, { tail: 50 });
+      const logs = await deps.logs(containerName);
       throw new Error(
         `DinD rootless container exited unexpectedly.\n--- container logs ---\n${logs}`,
       );
     }
 
-    if (!containerIp) {
-      containerIp = await dockerContainerIp(containerName);
-    }
+    const result = await deps.exec(containerName, [
+      "docker",
+      "-H",
+      `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+      "info",
+    ]);
+    if (result.code === 0) return;
 
-    // Detect daemon listen via TCP on bridge IP, then verify with docker info
-    if (containerIp && (await canConnectTcp(containerIp, DIND_INTERNAL_PORT))) {
-      const result = await dockerExec(containerName, [
-        "docker",
-        "-H",
-        `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
-        "info",
-      ]);
-      if (result.code === 0) return;
-    }
-
-    await new Promise((r) => setTimeout(r, READINESS_POLL_INTERVAL_MS));
+    await deps.sleep(READINESS_POLL_INTERVAL_MS);
   }
 
   // On timeout, dump logs to help diagnose
-  const logs = await dockerLogs(containerName, { tail: 50 });
+  const logs = await deps.logs(containerName);
   throw new Error(
     `DinD rootless failed to become ready within ${
       timeoutMs / 1000
     }s\n--- container logs ---\n${logs}`,
   );
-}
-
-async function canConnectTcp(hostname: string, port: number): Promise<boolean> {
-  const { createConnection } = await import("node:net");
-  return new Promise<boolean>((resolve) => {
-    const socket = createConnection({ host: hostname, port }, () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.on("error", () => {
-      socket.destroy();
-      resolve(false);
-    });
-  });
 }
