@@ -146,7 +146,9 @@ function makeStageState(
   const proxy = overrides.proxy ?? {
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
     proxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
-    caCertPath: "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.pem",
+    // These cases do not pull through the dummy proxy. The exact bind still
+    // requires a guaranteed-existing regular file on the Docker host.
+    caCertPath: import.meta.path,
   };
   return { workspace, container, network, proxy };
 }
