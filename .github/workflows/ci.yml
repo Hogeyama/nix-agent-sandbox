@@ -18,6 +18,11 @@ jobs:
       - name: Install dependencies
         run: nix develop -c bun install --frozen-lockfile
 
+      - name: Documentation checks
+        run: |
+          nix develop -c bun run docs:check
+          nix develop -c bun run docs:build
+
       - name: Type check
         run: nix develop -c bun run check
 
