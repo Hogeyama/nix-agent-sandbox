@@ -245,20 +245,6 @@ local commonHostexec: HostExecConfig = new {
       fallback = "container"
     }
     new {
-      id = "docker"
-      match {
-        argv0 = "docker"
-      }
-      cwd {
-        mode = "workspace-or-session-tmp"
-      }
-      inheritEnv {
-        mode = "unsafe-inherit-all"
-      }
-      approval = "deny"
-      fallback = "container"
-    }
-    new {
       id = "wl-paste"
       match {
         argv0 = "wl-paste"
@@ -359,7 +345,7 @@ local baseProfile: Profile = new {
     multiplex = true
   }
   docker {
-    enable = false
+    enable = true
   }
   gcloud {
     mountConfig = false
