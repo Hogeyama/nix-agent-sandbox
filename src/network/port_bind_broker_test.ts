@@ -34,6 +34,7 @@ async function withBroker<T>(
     written: PortBinding[][];
     echoPort: number;
   }) => Promise<T>,
+  relayDelayMs = 0,
 ): Promise<T> {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const echo = createServer({ allowHalfOpen: true }, (socket: Socket) => {
@@ -48,7 +49,10 @@ async function withBroker<T>(
       gateway: {
         socketPath: path.join(dir, "relay.sock"),
         isRelayConnected: () => true,
-        openStream: async () => connect({ port: echoPort, host: "127.0.0.1" }),
+        openStream: async () => {
+          await new Promise((resolve) => setTimeout(resolve, relayDelayMs));
+          return connect({ port: echoPort, host: "127.0.0.1" });
+        },
         probe: async () => "ok",
         close: async () => {},
       },
@@ -72,7 +76,7 @@ async function connectTcp(port: number): Promise<Socket> {
   });
 }
 
-test("bind opens a listener that reaches the container port through the gateway", async () => {
+test("bind preserves client data while the relay stream is opening", async () => {
   await withBroker(async ({ broker }) => {
     const result = await broker.bind({ containerPort: 3000, hostPort: 0 });
     const socket = await connectTcp(result.hostPort);
@@ -82,7 +86,7 @@ test("bind opens a listener that reaches the container port through the gateway"
     );
     expect(echoed.toString()).toBe("ping");
     socket.destroy();
-  });
+  }, 20);
 });
 
 test("bind persists the binding and reports the probe result", async () => {

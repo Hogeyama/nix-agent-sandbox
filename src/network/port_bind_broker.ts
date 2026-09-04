@@ -147,6 +147,12 @@ export async function startPortBindBroker(opts: {
   ): Promise<Server> =>
     new Promise((resolve, reject) => {
       const server = createServer({ allowHalfOpen: true }, (browser) => {
+        let pendingChunk: Buffer | undefined;
+        const holdFirstChunk = (chunk: Buffer) => {
+          pendingChunk = chunk;
+          browser.pause();
+        };
+        browser.once("data", holdFirstChunk);
         connections.add(browser);
         browser.on("close", () => connections.delete(browser));
         browser.on("error", () => browser.destroy());
@@ -155,8 +161,13 @@ export async function startPortBindBroker(opts: {
         opts.gateway
           .openStream(containerPort, abort.signal)
           .then((stream) => {
+            browser.off("data", holdFirstChunk);
             if (browser.destroyed) stream.destroy();
-            else pipeSockets(browser, stream);
+            else {
+              pipeSockets(browser, stream);
+              if (pendingChunk) stream.write(pendingChunk);
+              browser.resume();
+            }
           })
           .catch((error) => {
             logDebug(`[nas] port-bind: ${containerPort} unreachable: ${error}`);

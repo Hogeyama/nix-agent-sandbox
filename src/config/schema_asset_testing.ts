@@ -42,9 +42,16 @@ export async function useRepoSchemaAsset(): Promise<() => Promise<void>> {
         await cp(path.join(previous, entry), path.join(assetDir, entry), {
           recursive: true,
         });
+        const relayPath = path.join(
+          assetDir,
+          "docker",
+          "embed",
+          "port-relay.mjs",
+        );
+        await rm(relayPath, { force: true });
         await copyFile(
           new URL("../docker/embed/port-relay.mjs", import.meta.url),
-          path.join(assetDir, "docker", "embed", "port-relay.mjs"),
+          relayPath,
         );
         continue;
       }
