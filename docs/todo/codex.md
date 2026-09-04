@@ -1,5 +1,7 @@
 調査結果として、Claude では実現できている一方、Codex では不足しているものが主に 3 点あります。
 
+**0. Codexが起動するシェルへ NAS_HOSTEXEC_SOCKET などのhostexec broker環境を確実に継承させ、bun 等のwrapperが承認フローを通れるようにする**
+
 **1. 履歴 UI の prompt・summary 表示**
 最も明確な未実装です。
 
