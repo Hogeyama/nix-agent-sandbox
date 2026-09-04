@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -19,10 +19,13 @@ async function withRelay<T>(
   fn: (ctx: {
     gateway: Awaited<ReturnType<typeof startRelayGateway>>;
     echoPort: number;
+    procDir: string;
   }) => Promise<T>,
 ): Promise<T> {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-relay-proc-"));
   const socketPath = path.join(dir, "relay.sock");
+  // The scan reads /proc/net inside the container; here it reads a fixture.
+  const procDir = path.join(dir, "proc-net");
   const echo = createServer({ allowHalfOpen: true }, (socket: Socket) => {
     socket.write("HELLO\n");
     socket.on("data", (chunk: Buffer) => socket.write(chunk));
@@ -41,8 +44,14 @@ async function withRelay<T>(
       ensureRelay: async () => "ready",
     });
     gateway = startedGateway;
+    await mkdir(procDir, { recursive: true });
     proc = Bun.spawn(["bun", SCRIPT], {
-      env: { ...process.env, NAS_PORT_RELAY_SOCKET: socketPath },
+      env: {
+        ...process.env,
+        NAS_PORT_RELAY_SOCKET: socketPath,
+        NAS_PORT_RELAY_PROC_DIR: procDir,
+        NAS_PORT_RELAY_WATCH_MS: "20",
+      },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -50,7 +59,7 @@ async function withRelay<T>(
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(startedGateway.isRelayConnected()).toEqual(true);
-    return await fn({ gateway: startedGateway, echoPort });
+    return await fn({ gateway: startedGateway, echoPort, procDir });
   } finally {
     try {
       if (proc) {
@@ -166,4 +175,119 @@ test("the relay closes control for a request with extra fields", async () => {
       }
     }
   }
+});
+
+const PROC_HEADER =
+  "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+
+function procRow(address: string, port: number, state = "0A"): string {
+  const hexPort = port.toString(16).toUpperCase().padStart(4, "0");
+  return `   0: ${address}:${hexPort} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000  1000        0 1 1 0000000000000000 100 0 0 10 0`;
+}
+
+async function writeProcNet(
+  procDir: string,
+  rows: { tcp: string[]; tcp6?: string[]; ephemeralRange?: string },
+): Promise<void> {
+  await mkdir(path.join(procDir, "net"), { recursive: true });
+  await mkdir(path.join(procDir, "sys", "net", "ipv4"), { recursive: true });
+  await writeFile(
+    path.join(procDir, "net", "tcp"),
+    `${[PROC_HEADER, ...rows.tcp].join("\n")}\n`,
+  );
+  await writeFile(
+    path.join(procDir, "net", "tcp6"),
+    `${[PROC_HEADER, ...(rows.tcp6 ?? [])].join("\n")}\n`,
+  );
+  await writeFile(
+    path.join(procDir, "sys", "net", "ipv4", "ip_local_port_range"),
+    `${rows.ephemeralRange ?? "32768\t60999"}\n`,
+  );
+}
+
+async function waitForListeners(
+  gateway: Awaited<ReturnType<typeof startRelayGateway>>,
+  count: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (gateway.listeners().length === count) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(
+    `expected ${count} listeners, saw ${JSON.stringify(gateway.listeners())}`,
+  );
+}
+
+test("the relay reports listening ports and the address each one picked", async () => {
+  await withRelay(async ({ gateway, procDir }) => {
+    await writeProcNet(procDir, {
+      tcp: [
+        procRow("00000000", 5173),
+        procRow("0100007F", 3000),
+        procRow("020011AC", 8080),
+        // An established connection is not a server; it must not be offered.
+        procRow("0100007F", 4444, "01"),
+      ],
+      tcp6: [procRow("00000000000000000000000001000000", 9000)],
+    });
+
+    expect(await gateway.watchListeners(true)).toEqual("ready");
+    await waitForListeners(gateway, 4);
+    expect(gateway.listeners()).toEqual([
+      { containerPort: 3000, scope: "loopback" },
+      { containerPort: 5173, scope: "any" },
+      { containerPort: 8080, scope: "remote" },
+      { containerPort: 9000, scope: "loopback6" },
+    ]);
+  });
+});
+
+test("ports the kernel hands out on its own are not suggested", async () => {
+  await withRelay(async ({ gateway, procDir }) => {
+    await writeProcNet(procDir, {
+      tcp: [
+        procRow("00000000", 5432),
+        // What a Testcontainers publish looks like from the shared namespace.
+        procRow("00000000", 40001),
+        procRow("0100007F", 49152),
+      ],
+      ephemeralRange: "40000\t60999",
+    });
+
+    await gateway.watchListeners(true);
+    await waitForListeners(gateway, 1);
+    expect(gateway.listeners()).toEqual([
+      { containerPort: 5432, scope: "any" },
+    ]);
+  });
+});
+
+test("a server that stops listening stops being reported", async () => {
+  await withRelay(async ({ gateway, procDir }) => {
+    await writeProcNet(procDir, { tcp: [procRow("00000000", 5173)] });
+    await gateway.watchListeners(true);
+    await waitForListeners(gateway, 1);
+
+    await writeProcNet(procDir, { tcp: [] });
+    await waitForListeners(gateway, 0);
+  });
+});
+
+test("the relay only scans while the host is watching", async () => {
+  await withRelay(async ({ gateway, procDir }) => {
+    await writeProcNet(procDir, { tcp: [procRow("00000000", 5173)] });
+    // Nothing asked for candidates, so the scan never ran.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(gateway.listeners()).toEqual([]);
+
+    await gateway.watchListeners(true);
+    await waitForListeners(gateway, 1);
+    await gateway.watchListeners(false);
+
+    await writeProcNet(procDir, {
+      tcp: [procRow("00000000", 5173), procRow("00000000", 3000)],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(gateway.listeners()).toEqual([]);
+  });
 });

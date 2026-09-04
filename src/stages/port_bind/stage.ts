@@ -10,6 +10,7 @@ import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { MountSpec, PipelineState } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
+import { reservedNamespacePorts } from "../dind.ts";
 import { PortBindService } from "./port_bind_service.ts";
 
 export const CONTAINER_RELAY_SOCKET = "/run/nas-ports/relay.sock";
@@ -25,6 +26,8 @@ export interface PortBindPlan {
   readonly relayScriptSource: string;
   readonly controlSocket: string;
   readonly relayUser: string | undefined;
+  /** Ports nas already binds in the namespace; never suggested as candidates. */
+  readonly reservedPorts: readonly number[];
   readonly mounts: readonly MountSpec[];
 }
 
@@ -51,6 +54,9 @@ export function planPortBind(input: PortBindStageInput): PortBindPlan {
     relayScriptSource,
     controlSocket: brokerSocketPath(paths, input.sessionId),
     relayUser: input.host.uid === null ? undefined : String(input.host.uid),
+    reservedPorts: reservedNamespacePorts(
+      input.container.env.static.NAS_FORWARD_PORTS,
+    ),
     mounts: [
       {
         source: relaySocketSource,

@@ -3,8 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import {
+  connectUnix,
+  readJsonLine,
+  writeJsonLine,
+} from "../lib/unix_socket.ts";
 import { hostPortCandidates, startPortBindBroker } from "./port_bind_broker.ts";
-import type { PortBinding } from "./port_bind_protocol.ts";
+import type { ObservedListener, PortBinding } from "./port_bind_protocol.ts";
+import type { EnsureRelayResult } from "./port_bind_relay.ts";
 
 test("hostPortCandidates prefers the container port, then climbs above 1024", () => {
   expect(hostPortCandidates(3000, null).slice(0, 3)).toEqual([
@@ -54,6 +60,8 @@ async function withBroker<T>(
           return connect({ port: echoPort, host: "127.0.0.1" });
         },
         probe: async () => "ok",
+        watchListeners: async () => "ready" as const,
+        listeners: () => [],
         close: async () => {},
       },
       persist: async (bindings) => {
@@ -145,6 +153,8 @@ test("a failed bind persistence closes and forgets the listener", async () => {
         throw new Error("unused");
       },
       probe: async () => "ok",
+      watchListeners: async () => "ready" as const,
+      listeners: () => [],
       close: async () => {},
     },
     persist: async () => {
@@ -178,6 +188,8 @@ test("unbind keeps a live binding when persistence fails", async () => {
         throw new Error("unused");
       },
       probe: async () => "ok",
+      watchListeners: async () => "ready" as const,
+      listeners: () => [],
       close: async () => {},
     },
     persist: async () => {
@@ -215,6 +227,8 @@ test("close drains an accepted bind and rejects later mutations", async () => {
         throw new Error("unused");
       },
       probe: async () => "ok",
+      watchListeners: async () => "ready" as const,
+      listeners: () => [],
       close: async () => {},
     },
     persist: async () => persistGate,
@@ -247,6 +261,8 @@ test("close destroys a control client waiting on an incomplete line", async () =
         throw new Error("unused");
       },
       probe: async () => "ok",
+      watchListeners: async () => "ready" as const,
+      listeners: () => [],
       close: async () => {},
     },
     persist: async () => {},
@@ -302,6 +318,8 @@ test("a browser that disconnects while waiting cancels the stream request", asyn
           });
         }),
       probe: async () => "ok",
+      watchListeners: async () => "ready" as const,
+      listeners: () => [],
       close: async () => {},
     },
     persist: async () => {},
@@ -369,4 +387,123 @@ test("the control socket rejects invalid request shapes", async () => {
       ).toMatchObject({ ok: false, error: "invalid-request" });
     }
   });
+});
+
+async function withCandidateBroker<T>(
+  opts: {
+    listeners: ObservedListener[];
+    reservedPorts?: number[];
+    watchLeaseMs?: number;
+    ensure?: () => EnsureRelayResult;
+  },
+  fn: (ctx: {
+    broker: Awaited<ReturnType<typeof startPortBindBroker>>;
+    controlSocketPath: string;
+    watchCalls: boolean[];
+  }) => Promise<T>,
+): Promise<T> {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-broker-candidates-"));
+  const controlSocketPath = path.join(dir, "sock");
+  const watchCalls: boolean[] = [];
+  let broker: Awaited<ReturnType<typeof startPortBindBroker>> | undefined;
+  try {
+    broker = await startPortBindBroker({
+      controlSocketPath,
+      gateway: {
+        socketPath: path.join(dir, "relay.sock"),
+        isRelayConnected: () => true,
+        openStream: async () => {
+          throw new Error("unused");
+        },
+        probe: async () => "ok",
+        watchListeners: async (enabled) => {
+          watchCalls.push(enabled);
+          return opts.ensure?.() ?? "ready";
+        },
+        listeners: () => opts.listeners,
+        close: async () => {},
+      },
+      persist: async () => {},
+      reservedPorts: opts.reservedPorts,
+      watchLeaseMs: opts.watchLeaseMs,
+    });
+    return await fn({ broker, controlSocketPath, watchCalls });
+  } finally {
+    await broker?.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("candidates drop bound ports, nas ports, and flag unreachable ones", async () => {
+  await withCandidateBroker(
+    {
+      listeners: [
+        { containerPort: 3000, scope: "any" },
+        { containerPort: 5173, scope: "remote" },
+        { containerPort: 2375, scope: "any" },
+      ],
+      reservedPorts: [2375],
+    },
+    async ({ broker, watchCalls }) => {
+      await broker.bind({ containerPort: 3000, hostPort: 0 });
+      const result = await broker.candidates();
+      expect(result).toEqual({
+        candidates: [
+          { containerPort: 5173, scope: "remote", reachable: false },
+        ],
+        watch: "watching",
+      });
+      // Asking is what starts the scan; nothing else turned it on.
+      expect(watchCalls).toEqual([true]);
+    },
+  );
+});
+
+test("the scan stops once nothing renews the lease", async () => {
+  await withCandidateBroker(
+    { listeners: [{ containerPort: 3000, scope: "any" }], watchLeaseMs: 40 },
+    async ({ broker, watchCalls }) => {
+      await broker.candidates();
+      await broker.candidates();
+      expect(watchCalls).toEqual([true, true]);
+      for (let attempt = 0; attempt < 40 && watchCalls.length < 3; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(watchCalls.at(-1)).toBe(false);
+    },
+  );
+});
+
+test("a container that cannot be reached reports why instead of an empty scan", async () => {
+  await withCandidateBroker(
+    { listeners: [], ensure: () => "container-not-running" },
+    async ({ broker }) => {
+      expect(await broker.candidates()).toEqual({
+        candidates: [],
+        watch: "container-not-running",
+      });
+    },
+  );
+});
+
+test("the control socket answers a candidates request", async () => {
+  await withCandidateBroker(
+    { listeners: [{ containerPort: 5173, scope: "loopback" }] },
+    async ({ controlSocketPath }) => {
+      const socket = await connectUnix(controlSocketPath);
+      try {
+        await writeJsonLine(socket, { type: "candidates" });
+        const line = await readJsonLine(socket, 8192);
+        expect(JSON.parse(line ?? "null")).toEqual({
+          ok: true,
+          candidates: [
+            { containerPort: 5173, scope: "loopback", reachable: true },
+          ],
+          watch: "watching",
+        });
+      } finally {
+        socket.destroy();
+      }
+    },
+  );
 });

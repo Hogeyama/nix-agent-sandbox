@@ -201,3 +201,80 @@ test("binding rejects malformed success responses from the broker", async () => 
     }
   });
 });
+
+async function withFakeBroker<T>(
+  reply: (request: unknown) => unknown,
+  fn: (
+    paths: Awaited<ReturnType<typeof resolvePortsRuntimePaths>>,
+  ) => Promise<T>,
+): Promise<T> {
+  return await withPaths(async (paths) => {
+    const socketPath = brokerSocketPath(paths, "s1");
+    await mkdir(path.dirname(socketPath), { recursive: true });
+    const server = await createUnixServer(socketPath, (socket) => {
+      void (async () => {
+        const line = await readJsonLine(socket);
+        await writeJsonLine(
+          socket,
+          reply(line === null ? null : JSON.parse(line)),
+        );
+        socket.end();
+      })();
+    });
+    try {
+      await writeSessionRegistry(paths, entry("s1", socketPath, []));
+      return await fn(paths);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+}
+
+test("the live service asks its session for candidates", async () => {
+  let received: unknown;
+  await withFakeBroker(
+    (request) => {
+      received = request;
+      return {
+        ok: true,
+        candidates: [
+          { containerPort: 5173, scope: "remote", reachable: false },
+        ],
+        watch: "watching",
+      };
+    },
+    async (paths) => {
+      const result = await makePortBindClient().candidates(paths, "s1");
+      expect(received).toEqual({ type: "candidates" });
+      expect(result).toEqual({
+        candidates: [
+          { containerPort: 5173, scope: "remote", reachable: false },
+        ],
+        watch: "watching",
+      });
+    },
+  );
+});
+
+test("a malformed candidates response is a broker error, not data", async () => {
+  await withFakeBroker(
+    () => ({ ok: true, candidates: [{ containerPort: 0 }], watch: "watching" }),
+    async (paths) => {
+      await expect(
+        makePortBindClient().candidates(paths, "s1"),
+      ).rejects.toBeInstanceOf(InternalBrokerError);
+    },
+  );
+});
+
+test("the fake reports a watching scan with nothing found", async () => {
+  await withPaths(async (paths) => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* PortBindService;
+        return yield* svc.candidates(paths, "s1");
+      }).pipe(Effect.provide(makePortBindServiceFake())),
+    );
+    expect(result).toEqual({ candidates: [], watch: "watching" });
+  });
+});

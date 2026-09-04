@@ -5,12 +5,19 @@
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
   makePortBindClient,
+  type PortBindCandidates,
   type PortBindKey,
   SessionUnreachableError,
 } from "../domain/port_bind.ts";
 import { runFzfSelect } from "../fzf_review.ts";
-import type { PortBindSessionEntry } from "../network/port_bind_protocol.ts";
-import { resolvePortsRuntimePaths } from "../network/port_bind_registry.ts";
+import type {
+  PortBindCandidate,
+  PortBindSessionEntry,
+} from "../network/port_bind_protocol.ts";
+import {
+  type PortsRuntimePaths,
+  resolvePortsRuntimePaths,
+} from "../network/port_bind_registry.ts";
 import { APPROVAL_SCOPES, type ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
@@ -25,7 +32,19 @@ import {
   hasFormatJson,
   removeFirstOccurrence,
 } from "./helpers.ts";
-import { parseBindArgs, parseUnbindArgs } from "./port_bind_args.ts";
+import {
+  parseBindArgs,
+  parseBindSessionOnly,
+  parseUnbindArgs,
+} from "./port_bind_args.ts";
+
+/**
+ * The container-side scan starts only when someone asks for candidates, and it
+ * needs two passes before it trusts a port, so a one-shot CLI call has to wait
+ * out that warm-up instead of reporting an empty container.
+ */
+const CANDIDATE_WAIT_MS = 6000;
+const CANDIDATE_POLL_MS = 500;
 
 function hasPortBindArgument(args: string[]): boolean {
   for (let index = 0; index < args.length; index++) {
@@ -77,6 +96,32 @@ function bindingRows(sessions: PortBindSessionEntry[]) {
   );
 }
 
+async function collectCandidates(
+  client: ReturnType<typeof makePortBindClient>,
+  paths: PortsRuntimePaths,
+  sessionId: string,
+): Promise<PortBindCandidates> {
+  const deadline = Date.now() + CANDIDATE_WAIT_MS;
+  let result = await client.candidates(paths, sessionId);
+  while (
+    result.watch === "watching" &&
+    result.candidates.length === 0 &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, CANDIDATE_POLL_MS));
+    result = await client.candidates(paths, sessionId);
+  }
+  return result;
+}
+
+function candidateLine(candidate: PortBindCandidate): string {
+  // The scope only earns a mention when it is the reason a bind would not
+  // work; an ordinary server is just its port.
+  return candidate.reachable
+    ? `${candidate.containerPort}`
+    : `${candidate.containerPort} (${candidate.scope} — 127.0.0.1 からは届きません)`;
+}
+
 export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
   const sub = findFirstNonFlagArg(nasArgs);
   const runtimeDir = getFlagValue(nasArgs, "--runtime-dir");
@@ -109,6 +154,46 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
             );
           }
         }
+        return;
+      }
+
+      const suggestFor = parseBindSessionOnly(args);
+      if (suggestFor !== null) {
+        unreachableSessionId = suggestFor;
+        const found = await collectCandidates(
+          portBindClient,
+          paths,
+          suggestFor,
+        );
+        if (hasFormatJson(nasArgs)) {
+          console.log(JSON.stringify(found));
+          return;
+        }
+        if (found.candidates.length === 0) {
+          if (found.watch === "container-not-running") {
+            console.log("[nas] コンテナは起動していません。");
+          } else if (found.watch === "relay-unreachable") {
+            console.log("[nas] リレーを起動できませんでした。");
+          } else {
+            console.log("[nas] 未転送の待ち受けポートは見つかりませんでした。");
+          }
+          return;
+        }
+        const lines = found.candidates.map(candidateLine);
+        const selected = await runFzfSelect(lines, {
+          prompt: "bind> ",
+          missingMessage:
+            "[nas] fzf is not installed. Pass <session-id>:<container-port> to 'nas network bind'.",
+        });
+        if (selected === null) return;
+        const chosen = found.candidates[lines.indexOf(selected)];
+        const suggested = await portBindClient.bind(
+          paths,
+          suggestFor,
+          chosen.containerPort,
+          null,
+        );
+        console.log(`http://localhost:${suggested.hostPort} で開きました`);
         return;
       }
 

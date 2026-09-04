@@ -10,7 +10,10 @@ import {
   type ControlErrorKind,
   type ControlRequest,
   type ControlResponse,
+  isReachableScope,
+  type ListenerWatchState,
   MAX_CONTROL_BYTES,
+  type PortBindCandidate,
   type PortBinding,
   type ProbeResult,
 } from "./port_bind_protocol.ts";
@@ -19,6 +22,12 @@ import { pipeSockets, type RelayGateway } from "./port_bind_relay.ts";
 const HOST = "127.0.0.1";
 const MAX_CANDIDATES = 65;
 const MAX_PORT = 65_535;
+/**
+ * How long one `candidates` request keeps the container-side scan running.
+ * Interest is expressed by asking, not by an explicit subscription, so a
+ * client that dies simply stops renewing and the scan stops on its own.
+ */
+const WATCH_LEASE_MS = 30_000;
 
 export class ControlError extends Error {
   constructor(
@@ -52,6 +61,14 @@ export interface PortBindBroker {
   }): Promise<{ hostPort: number; probe: ProbeResult }>;
   unbind(key: { containerPort?: number; hostPort?: number }): Promise<void>;
   listBindings(): PortBinding[];
+  /**
+   * Container ports seen listening that no binding covers yet. Asking also
+   * starts (and renews the lease on) the container-side scan.
+   */
+  candidates(): Promise<{
+    candidates: PortBindCandidate[];
+    watch: ListenerWatchState;
+  }>;
   close(): Promise<void>;
 }
 
@@ -113,6 +130,9 @@ function parseControlRequest(line: string): ControlRequest {
   ) {
     return request as ControlRequest;
   }
+  if (request.type === "candidates" && hasKeys(request, ["type"])) {
+    return request as ControlRequest;
+  }
   throw new ControlError("invalid-request", "request shape is invalid");
 }
 
@@ -121,9 +141,19 @@ export async function startPortBindBroker(opts: {
   gateway: RelayGateway;
   persist: (bindings: PortBinding[]) => Promise<void>;
   now?: () => Date;
+  /**
+   * Ports nas itself binds inside the container's network namespace (the DinD
+   * daemon, the local proxy, forwarded ports). They are always listening and
+   * are never something the user wants exposed, so they never get suggested.
+   */
+  reservedPorts?: readonly number[];
+  watchLeaseMs?: number;
 }): Promise<PortBindBroker> {
   const now = opts.now ?? (() => new Date());
+  const reserved = new Set(opts.reservedPorts ?? []);
+  const watchLeaseMs = opts.watchLeaseMs ?? WATCH_LEASE_MS;
   const open = new Map<number, OpenBinding>();
+  let watchLease: ReturnType<typeof setTimeout> | undefined;
   let mutationTail = Promise.resolve();
   let closing = false;
 
@@ -282,6 +312,39 @@ export async function startPortBindBroker(opts: {
       open.delete(entry.binding.containerPort);
     });
 
+  const watchState = (
+    ensured: Awaited<ReturnType<RelayGateway["watchListeners"]>>,
+  ): ListenerWatchState => {
+    if (ensured === "ready") return "watching";
+    if (ensured === "container-not-running") return "container-not-running";
+    return "relay-unreachable";
+  };
+
+  const candidates: PortBindBroker["candidates"] = async () => {
+    const ensured = await opts.gateway.watchListeners(true);
+    if (watchLease) clearTimeout(watchLease);
+    watchLease = closing
+      ? undefined
+      : setTimeout(() => {
+          watchLease = undefined;
+          void opts.gateway.watchListeners(false).catch(() => {});
+        }, watchLeaseMs);
+    return {
+      candidates: opts.gateway
+        .listeners()
+        .filter(
+          (listener) =>
+            !open.has(listener.containerPort) &&
+            !reserved.has(listener.containerPort),
+        )
+        .map((listener) => ({
+          ...listener,
+          reachable: isReachableScope(listener.scope),
+        })),
+      watch: watchState(ensured),
+    };
+  };
+
   async function handleControl(socket: Socket): Promise<void> {
     socket.on("error", () => socket.destroy());
     try {
@@ -298,6 +361,8 @@ export async function startPortBindBroker(opts: {
       let response: ControlResponse;
       if (request.type === "bind") {
         response = { ok: true, ...(await bind(request)) };
+      } else if (request.type === "candidates") {
+        response = { ok: true, ...(await candidates()) };
       } else {
         await unbind(
           "containerPort" in request
@@ -332,8 +397,11 @@ export async function startPortBindBroker(opts: {
     bind,
     unbind,
     listBindings: snapshot,
+    candidates,
     close: async () => {
       closing = true;
+      if (watchLease) clearTimeout(watchLease);
+      watchLease = undefined;
       await mutationTail;
       for (const entry of open.values()) await closeBinding(entry);
       open.clear();

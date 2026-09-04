@@ -1155,6 +1155,49 @@ body::after {
   cursor: not-allowed;
   opacity: 0.55;
 }
+.port-candidate-list {
+  padding: 6px 14px 0;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 6px;
+}
+.port-candidate-label {
+  color: var(--muted-2);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.port-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.port-candidate-row button {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--cream-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.port-candidate-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.port-candidate-hint {
+  color: var(--rose);
+  font-size: 9px;
+  white-space: nowrap;
+  cursor: help;
+}
+.port-candidate-notice {
+  margin: 6px 14px 0;
+  color: var(--muted-2);
+  font-size: 10px;
+}
+
 .port-binding-form {
   display: flex;
   gap: 8px;

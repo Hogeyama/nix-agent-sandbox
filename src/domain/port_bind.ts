@@ -1,6 +1,7 @@
 export {
   makePortBindClient,
   makePortBindServiceFake,
+  type PortBindCandidates,
   PortBindService,
   type PortBindServiceFakeConfig,
   PortBindServiceLive,

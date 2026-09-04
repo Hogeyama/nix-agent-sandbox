@@ -374,6 +374,32 @@ export function bindPort(
   });
 }
 
+export type PortCandidate = {
+  containerPort: number;
+  scope: "any" | "loopback" | "loopback6" | "remote";
+  reachable: boolean;
+};
+
+export type PortWatchState =
+  | "watching"
+  | "container-not-running"
+  | "relay-unreachable";
+
+/**
+ * Ports the container is listening on that nothing has bound yet. Asking is
+ * also what keeps the container-side scan alive, so a caller that wants live
+ * suggestions keeps asking and one that stops lets the scan lapse.
+ */
+export function getPortCandidates(sessionId: string): Promise<{
+  candidates: PortCandidate[];
+  watch: PortWatchState;
+}> {
+  return request(
+    "GET",
+    `/api/network/candidates?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
 export function unbindPort(
   sessionId: string,
   containerPort: number,

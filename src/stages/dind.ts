@@ -17,4 +17,5 @@ export {
   type DindStageOptions,
   type DindStagePlanOptions,
   planDind,
+  reservedNamespacePorts,
 } from "./dind/stage.ts";

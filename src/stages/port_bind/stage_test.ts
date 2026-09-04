@@ -19,6 +19,7 @@ import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../../pipeline/types.ts";
 import { makeDockerServiceFake } from "../../services/docker.ts";
+import { reservedNamespacePorts } from "../dind.ts";
 import {
   makePortBindServiceFake,
   PortBindService,
@@ -120,6 +121,28 @@ async function exists(filePath: string): Promise<boolean> {
 function liveLayer() {
   return PortBindServiceLive.pipe(Layer.provide(makeDockerServiceFake()));
 }
+
+test("planPortBind keeps nas's own namespace ports out of the suggestions", () => {
+  const input = inputFor("s1");
+  expect(planPortBind(input).reservedPorts).toEqual(
+    reservedNamespacePorts(undefined),
+  );
+
+  const forwarded = {
+    ...input,
+    container: {
+      ...input.container,
+      env: {
+        ...input.container.env,
+        static: {
+          ...input.container.env.static,
+          NAS_FORWARD_PORTS: "18080,9222",
+        },
+      },
+    },
+  };
+  expect(planPortBind(forwarded).reservedPorts).toContain(9222);
+});
 
 test("planPortBind mounts the socket and the script read-only", () => {
   const plan = planPortBind(inputFor("s1"));

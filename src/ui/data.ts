@@ -15,7 +15,10 @@ import {
 } from "../domain/container.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
-import { makePortBindClient } from "../domain/port_bind/service.ts";
+import {
+  makePortBindClient,
+  type PortBindCandidates,
+} from "../domain/port_bind/service.ts";
 import type { PortBindKey } from "../domain/port_bind/types.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
@@ -253,6 +256,18 @@ export async function getPortBindings(
   ctx: UiDataContext,
 ): Promise<PortBindSessionEntry[]> {
   return await portBindClient.list(ctx.portsPaths);
+}
+
+/**
+ * Unbound listeners the session's container is showing. Each call also renews
+ * the broker's lease on the container-side scan, so the panel polls while it
+ * is open and the scan stops on its own once nobody is looking.
+ */
+export async function getPortCandidates(
+  ctx: UiDataContext,
+  sessionId: string,
+): Promise<PortBindCandidates> {
+  return await portBindClient.candidates(ctx.portsPaths, sessionId);
 }
 
 export interface NetworkRequestBodyItem {

@@ -4,7 +4,12 @@ import { createServer, type Server, type Socket } from "node:net";
 import * as path from "node:path";
 import { ensureDir, safeRemove } from "../lib/fs_utils.ts";
 import { logDebug } from "../log.ts";
-import { MAX_LINE_BYTES, type ProbeResult } from "./port_bind_protocol.ts";
+import {
+  type ListenerScope,
+  MAX_LINE_BYTES,
+  type ObservedListener,
+  type ProbeResult,
+} from "./port_bind_protocol.ts";
 
 const PAIRING_TIMEOUT_MS = 10_000;
 const HALF_OPEN_GRACE_MS = 30_000;
@@ -124,6 +129,17 @@ export interface RelayGateway {
   isRelayConnected(): boolean;
   openStream(port: number, signal?: AbortSignal): Promise<Socket>;
   probe(port: number): Promise<ProbeResult>;
+  /**
+   * Turn the container-side listener scan on or off. Enabling it starts the
+   * relay if it is not running yet, which is the whole cost of the feature —
+   * so nothing enables it until something actually asks for candidates.
+   *
+   * The request survives a relay restart: the flag is re-sent on the next
+   * control connection.
+   */
+  watchListeners(enabled: boolean): Promise<EnsureRelayResult>;
+  /** Ports last reported as listening; empty while nothing is watching. */
+  listeners(): ObservedListener[];
   close(): Promise<void>;
 }
 
@@ -145,7 +161,9 @@ export async function startRelayGateway(opts: {
   const pairingTimeoutMs = opts.pairingTimeoutMs ?? PAIRING_TIMEOUT_MS;
   const pending = new Map<string, Pending>();
   const connections = new Set<Socket>();
+  const observed = new Map<number, ListenerScope>();
   let control: Socket | null = null;
+  let watching = false;
   let closed = false;
   let closePromise: Promise<void> | null = null;
 
@@ -170,9 +188,35 @@ export async function startRelayGateway(opts: {
     return id;
   };
 
+  const sendWatch = (enabled: boolean): void => {
+    const active = control;
+    if (!active || active.destroyed) return;
+    try {
+      active.write(`watch ${enabled ? 1 : 0}\n`, () => {});
+    } catch {
+      // A relay that died mid-write re-sends the flag when it reconnects.
+    }
+  };
+
   const handleControlLine = (line: string): boolean => {
     if (line.startsWith("log ")) {
       logDebug(`[nas] port-relay: ${sanitize(line.slice(4))}`);
+      return true;
+    }
+
+    const listen = /^listen ([0-9]{1,5}) (any|loopback|loopback6|remote)$/.exec(
+      line,
+    );
+    if (listen) {
+      const port = Number(listen[1]);
+      if (port < 1 || port > 65_535) return false;
+      observed.set(port, listen[2] as ListenerScope);
+      return true;
+    }
+
+    const unlisten = /^unlisten ([0-9]{1,5})$/.exec(line);
+    if (unlisten) {
+      observed.delete(Number(unlisten[1]));
       return true;
     }
 
@@ -201,6 +245,9 @@ export async function startRelayGateway(opts: {
     const drop = () => {
       if (control !== socket) return;
       control = null;
+      // The next relay reports its own listeners from scratch, so anything
+      // this one saw is now hearsay.
+      observed.clear();
       rejectPending(new Error("relay disconnected"));
       for (const connection of connections) connection.destroy();
       if (!closed) opts.onRelayLost?.();
@@ -228,6 +275,7 @@ export async function startRelayGateway(opts: {
     socket.once("end", drop);
     socket.once("error", drop);
     socket.once("close", drop);
+    if (watching) sendWatch(true);
     opts.onRelayConnected?.();
   };
 
@@ -352,6 +400,24 @@ export async function startRelayGateway(opts: {
   return {
     socketPath: opts.socketPath,
     isRelayConnected: () => control !== null && !control.destroyed,
+    watchListeners: async (enabled) => {
+      // A closed gateway must not exec a relay for a request that raced close.
+      if (closed) return enabled ? "unreachable" : "ready";
+      if (!enabled) {
+        watching = false;
+        observed.clear();
+        sendWatch(false);
+        return "ready";
+      }
+      watching = true;
+      const ensured = await opts.ensureRelay();
+      if (ensured === "ready") sendWatch(true);
+      return ensured;
+    },
+    listeners: () =>
+      [...observed.entries()]
+        .map(([containerPort, scope]) => ({ containerPort, scope }))
+        .sort((a, b) => a.containerPort - b.containerPort),
     openStream: async (port, signal) => {
       const socket = await request("open", port, signal);
       if (!socket) throw new Error("relay did not return a stream");

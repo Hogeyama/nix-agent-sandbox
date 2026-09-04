@@ -112,6 +112,7 @@ Examples:
   nas network pending                    # Show pending approvals
   nas network approve <session> <request> --scope host-port
   nas network bind <session>:3000        # Open a container port on localhost
+  nas network bind <session>             # Pick from the ports the container is listening on
   nas network unbind <session>:3000      # Close an open port binding
   nas hostexec pending                   # Show pending hostexec approvals
   nas worktree clean --force             # Remove without confirmation

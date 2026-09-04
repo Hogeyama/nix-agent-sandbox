@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { parseBindArgs, parseUnbindArgs } from "./port_bind_args.ts";
+import {
+  parseBindArgs,
+  parseBindSessionOnly,
+  parseUnbindArgs,
+} from "./port_bind_args.ts";
 
 test("bind parses session, container port and optional host port", () => {
   expect(parseBindArgs(["abc123:3000"])).toEqual({
@@ -63,4 +67,18 @@ test("unbind rejects malformed or extra positionals", () => {
   expect(() => parseUnbindArgs(["9000", "extra"])).toThrow(
     "session-id:container-port",
   );
+});
+
+test("bind with only a session id asks for suggestions", () => {
+  expect(parseBindSessionOnly(["abc123"])).toEqual("abc123");
+  expect(parseBindSessionOnly(["--format", "json", "abc123"])).toEqual(
+    "abc123",
+  );
+});
+
+test("bind keeps a named target or a mistyped port out of suggestion mode", () => {
+  expect(parseBindSessionOnly(["abc123:3000"])).toEqual(null);
+  expect(parseBindSessionOnly(["3000"])).toEqual(null);
+  expect(parseBindSessionOnly(["abc123", "9000"])).toEqual(null);
+  expect(parseBindSessionOnly([])).toEqual(null);
 });

@@ -377,3 +377,130 @@ test("close rejects a request that is waiting for a stream", async () => {
     control.destroy();
   });
 });
+
+/** A relay stand-in that only records what the gateway sends it. */
+function rawControl(socketPath: string): { socket: Socket; lines: string[] } {
+  const socket = connect({ path: socketPath });
+  const lines: string[] = [];
+  let buffered = "";
+  socket.on("data", (chunk: Buffer) => {
+    buffered += chunk.toString();
+    let newline = buffered.indexOf("\n");
+    while (newline !== -1) {
+      lines.push(buffered.slice(0, newline));
+      buffered = buffered.slice(newline + 1);
+      newline = buffered.indexOf("\n");
+    }
+  });
+  socket.write("control\n");
+  return { socket, lines };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("condition was never met");
+}
+
+test("the gateway tracks the listeners the relay reports", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = rawControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      relay.socket.write("listen 5173 any\nlisten 3000 remote\n");
+      await waitFor(() => gateway.listeners().length === 2);
+      expect(gateway.listeners()).toEqual([
+        { containerPort: 3000, scope: "remote" },
+        { containerPort: 5173, scope: "any" },
+      ]);
+
+      relay.socket.write("unlisten 3000\n");
+      await waitFor(() => gateway.listeners().length === 1);
+      expect(gateway.listeners()).toEqual([
+        { containerPort: 5173, scope: "any" },
+      ]);
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("the watch flag reaches the relay and is re-sent after a reconnect", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const first = rawControl(socketPath);
+    let second: { socket: Socket; lines: string[] } | undefined;
+    try {
+      await waitForRelay(gateway);
+      expect(await gateway.watchListeners(true)).toEqual("ready");
+      await waitFor(() => first.lines.includes("watch 1"));
+
+      first.socket.write("listen 5173 any\n");
+      await waitFor(() => gateway.listeners().length === 1);
+      first.socket.destroy();
+      await waitFor(() => !gateway.isRelayConnected());
+      // The next relay reports from scratch, so nothing survives the gap.
+      expect(gateway.listeners()).toEqual([]);
+
+      second = rawControl(socketPath);
+      await waitForRelay(gateway);
+      await waitFor(() => second?.lines.includes("watch 1") === true);
+    } finally {
+      first.socket.destroy();
+      second?.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("turning the watch off clears the listeners and tells the relay", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = rawControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      await gateway.watchListeners(true);
+      relay.socket.write("listen 5173 any\n");
+      await waitFor(() => gateway.listeners().length === 1);
+
+      await gateway.watchListeners(false);
+      expect(gateway.listeners()).toEqual([]);
+      await waitFor(() => relay.lines.includes("watch 0"));
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("an out-of-range listen line drops the relay connection", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = rawControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      relay.socket.write("listen 99999 any\n");
+      await waitFor(() => !gateway.isRelayConnected());
+      expect(gateway.listeners()).toEqual([]);
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});

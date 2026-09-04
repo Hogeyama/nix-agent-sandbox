@@ -20,6 +20,7 @@ import {
   getNasContainers,
   getNetworkPending,
   getNetworkRequestBody,
+  getPortCandidates,
   getSessions,
   getTerminalSessions,
   renameSession,
@@ -283,6 +284,17 @@ export function createApiRoutes(ctx: UiDataContext): Router {
         hostPort ?? null,
       );
       return json(result);
+    }),
+  );
+
+  api.get("/network/candidates", ({ url }) =>
+    withErrorHandling(async () => {
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId) return json({ error: "sessionId is required" }, 400);
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      return json(await getPortCandidates(ctx, sessionId));
     }),
   );
 

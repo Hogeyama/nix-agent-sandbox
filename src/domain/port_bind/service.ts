@@ -8,7 +8,9 @@ import {
 import {
   type ControlRequest,
   type ControlResponse,
+  type ListenerWatchState,
   MAX_CONTROL_BYTES,
+  type PortBindCandidate,
   type PortBindSessionEntry,
   type ProbeResult,
 } from "../../network/port_bind_protocol.ts";
@@ -30,6 +32,12 @@ import {
   SessionUnreachableError,
 } from "./types.ts";
 
+/** Unbound listeners the session's relay currently sees, plus why it may see none. */
+export interface PortBindCandidates {
+  candidates: PortBindCandidate[];
+  watch: ListenerWatchState;
+}
+
 export class PortBindService extends Context.Tag("nas/PortBindService")<
   PortBindService,
   {
@@ -46,6 +54,14 @@ export class PortBindService extends Context.Tag("nas/PortBindService")<
       paths: PortsRuntimePaths,
       key: PortBindKey,
     ) => Effect.Effect<void, Error>;
+    /**
+     * Asking is what starts the container-side scan, so a caller that wants
+     * live suggestions keeps asking; one that stops lets the scan lapse.
+     */
+    readonly candidates: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+    ) => Effect.Effect<PortBindCandidates, Error>;
   }
 >() {}
 
@@ -83,6 +99,38 @@ function isProbeResult(value: unknown): value is ProbeResult {
     value === "container-not-running" ||
     value === "relay-unreachable"
   );
+}
+
+function isCandidate(value: unknown): value is PortBindCandidate {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PortBindCandidate>;
+  return (
+    Number.isInteger(candidate.containerPort) &&
+    (candidate.containerPort as number) >= 1 &&
+    (candidate.containerPort as number) <= 65_535 &&
+    (candidate.scope === "any" ||
+      candidate.scope === "loopback" ||
+      candidate.scope === "loopback6" ||
+      candidate.scope === "remote") &&
+    typeof candidate.reachable === "boolean"
+  );
+}
+
+function parseCandidates(response: ControlResponse): PortBindCandidates {
+  const candidates = "candidates" in response ? response.candidates : undefined;
+  const watch = "watch" in response ? response.watch : undefined;
+  if (
+    !Array.isArray(candidates) ||
+    !candidates.every(isCandidate) ||
+    (watch !== "watching" &&
+      watch !== "container-not-running" &&
+      watch !== "relay-unreachable")
+  ) {
+    throw new InternalBrokerError(
+      "broker returned an invalid candidates response",
+    );
+  }
+  return { candidates, watch };
 }
 
 function parseResponse(line: string): ControlResponse {
@@ -237,6 +285,17 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
         },
         catch: toError,
       }),
+
+    candidates: (paths, sessionId) =>
+      Effect.tryPromise({
+        try: async () => {
+          await requireSession(paths, sessionId);
+          return parseCandidates(
+            await sendRequest(paths, sessionId, { type: "candidates" }),
+          );
+        },
+        catch: toError,
+      }),
   }),
 );
 
@@ -254,6 +313,10 @@ export interface PortBindServiceFakeConfig {
     paths: PortsRuntimePaths,
     key: PortBindKey,
   ) => Effect.Effect<void, Error>;
+  readonly candidates?: (
+    paths: PortsRuntimePaths,
+    sessionId: string,
+  ) => Effect.Effect<PortBindCandidates, Error>;
 }
 
 export function makePortBindServiceFake(
@@ -272,6 +335,9 @@ export function makePortBindServiceFake(
             probe: "ok",
           })),
       unbindByKey: overrides.unbindByKey ?? (() => Effect.void),
+      candidates:
+        overrides.candidates ??
+        (() => Effect.succeed({ candidates: [], watch: "watching" })),
     }),
   );
 }
@@ -305,5 +371,10 @@ export function makePortBindClient(
       run((service) => service.bind(paths, sessionId, containerPort, hostPort)),
     unbindByKey: (paths: PortsRuntimePaths, key: PortBindKey): Promise<void> =>
       run((service) => service.unbindByKey(paths, key)),
+    candidates: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+    ): Promise<PortBindCandidates> =>
+      run((service) => service.candidates(paths, sessionId)),
   };
 }

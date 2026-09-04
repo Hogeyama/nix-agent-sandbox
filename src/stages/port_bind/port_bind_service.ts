@@ -133,6 +133,7 @@ export const PortBindServiceLive: Layer.Layer<
                 controlSocketPath: plan.controlSocket,
                 gateway,
                 persist,
+                reservedPorts: plan.reservedPorts,
               });
               try {
                 await persist([]);

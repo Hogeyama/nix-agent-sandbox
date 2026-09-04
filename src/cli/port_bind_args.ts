@@ -69,6 +69,22 @@ export function parseBindArgs(args: string[]): {
   };
 }
 
+/**
+ * `bind <session>` with no container port. The user is asking what the
+ * container is listening on rather than naming a target, so the caller offers
+ * the detected ports instead of failing on the missing port.
+ *
+ * A bare number stays a usage error: `bind 3000` is a mistyped target, not a
+ * session named "3000".
+ */
+export function parseBindSessionOnly(args: string[]): string | null {
+  const positional = positionalArgs(args, BIND_USAGE);
+  if (positional.length !== 1) return null;
+  const value = positional[0];
+  if (value.includes(":") || /^\d+$/.test(value)) return null;
+  return value;
+}
+
 export function parseUnbindArgs(args: string[]): PortBindKey | null {
   const positional = positionalArgs(args, UNBIND_USAGE);
   if (positional.length === 0) return null;
