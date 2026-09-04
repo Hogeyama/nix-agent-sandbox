@@ -8,6 +8,7 @@ import type {
   CommandSpec,
   ContainerPlan,
   DynamicEnvOp,
+  ExtraHost,
   MountSpec,
   NetworkAttachment,
 } from "./state.ts";
@@ -20,9 +21,9 @@ import type {
  * A partial update to a ContainerPlan.
  *
  * Merge semantics (applied by mergeContainerPlan):
- *   - mounts, env.dynamicOps, extraRunArgs  → append
- *   - env.static, labels                    → key-merge (patch wins)
- *   - network, command, image, workDir      → replace (undefined = keep base)
+ *   - mounts, env.dynamicOps, extraRunArgs, extraHosts → append
+ *   - env.static, labels                               → key-merge (patch wins)
+ *   - network, command, image, workDir                 → replace (undefined = keep base)
  */
 export interface ContainerPatch {
   readonly image?: string;
@@ -33,6 +34,7 @@ export interface ContainerPatch {
     readonly dynamicOps?: readonly DynamicEnvOp[];
   };
   readonly network?: NetworkAttachment;
+  readonly extraHosts?: readonly ExtraHost[];
   readonly extraRunArgs?: readonly string[];
   readonly command?: CommandSpec;
   readonly labels?: Readonly<Record<string, string>>;
@@ -52,6 +54,7 @@ export function emptyContainerPlan(
     workDir,
     mounts: [],
     env: { static: {}, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: [],
     command: { agentCommand: [], extraArgs: [] },
     labels: {},
@@ -89,6 +92,10 @@ export function mergeContainerPlan(
           : base.env.dynamicOps,
     },
     network: patch.network !== undefined ? patch.network : base.network,
+    extraHosts:
+      patch.extraHosts !== undefined
+        ? [...base.extraHosts, ...patch.extraHosts]
+        : base.extraHosts,
     extraRunArgs:
       patch.extraRunArgs !== undefined
         ? [...base.extraRunArgs, ...patch.extraRunArgs]

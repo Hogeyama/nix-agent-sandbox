@@ -275,6 +275,70 @@ async function innerRun(
   return { exitCode, output: `${stdout}\n${stderr}` };
 }
 
+/** Start a detached inner container that publishes `port` and answers on it. */
+async function innerServe(
+  sidecar: string,
+  image: string,
+  name: string,
+  port: number,
+): Promise<InnerRunResult> {
+  const proc = Bun.spawn(
+    [
+      "docker",
+      "exec",
+      sidecar,
+      "docker",
+      "-H",
+      "tcp://127.0.0.1:2375",
+      "run",
+      "-d",
+      "--name",
+      name,
+      "-p",
+      `${port}:8080`,
+      image,
+      "sh",
+      "-c",
+      'while true; do printf "HTTP/1.1 200 OK\\r\\nContent-Length: 3\\r\\n\\r\\nhi\\n" | nc -l -p 8080; done',
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, output: `${stdout}\n${stderr}` };
+}
+
+/** Run a throwaway container inside `sidecar`'s network namespace. */
+async function joinerRun(
+  sidecar: string,
+  image: string,
+  shellCmd: string,
+): Promise<InnerRunResult> {
+  const proc = Bun.spawn(
+    [
+      "docker",
+      "run",
+      "--rm",
+      "--network",
+      `container:${sidecar}`,
+      image,
+      "sh",
+      "-c",
+      shellCmd,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, output: `${stdout}\n${stderr}` };
+}
+
 /**
  * Patterns that prove a network *reach* failure (the egress-confinement signal
  * we want), as opposed to a machinery failure. busybox wget wording varies by
@@ -398,23 +462,17 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
           ),
       );
 
-      expect(
-        result.container?.env.static.DOCKER_HOST.startsWith("tcp://"),
-      ).toEqual(true);
-      expect(
-        result.container?.env.static.DOCKER_HOST.endsWith(":2375"),
-      ).toEqual(true);
-      expect(
-        typeof result.container?.env.static.NAS_DIND_CONTAINER_NAME,
-      ).toEqual("string");
+      expect(result.container?.env.static.DOCKER_HOST).toEqual(
+        "tcp://127.0.0.1:2375",
+      );
       expect(typeof result.container?.env.static.NAS_DIND_SHARED_TMP).toEqual(
         "string",
       );
       expect(result.dind?.containerName).toEqual(containerName);
-      expect(result.container?.network).toBeUndefined();
-      expect(result.container?.env.static.DOCKER_HOST).toEqual(
-        `tcp://${containerName}:2375`,
-      );
+      expect(result.container?.network).toEqual({
+        mode: "container",
+        containerName,
+      });
 
       const running = await dockerIsRunning(containerName);
       expect(running).toEqual(true);
@@ -577,6 +635,87 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
       ).toEqual(true);
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void));
+      await forceCleanup(
+        containerName,
+        plan!.networkName,
+        plan!.sharedTmpVolume,
+      );
+    }
+  },
+  90_000,
+);
+
+test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
+  "DindStage: a namespace joiner sees an inner container's published port on loopback",
+  async () => {
+    // Generated rather than the file's default `test-session-1234`, which
+    // derives a fixed container name two concurrent runs would collide on.
+    const sessionId = `spec-${crypto.randomUUID().slice(0, 8)}`;
+    const profile = makeProfile({ docker: { enable: true, shared: false } });
+    const sharedInput = makeSharedInput(profile, sessionId);
+    const stageState = makeStageState({
+      network: {
+        networkName: `nas-session-net-${sessionId}`,
+        runtimeDir: "/run/user/1000/nas/network",
+      },
+    });
+    const plan = planDind(
+      { ...sharedInput, ...stageState },
+      { disableCache: true, readinessTimeoutMs: 20_000 },
+    );
+    expect(plan).not.toBeNull();
+
+    const containerName = plan!.containerName;
+    const innerName = `inner-pub-${crypto.randomUUID().slice(0, 8)}`;
+    await forceCleanup(containerName, plan!.networkName, plan!.sharedTmpVolume);
+    await dockerNetworkCreateInternal(plan!.networkName);
+
+    const scope = Effect.runSync(Scope.make());
+    try {
+      const stage = createDindStageWithOptions(sharedInput, {
+        disableCache: true,
+        readinessTimeoutMs: 20_000,
+      });
+      await Effect.runPromise(
+        stage
+          .run(stageState)
+          .pipe(
+            Effect.provideService(Scope.Scope, scope),
+            Effect.provide(DindServiceLive),
+          ),
+      );
+
+      expect(await loadImageIntoSidecar(containerName, INNER_IMAGE)).toEqual(
+        true,
+      );
+      const served = await innerServe(
+        containerName,
+        INNER_IMAGE,
+        innerName,
+        18081,
+      );
+      expect(
+        served.exitCode,
+        `inner publish failed. Output:\n${served.output}`,
+      ).toEqual(0);
+
+      // The property the design turns on: rootlesskit publishes the inner
+      // container's port into the sidecar's namespace, and a joiner shares
+      // that namespace, so the port is on the joiner's own loopback.
+      // `docker run -d` returns once the container starts, not once `nc` is
+      // listening, so a single wget races the listener. Retry for ten seconds.
+      const result = await joinerRun(
+        containerName,
+        INNER_IMAGE,
+        "for i in $(seq 1 20); do wget -qO- -T 3 http://127.0.0.1:18081/ && exit 0; sleep 0.5; done; exit 1",
+      );
+      expect(
+        result.exitCode,
+        `joiner could not reach the published port. Output:\n${result.output}`,
+      ).toEqual(0);
+      expect(result.output).toContain("hi");
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
       await forceCleanup(
         containerName,
         plan!.networkName,

@@ -261,6 +261,7 @@ test("ContainerPlan: can construct full plan", () => {
     workDir: "/workspace",
     mounts: [{ source: "/repo", target: "/workspace" }],
     env: { static: { TERM: "xterm" }, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: ["--rm"],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: { "nas.session": "sess_abc" },
@@ -276,13 +277,15 @@ test("ContainerPlan: network attachment is optional", () => {
     workDir: "/workspace",
     mounts: [],
     env: { static: {}, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: [],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
-    network: { name: "nas-net-abc" },
+    network: { mode: "network", name: "nas-net-abc" },
   };
-  expect(plan.network?.name).toEqual("nas-net-abc");
-  expect(plan.network?.alias).toBeUndefined();
+  if (plan.network?.mode !== "network") throw new Error("unreachable");
+  expect(plan.network.name).toEqual("nas-net-abc");
+  expect(plan.network.alias).toBeUndefined();
 });
 
 test("SliceKey: covers all expected slice names", () => {
@@ -329,6 +332,7 @@ test("PipelineState: can construct with all slices", () => {
       workDir: "/workspace",
       mounts: [],
       env: { static: {}, dynamicOps: [] },
+      extraHosts: [],
       extraRunArgs: [],
       command: { agentCommand: ["claude"], extraArgs: [] },
       labels: {},

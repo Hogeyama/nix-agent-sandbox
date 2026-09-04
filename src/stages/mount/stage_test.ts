@@ -1425,6 +1425,7 @@ test("MountStage: planner emits container patch with structured mounts and dynam
           static: { EXISTING_ENV: "1" },
           dynamicOps: [],
         },
+        extraHosts: [],
         extraRunArgs: ["--init"],
         command: { agentCommand: ["legacy-agent"], extraArgs: ["--safe"] },
         labels: { "nas.managed": "true" },
@@ -1564,6 +1565,7 @@ test("MountStage run(): creates directories via MountSetupService and returns re
       },
       dynamicOps: [],
     },
+    extraHosts: [],
     extraRunArgs: [],
     command: {
       agentCommand: [
@@ -1623,6 +1625,7 @@ test("MountStage run(): preserves structured base container state", async () => 
           static: { STRUCTURED_ONLY: "1" },
           dynamicOps: [],
         },
+        extraHosts: [],
         extraRunArgs: ["--structured-flag"],
         command: { agentCommand: ["legacy-agent"], extraArgs: [] },
         labels: {},

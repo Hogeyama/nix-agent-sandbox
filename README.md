@@ -121,6 +121,21 @@ profiles {
 
 `docker.enable` を有効にすると、DinD サイドカーを立ち上げて隔離された Docker 環境を渡せます。リスクの詳細は[設定により隔離が緩和されるもの](#設定により隔離が緩和されるもの)を参照してください。
 
+エージェントコンテナは DinD サイドカーのネットワーク namespace に join しており、Docker デーモン自体もサイドカーの中で動作します。この構成には 2 つの制約が伴います。
+
+1つ目は bind mount です。Docker デーモンがサイドカー側で動いている以上、bind mount のパスはサイドカーのファイルシステム上で解決されます。エージェントコンテナ内で `docker run -v $PWD:/x ...` を実行しても、エージェントのファイルは渡りません。ワークスペースのようにサイドカー側に存在しないパスを指定した場合は、デーモンが rootless で動いているためディレクトリを作成できず、次のように失敗します。
+
+```
+docker: Error response from daemon: error while creating mount source path
+'/home/you/repo/project': mkdir /home/you: permission denied
+```
+
+サイドカー側でデーモンが作成できるパス（`/tmp` 配下など）を指定した場合は、失敗せずに空のディレクトリが渡ります。どちらにしてもエージェント側の内容は反映されません。
+
+ファイルをやり取りするには `/tmp/nas-shared` 配下のパスを使ってください。ここはエージェントコンテナとサイドカーの双方に同じパスでマウントされた Docker volume なので、bind mount の対象がその配下であれば正しく解決されます。
+
+2つ目はポートの衝突です。`network.proxy.forwardPorts` に列挙したポート、ループバックプロキシが listen する `18080`、Docker デーモンの `2375` は、同じネットワーク namespace の中ですでに使われています。同じポート番号でコンテナを publish しようとすると `EADDRINUSE` で失敗します。
+
 ### ネットワーク制御
 
 `network.allowlist` を使うと外部への通信を allowlist で制御できます。`"example.com"` のようなホスト名のほか、`"api.example.com:443"` や `"*.cdn.com:8080"` のようにポートやワイルドカードを含む形式も書けます。allowlist に載っていない通信が発生したときは、その場で approve / deny を尋ねられるようにできます。
@@ -266,7 +281,6 @@ profiles {
     }
     docker {
       enable = true # DinDサイドカーを使う
-      shared = true # DinDサイドカーを複数コンテナで共有する
     }
     network {
       proxy {
@@ -573,13 +587,13 @@ nas worktree clean --force   # 確認なしで削除
 
 ### Sidecar コンテナの掃除
 
-`docker.shared = true` や `network.allowlist` / `network.prompt.enable` を使っていると、DinD / Envoy 関連のコンテナが残ることがあります。未使用のものだけを止めて削除するには `container clean` を使います。
+`network.allowlist` / `network.prompt.enable` や DinD サイドカーを使っていると、セッションが異常終了した場合などに DinD / Envoy 関連のコンテナが残ることがあります。DinD サイドカーはセッションごとに 1 つ立ち上がる方式で、複数セッションで共有することはありません。旧バージョンで共有サイドカーとして作られた `nas-dind-shared` コンテナが残っている場合も対象になります。未使用のものだけを止めて削除するには `container clean` を使います。
 
 ```sh
 nas container clean
 ```
 
-このコマンドは nas が管理する DinD / proxy コンテナのうち、現在どのエージェントコンテナからも使われていないものだけを `stop` + `rm` します。削除後に空になった nas 管理 network と DinD 用 tmp volume もあわせて回収します。現在実行中のエージェントコンテナは対象外です。
+このコマンドは nas が管理する DinD / proxy コンテナのうち、現在どのエージェントコンテナからも使われていないものだけを `stop` + `rm` します。削除後に空になった nas 管理 network と DinD 用 tmp volume（旧バージョンで共有サイドカー用に作られた `nas-dind-shared-tmp` を含む）もあわせて回収します。現在実行中のエージェントコンテナは対象外です。
 
 ### セッションの管理
 
@@ -815,7 +829,6 @@ session network
 - エージェントは資格情報付き proxy URL を通じて Envoy に接続し、`Proxy-Authorization` は auth-router で検証された後に upstream へは除去されます
 - `localhost` / loopback / RFC1918 / link-local / ULA など deny-by-default 宛先は broker 前で拒否されます
 - `network.prompt.enable = true` のとき、allowlist 外通信は `nas network pending` に現れ、`approve` / `deny` で制御できます
-- DinD 有効時、`docker.shared = true` なら既存の共有 DinD サイドカーに session network を attach するだけで、サイドカー自体は再作成されません
 
 ### 設定により隔離が緩和されるもの
 
@@ -824,7 +837,7 @@ session network
 | 設定 | リスク |
 |------|--------|
 | `nix.mountSocket = true` | ホストの nix-daemon ソケットをコンテナに渡す。nix-daemon 経由で任意のビルド実行・`/nix/store` への書き込み・後続の nix 操作への影響などが可能で、実質的にホストユーザーと同等の権限をコンテナに与えることになる。信頼できないプロジェクト／エージェントで有効化しない |
-| `docker.enable = true` | `docker:dind-rootless` サイドカーが `--privileged` で起動される（user namespace セットアップに必要）。エージェントコンテナ自体は非特権のまま。Docker 操作はサイドカー内に隔離され、ホストの Docker デーモンにはアクセスできない |
+| `docker.enable = true` | エージェントコンテナは DinD サイドカーのネットワーク namespace に join する。Docker デーモンはエージェントから見て `127.0.0.1:2375` で応答するが、これはサイドカー内で動く DinD デーモンであり、ホストの Docker デーモンにはアクセスできない。DinD 内で起動したコンテナが公開するポートはエージェント自身の loopback 上に現れる。逆に、エージェントが `0.0.0.0` で公開したサーバーは、DinD 内で起動したコンテナから到達可能になる。サイドカーは `--privileged` で起動される（user namespace セットアップに必要）が、エージェントコンテナ自体は非特権のまま |
 | `network.proxy.forwardPorts` | 指定した各ポートについて、ホスト `127.0.0.1:<port>` に bind しているサービスへコンテナから直接到達できるようになる（per-port UDS をコンテナへ bind-mount し、コンテナ内の `127.0.0.1:<port>` をホストの同ポートに pipe する）。ホスト側を `0.0.0.0` に晒す必要はないが、認証なしで動かしている開発用 DB・管理 UI・デーモンがあれば、コンテナ内のエージェントがそのままフルアクセスできる点に注意 |
 | `dbus.session.enable = true` | 許可した DBus service に対して host 側資産へ到達できる。session bus 全体の露出は減るが、許可先 service の権限そのものは残る |
 | `gpg.forwardAgent = true` | ホストの gpg-agent ソケットと公開鍵リング・信頼 DB・設定ファイルがコンテナにマウントされる。agent が unlock されている間はコンテナから任意の署名・復号が可能 |

@@ -8,6 +8,7 @@
 
 import { Context, Effect, Layer } from "effect";
 import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
+import type { ExtraHost } from "../../pipeline/state.ts";
 
 // ---------------------------------------------------------------------------
 // Option types
@@ -20,7 +21,13 @@ export interface DindSidecarOpts {
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
-  readonly shared: boolean;
+  /**
+   * Host-to-IP mappings the sidecar's /etc/hosts must carry (e.g. the proxy
+   * alias). The agent joins the sidecar's network namespace and shares its
+   * /etc/hosts, so entries the agent needs must be added here instead of via
+   * the agent container's own --add-host.
+   */
+  readonly extraHosts: readonly ExtraHost[];
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
 }
@@ -40,9 +47,13 @@ export class DindService extends Context.Tag("nas/DindService")<
 export interface DindTeardownOpts {
   readonly containerName: string;
   readonly sharedTmpVolume: string;
-  /** Session network the sidecar was attached to (shared teardown detaches). */
-  readonly networkName: string;
-  readonly shared: boolean;
+  /**
+   * Name of the agent container that joined this sidecar's network
+   * namespace (`--network container:<containerName>`). Teardown checks
+   * whether it is still running and skips removal while it is, since
+   * removing the sidecar would strip the agent's namespace owner.
+   */
+  readonly joinerContainerName: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +71,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
             sharedTmpVolume: opts.sharedTmpVolume,
             sessionNetworkName: opts.networkName,
             proxyEndpoint: opts.proxyEndpoint,
-            shared: opts.shared,
+            extraHosts: opts.extraHosts,
             disableCache: opts.disableCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,
           }),
@@ -76,8 +87,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
           teardownDindSidecar({
             containerName: opts.containerName,
             sharedTmpVolume: opts.sharedTmpVolume,
-            sessionNetworkName: opts.networkName,
-            shared: opts.shared,
+            joinerContainerName: opts.joinerContainerName,
           }),
         catch: (e) =>
           new Error(

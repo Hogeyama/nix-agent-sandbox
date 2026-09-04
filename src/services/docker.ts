@@ -443,9 +443,11 @@ export function makeDockerServiceFake(
         ((name) =>
           Effect.succeed({
             name,
+            id: "",
             running: false,
             labels: {},
             networks: [],
+            networkMode: "",
             startedAt: "",
           })),
       listContainerNames:

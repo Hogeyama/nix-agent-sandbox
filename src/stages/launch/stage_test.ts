@@ -26,7 +26,7 @@ test("planLaunch: produces correct plan with composed command", () => {
       ...emptyContainerPlan("custom-image", "/workspace"),
       mounts: [{ source: "/tmp", target: "/workspace" }],
       env: { static: { TOKEN: "secret", MODE: "test" }, dynamicOps: [] },
-      network: { name: "sandbox-net" },
+      network: { mode: "network", name: "sandbox-net" },
       command: { agentCommand: ["agent-bin", "serve"], extraArgs: [] },
     },
   });
@@ -64,7 +64,8 @@ test("planLaunch: composes launch opts from container slice", () => {
         static: { FROM_SLICE: "yes" },
         dynamicOps: [],
       },
-      network: { name: "slice-net", alias: "slice-agent" },
+      network: { mode: "network", name: "slice-net", alias: "slice-agent" },
+      extraHosts: [],
       extraRunArgs: ["--init"],
       command: {
         agentCommand: ["slice-agent"],
@@ -112,7 +113,11 @@ test("planLaunch: slice contract keeps workdir/network/mounts singular in launch
     { source: "/repo", target: "/workspace" },
     { source: "/nix", target: "/nix", readOnly: true as const },
   ];
-  const network = { name: "slice-net", alias: "slice-agent" };
+  const network = {
+    mode: "network" as const,
+    name: "slice-net",
+    alias: "slice-agent",
+  };
   const { input, container } = createTestInput({
     container: {
       image: "slice-image",
@@ -120,6 +125,7 @@ test("planLaunch: slice contract keeps workdir/network/mounts singular in launch
       mounts,
       env: { static: {}, dynamicOps: [] },
       network,
+      extraHosts: [],
       extraRunArgs: ["--init", "--cpus", "2"],
       command: { agentCommand: ["slice-agent"], extraArgs: [] },
       labels: {},
@@ -190,6 +196,7 @@ function makeBasePlan(overrides?: Partial<ContainerPlan>): ContainerPlan {
     workDir: "/workspace/project",
     mounts: [],
     env: { static: {}, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: [],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
@@ -272,7 +279,7 @@ test("compileLaunchOpts: no dynamic ops → NAS_ENV_OPS absent", () => {
 
 test("compileLaunchOpts: network attachment adds --network and optional --network-alias", () => {
   const planNoAlias = makeBasePlan({
-    network: { name: "sandbox-net" },
+    network: { mode: "network", name: "sandbox-net" },
   });
   const optsNoAlias = compileLaunchOpts(planNoAlias, "nas-agent-1");
   expect(optsNoAlias.args).toContain("--network");
@@ -282,7 +289,7 @@ test("compileLaunchOpts: network attachment adds --network and optional --networ
   expect(optsNoAlias.args).not.toContain("--network-alias");
 
   const planWithAlias = makeBasePlan({
-    network: { name: "sandbox-net", alias: "agent" },
+    network: { mode: "network", name: "sandbox-net", alias: "agent" },
   });
   const optsWithAlias = compileLaunchOpts(planWithAlias, "nas-agent-2");
   expect(optsWithAlias.args).toContain("--network-alias");
@@ -293,7 +300,7 @@ test("compileLaunchOpts: network attachment adds --network and optional --networ
 
 test("compileLaunchOpts: extraRunArgs appended after network args", () => {
   const plan = makeBasePlan({
-    network: { name: "net1" },
+    network: { mode: "network", name: "net1" },
     extraRunArgs: ["--shm-size", "2g", "--privileged"],
   });
 
@@ -324,7 +331,8 @@ test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => 
         },
       ],
     },
-    network: { name: "nas-proxy-net", alias: "nas-agent" },
+    network: { mode: "network", name: "nas-proxy-net", alias: "nas-agent" },
+    extraHosts: [],
     extraRunArgs: ["--shm-size", "2g"],
     command: { agentCommand: ["copilot", "run"], extraArgs: ["--verbose"] },
     labels: { "nas.managed": "true", "nas.kind": "agent" },
@@ -345,6 +353,50 @@ test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => 
   expect(wIdx).toBeLessThan(firstVIdx);
   expect(firstVIdx).toBeLessThan(netIdx);
   expect(netIdx).toBeLessThan(shmIdx);
+});
+
+test("compileLaunchOpts: container network mode emits --network container:<name>", () => {
+  const plan = makeBasePlan({
+    network: { mode: "container", containerName: "nas-dind-abc12345" },
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args).toContain("--network");
+  expect(opts.args).toContain("container:nas-dind-abc12345");
+  expect(opts.args).not.toContain("--network-alias");
+});
+
+test("compileLaunchOpts: network mode expands extraHosts into --add-host", () => {
+  const plan = makeBasePlan({
+    network: { mode: "network", name: "nas-session-net-abc12345" },
+    extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args).toContain("--add-host=nas-envoy:172.20.0.2");
+});
+
+test("compileLaunchOpts: container mode does not expand extraHosts", () => {
+  const plan = makeBasePlan({
+    network: { mode: "container", containerName: "nas-dind-abc12345" },
+    extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args.some((a) => a.startsWith("--add-host="))).toBe(false);
+});
+
+test("compileLaunchOpts: no network attachment still expands extraHosts into --add-host", () => {
+  const plan = makeBasePlan({
+    extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args).toContain("--add-host=nas-envoy:172.20.0.2");
 });
 
 function createTestInput(overrides: { container?: ContainerPlan } = {}): {

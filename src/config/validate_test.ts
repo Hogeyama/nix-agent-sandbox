@@ -124,6 +124,34 @@ test("validate: no default is ok", () => {
 });
 
 // ---------------------------------------------------------------------------
+// docker.shared
+// ---------------------------------------------------------------------------
+
+test("validate: docker.enable with docker.shared is rejected", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({ docker: { enable: true, shared: true } }),
+        },
+      }),
+    ),
+  ).toThrow("docker.shared");
+});
+
+test("validate: docker.shared without docker.enable is accepted", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({ docker: { enable: false, shared: true } }),
+        },
+      }),
+    ),
+  ).not.toThrow();
+});
+
+// ---------------------------------------------------------------------------
 // request body audit
 // ---------------------------------------------------------------------------
 
@@ -511,6 +539,41 @@ test("validate: forwardPorts accepts valid ports", () => {
     }),
   );
   expect(config.profiles.test.network.proxy.forwardPorts).toEqual([8080, 5432]);
+});
+
+test("validate: forwardPorts rejects 2375 when docker.enable is true", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            docker: { ...DEFAULT_DOCKER_CONFIG, enable: true },
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              proxy: { forwardPorts: [2375] },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow(/2375.*reserved.*Docker daemon/);
+});
+
+test("validate: forwardPorts accepts 2375 when docker.enable is false", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          docker: { ...DEFAULT_DOCKER_CONFIG, enable: false },
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            proxy: { forwardPorts: [2375] },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.network.proxy.forwardPorts).toEqual([2375]);
 });
 
 // ---------------------------------------------------------------------------

@@ -5,9 +5,11 @@
  * ここでは Pkl では表現しにくいクロスフィールド制約や実行時セマンティクスのみ検証する。
  */
 
+import { DIND_INTERNAL_PORT } from "../docker/dind.ts";
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
 import { validateAuthzConfig } from "../network/authz/validate.ts";
+import { LOCAL_PROXY_PORT } from "../network/ports.ts";
 import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
 
 export class ConfigValidationError extends Error {
@@ -52,9 +54,22 @@ function validateProfile(name: string, profile: Profile): string[] {
   errors.push(...validateSecretRegistry(name, profile.secrets));
   errors.push(...validateAuthz(name, profile));
 
+  // --- docker.shared は docker.enable と併用不可 ---
+  if (profile.docker.enable && profile.docker.shared) {
+    errors.push(
+      `profile "${name}": docker.shared is no longer supported with docker.enable. ` +
+        `The agent now joins the sidecar's network namespace, and sessions sharing ` +
+        `one namespace would see each other's loopback services. Remove docker.shared.`,
+    );
+  }
+
   // --- forwardPorts の予約ポート(18080)・重複検出 ---
   errors.push(
-    ...validateForwardPorts(name, profile.network.proxy.forwardPorts),
+    ...validateForwardPorts(
+      name,
+      profile.network.proxy.forwardPorts,
+      profile.docker.enable,
+    ),
   );
 
   errors.push(
@@ -200,13 +215,22 @@ function validateAuthz(profileName: string, profile: Profile): string[] {
 // Forward ports validation
 // ---------------------------------------------------------------------------
 
-function validateForwardPorts(profileName: string, ports: number[]): string[] {
+function validateForwardPorts(
+  profileName: string,
+  ports: number[],
+  dockerEnable: boolean,
+): string[] {
   const errors: string[] = [];
   const seen = new Set<number>();
   for (const [i, port] of ports.entries()) {
-    if (port === 18080) {
+    if (port === LOCAL_PROXY_PORT) {
       errors.push(
-        `profile "${profileName}": proxy.forwardPorts[${i}] port 18080 is reserved for the internal authentication proxy`,
+        `profile "${profileName}": proxy.forwardPorts[${i}] port ${LOCAL_PROXY_PORT} is reserved for the internal authentication proxy`,
+      );
+    }
+    if (dockerEnable && port === DIND_INTERNAL_PORT) {
+      errors.push(
+        `profile "${profileName}": proxy.forwardPorts[${i}] port ${DIND_INTERNAL_PORT} is reserved for the Docker daemon when docker.enable is true`,
       );
     }
     if (seen.has(port)) {

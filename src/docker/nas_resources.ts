@@ -1,6 +1,5 @@
 export const NAS_MANAGED_LABEL = "nas.managed";
 export const NAS_KIND_LABEL = "nas.kind";
-export const NAS_SHARED_LABEL = "nas.shared";
 export const NAS_MANAGED_VALUE = "true";
 
 export const NAS_KIND_DIND = "dind";

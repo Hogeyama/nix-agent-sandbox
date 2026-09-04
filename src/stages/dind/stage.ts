@@ -3,36 +3,37 @@
  *
  * docker:dind-rootless コンテナをサイドカーとして起動し、
  * エージェントコンテナから隔離された Docker デーモンを利用可能にする。
- *
- * 動作モード:
- * - shared=false (デフォルト): セッションごとに専用サイドカーを起動・破棄
- * - shared=true: 固定名 "nas-dind-shared" のサイドカーを使い回し、teardown で削除しない
+ * サイドカーはセッションごとに専用の名前で起動し、teardown で破棄する。
  *
  * 起動手順:
  * 1. dind-rootless をデフォルト bridge で起動（rootlesskit が vpnkit + copy-up で
  *    ネットワーク名前空間をセットアップするため、カスタムネットワーク上では起動に失敗する）
  * 2. TCP 経由で daemon の readiness を確認
- * 3. エージェントコンテナに DOCKER_HOST env（tcp://<サイドカー名>:2375）を注入し、
- *    サイドカーの Docker デーモンを利用可能にする
- *
- * エージェントコンテナの network は DindStage では設定しない（network の設定は
- * 別ステージが担う）。
+ * 3. エージェントコンテナをサイドカーの network namespace に参加させる
+ *    (`--network container:<サイドカー名>`)。これにより daemon は
+ *    127.0.0.1:2375 で応答し、エージェントが起動した内部コンテナの公開ポートも
+ *    エージェント自身の loopback に現れる — ローカルインストールされた Docker と
+ *    同じ挙動になる。
  */
 
 import { Effect, type Scope } from "effect";
 import {
   DIND_INTERNAL_PORT,
-  SHARED_CONTAINER_NAME,
+  DIND_ROOTLESS_SOCKET_PATH,
   SHARED_TMP_MOUNT_PATH,
 } from "../../docker/dind.ts";
+import { containerNameForSession } from "../../docker/nas_resources.ts";
 import { logInfo } from "../../log.ts";
+import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
-import type { ContainerPlan, PipelineState } from "../../pipeline/state.ts";
+import type {
+  ContainerPlan,
+  ExtraHost,
+  PipelineState,
+} from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { DindService } from "./dind_service.ts";
-
-const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
 
 export type { DindStageOptions } from "../../docker/dind.ts";
 
@@ -51,10 +52,45 @@ export interface DindPlan {
   readonly networkName: string;
   /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
-  readonly shared: boolean;
+  /**
+   * Host-to-IP mappings the sidecar's /etc/hosts must carry (e.g. the proxy
+   * alias). The agent joins the sidecar's network namespace and cannot carry
+   * its own --add-host, so these entries are wired onto the sidecar instead.
+   */
+  readonly extraHosts: readonly ExtraHost[];
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
+  /**
+   * Name of the agent container that will join this sidecar's network
+   * namespace. Teardown uses it to check whether the agent is still
+   * running before removing the sidecar out from under it.
+   */
+  readonly joinerContainerName: string;
+  /**
+   * Ports already bound inside the shared network namespace (the DinD daemon
+   * port, the local proxy, and every forwarded port). Publishing an inner
+   * container on one of these fails with EADDRINUSE once the agent joins the
+   * sidecar's namespace.
+   */
+  readonly reservedPorts: readonly number[];
   readonly outputOverrides: Pick<StageResult, "container" | "dind">;
+}
+
+/**
+ * Ports already bound inside the shared network namespace.
+ *
+ * Reads the forwarded set from the env ProxyStage seeded rather than from the
+ * profile: ProxyStage unions the profile's ports with the observability
+ * receiver port before binding them, so the profile alone under-reports.
+ */
+export function reservedNamespacePorts(
+  forwardPortsEnv: string | undefined,
+): number[] {
+  const forwarded = (forwardPortsEnv ?? "")
+    .split(",")
+    .map((part) => Number.parseInt(part, 10))
+    .filter((port) => Number.isInteger(port));
+  return [DIND_INTERNAL_PORT, LOCAL_PROXY_PORT, ...forwarded];
 }
 
 type DindStageState = Pick<
@@ -82,7 +118,6 @@ export function planDind(
 
   const disableCache = options.disableCache ?? false;
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
-  const shared = input.profile.docker.shared;
 
   // The session network and proxy endpoint are produced by ProxyStage, which
   // now runs before DindStage. The sidecar attaches to this internal session
@@ -91,26 +126,26 @@ export function planDind(
   const networkName = input.network.networkName;
   const proxyEndpoint = input.proxy.proxyEndpoint;
 
-  let containerName: string;
-  let sharedTmpVolume: string;
-
-  if (shared) {
-    containerName = SHARED_CONTAINER_NAME;
-    sharedTmpVolume = SHARED_TMP_VOLUME;
-  } else {
-    const sessionId = input.sessionId.slice(0, 8);
-    containerName = `nas-dind-${sessionId}`;
-    sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
-  }
+  // Truncating to a handful of hex digits (as this used to) leaves too few
+  // possibilities that two concurrent sessions can plausibly collide on the
+  // same sidecar/volume name -- Docker then rejects the second `docker run
+  // --name` outright, and both sessions would contend for one shared tmp
+  // volume. Use the session id untruncated, matching `containerNameForSession`.
+  const containerName = `nas-dind-${input.sessionId}`;
+  const sharedTmpVolume = `nas-dind-tmp-${input.sessionId}`;
 
   return {
     containerName,
     sharedTmpVolume,
     networkName,
     proxyEndpoint,
-    shared,
+    extraHosts: input.container.extraHosts,
     disableCache,
     readinessTimeoutMs,
+    joinerContainerName: containerNameForSession(input.sessionId),
+    reservedPorts: reservedNamespacePorts(
+      input.container.env.static.NAS_FORWARD_PORTS,
+    ),
     outputOverrides: {
       dind: {
         containerName,
@@ -166,6 +201,9 @@ export function createDindStageWithOptions(
       if (plan === null) {
         return Effect.succeed({});
       }
+      logInfo(
+        `[nas] DinD: ports already bound in the shared namespace: ${plan.reservedPorts.join(", ")} — publishing a container on one of these fails with EADDRINUSE`,
+      );
       return runDind(plan);
     },
   };
@@ -191,7 +229,7 @@ function runDind(
         sharedTmpVolume: plan.sharedTmpVolume,
         networkName: plan.networkName,
         proxyEndpoint: plan.proxyEndpoint,
-        shared: plan.shared,
+        extraHosts: plan.extraHosts,
         disableCache: plan.disableCache,
         readinessTimeoutMs: plan.readinessTimeoutMs,
       }),
@@ -200,8 +238,7 @@ function runDind(
           .teardownSidecar({
             containerName: plan.containerName,
             sharedTmpVolume: plan.sharedTmpVolume,
-            networkName: plan.networkName,
-            shared: plan.shared,
+            joinerContainerName: plan.joinerContainerName,
           })
           .pipe(Effect.ignoreLogged),
     );
@@ -217,27 +254,25 @@ function buildContainerState(
     readonly sharedTmpVolume: string;
   },
 ): ContainerPlan {
-  // The agent talks to the sidecar over DOCKER_HOST=tcp://<dind>:2375. That
-  // hostname must bypass the agent's local proxy, so append the sidecar name to
-  // the no_proxy lists ProxyStage already seeded. env.static is key-merged
-  // (patch wins), so writing the full appended value here overrides ProxyStage's
-  // baseline cleanly. Fall back to the loopback baseline if (unexpectedly)
-  // ProxyStage left no value.
-  const baseNoProxyLower =
-    input.container.env.static.no_proxy ?? "localhost,127.0.0.1";
-  const baseNoProxyUpper =
-    input.container.env.static.NO_PROXY ?? "localhost,127.0.0.1";
-
+  // The agent joins the sidecar's network namespace, so the daemon answers on
+  // loopback and every port an inner container publishes lands on the agent's
+  // own 127.0.0.1 -- what a locally installed Docker would do. `no_proxy`
+  // needs no addition: ProxyStage's baseline already carries 127.0.0.1.
+  const staticEnv: Record<string, string> = {
+    DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+    NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
+  };
+  // env.static is a key-merge in which the patch wins, so writing this
+  // unconditionally would silently replace a value set through profile env.
+  if (
+    input.container.env.static.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE ===
+    undefined
+  ) {
+    staticEnv.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE = DIND_ROOTLESS_SOCKET_PATH;
+  }
   return mergeContainerPlan(input.container, {
-    env: {
-      static: {
-        DOCKER_HOST: `tcp://${config.containerName}:${DIND_INTERNAL_PORT}`,
-        NAS_DIND_CONTAINER_NAME: config.containerName,
-        NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
-        no_proxy: `${baseNoProxyLower},${config.containerName}`,
-        NO_PROXY: `${baseNoProxyUpper},${config.containerName}`,
-      },
-    },
+    network: { mode: "container", containerName: config.containerName },
+    env: { static: staticEnv },
     extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],
   });
 }

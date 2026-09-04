@@ -115,9 +115,11 @@ function makeDockerFake(
       return Effect.succeed(
         overrides.inspect?.(name) ?? {
           name,
+          id: "",
           running: false,
           labels: {},
           networks: [],
+          networkMode: "",
           startedAt: "",
         },
       );
@@ -205,9 +207,11 @@ test("ensureSharedProxy: skips when proxy is already running with matching addon
     isRunning: () => true,
     inspect: (name) => ({
       name,
+      id: "",
       running: true,
       labels: { [NAS_ADDON_HASH_LABEL]: "abc123" },
       networks: [],
+      networkMode: "",
       startedAt: "",
     }),
   });
@@ -235,9 +239,11 @@ test("ensureSharedProxy: recreates when proxy is running but addon hash differs"
       calls.inspect.push(name);
       return Effect.succeed({
         name,
+        id: "",
         running: true,
         labels: { [NAS_ADDON_HASH_LABEL]: "old-hash" },
         networks: [],
+        networkMode: "",
         startedAt: "",
       });
     },

@@ -22,6 +22,7 @@ import {
   resolveAuthzConfig,
 } from "../../network/authz/resolve.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
+import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
 import {
   generateSessionToken as defaultGenerateToken,
   hashToken,
@@ -56,7 +57,8 @@ const PROXY_CONTAINER_NAME = "nas-proxy-shared";
 const PROXY_ALIAS = "nas-proxy";
 const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
-export const LOCAL_PROXY_PORT = 18080;
+
+export { LOCAL_PROXY_PORT };
 
 /**
  * Mount target directory inside the agent container where per-port forward-port
@@ -164,8 +166,8 @@ export function planProxy(
 
   const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
-  // DinD's hostname is appended to no_proxy later by DindStage (which now runs
-  // after ProxyStage); here we only seed the loopback baseline.
+  // The agent reaches the DinD sidecar's daemon over its joined network
+  // namespace at 127.0.0.1, so this loopback baseline is all no_proxy needs.
   const noProxyEntries = ["localhost", "127.0.0.1"];
 
   const envVars: Record<string, string> = {
@@ -499,16 +501,19 @@ function runProxy(
       `[nas]   ↳ ProxyStage:create-session-network done (${formatElapsed(phaseStart)})`,
     );
 
-    // 10. Add --add-host so the agent container can resolve the proxy alias
-    //     without relying on Docker's embedded DNS (which returns SERVFAIL
-    //     on some Debian hosts with internal networks).
+    // 10. Record the proxy alias as a host mapping rather than formatting a
+    //     --add-host flag here. Docker's embedded DNS returns SERVFAIL for
+    //     internal networks on some Debian hosts, so the mapping is needed;
+    //     but the agent may be launched in container network mode, which
+    //     rejects the flag. Whichever container owns the network namespace
+    //     expands this.
     const overrides = { ...plan.outputOverrides };
     if (proxyIp && overrides.container) {
       overrides.container = {
         ...overrides.container,
-        extraRunArgs: [
-          ...overrides.container.extraRunArgs,
-          `--add-host=${PROXY_ALIAS}:${proxyIp}`,
+        extraHosts: [
+          ...overrides.container.extraHosts,
+          { host: PROXY_ALIAS, ip: proxyIp },
         ],
       };
     }
@@ -565,7 +570,7 @@ function buildContainerState(
 ): ContainerPlan {
   return mergeContainerPlan(resolveContainerBase(input), {
     env: { static: config.envVars },
-    network: { name: config.sessionNetworkName },
+    network: { mode: "network", name: config.sessionNetworkName },
     // Skip the mounts patch entirely when there's nothing to add; passing an
     // empty array still triggers mergeContainerPlan's append branch (a no-op
     // here), but keeping the patch keyless makes intent clearer.

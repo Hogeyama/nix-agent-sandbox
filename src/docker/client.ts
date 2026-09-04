@@ -60,9 +60,11 @@ export class InterruptedCommandError extends Error {
 
 export interface DockerContainerDetails {
   name: string;
+  id: string;
   running: boolean;
   labels: DockerLabels;
   networks: string[];
+  networkMode: string;
   startedAt: string;
 }
 
@@ -531,9 +533,11 @@ export async function dockerInspectContainer(
   const parsed = JSON.parse(result.stdout.toString())[0];
   return {
     name: String(parsed.Name ?? containerName).replace(/^\//, ""),
+    id: String(parsed.Id ?? ""),
     running: parsed.State?.Running === true,
     labels: parsed.Config?.Labels ?? {},
     networks: Object.keys(parsed.NetworkSettings?.Networks ?? {}),
+    networkMode: String(parsed.HostConfig?.NetworkMode ?? ""),
     startedAt: parsed.State?.StartedAt ?? "",
   };
 }
