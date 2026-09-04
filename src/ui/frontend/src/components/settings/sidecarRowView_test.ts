@@ -4,7 +4,7 @@
  * These cover the three contracts the page component relies on:
  *
  *   - `isSidecarContainer` returns true exactly for the sidecar
- *     `nas.kind` labels (`dind` / `proxy`) and false for any
+ *     `nas.kind` labels (`dind` / `proxy` / `registry-mirror`) and false for any
  *     other label, including `"agent"` and missing labels.
  *   - `formatUptime` produces the short relative-duration format across
  *     each range boundary, and renders `"-"` for `null`, future deltas,
@@ -35,9 +35,9 @@ function makeContainer(
 }
 
 describe("SIDECAR_KINDS", () => {
-  test("contains exactly dind, proxy in declaration order", () => {
+  test("contains exactly dind, proxy, registry-mirror in declaration order", () => {
     // Pin the public constant so a silent rename is caught by tests.
-    expect(SIDECAR_KINDS).toEqual(["dind", "proxy"]);
+    expect(SIDECAR_KINDS).toEqual(["dind", "proxy", "registry-mirror"]);
   });
 });
 
@@ -154,6 +154,10 @@ describe("normalizeSidecars", () => {
     const rows = normalizeSidecars([
       makeContainer({ name: "proxy-main", labels: { "nas.kind": "proxy" } }),
       makeContainer({ name: "dind-server", labels: { "nas.kind": "dind" } }),
+      makeContainer({
+        name: "mirror-main",
+        labels: { "nas.kind": "registry-mirror" },
+      }),
       makeContainer({ name: "proxy-aux", labels: { "nas.kind": "proxy" } }),
       makeContainer({ name: "dind-client", labels: { "nas.kind": "dind" } }),
     ]);
@@ -162,8 +166,15 @@ describe("normalizeSidecars", () => {
       "dind-server",
       "proxy-aux",
       "proxy-main",
+      "mirror-main",
     ]);
-    expect(rows.map((r) => r.kind)).toEqual(["dind", "dind", "proxy", "proxy"]);
+    expect(rows.map((r) => r.kind)).toEqual([
+      "dind",
+      "dind",
+      "proxy",
+      "proxy",
+      "registry-mirror",
+    ]);
   });
 
   test("propagates running and startedAt fields verbatim", () => {

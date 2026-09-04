@@ -3,7 +3,8 @@
  *
  * The module owns three responsibilities:
  *
- *   1. The canonical list of sidecar `nas.kind` labels (`SIDECAR_KINDS`).
+ *   1. The canonical list of dind, proxy, and registry-mirror sidecar
+ *      `nas.kind` labels (`SIDECAR_KINDS`).
  *      Owning the constant here keeps the Solid frontend self-contained
  *      and lets the predicate `isSidecarContainer` ship without any
  *      cross-package import.
@@ -20,7 +21,7 @@
 
 import type { ContainerInfoLike } from "../../stores/types";
 
-export const SIDECAR_KINDS = ["dind", "proxy"] as const;
+export const SIDECAR_KINDS = ["dind", "proxy", "registry-mirror"] as const;
 
 export type SidecarKind = (typeof SIDECAR_KINDS)[number];
 
@@ -46,7 +47,7 @@ const SIDECAR_KIND_SET: ReadonlySet<string> = new Set<string>(SIDECAR_KINDS);
  * Return true when `c.labels["nas.kind"]` is one of the sidecar kinds.
  *
  * The label, not the container name, is the wire-level discriminant: a
- * user could rename their proxy and the label would still be `"proxy"`.
+ * user could rename their sidecar and the label would still identify its kind.
  */
 export function isSidecarContainer(c: ContainerInfoLike): boolean {
   const kind = c.labels["nas.kind"];
@@ -57,7 +58,7 @@ export function isSidecarContainer(c: ContainerInfoLike): boolean {
  * Filter and project a raw container snapshot into table rows.
  *
  * Sort order:
- *   - primary: `kind` ascending (`dind` < `proxy`, lexicographic)
+ *   - primary: `kind` ascending (`dind` < `proxy` < `registry-mirror`, lexicographic)
  *   - secondary: `name` ascending within the same `kind`
  *
  * The order is deterministic and pinned in tests. When two rows share
