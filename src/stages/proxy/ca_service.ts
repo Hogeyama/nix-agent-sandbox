@@ -11,7 +11,10 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import {
+  caCertFilePath,
+  type NetworkRuntimePaths,
+} from "../../network/registry.ts";
 import { DockerService } from "../../services/docker.ts";
 import { FsService } from "../../services/fs.ts";
 
@@ -46,7 +49,7 @@ export const CaServiceLive: Layer.Layer<
     return CaService.of({
       ensureCaCert: (paths, proxyImage) =>
         Effect.gen(function* () {
-          const certPath = `${paths.caCertDir}/mitmproxy-ca-cert.pem`;
+          const certPath = caCertFilePath(paths);
           const certExists = yield* fs.exists(certPath);
 
           if (certExists) return;

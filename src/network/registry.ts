@@ -30,6 +30,17 @@ export interface NetworkRuntimePaths extends BaseRuntimePaths {
   authzDir: string;
 }
 
+/**
+ * The proxy CA's certificate, without its private key.
+ *
+ * mitmproxy's cert store keeps the key in sibling files (`mitmproxy-ca.pem`,
+ * `mitmproxy-ca.p12`), so callers that hand this path to a container must pass
+ * the file and never its directory.
+ */
+export function caCertFilePath(paths: { readonly caCertDir: string }): string {
+  return path.join(paths.caCertDir, "mitmproxy-ca-cert.pem");
+}
+
 export async function resolveNetworkRuntimePaths(
   runtimeDir?: string,
 ): Promise<NetworkRuntimePaths> {

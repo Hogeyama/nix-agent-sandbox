@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 /**
  * DindStage integration テスト（実 Docker 使用, DinD rootless 必須）
@@ -19,13 +22,24 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
 import {
+  dockerExec,
   dockerIsRunning,
+  dockerLogs,
+  dockerNetworkConnect,
   dockerNetworkCreateInternal,
+  dockerNetworkDisconnect,
   dockerNetworkRemove,
   dockerRm,
+  dockerRunDetached,
   dockerStop,
+  dockerVolumeCreate,
   dockerVolumeRemove,
 } from "../../docker/client.ts";
+import {
+  buildDindSidecarArgs,
+  buildDindSidecarEnv,
+  DIND_IMAGE,
+} from "../../docker/dind.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type {
@@ -132,6 +146,9 @@ function makeStageState(
   const proxy = overrides.proxy ?? {
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
     proxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
+    // These cases do not pull through the dummy proxy. The exact bind still
+    // requires a guaranteed-existing regular file on the Docker host.
+    caCertPath: import.meta.path,
   };
   return { workspace, container, network, proxy };
 }
@@ -423,6 +440,257 @@ async function forceCleanup(
   await dockerNetworkRemove(networkName).catch(() => {});
   await dockerVolumeRemove(volumeName).catch(() => {});
 }
+
+async function waitForContainerTcp(
+  containerName: string,
+  port: number,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const proc = Bun.spawn(
+      [
+        "docker",
+        "exec",
+        containerName,
+        "python3",
+        "-c",
+        `import socket; socket.create_connection(("127.0.0.1", ${port}), 0.2).close()`,
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    if ((await proc.exited) === 0) return;
+    await Bun.sleep(250);
+  }
+  const logs = await dockerLogs(containerName);
+  throw new Error(
+    `timed out waiting for ${containerName}:${port}\n` +
+      `--- container logs ---\n${logs}`,
+  );
+}
+
+async function waitForFile(pathname: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const file = Bun.file(pathname);
+    if ((await file.exists()) && file.size > 0) return;
+    await Bun.sleep(50);
+  }
+  throw new Error(`timed out waiting for ${pathname}`);
+}
+
+async function waitForDindReadyForTest(containerName: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (!(await dockerIsRunning(containerName))) {
+      const logs = await dockerLogs(containerName);
+      throw new Error(
+        `${containerName} exited before dockerd became ready\n` +
+          `--- container logs ---\n${logs}`,
+      );
+    }
+    const result = await dockerExec(containerName, [
+      "docker",
+      "-H",
+      "tcp://127.0.0.1:2375",
+      "info",
+    ]);
+    if (result.code === 0) return;
+    await Bun.sleep(250);
+  }
+  const logs = await dockerLogs(containerName);
+  throw new Error(
+    `timed out waiting for dockerd in ${containerName}\n` +
+      `--- container logs ---\n${logs}`,
+  );
+}
+
+async function startDindWithoutCa(
+  containerName: string,
+  volumeName: string,
+  networkName: string,
+  proxyEndpoint: string,
+): Promise<void> {
+  await dockerVolumeCreate(volumeName);
+  await dockerRunDetached({
+    name: containerName,
+    image: DIND_IMAGE,
+    args: buildDindSidecarArgs(volumeName, [], { disableCache: true }),
+    envVars: buildDindSidecarEnv({ proxyEndpoint, caCertPath: "" }),
+  });
+  await waitForDindReadyForTest(containerName);
+  await dockerNetworkConnect(networkName, containerName);
+  await dockerNetworkDisconnect("bridge", containerName);
+}
+
+async function pullInSidecar(
+  sidecar: string,
+  image: string,
+): Promise<InnerRunResult> {
+  const proc = Bun.spawn(
+    [
+      "docker",
+      "exec",
+      sidecar,
+      "docker",
+      "-H",
+      "tcp://127.0.0.1:2375",
+      "pull",
+      image,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, output: `${stdout}\n${stderr}` };
+}
+
+async function removeContainerWithAnonymousVolumes(
+  containerName: string,
+): Promise<void> {
+  try {
+    await Bun.spawn(["docker", "rm", "--force", "--volumes", containerName], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
+  } catch {}
+}
+
+test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
+  "DindStage: the sidecar pulls through the proxy with the CA mounted, and fails without it",
+  async () => {
+    const id = crypto.randomUUID();
+    const networkName = `nas-dind-ca-net-${id}`;
+    const proxyName = `nas-dind-ca-proxy-${id}`;
+    const withoutCaSessionId = `ca-without-${id}`;
+    const withCaSessionId = `ca-with-${id}`;
+    const scope = Effect.runSync(Scope.make());
+    const proxyConfDir = await mkdtemp(path.join(tmpdir(), "nas-dind-ca-"));
+    let withoutCaPlan: ReturnType<typeof planDind> = null;
+    let withCaPlan: ReturnType<typeof planDind> = null;
+    try {
+      const profile = makeProfile({ docker: { enable: true, shared: false } });
+      const caCertPath = path.join(proxyConfDir, "mitmproxy-ca-cert.pem");
+      const proxyEndpoint = `http://${proxyName}:8080`;
+
+      const withoutCaSharedInput = makeSharedInput(profile, withoutCaSessionId);
+      const withoutCaStageState = makeStageState({
+        network: {
+          networkName,
+          runtimeDir: "/run/user/1000/nas/network",
+        },
+        proxy: {
+          brokerSocket: `/tmp/${withoutCaSessionId}.sock`,
+          proxyEndpoint,
+          caCertPath,
+        },
+      });
+      withoutCaPlan = planDind(
+        { ...withoutCaSharedInput, ...withoutCaStageState },
+        { disableCache: true, readinessTimeoutMs: 30_000 },
+      );
+      expect(withoutCaPlan).not.toBeNull();
+
+      const withCaSharedInput = makeSharedInput(profile, withCaSessionId);
+      const withCaStageState = makeStageState({
+        network: {
+          networkName,
+          runtimeDir: "/run/user/1000/nas/network",
+        },
+        proxy: {
+          brokerSocket: `/tmp/${withCaSessionId}.sock`,
+          proxyEndpoint,
+          caCertPath,
+        },
+      });
+      withCaPlan = planDind(
+        { ...withCaSharedInput, ...withCaStageState },
+        { disableCache: true, readinessTimeoutMs: 30_000 },
+      );
+      expect(withCaPlan).not.toBeNull();
+
+      await chmod(proxyConfDir, 0o777);
+      await dockerNetworkCreateInternal(networkName);
+      await dockerRunDetached({
+        name: proxyName,
+        image: "mitmproxy/mitmproxy:11",
+        args: [],
+        envVars: {},
+        mounts: [{ source: proxyConfDir, target: "/nas-ca", mode: "rw" }],
+        command: [
+          "mitmdump",
+          "--mode",
+          "regular@8080",
+          "--set",
+          "connection_strategy=lazy",
+          "--set",
+          "confdir=/nas-ca",
+        ],
+      });
+      await dockerNetworkConnect(networkName, proxyName);
+      await waitForContainerTcp(proxyName, 8080);
+      await waitForFile(caCertPath);
+
+      // Keep the production proxy environment but deliberately omit its CA
+      // mount. This control must fail before the stage-backed positive case,
+      // otherwise a successful pull would not prove that trust came from the
+      // mounted certificate.
+      await startDindWithoutCa(
+        withoutCaPlan!.containerName,
+        withoutCaPlan!.sharedTmpVolume,
+        networkName,
+        proxyEndpoint,
+      );
+      const without = await pullInSidecar(
+        withoutCaPlan!.containerName,
+        INNER_IMAGE,
+      );
+      expect(without.exitCode).not.toEqual(0);
+      expect(without.output).toMatch(/x509|certificate/i);
+
+      const stage = createDindStageWithOptions(withCaSharedInput, {
+        disableCache: true,
+        readinessTimeoutMs: 30_000,
+      });
+      await Effect.runPromise(
+        stage
+          .run(withCaStageState)
+          .pipe(
+            Effect.provideService(Scope.Scope, scope),
+            Effect.provide(DindServiceLive),
+          ),
+      );
+      const withCa = await pullInSidecar(
+        withCaPlan!.containerName,
+        INNER_IMAGE,
+      );
+      expect(
+        withCa.exitCode,
+        `pull failed with the CA mounted. Output:\n${withCa.output}`,
+      ).toEqual(0);
+    } finally {
+      if (withoutCaPlan !== null) {
+        await removeContainerWithAnonymousVolumes(withoutCaPlan.containerName);
+      }
+      if (withCaPlan !== null) {
+        await removeContainerWithAnonymousVolumes(withCaPlan.containerName);
+      }
+      await removeContainerWithAnonymousVolumes(proxyName);
+      await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
+      if (withoutCaPlan !== null) {
+        await dockerVolumeRemove(withoutCaPlan.sharedTmpVolume).catch(() => {});
+      }
+      if (withCaPlan !== null) {
+        await dockerVolumeRemove(withCaPlan.sharedTmpVolume).catch(() => {});
+      }
+      await dockerNetworkRemove(networkName).catch(() => {});
+      await rm(proxyConfDir, { recursive: true, force: true }).catch(() => {});
+    }
+  },
+  90_000,
+);
 
 test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",

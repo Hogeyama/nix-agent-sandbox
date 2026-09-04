@@ -37,6 +37,8 @@ sidecar は rootless Docker daemon ですが、起動する sidecar コンテナ
 
 sidecar は起動後に session の内部 network へ接続され、既定 bridge から切り離されます。egress は session proxy を経由します。共有モードでも各 session の network へ接続して終了時に切断するため、shared は「同じ daemon とデータを複数 session が使う」選択です。異なる信頼境界の作業を混ぜないでください。
 
+DinD daemon による image pull も session proxy を経由します。まず `network.scopes` の `targets` に一致する scope が選択され、その scope 内で rule の `onMatch` または scope の `fallback` が `allow` となるか、`review` で承認される必要があります。どの scope の target にも一致しない registry は `network.fallback` の `review` または `deny` で処理されます。最終的に拒否されると proxy は `403 Forbidden` を返し、pull は失敗します。
+
 privileged sidecar と shared daemon の範囲は、[Docker in Docker のリスク](/nix-agent-sandbox/security/risks/#dind)を参照してください。
 
 ## 関連ページ

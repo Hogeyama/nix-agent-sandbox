@@ -315,6 +315,7 @@ test("pickPipelineStateSlices: preserves selected slices", () => {
         proxy: {
           brokerSocket: "/runtime/broker.sock",
           proxyEndpoint: "http://endpoint",
+          caCertPath: "/runtime/mitmproxy-ca/mitmproxy-ca-cert.pem",
         },
         container: {
           image: "nas-sandbox",
@@ -341,6 +342,7 @@ test("pickPipelineStateSlices: preserves selected slices", () => {
     proxy: {
       brokerSocket: "/runtime/broker.sock",
       proxyEndpoint: "http://endpoint",
+      caCertPath: "/runtime/mitmproxy-ca/mitmproxy-ca-cert.pem",
     },
     container: {
       image: "nas-sandbox",
