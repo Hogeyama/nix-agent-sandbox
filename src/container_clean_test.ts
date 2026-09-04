@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  buildSidecarUsageIndex,
   type ContainerCleanBackend,
   cleanNasContainers,
   isUnusedNasSidecar,
@@ -61,16 +62,20 @@ test("isNasManagedNetwork: legacy session network name is detected", () => {
 test("isUnusedNasSidecar: active non-managed container keeps sidecar alive", () => {
   const sidecar: DockerContainerDetails = {
     name: "nas-proxy-test",
+    id: "id-nas-proxy-test",
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
   const userContainer: DockerContainerDetails = {
     name: "nas-sandbox",
+    id: "id-nas-sandbox",
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
   const network: DockerNetworkDetails = {
@@ -87,6 +92,7 @@ test("isUnusedNasSidecar: active non-managed container keeps sidecar alive", () 
         [userContainer.name, userContainer],
       ]),
       new Map([[network.name, network]]),
+      buildSidecarUsageIndex([sidecar, userContainer]),
     ),
   ).toEqual(false);
 });
@@ -94,16 +100,20 @@ test("isUnusedNasSidecar: active non-managed container keeps sidecar alive", () 
 test("isUnusedNasSidecar: only managed sidecars on network is unused", () => {
   const proxy: DockerContainerDetails = {
     name: "nas-proxy-test",
+    id: "id-nas-proxy-test",
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
   const dind: DockerContainerDetails = {
     name: "nas-dind-shared",
+    id: "id-nas-dind-shared",
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
   const network: DockerNetworkDetails = {
@@ -120,6 +130,7 @@ test("isUnusedNasSidecar: only managed sidecars on network is unused", () => {
         [dind.name, dind],
       ]),
       new Map([[network.name, network]]),
+      buildSidecarUsageIndex([proxy, dind]),
     ),
   ).toEqual(true);
 });
@@ -127,19 +138,23 @@ test("isUnusedNasSidecar: only managed sidecars on network is unused", () => {
 test("isUnusedNasSidecar: session network with active container keeps proxy alive", () => {
   const proxy: DockerContainerDetails = {
     name: "nas-proxy-shared",
+    id: "id-nas-proxy-shared",
     running: true,
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_PROXY,
     },
     networks: ["nas-session-example"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
   const userContainer: DockerContainerDetails = {
     name: "nas-sandbox",
+    id: "id-nas-sandbox",
     running: true,
     labels: {},
     networks: ["nas-session-example"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
   const sessionNetwork: DockerNetworkDetails = {
@@ -159,6 +174,7 @@ test("isUnusedNasSidecar: session network with active container keeps proxy aliv
         [userContainer.name, userContainer],
       ]),
       new Map([[sessionNetwork.name, sessionNetwork]]),
+      buildSidecarUsageIndex([proxy, userContainer]),
     ),
   ).toEqual(false);
 });
@@ -241,16 +257,23 @@ class FakeBackend implements ContainerCleanBackend {
 function createManagedContainer(
   name: string,
   kind: string,
-  options: { running?: boolean; networks?: string[] } = {},
+  options: {
+    running?: boolean;
+    networks?: string[];
+    id?: string;
+    networkMode?: string;
+  } = {},
 ): DockerContainerDetails {
   return {
     name,
+    id: options.id ?? `id-${name}`,
     running: options.running ?? true,
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: kind,
     },
     networks: [...(options.networks ?? [])],
+    networkMode: options.networkMode ?? "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   };
 }
@@ -311,9 +334,11 @@ test("cleanNasContainers: keeps sidecar when an active non-managed container sha
   );
   backend.containers.set("nas-sandbox", {
     name: "nas-sandbox",
+    id: "id-nas-sandbox",
     running: true,
     labels: {},
     networks: ["nas-session-example"],
+    networkMode: "bridge",
     startedAt: "2026-01-01T00:00:00Z",
   });
   backend.networks.set(
@@ -353,4 +378,215 @@ test("cleanNasContainers: removes stopped sidecar and orphaned managed resources
   expect(result.removedNetworks).toEqual(["nas-session-orphan"]);
   expect(result.removedVolumes).toEqual([]);
   expect(backend.stopped).toEqual([]);
+});
+
+test("isUnusedNasSidecar: a namespace joiner keeps its owner alive", () => {
+  const dind = createManagedContainer("nas-dind-abc12345", "dind", {
+    id: "dindid",
+    networks: ["nas-session-net-abc12345"],
+  });
+  const agent = createManagedContainer("nas-agent-sess_abc12345", "agent", {
+    id: "agentid",
+    networks: [],
+    networkMode: "container:dindid",
+  });
+  const containers = new Map([
+    [dind.name, dind],
+    [agent.name, agent],
+  ]);
+  const networks = new Map([
+    [
+      "nas-session-net-abc12345",
+      createManagedNetwork(
+        "nas-session-net-abc12345",
+        NAS_KIND_SESSION_NETWORK,
+        [dind.name],
+      ),
+    ],
+  ]);
+
+  expect(
+    isUnusedNasSidecar(
+      dind,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(false);
+});
+
+test("isUnusedNasSidecar: a namespace joiner keeps the shared proxy alive", () => {
+  const dind = createManagedContainer("nas-dind-abc12345", "dind", {
+    id: "dindid",
+    networks: ["nas-session-net-abc12345"],
+  });
+  const proxy = createManagedContainer("nas-proxy-shared", "proxy", {
+    id: "proxyid",
+    networks: ["nas-session-net-abc12345"],
+  });
+  const agent = createManagedContainer("nas-agent-sess_abc12345", "agent", {
+    id: "agentid",
+    networks: [],
+    networkMode: "container:dindid",
+  });
+  const containers = new Map([
+    [dind.name, dind],
+    [proxy.name, proxy],
+    [agent.name, agent],
+  ]);
+  const networks = new Map([
+    [
+      "nas-session-net-abc12345",
+      createManagedNetwork(
+        "nas-session-net-abc12345",
+        NAS_KIND_SESSION_NETWORK,
+        [dind.name, proxy.name],
+      ),
+    ],
+  ]);
+
+  expect(
+    isUnusedNasSidecar(
+      proxy,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(false);
+});
+
+test("isUnusedNasSidecar: an orphan with no joiner is still unused", () => {
+  const dind = createManagedContainer("nas-dind-shared", "dind", {
+    id: "orphanid",
+    networks: ["nas-session-net-old"],
+  });
+  const containers = new Map([[dind.name, dind]]);
+  const networks = new Map([
+    [
+      "nas-session-net-old",
+      createManagedNetwork("nas-session-net-old", NAS_KIND_SESSION_NETWORK, [
+        dind.name,
+      ]),
+    ],
+  ]);
+
+  expect(
+    isUnusedNasSidecar(
+      dind,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(true);
+});
+
+test("isUnusedNasSidecar: a joiner with no resolvable owner does not keep an unrelated sidecar alive", () => {
+  // The container map is built from `docker ps`, which lists running
+  // containers only. A joiner's owner can stop between when the joiner
+  // was started and when cleanup runs, leaving `container:<id>` pointing
+  // at nothing in this map -- this is a normal, reachable state, not a
+  // corrupt one.
+  const dind = createManagedContainer("nas-dind-shared", "dind", {
+    id: "dindid",
+    networks: ["nas-session-net-old"],
+  });
+  const danglingJoiner = createManagedContainer(
+    "nas-agent-sess_gone",
+    "agent",
+    {
+      id: "agentid",
+      networks: [],
+      networkMode: "container:stopped-owner-id",
+    },
+  );
+  const containers = new Map([
+    [dind.name, dind],
+    [danglingJoiner.name, danglingJoiner],
+  ]);
+  const networks = new Map([
+    [
+      "nas-session-net-old",
+      createManagedNetwork("nas-session-net-old", NAS_KIND_SESSION_NETWORK, [
+        dind.name,
+      ]),
+    ],
+  ]);
+
+  expect(
+    isUnusedNasSidecar(
+      dind,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(true);
+});
+
+test("isUnusedNasSidecar: a live joiner keeps its owner alive even with no nas-managed network", () => {
+  // The owner reports no networks of its own at this moment -- e.g. it was
+  // disconnected from its nas-managed network but not yet removed. Network
+  // membership alone (relevantNetworks / virtualMembers) finds nothing to
+  // check, so only a direct ownership lookup can see the running joiner.
+  const dind = createManagedContainer("nas-dind-abc12345", "dind", {
+    id: "dindid",
+    networks: [],
+  });
+  const agent = createManagedContainer("nas-agent-sess_abc12345", "agent", {
+    id: "agentid",
+    networks: [],
+    networkMode: "container:dindid",
+  });
+  const containers = new Map([
+    [dind.name, dind],
+    [agent.name, agent],
+  ]);
+  const networks = new Map<string, DockerNetworkDetails>();
+
+  expect(
+    isUnusedNasSidecar(
+      dind,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(false);
+});
+
+test("isUnusedNasSidecar: a sidecar joining another sidecar's namespace is not credited as a user", () => {
+  // The candidate here is itself nas-managed (kind: proxy) and reports
+  // `container:dindid` as its network mode. If it were credited like a
+  // regular joiner, two sidecars could reference each other's namespace
+  // and keep each other alive forever.
+  const dind = createManagedContainer("nas-dind-shared", "dind", {
+    id: "dindid",
+    networks: ["nas-session-net-abc12345"],
+  });
+  const otherSidecar = createManagedContainer("nas-proxy-other", "proxy", {
+    id: "proxyid2",
+    networks: [],
+    networkMode: "container:dindid",
+  });
+  const containers = new Map([
+    [dind.name, dind],
+    [otherSidecar.name, otherSidecar],
+  ]);
+  const networks = new Map([
+    [
+      "nas-session-net-abc12345",
+      createManagedNetwork(
+        "nas-session-net-abc12345",
+        NAS_KIND_SESSION_NETWORK,
+        [dind.name],
+      ),
+    ],
+  ]);
+
+  expect(
+    isUnusedNasSidecar(
+      dind,
+      containers,
+      networks,
+      buildSidecarUsageIndex(containers.values()),
+    ),
+  ).toBe(true);
 });

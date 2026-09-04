@@ -51,9 +51,11 @@ function makeDetails(
 ): DockerContainerDetails {
   return {
     name: overrides.name,
+    id: overrides.id ?? `id-${overrides.name}`,
     running: overrides.running ?? false,
     labels: overrides.labels ?? {},
     networks: overrides.networks ?? [],
+    networkMode: overrides.networkMode ?? "bridge",
     startedAt: overrides.startedAt ?? "1970-01-01T00:00:00.000Z",
   };
 }

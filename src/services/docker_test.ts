@@ -25,9 +25,11 @@ test("Fake inspect: default returns minimum DockerContainerDetails for the reque
   );
   expect(details).toEqual({
     name: "ghost",
+    id: "",
     running: false,
     labels: {},
     networks: [],
+    networkMode: "",
     startedAt: "",
   });
 });
@@ -46,9 +48,11 @@ test("Fake inspect: override is invoked with the container name", async () => {
   const calls: string[] = [];
   const stub: DockerContainerDetails = {
     name: "stub",
+    id: "stub-id",
     running: true,
     labels: { "nas.managed": "true" },
     networks: ["bridge"],
+    networkMode: "bridge",
     startedAt: "2024-01-01T00:00:00Z",
   };
   const layer = makeDockerServiceFake({
