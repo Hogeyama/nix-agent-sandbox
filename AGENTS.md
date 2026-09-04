@@ -27,9 +27,16 @@ bun run compile            # Build standalone binary (bun build --compile)
 
 - `bun test src/` is **not** a unit run: `src/` holds `*integration_test.ts` files, some of
   which spawn `docker` at import time even when their tests skip. Use `bun run test:unit`
-  while iterating. Each distinct `bun test <args>` is a separate hostexec capability, so
-  repeated runs with varying arguments multiply approval prompts.
-  See `.claude/skills/test-policy/SKILL.md`.
+  while iterating. See `.claude/skills/test-policy/SKILL.md`.
+- **`bun run test` runs on the host; every other test command runs in the container.**
+  The hostexec rule matches that exact argv (`bun` + `^run test$`) and prompts for
+  approval; `bun test <anything>` does not match and stays inside the sandbox. The two
+  environments do not agree: a test that needs `docker build` to reach the network can
+  only pass on the host, because a DinD build container has no route out (`apt-get`
+  resolves nothing, while the base image pull still succeeds through the proxied
+  daemon). Such tests carry an `imageBuildable`-style predicate and skip inside the
+  sandbox — so a green `bun test src/` there is a smaller claim than a green
+  `bun run test`.
 - Tests should import from relative paths, not use import maps for internal modules
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix (nix-community/bun2nix) + nix-bundle-elf for standalone binaries

@@ -46,17 +46,24 @@ bun run test:unit              # unit のみ（Docker 不要、高速、安全�
 bun run test:integration       # integration + tests/ 配下すべて
 ```
 
-## Docker / hostexec 承認をまとめる
+## `bun run test` はホスト、それ以外はコンテナ内
 
-Docker integration を含む変更では、開発中は Docker に触れない unit test だけを
-絞って実行し、最終確認で `bun run test` を **1 回だけ**実行する。異なる引数の
-`bun test <integration-file>` を途中で何度も実行すると、hostexec では別 capability
-として扱われ、承認が増える。integration file は import 時の availability probe
+hostexec のルールは `argv0 = "bun"` かつ `argRegex = "^run test$"` にのみ一致する。
+つまり **`bun run test` だけがホストで実行され、承認プロンプトを出す**。
+`bun test <args>` はどんな引数でもコンテナ内で走り、承認は増えない。
+
+この2つは同じ結果を返さない。`docker build` がネットワークを要するテストは
+ホストでしか通らない。サンドボックス内の DinD ではビルドコンテナに外向きの経路が
+無く、`apt-get` が何も解決できないためである（ベースイメージの pull は proxy 済みの
+dockerd が行うので成功する）。該当テストは `imageBuildable` のような述語で
+サンドボックス内では skip する。**コンテナ内の green は、ホストの green より弱い主張**
+である点に注意する。
+
+開発中は Docker に触れない unit test を絞って実行し、最終確認で `bun run test` を
+**1 回だけ**実行する。integration file は import 時の availability probe
 （例: `docker info`）も実行し得るため、test body が skip でも無害ではない。
-
-Docker integration の個別再実行は、full suite で失敗を確認した後の原因調査、
-またはユーザーが明示的に求めた場合に限る。承認を減らすために Docker policy を
-迂回したり、絶対パスや permissive rule を使ったりしてはならない。
+承認を減らすために Docker policy を迂回したり、絶対パスや permissive rule を
+使ったりしてはならない。
 
 ## Unit テストで許可される依存
 
