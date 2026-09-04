@@ -12,6 +12,10 @@ Nix の自動検出は `/nix`、daemon socket、Nix cache を読み書き可能�
 ネットワーク、`extraMounts`、HostExec は policy-controlled な capability です。許可を広げる前に
 [信頼境界](https://hogeyama.github.io/nix-agent-sandbox/security/model/)を確認してください。
 
+| 操作 | 広がる境界 |
+| --- | --- |
+| `nas network bind` | エージェントが作成したページをホストの loopback に公開するため、そのページから `127.0.0.1` 上のほかのサービスへ到達できる |
+
 ## ユーザーガイド
 
 詳細な設定、機能、レシピ、運用とセキュリティの情報は
