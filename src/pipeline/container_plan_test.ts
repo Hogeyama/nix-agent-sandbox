@@ -16,6 +16,7 @@ function makeBasePlan(overrides?: Partial<ContainerPlan>): ContainerPlan {
     workDir: "/workspace/project",
     mounts: [],
     env: { static: {}, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: [],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
@@ -160,6 +161,17 @@ test("mergeContainerPlan: image and workDir are replaced", () => {
   const result = mergeContainerPlan(base, patch);
   expect(result.image).toEqual("new:2");
   expect(result.workDir).toEqual("/new");
+});
+
+test("mergeContainerPlan: extraHosts append", () => {
+  const base = makeBasePlan({ extraHosts: [{ host: "a", ip: "1.1.1.1" }] });
+  const result = mergeContainerPlan(base, {
+    extraHosts: [{ host: "b", ip: "2.2.2.2" }],
+  });
+  expect(result.extraHosts).toEqual([
+    { host: "a", ip: "1.1.1.1" },
+    { host: "b", ip: "2.2.2.2" },
+  ]);
 });
 
 test("mergeContainerPlan: base is not mutated", () => {

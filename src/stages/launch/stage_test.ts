@@ -65,6 +65,7 @@ test("planLaunch: composes launch opts from container slice", () => {
         dynamicOps: [],
       },
       network: { mode: "network", name: "slice-net", alias: "slice-agent" },
+      extraHosts: [],
       extraRunArgs: ["--init"],
       command: {
         agentCommand: ["slice-agent"],
@@ -124,6 +125,7 @@ test("planLaunch: slice contract keeps workdir/network/mounts singular in launch
       mounts,
       env: { static: {}, dynamicOps: [] },
       network,
+      extraHosts: [],
       extraRunArgs: ["--init", "--cpus", "2"],
       command: { agentCommand: ["slice-agent"], extraArgs: [] },
       labels: {},
@@ -194,6 +196,7 @@ function makeBasePlan(overrides?: Partial<ContainerPlan>): ContainerPlan {
     workDir: "/workspace/project",
     mounts: [],
     env: { static: {}, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: [],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
@@ -329,6 +332,7 @@ test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => 
       ],
     },
     network: { mode: "network", name: "nas-proxy-net", alias: "nas-agent" },
+    extraHosts: [],
     extraRunArgs: ["--shm-size", "2g"],
     command: { agentCommand: ["copilot", "run"], extraArgs: ["--verbose"] },
     labels: { "nas.managed": "true", "nas.kind": "agent" },
@@ -361,6 +365,38 @@ test("compileLaunchOpts: container network mode emits --network container:<name>
   expect(opts.args).toContain("--network");
   expect(opts.args).toContain("container:nas-dind-abc12345");
   expect(opts.args).not.toContain("--network-alias");
+});
+
+test("compileLaunchOpts: network mode expands extraHosts into --add-host", () => {
+  const plan = makeBasePlan({
+    network: { mode: "network", name: "nas-session-net-abc12345" },
+    extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args).toContain("--add-host=nas-envoy:172.20.0.2");
+});
+
+test("compileLaunchOpts: container mode does not expand extraHosts", () => {
+  const plan = makeBasePlan({
+    network: { mode: "container", containerName: "nas-dind-abc12345" },
+    extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args.some((a) => a.startsWith("--add-host="))).toBe(false);
+});
+
+test("compileLaunchOpts: no network attachment still expands extraHosts into --add-host", () => {
+  const plan = makeBasePlan({
+    extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-sess_abc12345");
+
+  expect(opts.args).toContain("--add-host=nas-envoy:172.20.0.2");
 });
 
 function createTestInput(overrides: { container?: ContainerPlan } = {}): {

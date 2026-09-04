@@ -107,6 +107,16 @@ export function compileLaunchOpts(
     }
   }
 
+  // Host mappings are meaningless to a container joining another container's
+  // namespace (`--network container:<name>`) — Docker rejects --add-host in
+  // that mode since the namespace owner already resolves them. Every other
+  // case, including no network attachment at all, still needs its mappings.
+  if (plan.network?.mode !== "container") {
+    for (const entry of plan.extraHosts) {
+      args.push(`--add-host=${entry.host}:${entry.ip}`);
+    }
+  }
+
   args.push(...plan.extraRunArgs);
 
   const envVars: Record<string, string> = { ...plan.env.static };

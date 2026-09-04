@@ -499,16 +499,19 @@ function runProxy(
       `[nas]   ↳ ProxyStage:create-session-network done (${formatElapsed(phaseStart)})`,
     );
 
-    // 10. Add --add-host so the agent container can resolve the proxy alias
-    //     without relying on Docker's embedded DNS (which returns SERVFAIL
-    //     on some Debian hosts with internal networks).
+    // 10. Record the proxy alias as a host mapping rather than formatting a
+    //     --add-host flag here. Docker's embedded DNS returns SERVFAIL for
+    //     internal networks on some Debian hosts, so the mapping is needed;
+    //     but the agent may be launched in container network mode, which
+    //     rejects the flag. Whichever container owns the network namespace
+    //     expands this.
     const overrides = { ...plan.outputOverrides };
     if (proxyIp && overrides.container) {
       overrides.container = {
         ...overrides.container,
-        extraRunArgs: [
-          ...overrides.container.extraRunArgs,
-          `--add-host=${PROXY_ALIAS}:${proxyIp}`,
+        extraHosts: [
+          ...overrides.container.extraHosts,
+          { host: PROXY_ALIAS, ip: proxyIp },
         ],
       };
     }

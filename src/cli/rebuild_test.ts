@@ -20,6 +20,7 @@ test("createRebuildInitialState: seeds workspace and container slices", () => {
     workDir: "/repo/worktree",
     mounts: [],
     env: { static: {}, dynamicOps: [] },
+    extraHosts: [],
     extraRunArgs: [],
     command: { agentCommand: [], extraArgs: [] },
     labels: {},

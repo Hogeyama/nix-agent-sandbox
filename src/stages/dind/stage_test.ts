@@ -183,6 +183,7 @@ test("DindStage: shared mode uses fixed names", () => {
       },
       dynamicOps: [],
     },
+    extraHosts: [],
     extraRunArgs: ["-v", "nas-dind-shared-tmp:/tmp/nas-shared"],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
@@ -296,6 +297,7 @@ test("DindStage: planner merges into existing container slice and preserves exis
       },
       dynamicOps: [],
     },
+    extraHosts: [],
     extraRunArgs: [
       "--shm-size",
       "2g",

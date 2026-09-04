@@ -476,6 +476,7 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
       },
       dynamicOps: [],
     },
+    extraHosts: [],
     extraRunArgs: ["--shm-size", "2g"],
     network: { mode: "network", name: "nas-session-net-test-session-123" },
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
@@ -798,6 +799,17 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
     mode: "network",
     name: "nas-session-net-test-session-123",
   });
+  // Docker's embedded DNS SERVFAILs the proxy alias on some hosts, so the
+  // resolved IP travels as a host mapping on the container plan rather than
+  // as a --add-host flag baked in here (a container-network-mode agent
+  // would reject the flag; whichever container owns the namespace expands
+  // the mapping itself).
+  expect(result.container?.extraHosts).toEqual([
+    { host: "nas-proxy", ip: "172.18.0.2" },
+  ]);
+  expect(
+    result.container?.extraRunArgs.some((arg) => arg.startsWith("--add-host=")),
+  ).toBe(false);
 });
 
 test("createProxyStage().run(): calls services and returns merged output", async () => {
@@ -885,6 +897,28 @@ test("createProxyStage().run(): calls services and returns merged output", async
   expect(result.container?.env.static.http_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
+  expect(result.container?.extraHosts).toEqual([
+    { host: "nas-proxy", ip: "172.18.0.2" },
+  ]);
+  expect(
+    result.container?.extraRunArgs.some((arg) => arg.startsWith("--add-host=")),
+  ).toBe(false);
+});
+
+test("createProxyStage().run(): does not add an extraHosts entry when the proxy service reports no IP", async () => {
+  const profile = makeProfile();
+
+  const result = await runStageWithFakes(profile, {
+    proxyService: makeProxyServiceFake({
+      createSessionNetwork: () =>
+        Effect.succeed({
+          teardown: () => Effect.void,
+          proxyIp: null,
+        }),
+    }),
+  });
+
+  expect(result.container?.extraHosts).toEqual([]);
 });
 
 test("createProxyStage().run(): gives both runtime consumers the same resolved document", async () => {
