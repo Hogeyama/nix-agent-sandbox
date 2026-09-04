@@ -28,6 +28,7 @@ import type {
   DtachSessionLike,
   HostExecPendingItemLike,
   NetworkPendingItemLike,
+  PortBindSessionLike,
   SessionRow,
 } from "../stores/types";
 import { createSseDispatch, SSE_EVENT_NAMES } from "./createSseDispatch";
@@ -46,6 +47,7 @@ interface FakeStores {
     setDtachSessions: ReturnType<typeof mock>;
   };
   audit: AuditStore & { setEntries: ReturnType<typeof mock> };
+  setPortBindings: ReturnType<typeof mock>;
 }
 
 function makeFakeStores(): FakeStores {
@@ -93,7 +95,15 @@ function makeFakeStores(): FakeStores {
     entries: () => [],
     setEntries: mock((_items: AuditLogEntryLike[]) => {}),
   };
-  return { sessions, sidecars, pending, pendingAction, terminals, audit };
+  return {
+    sessions,
+    sidecars,
+    pending,
+    pendingAction,
+    terminals,
+    audit,
+    setPortBindings: mock((_items: PortBindSessionLike[]) => {}),
+  };
 }
 
 describe("createSseDispatch", () => {
@@ -264,6 +274,28 @@ describe("createSseDispatch", () => {
     expect(stores.terminals.setDtachSessions).not.toHaveBeenCalled();
   });
 
+  test("'port-bindings' with valid envelope updates the binding snapshot", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+    const items: PortBindSessionLike[] = [
+      {
+        sessionId: "s1",
+        bindings: [
+          {
+            containerPort: 3000,
+            hostPort: 49152,
+            createdAt: "2026-09-05T00:00:00.000Z",
+          },
+        ],
+      },
+    ];
+
+    dispatch("port-bindings", { items });
+
+    expect(stores.setPortBindings).toHaveBeenCalledTimes(1);
+    expect(stores.setPortBindings).toHaveBeenCalledWith(items);
+  });
+
   test("malformed envelope (missing items / not an array / null / primitive) does not invoke any setter or reconcile", () => {
     const stores = makeFakeStores();
     const dispatch = createSseDispatch(stores);
@@ -294,6 +326,7 @@ describe("createSseDispatch", () => {
       "network:pending",
       "hostexec:pending",
       "terminal:sessions",
+      "port-bindings",
       "audit:logs",
     ]);
   });

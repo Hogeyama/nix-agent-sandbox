@@ -363,6 +363,27 @@ export function denyNetwork(
   });
 }
 
+export function bindPort(
+  sessionId: string,
+  containerPort: number,
+): Promise<{ hostPort: number; probe: string }> {
+  return request("POST", "/api/network/bind", {
+    sessionId,
+    containerPort,
+    hostPort: null,
+  });
+}
+
+export function unbindPort(
+  sessionId: string,
+  containerPort: number,
+): Promise<{ ok: boolean }> {
+  return request("POST", "/api/network/unbind", {
+    sessionId,
+    containerPort,
+  });
+}
+
 /**
  * Approve a pending host-exec request. The backend validates `scope`
  * against `once | capability` and persists the decision.

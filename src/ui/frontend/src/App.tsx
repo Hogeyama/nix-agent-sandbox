@@ -47,7 +47,7 @@ import { createSessionsStore } from "./stores/sessionsStore";
 import { findShellForAgent } from "./stores/shellMapping";
 import { createSidecarsStore } from "./stores/sidecarsStore";
 import { createTerminalsStore } from "./stores/terminalsStore";
-import type { SessionRow } from "./stores/types";
+import type { PortBindSessionLike, SessionRow } from "./stores/types";
 import { createUiStore } from "./stores/uiStore";
 
 // Width of the collapsed-rail rendered in place of the right pane and
@@ -63,6 +63,9 @@ export function App() {
   const pendingAction = createPendingActionStore();
   const terminals = createTerminalsStore();
   const audit = createAuditStore();
+  const [portBindings, setPortBindings] = createSignal<PortBindSessionLike[]>(
+    [],
+  );
   // Owns the older-history pool of the Audit settings page. The store
   // is created once for the lifetime of `App`, while the AuditPage
   // component itself is mounted/unmounted by the SettingsShell's
@@ -90,6 +93,7 @@ export function App() {
     pendingAction,
     terminals,
     audit,
+    setPortBindings,
   });
   const { connected } = useConnection("/api/events", dispatch, {
     eventNames: SSE_EVENT_NAMES,
@@ -353,6 +357,7 @@ export function App() {
           hostexec={pending.hostexec}
           sessionNameFor={sessionNameFor}
           activeSessionId={activeAgentSessionId}
+          portBindings={portBindings}
           showAllSessions={pendingShowAll}
           setShowAllSessions={setPendingShowAll}
           collapsed={ui.rightCollapsed}

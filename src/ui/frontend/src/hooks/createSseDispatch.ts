@@ -38,6 +38,7 @@ import type {
   DtachSessionLike,
   HostExecPendingItemLike,
   NetworkPendingItemLike,
+  PortBindSessionLike,
 } from "../stores/types";
 
 export interface SseDispatchStores {
@@ -47,6 +48,7 @@ export interface SseDispatchStores {
   pendingAction: PendingActionStore;
   terminals: TerminalsStore;
   audit: AuditStore;
+  setPortBindings: (items: PortBindSessionLike[]) => void;
 }
 
 export type SseDispatch = (name: string, data: unknown) => void;
@@ -62,6 +64,7 @@ export const SSE_EVENT_NAMES = [
   "network:pending",
   "hostexec:pending",
   "terminal:sessions",
+  "port-bindings",
   "audit:logs",
 ] as const;
 
@@ -116,6 +119,11 @@ export function createSseDispatch(stores: SseDispatchStores): SseDispatch {
       case "terminal:sessions": {
         const items = extractItems<DtachSessionLike>(data);
         if (items !== null) stores.terminals.setDtachSessions(items);
+        return;
+      }
+      case "port-bindings": {
+        const items = extractItems<PortBindSessionLike>(data);
+        if (items !== null) stores.setPortBindings(items);
         return;
       }
       case "audit:logs": {
