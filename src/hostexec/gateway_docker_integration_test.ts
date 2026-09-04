@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { chmod, copyFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createUnixServer, type Server } from "../lib/unix_socket.ts";
@@ -101,6 +101,20 @@ test.skipIf(!dockerProofAvailable)(
       controlServer = control.server;
       containerName = `nas-hostexec-gateway-${crypto.randomUUID()}`;
 
+      // The daemon has to see the bind source itself. Under DinD the only path
+      // it shares with this process is the temp volume the harness already
+      // uses, while the built client lives in the repo -- invisible to it. A
+      // copy beside the harness's own directories is visible either way, and
+      // mounting a copy proves the same boundary as mounting the artifact.
+      const stagedClientDir = path.join(testHarness.rootDir, "client");
+      await mkdir(stagedClientDir, { recursive: true });
+      const stagedClientPath = path.join(
+        stagedClientDir,
+        "nas-hostexec-client",
+      );
+      await copyFile(artifacts.clientPath!, stagedClientPath);
+      await chmod(stagedClientPath, 0o755);
+
       const externalMount = "/run/nas-hostexec";
       const clientMount = "/opt/nas/hostexec/libexec/nas-hostexec-client";
       const wrapperDir = "/tmp/nas-hostexec-wrapper";
@@ -125,7 +139,7 @@ test.skipIf(!dockerProofAvailable)(
         "--mount",
         `type=bind,src=${testHarness.externalSocketDir},dst=${externalMount},readonly`,
         "--mount",
-        `type=bind,src=${artifacts.clientPath!},dst=${clientMount},readonly`,
+        `type=bind,src=${stagedClientPath},dst=${clientMount},readonly`,
         "-e",
         `NAS_HOSTEXEC_SOCKET=${externalSocket}`,
         "-e",
@@ -159,7 +173,7 @@ test.skipIf(!dockerProofAvailable)(
             Source: testHarness.externalSocketDir,
             Destination: externalMount,
           },
-          { Source: artifacts.clientPath!, Destination: clientMount },
+          { Source: stagedClientPath, Destination: clientMount },
         ]),
       );
       expect(
