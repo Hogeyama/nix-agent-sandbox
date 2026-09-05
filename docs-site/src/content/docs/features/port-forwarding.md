@@ -7,6 +7,8 @@ description: コンテナから明示したホスト loopback サービスへ接
 
 `network.proxy.forwardPorts` は、ホストの `127.0.0.1:<port>` にあるサービスを、コンテナ内の同じ `localhost:<port>` として到達可能にします。各 session は TCP を直接公開せず、per-session の Unix socket relay を通ります。ホストのサービスを `0.0.0.0` に bind し直す必要はありません。
 
+コンテナ内の開発サーバーをホストから開く場合は方向が逆です。[コンテナポート公開](/nix-agent-sandbox/features/port-bind/)の `nas network bind` を使います。
+
 ## いつ使う？
 
 ローカル開発 API、DB、観測用 receiver をコンテナ内のツールから使うときだけ指定します。ホストのサービスへ接続する必要がなければ、空のままにしてください。
@@ -40,5 +42,6 @@ forward port はネットワークの HTTP scope 認可ではありません。�
 
 ## 関連ページ
 
+- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — コンテナの service を host loopback で開く逆方向の relay
 - [ネットワーク制御](/nix-agent-sandbox/features/network/) — 外向き HTTP(S) の scope / rule 認可
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `ProxyConfig.forwardPorts` の全定義

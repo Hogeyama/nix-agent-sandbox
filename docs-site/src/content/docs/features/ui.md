@@ -44,6 +44,7 @@ nas ui stop --port 4040
 
 - 左の Sessions pane では session の名前、状態、profile、作業ディレクトリ、worktree、ID と pending 件数を見て、選択・名前変更・terminal 表示を切り替えます。
 - 右の Pending pane では network と HostExec の request を、選択中の session または全 session で絞り込めます。カードの対象、rule、理由、承認範囲を確認して Allow / Deny を選びます。承認範囲はそのカードに表示された内容に従います。
+- 選択した session の `Ports · in` panel では、コンテナ内で検出した待ち受け port の公開、port 番号の直接指定、公開 URL、既存 binding の解除を操作します。
 - Settings の Sidecars では `dind` と `proxy` の sidecar の名前、種別、状態、uptime を確認し、それぞれを Stop できます。agent container はこの一覧には出ず、選択した session の terminal toolbar から Stop します。
 - Settings の Audit は承認・拒否の永続 audit log を表示します。domain、session ID の部分一致、active session のみで絞り込み、古い行を追加で読み込みます。Preferences では画面の font size と pane 幅を変えられます。
 - History は conversation を起点に、profile / agent / worktree、trace、span、token と cache token の集計、関連 invocation を表示します。データは UI を開いている間に更新されます。
@@ -68,6 +69,7 @@ loopback listener の前提と扱える control surface は、[UI daemon のリ�
 
 - [セッション・通知](/nix-agent-sandbox/features/sessions/) — dtach session と notification の設定
 - [ネットワーク制御](/nix-agent-sandbox/features/network/) — network approval の意味
+- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — `Ports · in` panel と同じ binding を CLI から操作する
 - [HostExec](/nix-agent-sandbox/features/hostexec/) — host command approval の意味
 - [Observability](/nix-agent-sandbox/features/observability/) — History が読む telemetry と保持期間
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `UiConfig` の全定義

@@ -25,6 +25,10 @@ secret frame、audit/history database
 
 sidecar-visible: network runtime dir（session registry、resolved authz document、
 per-session network broker socket。shared mitmproxy に read/write mount）
+
+host browser / process
+└─ 127.0.0.1:<host port> ──> host port-bind listener ──> per-session relay socket
+                                                       └─> container 127.0.0.1:<container port>
 ```
 
 shared proxy や shared DinD sidecar は複数 session に再利用され得ます。対して network broker、port relay、DBus proxy、HostExec gateway、xpra display は session ごとの runtime path を使います。共有 sidecar を別の信頼境界の session と混ぜないでください。
@@ -54,5 +58,6 @@ shared mitmproxy sidecar には `host.docker.internal:host-gateway` の host-gat
 
 - [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/) — workspace view と writable mount
 - [ネットワーク制御](/nix-agent-sandbox/features/network/) — upstream への HTTP(S) 認可
+- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — host loopback から container service への relay
 - [HostExec](/nix-agent-sandbox/features/hostexec/) — socket の役割と rule
 - [UI daemon](/nix-agent-sandbox/features/ui/) — host-local control surface

@@ -38,6 +38,7 @@ export default defineConfig({
             { label: "ファイル隔離・マウント", slug: "features/filesystem" },
             { label: "ネットワーク制御", slug: "features/network" },
             { label: "localhost ポート転送", slug: "features/port-forwarding" },
+            { label: "コンテナポート公開", slug: "features/port-bind" },
             { label: "HostExec", slug: "features/hostexec" },
             { label: "シークレット・認証情報", slug: "features/secrets" },
             { label: "Nix 統合", slug: "features/nix" },

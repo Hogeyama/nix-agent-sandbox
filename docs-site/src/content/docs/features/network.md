@@ -81,5 +81,6 @@ mask 前の body を host に保存する opt-in の範囲と retention は、[r
 ## 関連ページ
 
 - [シークレット・認証情報](/nix-agent-sandbox/features/secrets/) — secret disposition と mask の設定
-- [localhost ポート転送](/nix-agent-sandbox/features/port-forwarding/) — host loopback への明示的な経路
+- [localhost ポート転送](/nix-agent-sandbox/features/port-forwarding/) — コンテナから host loopback service へ接続する経路
+- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — コンテナの service を host loopback で開く逆方向の経路
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `NetworkConfig`、`Scope`、`Rule` の全定義
