@@ -7,6 +7,7 @@ import {
   type Config,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
@@ -197,6 +198,7 @@ function createTestInput(opts: {
     extraMounts: [],
     env: [],
     secrets: {},
+    guide: DEFAULT_GUIDE_CONFIG,
   };
   const config: Config = {
     default: "test-profile",

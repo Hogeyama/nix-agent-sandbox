@@ -7,6 +7,7 @@ import {
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_NIX_CONFIG,
@@ -33,6 +34,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     env: [],
     secrets: {},
     hook: DEFAULT_HOOK_CONFIG,
+    guide: DEFAULT_GUIDE_CONFIG,
     ...overrides,
   };
 }
