@@ -99,7 +99,9 @@ interface GuideFacts {
 }
 ```
 
-`hostexec` の事実は `profile.hostexec.prompt` のみから導く。`hostexec.secrets` と `hostexec.rules`（`inheritEnv` によるシークレット注入を含みうる）は読まない。
+`hostexec` の事実は `profile.hostexec.prompt` と、各ルールの `approval` フィールドのみから導く。`approval` が必要なのは、承認プロンプトが起きうるのは `approval = "prompt"` のルールが存在するときだけであり、`prompt.enable` だけでは「無反応になりうるか」を判定できないため（ルールに一致しないコマンドは hostexec の対象にならず、`src/hostexec/broker.ts` が `null` を返して素通しする）。
+
+`hostexec.secrets` は読まない。ルールからも `approval` 以外は読まない — とくに `env` と `inheritEnv` はシークレット注入を含みうる。
 
 ### 本文のセクションと出現条件
 
