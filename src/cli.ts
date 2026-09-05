@@ -66,6 +66,7 @@ import {
   DockerBuildServiceLive,
   resolveBuildProbes,
 } from "./stages/docker_build.ts";
+import { createGuideStage, GuideServiceLive } from "./stages/guide.ts";
 import {
   createHostExecStage,
   HostExecBrokerServiceLive,
@@ -354,6 +355,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       ForwardPortRelayServiceLive,
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
+      GuideServiceLive.pipe(Layer.provide(FsServiceLive)),
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       MaskFilterServiceLive.pipe(Layer.provide(hostServiceLayer)),
@@ -456,6 +458,7 @@ export function createCliPipelineBuilder({
       .add(createMountStage(input, mountProbes))
       .add(createMaskFilterStage(input))
       .add(createHostExecStage(input))
+      .add(createGuideStage(input))
       // ObservabilityStage materializes the observability slice and, when
       // enabled, acquires the per-session OTLP receiver and injects the OTLP
       // envs into the container slice. ProxyStage downstream picks up the
