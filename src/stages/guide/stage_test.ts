@@ -123,7 +123,10 @@ describe("planGuide", () => {
     expect(plan?.mounts[0]?.target).toBe(
       `${GUIDE_CLAUDE_ADD_DIR}/.claude/skills/nas-sandbox`,
     );
-    expect(plan?.extraArgs).toEqual(["--add-dir", GUIDE_CLAUDE_ADD_DIR]);
+    // A single token: `--add-dir` is variadic (`--add-dir <directories...>`),
+    // so emitting the value as a separate argv token would let it absorb
+    // whatever CLI passthrough arg follows (e.g. the user's prompt).
+    expect(plan?.extraArgs).toEqual([`--add-dir=${GUIDE_CLAUDE_ADD_DIR}`]);
   });
 
   test("never mounts the guide writable", () => {
@@ -174,8 +177,7 @@ describe("createGuideStage", () => {
     expect(fake.writes[0]?.content).toContain("name: nas-sandbox");
     expect(result.container?.mounts).toHaveLength(1);
     expect(result.container?.command.extraArgs).toEqual([
-      "--add-dir",
-      GUIDE_CLAUDE_ADD_DIR,
+      `--add-dir=${GUIDE_CLAUDE_ADD_DIR}`,
     ]);
   });
 });

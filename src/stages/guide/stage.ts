@@ -34,7 +34,11 @@ function containerTarget(
   if (agent === "claude") {
     return {
       target: `${GUIDE_CLAUDE_ADD_DIR}/.claude/skills/${GUIDE_SKILL_NAME}`,
-      extraArgs: ["--add-dir", GUIDE_CLAUDE_ADD_DIR],
+      // `claude --help` declares `--add-dir <directories...>` as variadic:
+      // emitted as two argv tokens, it swallows every following non-option
+      // argument (including the user's prompt). A single `--add-dir=...`
+      // token cannot absorb anything after it.
+      extraArgs: [`--add-dir=${GUIDE_CLAUDE_ADD_DIR}`],
     };
   }
   // codex と copilot はどちらも ~/.agents/skills を読む。nas はホストの
