@@ -35,6 +35,7 @@ import type {
 } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { DindService } from "./dind_service.ts";
+import { logDebug } from "effect/Effect";
 
 export type { DindStageOptions } from "../../docker/dind.ts";
 
@@ -217,7 +218,7 @@ export function createDindStageWithOptions(
       if (plan === null) {
         return Effect.succeed({});
       }
-      logInfo(
+      logDebug(
         `[nas] DinD: ports already bound in the shared namespace: ${plan.reservedPorts.join(", ")} — publishing a container on one of these fails with EADDRINUSE`,
       );
       return runDind(plan);
