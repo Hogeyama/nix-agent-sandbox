@@ -31,7 +31,9 @@ host browser / process
                                                        └─> container 127.0.0.1:<container port>
 ```
 
-shared proxy や shared DinD sidecar は複数 session に再利用され得ます。対して network broker、port relay、DBus proxy、HostExec gateway、xpra display は session ごとの runtime path を使います。共有 sidecar を別の信頼境界の session と混ぜないでください。
+mitmproxy sidecar は複数 session に再利用され得ます。DinD daemon と mutable data、一時 volume、`registry-mirror` process は session ごとに分かれますが、public Docker Hub の blob / manifest を保存する `nas-registry-cache` volume だけは後の session でも再利用します。private registry と mutable Docker/containerd state はこの cache では共有されません。cache hit では upstream request がないため、新しい network approval も発生しません。
+
+network broker、port relay、DBus proxy、HostExec gateway、xpra display も session ごとの runtime path を使います。共有される proxy や永続 cache は、session ごとの broker / process と同じ境界ではありません。
 
 shared mitmproxy sidecar には `host.docker.internal:host-gateway` の host-gateway mapping もあります。scope が `host.docker.internal:<port>` を明示して許可すれば、sidecar はその TCP host service へ到達できます。この経路は per-session Unix socket relay ではないため、host service を socket だけで隔離できるとは考えず、host-gateway target は特に狭く設定します。
 

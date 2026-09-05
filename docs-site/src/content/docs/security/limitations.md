@@ -22,7 +22,7 @@ description: 対応 runtime、agent binary、TTY、cleanup と機能別の制約
 - DBus proxy は host UID または `xdg-dbus-proxy` がなければ有効化を skip します。`DBUS_SESSION_BUS_ADDRESS` がないことだけでは skip せず、`unix:path=/run/user/$UID/bus` を source address として合成します。その bus が実在・利用可能でなければ proxy の起動または readiness が失敗します。設定だけで session bus を作る機能ではありません。
 - X11/xpra には `xpra`、`xauth`、xpra が起動する Xvfb が必要です。host `DISPLAY` がないと auto-attach は失敗しますが、container と X server は継続します。WSL などで `/tmp/.X11-unix` が read-only の場合は host の `unshare` と `mount` binary で private user/mount namespace 内に `mount --bind` を実行します。unprivileged user namespace と mount namespace が利用可能で、両 binary がなければ display setup は失敗します。
 - session scope が正常に閉じれば broker、xpra、secret frame は cleanup を試みます。しかし SIGKILL や finalizer の失敗では、mask-filter runtime の per-session directory と mode `0600` の plaintext `mask-secrets` frame が残り得ます。この runtime に reaper はなく、nas を再起動しても残存 frame が自動で消えるとは限りません。host operator は live session が使っていないことを確認してから、残存する該当 session directory を手動で安全に cleanup してください。`nas network gc` は stale network runtime 用であり、mask-filter frame を回収する command でも、稼働中 broker の state を消す command でもありません。
-- shared DinD sidecar は session 終了時に削除されません。不要になったものは `nas container list` で確認して `nas container clean` を使います。worktree cleanup は active session を検査しません。
+- DinD sidecar、mutable data volume、一時 volume、`registry-mirror` は session 専用で、通常の teardown で削除されます。agent container がまだ DinD の network namespace を使っている場合や cleanup に失敗した場合は残り得るため、unused になってから `nas container list` で確認し、`nas container clean` を使います。永続 pull cache の `nas-registry-cache` はこの cleanup でも削除されません。`docker.shared = true` は deprecated な互換 field であり、DinD 有効時は validation error です。worktree cleanup は active session を検査しません。
 
 ## 実装上の境界
 

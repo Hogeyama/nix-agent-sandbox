@@ -54,8 +54,10 @@ nas container clean
 
 `list` は nas 管理 container の名前、kind、running 状態、開始時刻を表示します。
 `clean` は session から使用されていない nas sidecar container を削除し、空になった nas
-network と volume も回収します。実行中の agent container や、その agent に接続中の
-sidecar は対象外です。この unused-sidecar protection は `worktree clean` には適用されません。
+network と session 用の一時 volume も回収します。実行中の agent container や、その agent に接続中の
+sidecar は対象外です。public Docker Hub pull を session 間で再利用する永続 volume
+`nas-registry-cache` は、unused sidecar がなくても意図的に削除しません。この unused-sidecar
+protection は `worktree clean` には適用されません。
 削除対象がなければ `No unused nas sidecars found.` と表示されます。
 
 ## 関連ページ

@@ -36,7 +36,7 @@ description: capability を必要最小限に保ち、承認と保存データ�
 
 ## sidecar と display の後始末
 
-- shared DinD は session 間で daemon data を共有します。異なる project / trust boundary を同じ shared sidecar に接続しません。不要になった sidecar は [運用の cleanup](/nix-agent-sandbox/operations/maintenance/) で対象を確認してから消します。
+- `docker.shared` は使わず、古い profile に残っていれば削除します。DinD daemon と mutable state は session 専用ですが、public Docker Hub の `nas-registry-cache` は session 間で残ります。cache hit では新しい network approval が発生しないため、approval の有無を image の信頼確認にせず、必要なら digest を固定します。不要になった session sidecar は [運用の cleanup](/nix-agent-sandbox/operations/maintenance/) で対象を確認してから消します。
 - xpra viewer に focus したときは keyboard と clipboard が agent application に届きます。表示中の agent を信頼できないなら display forwarding を有効にしません。
 - `nas worktree clean` は active-session guard を持たず、`nas-*` 名の worktree と orphan `nas/*` branch を name-based に対象にします。agent/container が停止したことと対象 list を確認してから実行します。
 
@@ -44,5 +44,5 @@ description: capability を必要最小限に保ち、承認と保存データ�
 
 - [機能別リスク](../risks/) — 既定値と resource の一覧
 - [承認キューを操作する](/nix-agent-sandbox/operations/approvals/) — scope の実際の意味
-- [Docker in Docker](/nix-agent-sandbox/features/docker/) — shared sidecar の扱い
+- [Docker in Docker](/nix-agent-sandbox/features/docker/) — session state と永続 pull cache の扱い
 - [X11 / xpra](/nix-agent-sandbox/features/display/) — input boundary
