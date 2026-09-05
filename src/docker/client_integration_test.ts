@@ -54,6 +54,20 @@ const DOCKER_DAEMON_AVAILABLE = (() => {
   }
 })();
 
+/**
+ * Pull the shared image once, before any case's timeout is running. A DinD
+ * daemon starts with an empty image store and pulls through the session proxy,
+ * which is slow enough that the 5s default budget went on the pull rather than
+ * on the assertion -- and the case that paid it was whichever ran first. A
+ * failure here is left to the cases, which fail on their own assertions.
+ */
+if (DOCKER_DAEMON_AVAILABLE) {
+  await Bun.spawn(["docker", "pull", "-q", TEST_IMAGE], {
+    stdout: "ignore",
+    stderr: "ignore",
+  }).exited;
+}
+
 async function makeDockerBindableTempDir(prefix: string): Promise<string> {
   const base = SHARED_TMP ?? "/tmp";
   const dir = `${base}/${prefix}${crypto.randomUUID().slice(0, 8)}`;
@@ -168,6 +182,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
     const exists = await dockerImageExists(TEST_IMAGE);
     expect(exists).toEqual(true);
   },
+  30_000,
 );
 
 test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
@@ -205,6 +220,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   },
+  30_000,
 );
 
 // --- dockerBuild with labels ---
@@ -225,6 +241,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   },
+  30_000,
 );
 
 // --- dockerRunDetached ---
