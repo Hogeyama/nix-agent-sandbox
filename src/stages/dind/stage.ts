@@ -17,6 +17,7 @@
  */
 
 import { Effect, type Scope } from "effect";
+import { logDebug } from "effect/Effect";
 import {
   DIND_INTERNAL_PORT,
   DIND_ROOTLESS_SOCKET_PATH,
@@ -35,7 +36,6 @@ import type {
 } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { DindService } from "./dind_service.ts";
-import { logDebug } from "effect/Effect";
 
 export type { DindStageOptions } from "../../docker/dind.ts";
 
