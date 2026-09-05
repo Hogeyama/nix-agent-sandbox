@@ -305,6 +305,51 @@ test("configureClaude: uses install script when claude binary not found", () => 
   expect(result.agentCommand[2]?.includes("install.sh")).toEqual(true);
 });
 
+test("configureClaude: bootstrap command forwards appended arguments to claude", () => {
+  // Tokens appended after `bash -c <script>` become the script's own
+  // positional parameters, not arguments to `claude`, unless the script
+  // explicitly forwards them via "$@". The launch stage appends extra argv
+  // (e.g. --add-dir, profile.agentArgs) after the whole agentCommand array,
+  // so those tokens land exactly where bash -c's $0, $1, ... would consume
+  // them if the script did not forward.
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.agentCommand[2]).toContain('claude "$@"');
+  // A 4th token is required as $0 for "$@" to start at the first real
+  // argument — without it, the first appended arg would be consumed as $0
+  // and silently excluded from "$@".
+  expect(result.agentCommand.length).toBe(4);
+  expect(result.agentCommand[3]).toEqual("claude");
+
+  // Prove the $0/"$@" mechanics against a real bash. The real script also
+  // runs `curl | bash` first (network-dependent, unsuitable for a unit
+  // test), so this substitutes a harmless `printf` for the trailing
+  // `claude "$@"` clause asserted above, keeping the same shape: a script
+  // ending in `"$@"`, invoked with the same 4-token agentCommand followed
+  // by the launch stage's appended argv (--add-dir, profile.agentArgs).
+  const appended = [
+    "--dangerously-skip-permissions",
+    "--add-dir=/opt/nas/guide",
+  ];
+  const script = 'printf "%s\\n" "$@"';
+  const proc = Bun.spawnSync(
+    ["bash", "-c", script, result.agentCommand[3] ?? "", ...appended],
+    { stdout: "pipe", stderr: "pipe", stdin: "ignore" },
+  );
+  const stdout = new TextDecoder().decode(proc.stdout).trim().split("\n");
+  expect(stdout).toEqual(appended);
+});
+
 test("configureClaude: preserves existing dockerArgs", () => {
   const probes: ClaudeProbes = {
     claudeDirExists: false,

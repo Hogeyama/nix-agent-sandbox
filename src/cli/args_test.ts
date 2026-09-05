@@ -11,6 +11,7 @@ import type { Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -208,6 +209,7 @@ function baseProfile(): Profile {
     extraMounts: [],
     env: [],
     secrets: {},
+    guide: DEFAULT_GUIDE_CONFIG,
   };
 }
 

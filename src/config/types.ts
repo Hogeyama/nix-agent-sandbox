@@ -206,6 +206,16 @@ export interface MaskConfig {
   apply?: string[];
 }
 
+/** エージェント向けガイド設定 */
+export interface GuideConfig {
+  enable: boolean;
+  extra?: string;
+}
+
+export const DEFAULT_GUIDE_CONFIG: GuideConfig = {
+  enable: false,
+};
+
 /** プロファイル */
 export interface Profile {
   agent: AgentType;
@@ -226,6 +236,7 @@ export interface Profile {
   hostexec?: HostExecConfig;
   /** 秘密の名前付きレジストリ。 */
   secrets: Record<string, SecretConfig>;
+  guide: GuideConfig;
   mask?: MaskConfig;
 }
 

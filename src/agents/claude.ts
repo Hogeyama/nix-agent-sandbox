@@ -72,7 +72,14 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     : [
         "bash",
         "-c",
-        "curl -fsSL https://claude.ai/install.sh | bash && claude",
+        // Tokens appended after `bash -c <script>` become the script's own
+        // $0, $1, ... — not arguments to `claude` — so anything the launch
+        // stage appends (e.g. --add-dir, profile.agentArgs) would otherwise
+        // be silently dropped. Forward them explicitly via "$@"; the extra
+        // "claude" token supplies the required $0 placeholder that "$@"
+        // does not include.
+        'curl -fsSL https://claude.ai/install.sh | bash && claude "$@"',
+        "claude",
       ];
 
   return { dockerArgs: [...args], envVars, agentCommand };

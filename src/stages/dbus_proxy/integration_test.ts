@@ -8,6 +8,7 @@ import {
   type Config,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
@@ -48,6 +49,7 @@ function makeProfile(): Profile {
     extraMounts: [],
     env: [],
     secrets: {},
+    guide: DEFAULT_GUIDE_CONFIG,
   };
 }
 

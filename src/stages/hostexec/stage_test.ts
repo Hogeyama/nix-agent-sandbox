@@ -4,6 +4,7 @@ import { Cause, Effect, Exit, Option, Scope } from "effect";
 import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_REQUEST_BODY_AUDIT_CONFIG,
@@ -63,6 +64,7 @@ function makeProfile(): Profile {
     extraMounts: [],
     env: [],
     secrets: {},
+    guide: DEFAULT_GUIDE_CONFIG,
     hostexec: {
       prompt: {
         enable: true,

@@ -86,6 +86,9 @@ class Profile {
 
   /// 秘密のマスクをどの層に適用するか。`null` で全層無効。
   mask: MaskConfig? = null
+
+  /// エージェント向けガイド設定
+  guide: GuideConfig = new {}
 }
 
 class WorktreeConfig {
@@ -800,4 +803,17 @@ class HostExecConfig {
   secrets: Mapping<String, SecretConfig> = new {}
 
   rules: Listing<HostExecRule> = new {}
+}
+
+// ---------------------------------------------------------------------------
+// Guide
+// ---------------------------------------------------------------------------
+
+/// エージェント向けガイド設定
+class GuideConfig {
+  /// ガイドをコンテナに供給するか。既定は無効（opt-in）。
+  enable: Boolean = false
+
+  /// 生成されたガイドの末尾に追記される、環境固有の注意書き。
+  extra: String? = null
 }

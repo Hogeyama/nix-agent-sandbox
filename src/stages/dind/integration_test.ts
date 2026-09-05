@@ -15,6 +15,7 @@ import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
@@ -80,6 +81,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     extraMounts: [],
     env: [],
     secrets: {},
+    guide: DEFAULT_GUIDE_CONFIG,
     ...rest,
   };
 }

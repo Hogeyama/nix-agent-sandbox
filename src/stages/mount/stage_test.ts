@@ -14,6 +14,7 @@ import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_OBSERVABILITY_CONFIG,
@@ -75,6 +76,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     extraMounts: [],
     env: [],
     secrets: {},
+    guide: DEFAULT_GUIDE_CONFIG,
     ...rest,
   };
 }
@@ -1468,7 +1470,8 @@ test("MountStage: planner emits container patch with structured mounts and dynam
     agentCommand: [
       "bash",
       "-c",
-      "curl -fsSL https://claude.ai/install.sh | bash && claude",
+      'curl -fsSL https://claude.ai/install.sh | bash && claude "$@"',
+      "claude",
     ],
     extraArgs: ["--safe"],
   });
@@ -1575,7 +1578,8 @@ test("MountStage run(): creates directories via MountSetupService and returns re
       agentCommand: [
         "bash",
         "-c",
-        "curl -fsSL https://claude.ai/install.sh | bash && claude",
+        'curl -fsSL https://claude.ai/install.sh | bash && claude "$@"',
+        "claude",
       ],
       extraArgs: [],
     },
