@@ -6,10 +6,16 @@
 import * as path from "node:path";
 import { Cause, Context, Effect, Layer } from "effect";
 import { FsService } from "../../services/fs.ts";
+import { GUIDE_SKILL_NAME } from "./content.ts";
 
 export interface GuideWritePlan {
-  /** Directory to place `SKILL.md` in. This is the skill's own directory. */
-  readonly dir: string;
+  /**
+   * Session directory: the unit this service owns. `write` creates it (and
+   * the skill directory beneath it) and `close` removes it whole, so no
+   * empty per-session directory is left behind once the skill directory
+   * itself is gone.
+   */
+  readonly sessionDir: string;
   readonly content: string;
 }
 
@@ -29,30 +35,43 @@ export const GuideServiceLive: Layer.Layer<GuideService, never, FsService> =
     GuideService,
     Effect.gen(function* () {
       const fs = yield* FsService;
+
+      // fs.rm ends in Effect.orDie, so a real failure (EBUSY, EPERM, ...)
+      // surfaces as a defect, not a typed error. Effect.catchAll only sees
+      // the (empty) error channel and would let the defect escape. Use
+      // catchAllCause to intercept it, and log rather than swallow so a
+      // leftover directory is diagnosable.
+      const removeSessionDir = (sessionDir: string): Effect.Effect<void> =>
+        fs
+          .rm(sessionDir, { recursive: true, force: true })
+          .pipe(
+            Effect.catchAllCause((cause) =>
+              Effect.logWarning(
+                `GuideService: failed to remove ${sessionDir}: ${Cause.pretty(cause)}`,
+              ),
+            ),
+          );
+
       return GuideService.of({
-        write: (plan) =>
-          Effect.gen(function* () {
-            yield* fs.mkdir(plan.dir, { recursive: true, mode: 0o755 });
-            yield* fs.writeFile(path.join(plan.dir, "SKILL.md"), plan.content, {
+        write: (plan) => {
+          const skillDir = path.join(plan.sessionDir, GUIDE_SKILL_NAME);
+          return Effect.gen(function* () {
+            yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o755 });
+            yield* fs.mkdir(skillDir, { recursive: true, mode: 0o755 });
+            yield* fs.writeFile(path.join(skillDir, "SKILL.md"), plan.content, {
               mode: 0o644,
             });
-            return {
-              close: () =>
-                fs.rm(plan.dir, { recursive: true, force: true }).pipe(
-                  // fs.rm ends in Effect.orDie, so a real failure (EBUSY,
-                  // EPERM, ...) surfaces as a defect, not a typed error.
-                  // Effect.catchAll only sees the (empty) error channel and
-                  // would let the defect escape the finalizer. Use
-                  // catchAllCause to intercept it, and log rather than
-                  // swallow so a leftover directory is diagnosable.
-                  Effect.catchAllCause((cause) =>
-                    Effect.logWarning(
-                      `GuideService: failed to remove ${plan.dir}: ${Cause.pretty(cause)}`,
-                    ),
-                  ),
-                ),
-            };
-          }),
+            return { close: () => removeSessionDir(plan.sessionDir) };
+          }).pipe(
+            // If mkdir succeeds but writeFile then dies, the effect above
+            // never returns a handle, so Effect.acquireRelease's caller
+            // never gets to register a release for what was already
+            // created on disk. Clean up here instead, on the failure path
+            // itself, so a partially-created session directory cannot
+            // outlive this call.
+            Effect.onError(() => removeSessionDir(plan.sessionDir)),
+          );
+        },
       });
     }),
   );

@@ -18,7 +18,14 @@ export const GUIDE_CLAUDE_ADD_DIR = "/opt/nas/guide";
 export type GuideStageInput = StageInput & Pick<PipelineState, "container">;
 
 export interface GuidePlan {
-  readonly hostDir: string;
+  /**
+   * Session directory: `<runtime>/guide/<sessionId>`. This is the unit
+   * GuideService owns — it creates this directory (and the skill directory
+   * beneath it) and removes the whole thing on close, so no empty
+   * `<sessionId>` directory is left behind once the skill directory itself
+   * is gone.
+   */
+  readonly sessionDir: string;
   readonly content: string;
   readonly mounts: readonly MountSpec[];
   readonly extraArgs: readonly string[];
@@ -59,11 +66,11 @@ export function planGuide(input: GuideStageInput): GuidePlan | null {
   const containerHome: string | undefined = input.container.env.static.NAS_HOME;
   if (containerHome === undefined) return null;
 
-  const hostDir = path.join(
+  const sessionDir = path.join(
     resolveRuntimeSubdir(input.host, "guide"),
     input.sessionId,
-    GUIDE_SKILL_NAME,
   );
+  const skillDir = path.join(sessionDir, GUIDE_SKILL_NAME);
   const { target, extraArgs } = containerTarget(
     input.profile.agent,
     containerHome,
@@ -71,9 +78,9 @@ export function planGuide(input: GuideStageInput): GuidePlan | null {
   const facts = profileToGuideFacts(input.profile, input.container.workDir);
 
   return {
-    hostDir,
+    sessionDir,
     content: renderGuide(facts),
-    mounts: [{ source: hostDir, target, readOnly: true }],
+    mounts: [{ source: skillDir, target, readOnly: true }],
     extraArgs,
   };
 }
@@ -91,7 +98,7 @@ export function createGuideStage(
 
         const service = yield* GuideService;
         yield* Effect.acquireRelease(
-          service.write({ dir: plan.hostDir, content: plan.content }),
+          service.write({ sessionDir: plan.sessionDir, content: plan.content }),
           (handle) =>
             handle
               .close()
