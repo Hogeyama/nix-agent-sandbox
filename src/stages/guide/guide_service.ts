@@ -56,7 +56,12 @@ export const GuideServiceLive: Layer.Layer<GuideService, never, FsService> =
         write: (plan) => {
           const skillDir = path.join(plan.sessionDir, GUIDE_SKILL_NAME);
           return Effect.gen(function* () {
-            yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o755 });
+            // The session directory never leaves the host, so it stays
+            // private (0o700), matching every other per-session runtime
+            // directory in this repository. The skill directory is the
+            // bind-mount source and must stay readable inside the
+            // container, so it keeps the more permissive mode.
+            yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o700 });
             yield* fs.mkdir(skillDir, { recursive: true, mode: 0o755 });
             yield* fs.writeFile(path.join(skillDir, "SKILL.md"), plan.content, {
               mode: 0o644,

@@ -8,7 +8,7 @@ import { GUIDE_SKILL_NAME } from "./content.ts";
 import { GuideService, GuideServiceLive } from "./guide_service.ts";
 
 describe("GuideServiceLive", () => {
-  test("writes SKILL.md into the session directory and removes the whole session directory on close", async () => {
+  test("writes SKILL.md into the session directory (0o700) and removes the whole session directory on close", async () => {
     const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-guide-"));
     const sessionDir = path.join(runtimeDir, "sess-1");
     try {
@@ -27,6 +27,11 @@ describe("GuideServiceLive", () => {
       );
 
       expect(await readFile(skillPath, "utf8")).toBe("---\nname: x\n---\n");
+      // Matches every other per-session runtime directory in this
+      // repository (display, dbus-proxy, maskfs all use 0o700). Under the
+      // /tmp fallback (XDG_RUNTIME_DIR absent), a world-readable session
+      // directory would let any local user reach the skill content below.
+      expect((await stat(sessionDir)).mode & 0o777).toBe(0o700);
 
       await Effect.runPromise(handle.close());
 
