@@ -77,6 +77,18 @@ const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const DOCKER_HOST = process.env.DOCKER_HOST;
 const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
 
+/**
+ * The two pipeline cases below build the sandbox image, and building it needs
+ * the network: the Dockerfile's `apt-get install` has to reach the archive.
+ * Inside a nas sandbox the daemon is the DinD sidecar, whose build containers
+ * have no route out -- the base image pull still succeeds, because dockerd
+ * itself is proxied, but the install step resolves no package and the build
+ * exits 100. Without this predicate the failure names the entrypoint the cases
+ * exist to check, which is not what broke.
+ */
+const USING_DIND = SHARED_TMP !== undefined && DOCKER_HOST !== undefined;
+const imageBuildable = !USING_DIND;
+
 async function isDockerAvailable(): Promise<boolean> {
   try {
     const exitCode = await Bun.spawn(["docker", "info"], {
@@ -953,7 +965,7 @@ async function withFakeCodexProject(
   }
 }
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
   "CLI E2E: launches agent through nas pipeline",
   async () => {
     await withFakeCodexProject(async (projectDir, env) => {
@@ -971,7 +983,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   30_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
   "CLI E2E: agent writes into mounted workspace",
   async () => {
     await withFakeCodexProject(async (projectDir, env) => {
