@@ -27,9 +27,10 @@ How it works
     that name, so naming this one "env" would send every env in the
     container to the broker.
 
-Enabling it
+The rule that enables it
 
-    Add a rule to .nas/config.pkl:
+    This repository's .nas/config.pkl already carries it. Another repository
+    needs its own copy:
 
         new {
             id = "hostexec"
@@ -43,7 +44,7 @@ Enabling it
     The approval key covers the whole argv, so approving
     `hostexec bun run test` for a session approves nothing else.
 
-Without the rule
+Where the rule is missing
 
     The command still runs -- in the container -- and this script says so
     on stderr. A command that silently changes which machine it runs on is
@@ -75,7 +76,7 @@ esac
 # no rule matched and nothing was forwarded anywhere.
 if [[ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]]; then
     echo "[hostexec] no rule matched: running in the container, not on the host." >&2
-    echo "[hostexec] see 'hostexec --help' for the rule to add." >&2
+    echo "[hostexec] see 'hostexec --help' for the rule this needs." >&2
 fi
 
 exec "$@"

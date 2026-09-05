@@ -46,25 +46,6 @@ bun run test:unit              # unit のみ（Docker 不要、高速、安全�
 bun run test:integration       # integration + tests/ 配下すべて
 ```
 
-## `bun run test` はホスト、それ以外はコンテナ内
-
-hostexec のルールは `argv0 = "bun"` かつ `argRegex = "^run test$"` にのみ一致する。
-つまり **`bun run test` だけがホストで実行され、承認プロンプトを出す**。
-`bun test <args>` はどんな引数でもコンテナ内で走り、承認は増えない。
-
-この2つは同じ結果を返さない。`docker build` がネットワークを要するテストは
-ホストでしか通らない。サンドボックス内の DinD ではビルドコンテナに外向きの経路が
-無く、`apt-get` が何も解決できないためである（ベースイメージの pull は proxy 済みの
-dockerd が行うので成功する）。該当テストは `imageBuildable` のような述語で
-サンドボックス内では skip する。**コンテナ内の green は、ホストの green より弱い主張**
-である点に注意する。
-
-開発中は Docker に触れない unit test を絞って実行し、最終確認で `bun run test` を
-**1 回だけ**実行する。integration file は import 時の availability probe
-（例: `docker info`）も実行し得るため、test body が skip でも無害ではない。
-承認を減らすために Docker policy を迂回したり、絶対パスや permissive rule を
-使ったりしてはならない。
-
 ## Unit テストで許可される依存
 
 - temp dir: `mkdtemp(path.join(tmpdir(), "nas-<area>-"))`（`node:fs/promises` + `node:os`）
@@ -96,6 +77,13 @@ test.skipIf(!dockerAvailable)("...", async () => { ... });
 `dockerAvailable` / `hasPkl` / `hasNix` / `python3` / `canBindMount` /
 ビルド済みバイナリのパス有無など。**必要な能力ごとに述語を分ける** —
 一つにまとめると、Docker はあるが pkl が無い環境で理由の分からない失敗になる。
+
+### テストの実行環境
+
+このプロジェクトの開発自体もnasサンドボックスで行われるため、
+テストはコンテナ内で走る。そのため、いくつかのテストケースはスキップされてしまう。
+そのようなケースを実行するためには `./scripts/hostexec bun ...` を使うとよい。
+これはユーザーの手動承認を必要とするため、利用は最小限に絞ること。
 
 ### cleanup を必ず書く
 
