@@ -244,6 +244,15 @@ local commonHostexec: HostExecConfig = new {
       approval = "allow"
       fallback = "container"
     }
+    new {
+      // エスケープハッチ
+      id = "hostexec"
+      match { argv0 = "./scripts/hostexec" }
+      cwd { mode = "workspace-or-session-tmp" }
+      inheritEnv { mode = "unsafe-inherit-all" }
+      approval = "prompt"
+      fallback = "container"
+    }
   }
 }
 

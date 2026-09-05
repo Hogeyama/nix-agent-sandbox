@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Run a command on the host instead of inside the nas sandbox.
+#
+# There is no client call in here, and that is the point: nas intercepts this
+# script by its path, so in a sandbox the exec never reaches this file. What
+# the broker runs is this same file on the host, where its only job is to
+# become the command that followed it. See --help.
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+usage: hostexec <command> [args...]
+       hostexec -- <command> [args...]
+
+Run a command on the host instead of inside the nas sandbox.
+
+    hostexec bun run test     # the full suite, on the host
+
+How it works
+
+    nas intercepts this script by its path, so inside a sandbox the exec
+    never reaches the file. The broker runs this same file on the host,
+    where it execs whatever followed it. Nothing here talks to the broker.
+
+    Matching on a path rather than a bare name keeps the wrapper directory
+    clean: a rule whose argv0 is a plain command installs a PATH symlink of
+    that name, so naming this one "env" would send every env in the
+    container to the broker.
+
+Enabling it
+
+    Add a rule to .nas/config.pkl:
+
+        new {
+            id = "hostexec"
+            match { argv0 = "./scripts/hostexec" }
+            cwd { mode = "workspace-or-session-tmp" }
+            inheritEnv { mode = "unsafe-inherit-all" }
+            approval = "prompt"
+            fallback = "container"
+        }
+
+    The approval key covers the whole argv, so approving
+    `hostexec bun run test` for a session approves nothing else.
+
+Without the rule
+
+    The command still runs -- in the container -- and this script says so
+    on stderr. A command that silently changes which machine it runs on is
+    the confusion this script exists to remove.
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+    usage >&2
+    exit 64
+fi
+
+case "$1" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --)
+        shift
+        if [[ $# -eq 0 ]]; then
+            usage >&2
+            exit 64
+        fi
+        ;;
+esac
+
+# Set for the container by the hostexec stage, absent from the host process
+# whose environment the broker passes on. Reaching this line with it set means
+# no rule matched and nothing was forwarded anywhere.
+if [[ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]]; then
+    echo "[hostexec] no rule matched: running in the container, not on the host." >&2
+    echo "[hostexec] see 'hostexec --help' for the rule to add." >&2
+fi
+
+exec "$@"
