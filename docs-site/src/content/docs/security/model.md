@@ -1,65 +1,50 @@
 ---
-title: 設計思想と信頼境界
-description: nas が分離する経路と、設定で追加される host capability を確認する
+title: 隔離の範囲
+description: ホストとコンテナの共有範囲、設定の信頼、承認の分離
 ---
 
-nas の network schema は `network.fallback`、scope `fallback`、WebSocket を既定で deny にします。scope や rule がない request はその fallback に従いますが、設定では `allow` / `review` を選べ、Anthropic preset も fallback を `review` にします。したがって deny-by-default は変更不能な不変条件ではなく、安全側の既定値です。host service の明示的な経路には Unix socket を使いますが、それだけが host 到達経路ではありません。ただし Docker コンテナだけを敵対的な agent や repository に対する完全な境界とは見なしません。workspace、agent の既存設定・認証 directory、opt-in の mount、broker に委ねた capability は、その構成で信頼した範囲です。
+nas は Docker コンテナと通信制御で、エージェントのアクセスを制限します。ただし、書き込み可能な共有ファイルや許可したホスト実行を通じて、エージェントはホストに変更を加えられます。
 
-## セッションの経路
+## ファイルとプロセス
 
-```text
-agent container
-├─ workspace view (通常は rw。maskfs 時は FUSE の表示ビュー)
-├─ per-session Unix sockets
-│  ├─ HostExec exec socket ──> host HostExec broker ──> 許可した host command
-│  ├─ forward-port relay ───> host 127.0.0.1:<明示した port>
-│  ├─ DBus proxy socket ────> filtered host session bus
-│  └─ X11 socket + cookie ──> per-session xpra/Xvfb
-└─ HTTP(S) proxy ───────────> shared mitmproxy sidecar
-                                   ├─ per-session Unix socket（認可制御・decision）
-                                   │  └──────────────> host session broker / trust boundary
-                                   └─ 許可された HTTP(S) data path ──> upstream network
+作業フォルダーと、選択したエージェントの既存設定・認証情報は読み書き可能で共有します。
 
-host-only: HostExec control socket (approve / deny / pending)、HostExec control state、
-secret frame、audit/history database
-
-sidecar-visible: network runtime dir（session registry、resolved authz document、
-per-session network broker socket。shared mitmproxy に read/write mount）
-
-host browser / process
-└─ 127.0.0.1:<host port> ──> host port-bind listener ──> per-session relay socket
-                                                       └─> container 127.0.0.1:<container port>
-```
-
-mitmproxy sidecar は複数 session に再利用され得ます。DinD daemon と mutable data、一時 volume、`registry-mirror` process は session ごとに分かれますが、public Docker Hub の blob / manifest を保存する `nas-registry-cache` volume だけは後の session でも再利用します。private registry と mutable Docker/containerd state はこの cache では共有されません。cache hit では upstream request がないため、新しい network approval も発生しません。
-
-network broker、port relay、DBus proxy、HostExec gateway、xpra display も session ごとの runtime path を使います。共有される proxy や永続 cache は、session ごとの broker / process と同じ境界ではありません。
-
-shared mitmproxy sidecar には `host.docker.internal:host-gateway` の host-gateway mapping もあります。scope が `host.docker.internal:<port>` を明示して許可すれば、sidecar はその TCP host service へ到達できます。この経路は per-session Unix socket relay ではないため、host service を socket だけで隔離できるとは考えず、host-gateway target は特に狭く設定します。
-
-## 守る不変条件
-
-- 名前付き secret の解決と secret frame の読取りは host 側だけで行います。生の secret をコンテナの file や通常の環境変数へ mount しません。HostExec rule の明示的な `env` 注入だけは、許可された host command に対する例外です。
-- HostExec の stdout / stderr も、`mask.filter` と profile の `mask.apply` を正しく設定すれば host 側 filter で mask されます。注入 registry だけを設定しても mask 対象にはなりません。
-- コンテナへ mount する HostExec **exec socket** は execute / fallback 専用です。approve、deny、pending 一覧を扱う **control socket** は host broker directory にだけ置かれ、コンテナへ公開しません。
-- host service の socket を TCP で広く公開する代わりに、必要な session に必要な Unix socket を渡します。それでも、その socket の先にある service の権限は agent が使えます。
+エージェントはホストの UID/GID で動きます。共有ファイルの変更はホストに残り、コンテナ内だけの変更は終了後に残りません。追加マウント、Nix、認証情報の共有範囲は[機能別リスク](../risks/)を参照してください。
 
 <span id="repository-trust"></span>
 
-## repository を信頼する境界
+## プロジェクト設定の信頼
 
-`.nas/config.pkl` は HostExec、mount、network、`env` command、worktree `onCreate` を host 側へ影響させられます。nas は `.nas/` 直下のユーザー作成 `.pkl` の content hash を記録し、変更時は再信頼を求めます。確認後だけ `nas config trust` を実行してください。`NAS_CONFIG_TRUST_ALL=1` はこの gate を完全に bypass するため、CI / test 以外で使うべきではありません。
+プロジェクト設定は、共有ファイル、通信、HostExec に加え、環境変数の取得コマンドや worktree の `onCreate` を通してホストでコマンドを実行できます。
 
-この gate は、既に信頼した設定や agent が利用する capability を無害化するものではありません。何を mount し、どの socket、rule、approval を許すかは、[機能別リスク](../risks/) と [推奨設定](../recommendations/) で個別に確認してください。
+nas は `.nas/` 直下のユーザー作成 `.pkl` ファイルの内容を記録し、変更時に再承認を求めます。内容を確認したうえで `nas config trust` を実行してください。`NAS_CONFIG_TRUST_ALL=1` はこの確認を無効にします。
 
-## コンテナ境界の範囲
+設定の信頼は、その設定が参照する実行ファイルやスクリプトの安全性を保証しません。エージェントが変更できるファイルをホストで実行する場合は、その変更もホストに影響します。
 
-コンテナ layer 内だけの変更は session 終了後に残りませんが、workspace と writable bind mount の変更は host に残ります。コンテナ内 agent は host UID/GID に合わせて動くため、書込み可能に渡した実体には host user として変更を加えられます。Docker の namespace、sidecar 分離、proxy authorization は重要な層ですが、脆弱性、誤った mount、許可済み broker capability、同一 host の信頼できない利用者までを自動で防ぐ保証ではありません。
+## 通信経路
 
-## 関連ページ
+| 用途 | 経路 |
+| --- | --- |
+| 外部 HTTP(S) | プロキシを経由し、セッションごとの scope・ルールで認可。 |
+| ホストの localhost サービス | `forwardPorts` で指定したポートへ、セッション専用ソケットで中継。 |
+| コンテナの開発サーバー | `nas network bind` で、ホストの localhost からコンテナへ中継。 |
+| ホスト上のコマンド | HostExec の実行用ソケットから、ホストの仲介プロセスへ要求。 |
+| DBus・X11 | 許可したサービスや画面のソケットだけを共有。 |
 
-- [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/) — workspace view と writable mount
-- [ネットワーク制御](/nix-agent-sandbox/features/network/) — upstream への HTTP(S) 認可
-- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — host loopback から container service への relay
-- [HostExec](/nix-agent-sandbox/features/hostexec/) — socket の役割と rule
-- [UI daemon](/nix-agent-sandbox/features/ui/) — host-local control surface
+外部通信は既定で拒否しますが、設定やプリセットで許可・承認待ちに変更できます。`host.docker.internal:<port>` を scope で許可すると、プロキシからホストの TCP サービスへも接続できます。ホストへの経路が専用ソケットだけとは限りません。
+
+## 秘密と承認の分離
+
+名前付き秘密の取得と、マスク用の生値の読み取りはホストで行います。その生値をエージェント用ファイルとして共有しません。ただし、元の認証ファイルや通常の環境変数を別途共有すれば、エージェントはそこから値を読めます。
+
+HostExec の実行用ソケットと承認用ソケットは別です。承認用ソケットはコンテナへ渡さず、エージェント自身による承認を防ぎます。出力のマスクには、[シークレット・認証情報](/nix-agent-sandbox/features/secrets/)の設定が必要です。
+
+## セッション間の共有
+
+HTTP(S) プロキシは複数セッションで再利用される場合があります。プロキシには、セッション登録情報、通信ルール、認可用ソケットを含むネットワーク実行ディレクトリを読み書き可能で共有します。
+
+DinD の Docker daemon と作業データはセッション専用です。公開 Docker Hub イメージの取得キャッシュだけは後のセッションでも再利用し、キャッシュからの取得では新たな通信承認が発生しません。詳細は [Docker in Docker](/nix-agent-sandbox/features/docker/)を参照してください。
+
+## 制約
+
+コンテナの脆弱性、誤ったマウント、許可済みコマンドの悪用、同じホストの信頼できない利用者まで防ぐ保証はありません。特に[ブラウザ UI](/nix-agent-sandbox/features/ui/#注意点)は、同じホストの利用者を信頼する前提です。

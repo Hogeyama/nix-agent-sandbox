@@ -1,67 +1,63 @@
 ---
-title: Docker イメージを再ビルドする
-description: nas image、過去の Worktree、未使用 sidecar を安全に整理する
+title: イメージ・作業環境の管理
+description: Docker イメージの再構築、Worktree と未使用コンテナの削除
 ---
 
-## Docker イメージを再ビルドする
+nas の Docker イメージの再構築と、終了後の作業環境の削除に使うコマンドです。
 
-nas image を作り直すには `nas rebuild` を使います。image があれば最初に通常の Docker
-image removal を試み、成功後に build pipeline を走らせます。
+## イメージの再構築
+
+既存イメージを削除して再ビルドします。
 
 ```sh
 nas rebuild
-nas rebuild --force
 ```
 
-`--force`（`-f`）は `docker rmi --force` を使うので、image を参照中の container がある
-場合にも削除できます。実行中の session を止める操作ではありませんが、その session が
-使う image を強制削除する前に終了させるのが安全です。
+`nas rebuild --force` は参照中のコンテナがあってもイメージを強制削除するため、先に該当セッションを終了してください。セッション自体を停止するコマンドではありません。
 
-## 過去の Worktree を整理する
+## Worktree の削除
 
-`nas worktree` は ownership metadata を持ちません。現在の selector は git worktree の path の
-basename が `nas-` で始まるかだけです。したがって nas が作ったものだけでなく、ユーザーが
-作った `nas-*` basename の worktree も対象になります。
+まず対象を確認します。
 
 ```sh
 nas worktree list
 nas worktree list --format json
-nas worktree clean
-nas worktree clean -f
-nas worktree clean -f -B
 ```
 
-`list` は既定 subcommand で、path、branch、base、HEAD を表示します。`clean` は確認を
-求めて matching な `nas-*` worktree を force remove し、`-f` / `--force` はその確認を
-省略します。`-B` / `--delete-branch` を併用すると、削除した worktree の orphan branch も
-削除します。さらに cleanup の開始時点で orphan だった**すべての** `nas/*` branch も削除
-するため、この invocation で worktree を削除したかどうかには依存しません。
+対象は、ディレクトリ名が `nas-` で始まる Git worktree です。nas が作成した記録ではなく名前で選ぶため、手動作成した同名形式の worktree も含まれます。
 
-> **警告:** `nas worktree clean` に active-session guard はありません。実行中または detach
-> 済み session が使う worktree も matching なら削除できます。detach は terminal を外すだけで
-> agent を停止しません。session が実際に終了したことを確認してから実行してください。
-> `nas session list` は multiplex を有効にした dtach session だけを一覧にするため、そこに
-> 表示がないことは non-multiplexed session の停止証明になりません。該当する agent process
-> または container も手動で確認し、`nas worktree list` の対象を確認してから削除します。
+**削除前に、使用中のエージェントとコンテナを終了してください。** 使用中でも削除対象になります。ターミナルの切り離しは停止ではありません。また、`nas session list` は dtach のセッションだけを表示するため、一覧が空でもすべて停止したとは限りません。
 
-## 未使用 sidecar を整理する
+確認後、対象の worktree を未コミットの変更ごと削除します。必要な変更を保存してから実行してください。ブランチは既定では残ります。
+
+```sh
+nas worktree clean
+```
+
+| オプション | 動作 |
+| --- | --- |
+| `-f`, `--force` | 確認を省略。 |
+| `-B`, `--delete-branch` | 削除した worktree のブランチに加え、開始時点で worktree に属していなかったすべての `nas/*` ブランチも削除。 |
+
+## 未使用コンテナの削除
+
+`list` で名前、種類、稼働状態、開始時刻を確認します。
 
 ```sh
 nas container list
 nas container list --format json
-nas container clean
 ```
 
-`list` は nas 管理 container の名前、kind、running 状態、開始時刻を表示します。
-`clean` は session から使用されていない nas sidecar container を削除し、空になった nas
-network と session 用の一時 volume も回収します。実行中の agent container や、その agent に接続中の
-sidecar は対象外です。public Docker Hub pull を session 間で再利用する永続 volume
-`nas-registry-cache` は、unused sidecar がなくても意図的に削除しません。この unused-sidecar
-protection は `worktree clean` には適用されません。
-削除対象がなければ `No unused nas sidecars found.` と表示されます。
+`clean` は未使用の補助コンテナ、空のネットワーク、セッション用の一時ボリュームを削除します。
+
+実行中のエージェントと、それが使用する補助コンテナは削除しません。公開 Docker Hub の取得キャッシュ `nas-registry-cache` も保持します。この使用中の判定は `worktree clean` にはありません。
+
+```sh
+nas container clean
+```
 
 ## 関連ページ
 
 - [Worktree](/nix-agent-sandbox/features/worktree/)
 - [Docker in Docker](/nix-agent-sandbox/features/docker/)
-- [セッション・通知](/nix-agent-sandbox/features/sessions/)
+- [異常終了後のデータ](/nix-agent-sandbox/security/limitations/#異常終了後のデータ)

@@ -1,12 +1,13 @@
 ---
-title: 監査ログを確認する
-description: Network と HostExec の認可記録を CLI と UI で絞り込む
+title: 監査ログ
+description: 通信・ホスト実行の許可と拒否の記録、検索、保持期間
 ---
 
-## 認可の記録を絞り込む
+通信と HostExec の許可・拒否は、`nas audit` またはブラウザ UI の Settings → Audit で確認できます。エージェントの[実行履歴・利用量](/nix-agent-sandbox/features/observability/)とは別の記録です。
 
-`nas audit` は Network と HostExec の許可・拒否を記録する audit database を読みます。
-既定の開始日は当日の UTC date です。
+## CLI の検索条件
+
+既定では当日の UTC 日付以降の記録を表示します。
 
 ```sh
 nas audit
@@ -15,33 +16,30 @@ nas audit --session sess_abc123 --domain network
 nas audit --since 2026-09-01 --domain hostexec --json
 ```
 
-`--since YYYY-MM-DD` は開始日、`--session ID` は session ID、`--domain network|hostexec` は
-domain を絞ります。`--json` は JSON array を出力し、通常表示で同じ request-policy
-outcome が連続する場合の行の集約を行いません。別の audit database を調べる必要がある
-運用では `--audit-dir DIR` も使えます。
+| オプション | 対象 |
+| --- | --- |
+| `--since YYYY-MM-DD` | 開始日以降の記録。 |
+| `--session ID` | 指定セッション。 |
+| `--domain network\|hostexec` | 通信または HostExec。 |
+| `--json` | 連続した同じ判定を集約せず、JSON 配列で出力。 |
+| `--audit-dir DIR` | 指定ディレクトリの監査 DB。 |
 
-## request body は別の高感度 opt-in
+## UI の検索条件
 
-authorization audit record には decision、理由、target または command、rule / request
-policy metadata が入ります。これは request body を既定で保存する機能ではありません。
-`network.requestBodyAudit.enable = true` を明示したときだけ、mask 前の正確な request body を
-host audit database に保存しようとします。body の保存に失敗・上限超過した場合は status
-だけを audit metadata に残し、認可処理は続きます。
+Settings → Audit では、種類、セッション ID の部分一致、実行中のセッションで絞り込めます。古い記録は追加で読み込めます。
 
-raw body は `retentionSeconds`、`maxBodyBytes`、`maxTotalBytes` で短く制限してください。
-期限切れ body は後の保存または detail 読み取りで削除され、容量不足では古い body row が
-先に削除されます。これは audit log metadata を消さず、`audit_log` 自体には自動 retention
-がありません。host 側で両方の保持と database access を運用してください。
+## リクエスト本文の保存
 
-## UI でも確認する
+通常は判定、理由、通信先またはコマンド、ルールなどを記録します。`network.requestBodyAudit.enable = true` を指定した場合だけ、マスク前のリクエスト本文も保存します。秘密値やプロンプト、ツール入力を含み得ます。
 
-[UI daemon](/nix-agent-sandbox/features/ui/) の Settings にある Audit は、同じ永続 audit log を
-表示します。domain、session ID の部分一致、active session で絞り込み、古い行をさらに
-読み込みます。UI は local trusted user 向けの操作面なので、共有 host では audit data と
-承認操作にアクセスできるユーザーを信頼済みの人に限定してください。
+`retentionSeconds` で保持期間、`maxBodyBytes` と `maxTotalBytes` で容量を制限してください。保存失敗や上限超過では状態だけを記録し、認可処理は続けます。
 
-## 関連ページ
+## 保存先
 
-- [Observability](/nix-agent-sandbox/features/observability/)
-- [ネットワーク制御](/nix-agent-sandbox/features/network/)
-- [HostExec](/nix-agent-sandbox/features/hostexec/)
+監査 DB は `$XDG_DATA_HOME/nas/audit/audit.db`、`XDG_DATA_HOME` が未設定なら `~/.local/share/nas/audit/audit.db` に保存します。`--audit-dir DIR` では `DIR/audit.db` を読みます。
+
+## 保持期間と削除
+
+期限切れの本文は、次の本文保存または詳細読み取り時に削除します。総量上限を超える場合は古い本文から削除します。
+
+**本文の削除は、許可・拒否の記録を削除しません。** `audit_log` 自体に自動削除はないため、ホスト側で監査 DB の保持と削除を管理してください。DB ファイルと UI の閲覧権限も確認してください。

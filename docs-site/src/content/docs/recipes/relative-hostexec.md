@@ -1,67 +1,52 @@
 ---
-title: 相対パスコマンドを prompt 承認で移譲
-description: ./gradlew の residual risk を確認して HostExec する
+title: 相対パスコマンドのホスト実行
+description: Gradle wrapper のホスト実行と作業ディレクトリの制約
 ---
 
-## 得られること
+作業フォルダーの `./gradlew assembleDebug` を、承認後にホストで実行する例です。相対パスは実行時の作業ディレクトリから解決されるため、ルートの `gradlew` だけに固定する設定ではありません。
 
-ワークスペースで実行した `./gradlew assembleDebug` を HostExec の prompt に送れます。相対
-`argv0` と引数は絞れますが、現行の cwd 制約では workspace root の wrapper に固定できません。
+## 前提条件
 
-## 前提
+- エージェントの API への通信許可を設定済み。Claude Code の例は[クイックスタート](/nix-agent-sandbox/getting-started/quick-start/)を参照。
 
-- ワークスペース直下に `gradlew` がある。
-- ホストで Gradle wrapper が必要とする JDK などを利用できる。
-- 実行ごとに、承認画面の cwd と integrity 状態を確認できる。
-- この残余リスクを受け入れられない場合は、workspace 外の immutable な絶対パス wrapper を
-  用意する。
+- 作業フォルダーに `gradlew` があり、ホストに必要な JDK などがある。
+- 実行ごとに、承認画面の作業ディレクトリとファイルの変更状態を確認する。
+
+## 設定例
+
+エージェントとの通信を設定済みの `claude` プロファイルに、以下の設定を追加します。編集先は[プロファイルの編集](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)を参照してください。既存の設定項目がある場合は、その中に要素を追加し、通信先やルールを残してください。
 
 ```pkl
-amends "Schema.pkl"
-
-profiles {
-  ["android"] {
-    agent = "claude"
-    hostexec = new HostExecConfig {
-      rules = new Listing {
-        new HostExecRule {
-          id = "gradlew-assemble-debug"
-          match { argv0 = "./gradlew"; argRegex = "^assembleDebug$" }
-          cwd { mode = "workspace-only" }
-          inheritEnv { mode = "minimal" }
-          approval = "prompt"
-        }
-      }
+hostexec = new HostExecConfig {
+  rules = new Listing {
+    new HostExecRule {
+      id = "gradlew-assemble-debug"
+      match { argv0 = "./gradlew"; argRegex = "^assembleDebug$" }
+      cwd { mode = "workspace-only" }
+      inheritEnv { mode = "minimal" }
+      approval = "prompt"
     }
   }
 }
 ```
 
+設定を確認して `nas config trust` を実行後、ホストでルールの一致を確認します。
+
 ```sh
-nas hostexec test --profile android -- ./gradlew assembleDebug
+nas hostexec test --profile claude -- ./gradlew assembleDebug
 ```
 
-## 権限と注意点
+`nas claude` で起動し、エージェントが対象コマンドを要求したら、一回限りで承認します。
 
-## 重要: workspace root には固定できない
+## 作業ディレクトリの制約
 
-`workspace-only` は workspace の子 directory も許します。相対 `argv0 = "./gradlew"` は
-root のファイル名を固定するのではなく、現在の cwd から見た literal な `./gradlew` に一致
-します。そのため agent が nested directory に `gradlew` を作り、そこから同じ引数で実行
-すると prompt に到達します。root の `gradlew` を `ro` mount にしても nested wrapper を
-保護することにはなりません。
+`workspace-only` は子ディレクトリも許します。エージェントが子ディレクトリに別の `gradlew` を作り、そこから実行しても同じルールに一致します。ルートのファイルを読み取り専用にしても、この要求は防げません。
 
-この recipe は自動的に安全な固定 wrapper を作るものではなく、**one-shot 承認を人が確認
-するための構成**です。承認画面で cwd が期待する root か、`[CHANGED-SINCE-START]` がないか、
-command と引数が期待どおりかを確認し、`--scope once` で承認してください。session 中の
-capability 再利用は選ばないでください。workspace 由来の wrapper をホストで実行する危険を
-受け入れられない場合は、workspace 外に置いた immutable な絶対パス wrapper だけを rule に
-指定します。
+承認前に、作業ディレクトリ、コマンド、引数、`[CHANGED-SINCE-START]` の有無を確認し、`--scope once` を選んでください。セッション中の承認再利用は避けてください。
 
-この current runtime の制約は、[HostExec のリスク](/nix-agent-sandbox/security/risks/#hostexec)と[制約・注意事項](/nix-agent-sandbox/security/limitations/#実装上の境界)にもまとめています。
+この確認に依存できない場合は、作業フォルダー外の、エージェントが変更できない絶対パスのスクリプトをルールに指定します。
 
 ## 関連ページ
 
 - [HostExec](/nix-agent-sandbox/features/hostexec/)
-- [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/)
-- [承認キューを操作する](/nix-agent-sandbox/operations/approvals/)
+- [通信・ホスト実行の承認](/nix-agent-sandbox/operations/approvals/)

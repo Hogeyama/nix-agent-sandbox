@@ -1,26 +1,13 @@
 ---
 title: Docker in Docker
-description: rootless DinD sidecar による隔離 Docker 環境
+description: エージェント用 Docker 環境の設定とデータの保持期間
 ---
 
-## どんな機能？
+エージェントに Docker イメージのビルド、テスト用コンテナ、Compose を使わせるには `docker.enable = true` を設定します。セッション専用の Docker daemon を別コンテナで起動し、エージェントに接続先を渡します。ホストの Docker ソケットは共有しません。
 
-`docker.enable` は session 専用の `docker:dind-rootless` sidecar を起動し、agent コンテナにその daemon への `DOCKER_HOST` を渡します。agent は host Docker daemon ではなく、この隔離された Docker 環境を使います。
+## 設定例
 
-## いつ使う？
-
-agent に image build、テスト用コンテナ、Compose などを実行させるときに有効にします。Docker を使わない profile は既定の `enable = false` のままにしてください。host には nas 自身が sidecar を起動・管理するための Docker CLI / daemon が必要です。
-
-## 主要な設定項目
-
-| 設定 | 既定 | 用途 |
-| --- | --- | --- |
-| `docker.enable` | `false` | session 専用の rootless DinD sidecar を起動する。 |
-| `docker.shared` | `false` | 後方互換のためだけに残る deprecated field。`true` は使用できない。 |
-
-## 最小の設定例
-
-session ごとに独立した sidecar を使う例です。session 終了時に sidecar と一時 volume は teardown されます。
+[対象プロファイル](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)に追加します。
 
 ```pkl
 docker = new DockerConfig {
@@ -28,28 +15,35 @@ docker = new DockerConfig {
 }
 ```
 
-`docker.shared` は以前の設定との読み込み互換性のためだけに残っています。`docker.enable = true` と `docker.shared = true` を併用すると validation error になります。古い profile に `shared` があれば、その field を削除してください。
+`docker.enable = true` と `docker.shared = true` の併用は設定エラーです。古いプロファイルに `shared` があれば削除してください。
 
-## session state と pull cache のライフサイクル
+## 設定項目
 
-DinD daemon、image・container などの mutable Docker/containerd state、DinD data volume、agent と共有する一時 volume は session 専用です。通常の session teardown は DinD sidecar と二つの volume に加え、その session の `registry-mirror` sidecar も削除します。異常終了などで unused resource が残った場合は [`nas container clean`](/nix-agent-sandbox/operations/maintenance/) で回収できます。
+| 設定 | 既定 | 用途 |
+| --- | --- | --- |
+| `docker.enable` | `false` | セッション専用の Docker daemon を補助コンテナで起動。 |
+| `docker.shared` | `false` | 廃止済みの互換フィールド。`true` は使用不可。 |
 
-一方、public Docker Hub の blob と manifest は Docker volume `nas-registry-cache` に保存され、後の session でも再利用されます。共有されるのはこの pull cache だけで、DinD daemon、mutable state、private registry の image は session 間で共有されません。`nas container clean` もこの cache volume は意図的に残します。
+## データとキャッシュの保持期間
 
-Docker Hub pull はまず session 専用の `registry-mirror` を使います。cache miss では mirror からその session の proxy と network authorization を通って upstream へ request するため、scope / rule の allow または review approval が必要です。cache hit は upstream request を発生させないため、新しい network approval も発生しません。mirror を起動できない場合は、同じ session proxy を使う direct pull に fallback します。
+| 対象 | セッション終了後 |
+| --- | --- |
+| Docker daemon、作成したイメージ・コンテナ、作業用ボリューム | 通常の終了処理で削除。 |
+| セッション専用の `registry-mirror` コンテナ | 通常の終了処理で削除。 |
+| 公開 Docker Hub の取得キャッシュ `nas-registry-cache` | 次のセッションでも再利用。`nas container clean` でも保持。 |
 
-## 注意点・セキュリティへの影響
+非公開レジストリのイメージや、Docker の作業データはセッション間で共有しません。異常終了などで残った未使用コンテナは[管理コマンド](/nix-agent-sandbox/operations/maintenance/#未使用コンテナの削除)で削除できます。
 
-sidecar は rootless Docker daemon ですが、起動する sidecar コンテナ自体には `--privileged` が必要です。この権限は agent コンテナへは渡りません。agent は `tcp://<sidecar>:2375` の `DOCKER_HOST` と共有一時 volume を受け取るだけで、`docker.enable` によって host の `/var/run/docker.sock` は自動で mount されません。
+キャッシュにないイメージの取得には、[ネットワーク制御](/nix-agent-sandbox/features/network/)で通信許可が必要です。拒否されると `403 Forbidden` で取得に失敗します。キャッシュから取得した場合は外部通信も新たな承認も発生しません。ミラーを起動できない場合は、同じセッションのプロキシを経由して直接取得します。
 
-sidecar は起動後に session の内部 network へ接続され、既定 bridge から切り離されます。egress は session proxy を経由します。
+## 注意点
 
-cache miss や direct pull の request では、まず `network.scopes` の `targets` に一致する scope が選択され、その scope 内で rule の `onMatch` または scope の `fallback` が `allow` となるか、`review` で承認される必要があります。どの scope の target にも一致しない registry は `network.fallback` の `review` または `deny` で処理されます。最終的に拒否されると proxy は `403 Forbidden` を返し、pull は失敗します。
+エージェント用の Docker daemon は rootless ですが、それを動かす補助コンテナには `--privileged` が必要です。エージェントのコンテナにはこの権限を渡しません。
 
-privileged sidecar と永続 pull cache の範囲は、[Docker in Docker のリスク](/nix-agent-sandbox/security/risks/#dind)を参照してください。
+補助コンテナはセッションの内部ネットワークに接続し、外向き通信にはプロキシを使います。[Docker in Docker のリスク](/nix-agent-sandbox/security/risks/#dind)も参照してください。
 
 ## 関連ページ
 
-- [ネットワーク制御](/nix-agent-sandbox/features/network/) — sidecar を含む egress の認可
-- [localhost ポート転送](/nix-agent-sandbox/features/port-forwarding/) — host の開発サービスが必要な場合の明示的な経路
+- [ネットワーク制御](/nix-agent-sandbox/features/network/) — Docker イメージ取得時の通信許可
+- [localhost ポート転送](/nix-agent-sandbox/features/port-forwarding/) — ホストの開発サービスが必要な場合の明示的な経路
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `DockerConfig` の全定義

@@ -1,58 +1,46 @@
 ---
-title: X11 アプリを表示する
-description: xpra の Xvfb-backed display で headed application を起動する
+title: X11 アプリの表示
+description: xpra による GUI アプリの表示手順と起動時のエラー
 ---
 
-## 得られること
+コンテナで起動した GUI アプリを、ホストの xpra ビューアーに表示する手順です。
 
-agent が起動する headed browser などを、ホストの通常の X display を渡さずに表示できます。
-nas は xpra の detached X server を session ごとに起動し、Xvfb socket と per-session
-cookie だけをコンテナへ渡します。
+## 前提条件
 
-## 前提
+- エージェントの API への通信許可を設定済み。Claude Code の例は[クイックスタート](/nix-agent-sandbox/getting-started/quick-start/)を参照。
 
-- ホストの PATH に `xpra` と `xauth` がある。xpra が起動する Xvfb も必要である。
-- headed application はコンテナ image 内にインストール済みである。
-- viewer を表示する host desktop session がある。
+- ホストの PATH に `xpra`、`xauth` があり、xpra が `Xvfb` を起動できる。
+- ホストにデスクトップ環境がある。
+- 使用する GUI アプリをコンテナのイメージに導入済み。
+
+## 設定例
+
+エージェントとの通信を設定済みの `claude` プロファイルに、以下の設定を追加します。編集先は[プロファイルの編集](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)を参照してください。既存の設定項目がある場合は、その中に要素を追加し、通信先やルールを残してください。
 
 ```pkl
-amends "Schema.pkl"
-
-profiles {
-  ["browser"] {
-    agent = "claude"
-    display {
-      sandbox = "xpra"
-      size = "1920x1080"
-    }
-  }
+display {
+  sandbox = "xpra"
+  size = "1920x1080"
 }
 ```
 
-起動後、agent に headed application を起動させます。たとえば Playwright を既に image に
-入れているなら、agent 内で `playwright-cli --headed` を使います。nas は host 側で
-`xpra attach :<display-number>` も自動起動し、`[nas] xpra :<display-number> ready
-(auto-attached).` と表示します。通常は手動で attach し直す必要はありません。
+## 起動
 
-## 権限と注意点
+設定を確認して `nas config trust` を実行し、`nas claude` で起動します。その後、エージェントに GUI アプリを起動させます。Playwright CLI を導入済みなら `playwright-cli --headed` を使えます。
 
-`display.sandbox = "xpra"` は host の既存 X session やその cookie をコンテナへ
-マウントしません。一方、xpra viewer の focused keyboard 入力と貼り付けた clipboard は
-agent 側 application に渡ります。表示・入力する内容をその agent に任せてよい場合だけ
-attach してください。
+nas はホストで `xpra attach :<display-number>` を自動実行します。通常は手動接続は不要です。
 
-`[nas] xpra not found on PATH` は xpra を、`[nas] xauth not found on PATH` は xauth を
-導入してから再試行します。Xvfb 起動で止まる場合は、xpra が利用できる Xvfb を host に
-導入し、session log に出る xpra log path を確認します。host に `DISPLAY` がないなどで
-auto-attach が失敗しても、agent container と X server は動作を続けます。session directory
-の `xpra-attach.log` を確認して host display 側を直してください。WSL で `/tmp/.X11-unix`
-が read-only の場合、nas は private mount namespace を使うため、unprivileged user namespace
-と mount namespace が利用可能で、host の `unshare` と `mount` binary が必要です。nas は
-private namespace 内で `mount --bind` を実行するため、どれかがない場合は display setup が失敗します。
+## 起動時のエラー
 
-viewer へ渡る keyboard / clipboard と session socket の範囲は、[display forwarding のリスク](/nix-agent-sandbox/security/risks/#display-forwarding)を確認してください。
+| 状態 | 確認事項 |
+| --- | --- |
+| `xpra not found on PATH` | ホストへの xpra の導入と PATH。 |
+| `xauth not found on PATH` | ホストへの xauth の導入と PATH。 |
+| Xvfb の起動失敗 | Xvfb の導入状況と、セッションログに記載された xpra ログ。 |
+| ビューアーの接続失敗 | ホストの `DISPLAY` と、セッションディレクトリの `xpra-attach.log`。コンテナと X server は動作を続行。 |
 
-## 関連ページ
+WSL などで `/tmp/.X11-unix` が読み取り専用の場合は、ホストの `unshare` と `mount`、非特権ユーザー名前空間とマウント名前空間が必要です。
 
-- [X11 / xpra](/nix-agent-sandbox/features/display/)
-- [セッション・通知](/nix-agent-sandbox/features/sessions/)
+## 入力の共有範囲
+
+ホストの既存 X server や認証 Cookie は共有しません。ただし、xpra 画面へのキー入力と貼り付けは、エージェント側のアプリに渡ります。詳しくは [X11 / xpra](/nix-agent-sandbox/features/display/)を参照してください。

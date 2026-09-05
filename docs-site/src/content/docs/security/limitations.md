@@ -1,37 +1,31 @@
 ---
 title: 制約・注意事項
-description: 対応 runtime、agent binary、TTY、cleanup と機能別の制約
+description: 対応環境、非対話実行、追加機能の制約
 ---
 
-このページは現在の実装で確認できる制約です。構成を広げる前に、[機能別リスク](../risks/)も確認してください。
+対応環境は[インストール](/nix-agent-sandbox/getting-started/installation/)、設定によるアクセス権限の違いは[機能別リスク](../risks/)を参照してください。
 
-## runtime と配布物
+## 非対話実行
 
-- nas は Linux と Docker 20.10 以降を前提にします。Docker が利用できない host や、Docker daemon を操作できない user では agent container を起動できません。
-- 使用する Claude Code、GitHub Copilot CLI、OpenAI Codex CLI は公式の standalone binary が必要です。npm 版は `node_modules` tree に依存し、単一 binary の bind mount で起動する設計には対応しません。
-- release artifact は `x86_64-linux` と `aarch64-linux` 向けです。現在 aarch64 release は動作未確認です。対応 artifact があることは、その host / agent / Docker 組合せの動作保証ではありません。
+引数なしの対話起動には TTY が必要です。CI やスクリプトでは、エージェントにプロンプトなどの引数を渡してください。未信頼の設定は対話確認ができず失敗するため、事前に内容を確認して `nas config trust` を実行します。
 
-## terminal と file ownership
+## 追加機能の前提条件
 
-- 引数なしの interactive agent 起動には TTY が必要です。non-TTY の CI / script では agent に prompt option など明示的な引数を渡します。untrusted config は non-TTY では trust prompt を出せず失敗するため、事前に確認して `nas config trust` を実行します。
-- entrypoint は setup のため root で始まりますが、agent 実行前に host UID/GID へ drop します。workspace や writable bind mount で agent が作成・変更した file は host user の ownership / permission で残ります。
+- Nix：`enable = true` でも、ホストに `/nix` がなければ共有されません。
+- DBus：ホストの UID または `xdg-dbus-proxy` がなければ有効化を省略します。`DBUS_SESSION_BUS_ADDRESS` が未設定なら `unix:path=/run/user/$UID/bus` を使いますが、バスが利用できなければ起動に失敗します。
+- X11：必要なツールや WSL の条件は [X11 アプリの表示](/nix-agent-sandbox/recipes/x11-apps/#前提条件)を参照してください。ビューアーの自動接続に失敗しても、コンテナと X server は動作を続けます。
+- Docker：`docker.shared = true` は廃止済みの互換フィールドで、DinD 有効時には設定エラーになります。
 
-## optional feature の前提と cleanup
+## 異常終了後のデータ
 
-- Nix integration は host の `/nix` 検出で auto 有効になり得ます。`nix.enable = true` でも host に `/nix` がなければ mount は作られません。Nix は必要性だけでなく socket を渡してよいかを判断してください。
-- DBus proxy は host UID または `xdg-dbus-proxy` がなければ有効化を skip します。`DBUS_SESSION_BUS_ADDRESS` がないことだけでは skip せず、`unix:path=/run/user/$UID/bus` を source address として合成します。その bus が実在・利用可能でなければ proxy の起動または readiness が失敗します。設定だけで session bus を作る機能ではありません。
-- X11/xpra には `xpra`、`xauth`、xpra が起動する Xvfb が必要です。host `DISPLAY` がないと auto-attach は失敗しますが、container と X server は継続します。WSL などで `/tmp/.X11-unix` が read-only の場合は host の `unshare` と `mount` binary で private user/mount namespace 内に `mount --bind` を実行します。unprivileged user namespace と mount namespace が利用可能で、両 binary がなければ display setup は失敗します。
-- session scope が正常に閉じれば broker、xpra、secret frame は cleanup を試みます。しかし SIGKILL や finalizer の失敗では、mask-filter runtime の per-session directory と mode `0600` の plaintext `mask-secrets` frame が残り得ます。この runtime に reaper はなく、nas を再起動しても残存 frame が自動で消えるとは限りません。host operator は live session が使っていないことを確認してから、残存する該当 session directory を手動で安全に cleanup してください。`nas network gc` は stale network runtime 用であり、mask-filter frame を回収する command でも、稼働中 broker の state を消す command でもありません。
-- DinD sidecar、mutable data volume、一時 volume、`registry-mirror` は session 専用で、通常の teardown で削除されます。agent container がまだ DinD の network namespace を使っている場合や cleanup に失敗した場合は残り得るため、unused になってから `nas container list` で確認し、`nas container clean` を使います。永続 pull cache の `nas-registry-cache` はこの cleanup でも削除されません。`docker.shared = true` は deprecated な互換 field であり、DinD 有効時は validation error です。worktree cleanup は active session を検査しません。
+通常の終了処理では、補助プロセスや一時データの削除を試みます。SIGKILL や削除処理の失敗では、一部が残る場合があります。
+
+特に、出力マスク用のセッションディレクトリには、権限 `0600` の `mask-secrets` ファイルに秘密値が平文で残る場合があります。**nas の再起動や `nas network gc` では自動回収されません。** 保存先は起動時の `$XDG_RUNTIME_DIR/nas/mask-filter/<session-id>/mask-secrets`、`XDG_RUNTIME_DIR` が未設定なら `/tmp/nas-<ホストのUID>/mask-filter/<session-id>/mask-secrets` です。ホストの UID は `id -u` で確認できます。使用中のセッションがないことを確認してから、該当するセッションのディレクトリをホストで削除してください。
+
+未使用の Docker 補助コンテナは `nas container clean` で削除できます。取得キャッシュ `nas-registry-cache` は残ります。Worktree の削除とあわせて[イメージ・作業環境の管理](/nix-agent-sandbox/operations/maintenance/)を参照してください。
 
 ## 実装上の境界
 
-- HostExec の `fallback = "deny"` は schema にありますが、current runtime は per-rule fallback の deny を実行しません。rule 不一致の fallback は container execution が成功する保証でもありません。
-- relative HostExec `argv0` と `workspace-only` は workspace root を固定しません。nested cwd から同名 wrapper を request できるため、one-shot approval と cwd/integrity の確認、または immutable absolute path が必要です。
-- network / HostExec approval、audit、telemetry は security control の補助であり、完全な forensic record ではありません。receiver や保存の失敗で telemetry は欠け、request body の expiry は audit metadata を消しません。
-
-## 関連ページ
-
-- [インストール](/nix-agent-sandbox/getting-started/installation/) — runtime と artifact
-- [相対パスコマンドを prompt 承認で移譲](/nix-agent-sandbox/recipes/relative-hostexec/) — cwd の残余リスク
-- [Docker イメージを再ビルドする](/nix-agent-sandbox/operations/maintenance/) — sidecar / worktree cleanup
+- HostExec の `fallback = "deny"` は、現在の実装では不一致時の動作を変えません。[不一致時の動作](/nix-agent-sandbox/features/hostexec/#不一致時の動作)を参照してください。
+- 相対パスと `workspace-only` の組み合わせは、実行元をルートディレクトリに固定しません。[相対パスコマンドのホスト実行](/nix-agent-sandbox/recipes/relative-hostexec/)を参照してください。
+- 収集・保存に失敗すると処理記録は欠けます。また、リクエスト本文の期限切れ削除は監査ログ全体の削除ではありません。[監査ログ](/nix-agent-sandbox/operations/audit/)と[実行履歴・利用量](/nix-agent-sandbox/features/observability/)は別々に管理してください。

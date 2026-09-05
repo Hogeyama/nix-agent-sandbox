@@ -1,63 +1,62 @@
 ---
-title: 承認キューを操作する
-description: Network と HostExec の pending request を確認、承認、拒否する
+title: 通信・ホスト実行の承認
+description: 通信・ホスト実行の承認待ち一覧と許可範囲
 ---
 
-## pending を確認して判断する
+通信や HostExec が承認待ちになった場合は、ホストの CLI または[ブラウザ UI](/nix-agent-sandbox/features/ui/)で許可・拒否します。
+
+## 保留中の要求
 
 ```sh
 nas network pending
 nas hostexec pending
 nas network pending --format json
+```
+
+通信では接続先とルール、HostExec では作業ディレクトリ、コマンド、引数を確認します。対話的に選ぶ場合は `fzf` が必要です。
+
+```sh
 nas network review
 nas hostexec review
 ```
 
-`pending` は保留中の request を表示します。network は target、HTTP review 情報、rule ID、
-状態、作成時刻を、HostExec は rule ID、cwd、`argv0` と引数を示します。`review` は `fzf`
-で選んで approve / deny する対話操作です。表示した値が期待した narrow rule か、cwd や
-target が意図したものかを確認してから判断してください。
+## 個別の承認・拒否
 
-## 個別に approve / deny する
+一覧に表示されたセッション ID と要求 ID を指定します。次は一回限りの承認と拒否の例です。
 
 ```sh
 nas network approve <session-id> <request-id> --scope once
 nas network deny <session-id> <request-id>
-nas hostexec approve <session-id> <request-id> --scope capability
+nas hostexec approve <session-id> <request-id> --scope once
 nas hostexec deny <session-id> <request-id>
 ```
 
-Network の `--scope` は request ごとに表示される `approvalScopes` から選びます。現在の
-候補全体は `once`、`rule`、`host-port`、`host`、`violation` です。ただし実際に送れる
-範囲は pending の種類で異なります。通常の rule / fallback review は `once` のほか、
-scope が単一の正確な host:port なら `rule`、それ以外では `host-port` または `host` を
-提示します。受理条件違反の review では `once` または `violation` だけです。**Network
-では `--scope` を省略すると必ず `once` です。** 再利用したい範囲を明示してください。
+## 通信の承認範囲
 
-| scope | session 中に再利用する同一性 |
+`--scope` は、要求ごとの `approvalScopes` に表示された候補から選びます。省略時は常に `once` です。再利用はいずれも同じセッション内に限られます。
+
+| 値 | 承認の適用範囲 |
 | --- | --- |
-| `once` | 記憶しない。次の request は再度確認する。 |
-| `rule` | rule ID、判定理由、正確な host:port。scope 自体がその 1 target に固定される場合だけ選べる。 |
-| `host-port` | rule ID、判定理由、host、port。 |
-| `host` | rule ID、判定理由、host。port はまたいで再利用する。 |
-| `violation` | rule ID、受理条件の位置、違反値。target は含まず、受理条件違反の review だけで選べる。 |
+| `once` | その要求だけ。 |
+| `rule` | 同じルール ID・判定理由・ホスト・ポート。scope が単一のホストとポートに固定されている場合のみ選択可能。 |
+| `host-port` | 同じルール ID・判定理由・ホスト・ポート。 |
+| `host` | 同じルール ID・判定理由・ホスト。異なるポートにも適用。 |
+| `violation` | 同じルール ID・受理条件の位置・違反値。接続先は問わない。受理条件違反の承認でのみ選択可能。 |
 
-HostExec の scope は `once` または `capability` です。`once` はその request のみ、
-`capability` は同じ rule、command、引数などで表す capability を session 中に再利用します。
-HostExec の scope を省略したときは `hostexec.prompt.defaultScope` が使われます。Network の
-再利用も session 限定ですが、Network の省略値は前述のとおり `once` です。
+通常の要求では `once` と、接続先の設定に応じて `rule` または `host-port` / `host` を選べます。受理条件違反では `once` または `violation` だけです。
 
-## stale network runtime を掃除する
+通常の再利用条件にはパスを含みません。scope の fallback はルール ID `$fallback` として扱われ、別のパスにも承認が適用されます。
+
+## HostExec の承認範囲
+
+`once` はその要求だけ、`capability` は同じルール、コマンド、引数などの実行条件に対してセッション中の再利用を許可します。
+
+省略時は `hostexec.prompt.defaultScope` に従い、既定は `"capability"` です。一回限りにする場合は `--scope once` を明示してください。
+
+## 終了済みセッションの通信データ
 
 ```sh
 nas network gc
 ```
 
-これは stale session registry、pending directory、broker socket を回収し、削除件数を
-表示します。現在動いている broker の state を消すためのコマンドではありません。
-
-## 関連ページ
-
-- [ネットワーク制御](/nix-agent-sandbox/features/network/)
-- [HostExec](/nix-agent-sandbox/features/hostexec/)
-- [UI daemon](/nix-agent-sandbox/features/ui/)
+異常終了などで残ったセッション登録情報、承認待ちディレクトリ、仲介プロセスのソケットを回収します。稼働中の通信状態は削除しません。

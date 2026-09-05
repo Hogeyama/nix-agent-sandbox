@@ -1,24 +1,15 @@
 ---
 title: X11 / xpra
-description: agent 用の隔離 X server で GUI と browser automation を実行する
+description: コンテナ内の GUI アプリ用の画面設定
 ---
 
-## どんな機能？
+GUI 付きブラウザや X11 アプリをコンテナで使うには、`display.sandbox = "xpra"` を設定します。nas はセッション専用の X server を起動し、ホストの xpra ビューアーに表示します。
 
-`display.sandbox = "xpra"` は host 上で xpra の detached X server（Xvfb backing）を session ごとに起動します。agent コンテナには、その X server の socket と session 専用の Xauthority cookie だけを渡すため、Playwright / Chromium などの GUI を使えます。
+ホストには `xpra`、`Xvfb`、`xauth`、コンテナには使用する GUI アプリが必要です。手順と起動時のエラーは [X11 アプリの表示](/nix-agent-sandbox/recipes/x11-apps/)を参照してください。
 
-## いつ使う？
+## 設定例
 
-画面を必要とする browser automation や X11 application を sandbox 内で実行するときに使います。GUI が不要なら既定の `"none"` のままにしてください。host には `xpra`、xpra が起動する `Xvfb`、xpra が生成する cookie を読むための `xauth` が必要です。`xpra` を検出できても `Xvfb` を起動できない環境では display を開始できません。
-
-## 主要な設定項目
-
-| 設定 | 既定 | 用途 |
-| --- | --- | --- |
-| `display.sandbox` | `"none"` | `"xpra"` で隔離 X server を有効にする。 |
-| `display.size` | `"1920x1080"` | Xvfb の初期画面サイズ。`WIDTHxHEIGHT`、各値は 1〜16384。 |
-
-## 最小の設定例
+[対象プロファイル](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)に追加します。
 
 ```pkl
 display = new DisplayConfig {
@@ -27,20 +18,25 @@ display = new DisplayConfig {
 }
 ```
 
-nas は利用可能な `:100` 以上の display number を選び、コンテナへ `DISPLAY=:<number>` と `XAUTHORITY=~/.Xauthority` を設定します。Chromium 系の shared memory 使用量に備え、container の `/dev/shm` も 2 GiB に拡張します。
+nas は利用可能な `:100` 以上のディスプレイ番号を選び、コンテナへ `DISPLAY=:<number>` と `XAUTHORITY=~/.Xauthority` を設定します。Chromium 系の共有メモリ使用量に備え、コンテナの `/dev/shm` も 2 GiB に拡張します。
 
-## 注意点・セキュリティへの影響
+## 設定項目
 
-コンテナに mount するのは Xvfb socket 一つと、mode `0600` の per-session cookie だけです。host の `/tmp/.X11-unix` 全体、host desktop の `DISPLAY`、host desktop の Xauthority は agent に公開しません。xpra は host 側 viewer を auto-attach しようとしますが、これは host desktop を agent に渡すものではありません。
+| 設定 | 既定 | 用途 |
+| --- | --- | --- |
+| `display.sandbox` | `"none"` | `"xpra"` で専用の X server を有効にする。 |
+| `display.size` | `"1920x1080"` | Xvfb の初期画面サイズ。`WIDTHxHEIGHT`、各値は 1〜16384。 |
 
-ただし auto-attach した viewer は、focus された agent 側 window へ host の keyboard input を送り、貼り付けた clipboard 内容も渡します。これは GUI を有効にした session への意図的な input trust boundary です。信頼できない agent に host 側の入力や clipboard を渡せない場合は、xpra を有効にしないでください。
+## 注意点
 
-session の scope が閉じると xpra process は停止します。異常終了で残った registry、session directory、socket は次回の runtime GC が掃除します。WSL などで `/tmp/.X11-unix` が read-only の場合は、private mount namespace で writable な per-session directory をそこへ bind して起動し、container にはその実体 socket だけを同じ `/tmp/.X11-unix/X<number>` として mount します。
+コンテナに渡すのは、セッション専用の Xvfb ソケットと、権限 `0600` の認証 Cookie です。ホストの既存デスクトップの `DISPLAY` や Xauthority、`/tmp/.X11-unix` 全体は共有しません。
 
-viewer の input boundary は、[display forwarding のリスク](/nix-agent-sandbox/security/risks/#display-forwarding)も参照してください。
+xpra ビューアーへのキー入力と貼り付けは、エージェント側のアプリに届きます。扱う内容をそのエージェントに渡してよいか確認してください。
+
+通常の終了時には xpra も停止します。異常終了で残った登録情報、ディレクトリ、ソケットは次回の起動時に回収します。環境ごとの前提やエラーは [X11 アプリの表示](/nix-agent-sandbox/recipes/x11-apps/)を参照してください。
 
 ## 関連ページ
 
-- [Docker in Docker](/nix-agent-sandbox/features/docker/) — GUI を含む container workflow に Docker が必要な場合
-- [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/) — host path を渡す際の境界
+- [Docker in Docker](/nix-agent-sandbox/features/docker/) — GUI を含むコンテナ操作に Docker が必要な場合
+- [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/) — ホストパスを渡す際の境界
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `DisplayConfig` の全定義

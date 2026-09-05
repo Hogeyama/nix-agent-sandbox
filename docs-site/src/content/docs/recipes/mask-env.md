@@ -1,89 +1,68 @@
 ---
-title: .env を隠してコマンドをホスト実行
-description: .env の値をコンテナへ見せず、限定したビルドだけに渡す
+title: .env の非公開とホスト実行
+description: .env の非公開、ビルド時の秘密値の注入、出力マスク
 ---
 
-## 得られること
+`.env` をエージェントには空のファイルとして見せ、ホスト上の `pnpm build` に `API_TOKEN` を渡す例です。コマンド出力に現れるトークンもマスクします。
 
-エージェントからは `.env` を空として見せ、ホスト上の `pnpm build` にだけ
-`API_TOKEN` を渡します。秘密の生値はコンテナへマウントせず、HostExec のその
-rule が実行される短い間だけホスト側の環境変数になります。
+## 前提条件
 
-## 前提
+- エージェントの API への通信許可を設定済み。Claude Code の例は[クイックスタート](/nix-agent-sandbox/getting-started/quick-start/)を参照。
 
-- `.env` がワークスペース直下にあり、`API_TOKEN` を持つ。
-- ホストに `pnpm` があり、`pnpm build` が `.env` を読む必要がある。
-- `package.json` と、ビルドが実行するスクリプトおよび設定ファイルを、エージェントが
-  書き換えられないようにする。
+- 作業フォルダー直下の `.env` に `API_TOKEN` がある。
+- ホストに `pnpm` がある。
+- `package.json` とビルドが読むスクリプト・設定を、エージェントが変更できないようにする。
 
-次を `.nas/config.pkl` に置きます。独立した設定にする例なので、既存の共通設定を
-継承する場合は先頭を `amends "modulepath:/global.pkl"` に替えてください。
+## 設定例
+
+エージェントとの通信を設定済みの `claude` プロファイルに、以下の設定を追加します。編集先は[プロファイルの編集](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)を参照してください。既存の設定項目がある場合は、その中に要素を追加し、通信先やルールを残してください。
 
 ```pkl
-amends "Schema.pkl"
-
-profiles {
-  ["build"] {
-    agent = "claude"
-    extraMounts = new Listing {
-      new ExtraMountConfig { src = "/dev/null"; dst = ".env" }
-      new ExtraMountConfig {
-        src = "package.json"
-        dst = "package.json"
-        mode = "ro"
-      }
-    }
-    secrets {
-      ["build_api_token"] { from = "dotenv:.env#API_TOKEN" }
-    }
-    mask = new MaskConfig {
-      filter = true
-      apply = new Listing { "build_api_token" }
-    }
-    hostexec = new HostExecConfig {
-      secrets {
-        ["build_api_token"] { from = "dotenv:.env#API_TOKEN" }
-      }
-      rules = new Listing {
-        new HostExecRule {
-          id = "pnpm-build"
-          match { argv0 = "pnpm"; argRegex = "^build$" }
-          cwd { mode = "workspace-only" }
-          env { ["API_TOKEN"] = "secret:build_api_token" }
-          inheritEnv { mode = "minimal" }
-          approval = "prompt"
-          fallback = "deny"
-        }
-      }
+extraMounts = new Listing {
+  new ExtraMountConfig { src = "/dev/null"; dst = ".env" }
+  new ExtraMountConfig {
+    src = "package.json"
+    dst = "package.json"
+    mode = "ro"
+  }
+}
+secrets {
+  ["build_api_token"] { from = "dotenv:.env#API_TOKEN" }
+}
+mask = new MaskConfig {
+  filter = true
+  apply = new Listing { "build_api_token" }
+}
+hostexec = new HostExecConfig {
+  secrets {
+    ["build_api_token"] { from = "dotenv:.env#API_TOKEN" }
+  }
+  rules = new Listing {
+    new HostExecRule {
+      id = "pnpm-build"
+      match { argv0 = "pnpm"; argRegex = "^build$" }
+      cwd { mode = "workspace-only" }
+      env { ["API_TOKEN"] = "secret:build_api_token" }
+      inheritEnv { mode = "minimal" }
+      approval = "prompt"
+      fallback = "deny"
     }
   }
 }
 ```
 
-実行前に rule を確認できます。
+設定を確認して `nas config trust` を実行後、ホストでルールの一致を確認します。
 
 ```sh
-nas hostexec test --profile build -- pnpm build
+nas hostexec test --profile claude -- pnpm build
 ```
 
-## 権限と注意点
+`nas claude` で起動し、エージェントが `pnpm build` を要求したら、実行内容を確認して承認します。
 
-この rule は任意のホスト実行を許すものではありません。`argv0 = "pnpm"` と
-引数がちょうど `build` の要求だけを、workspace を cwd にして承認待ちへ送ります。
-ただし `pnpm build` は `package.json` と参照先スクリプトを実行します。エージェントが
-それらを書き換えられるなら、HostExec を任意のホスト実行へ広げることになります。
-依存するファイルを `ro` mount に追加するか、固定パスの単純な実行ファイルへ rule を
-替えてください。
+## 注意点
 
-`hostexec.secrets` は注入専用で、profile の `secrets` とは別の registry です。注入だけでは
-HostExec の stdout / stderr を伏せません。このレシピでは同じ取得元を profile 側にも登録し、
-`mask.filter = true` と `mask.apply` で必ず出力 mask の対象にします。HostExec の control
-socket はホスト専用で、コンテナから自分の要求を承認することはできません。
+`pnpm build` はプロジェクトのスクリプトを実行します。エージェントがそれらを書き換えられると、変更したコードがホストで動きます。子ディレクトリからの要求もあり得るため、承認画面の作業ディレクトリも確認してください。
 
-この rule が渡す host command capability は、[HostExec のリスク](/nix-agent-sandbox/security/risks/#hostexec)を参照してください。
+`hostexec.secrets` は注入用、プロファイルの `secrets` はマスク用です。出力も隠すため、この例では同じ取得元を両方に登録しています。
 
-## 関連ページ
-
-- [HostExec](/nix-agent-sandbox/features/hostexec/)
-- [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/)
-- [シークレット・認証情報](/nix-agent-sandbox/features/secrets/)
+現在の実装では `fallback = "deny"` は不一致時の動作を変更しません。[HostExec の不一致時の動作](/nix-agent-sandbox/features/hostexec/#不一致時の動作)を参照してください。

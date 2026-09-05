@@ -26,14 +26,13 @@ export default defineConfig({
         {
           label: "はじめに",
           items: [
-            { label: "nas とは", slug: "getting-started/about" },
             { label: "インストール", slug: "getting-started/installation" },
             { label: "クイックスタート", slug: "getting-started/quick-start" },
             { label: "設定の基本", slug: "getting-started/configuration" },
           ],
         },
         {
-          label: "機能ガイド",
+          label: "機能別の設定",
           items: [
             { label: "ファイル隔離・マウント", slug: "features/filesystem" },
             { label: "ネットワーク制御", slug: "features/network" },
@@ -46,48 +45,48 @@ export default defineConfig({
             { label: "Worktree", slug: "features/worktree" },
             { label: "セッション・通知", slug: "features/sessions" },
             { label: "X11 / xpra", slug: "features/display" },
-            { label: "UI daemon", slug: "features/ui" },
-            { label: "Observability", slug: "features/observability" },
-          ],
-        },
-        {
-          label: "レシピ",
-          items: [
-            {
-              label: ".env を隠してコマンドをホスト実行",
-              slug: "recipes/mask-env",
-            },
-            {
-              label: "相対パスコマンドを安全に移譲",
-              slug: "recipes/relative-hostexec",
-            },
-            {
-              label: "proxy 環境変数を参照しないツール",
-              slug: "recipes/proxy-tools",
-            },
-            { label: "Codex の keyring", slug: "recipes/codex-keyring" },
-            { label: "X11 アプリを表示する", slug: "recipes/x11-apps" },
+            { label: "ブラウザ UI", slug: "features/ui" },
+            { label: "実行履歴・利用量", slug: "features/observability" },
           ],
         },
         {
           label: "運用",
           items: [
             {
-              label: "Docker イメージを再ビルドする",
+              label: "イメージ・作業環境の管理",
               slug: "operations/maintenance",
             },
             {
-              label: "承認キューを操作する",
+              label: "通信・ホスト実行の承認",
               slug: "operations/approvals",
             },
-            { label: "監査ログを確認する", slug: "operations/audit" },
+            { label: "監査ログ", slug: "operations/audit" },
+          ],
+        },
+        {
+          label: "設定例",
+          items: [
+            {
+              label: ".env の非公開とホスト実行",
+              slug: "recipes/mask-env",
+            },
+            {
+              label: "相対パスコマンドのホスト実行",
+              slug: "recipes/relative-hostexec",
+            },
+            {
+              label: "Gradle・Maven のプロキシ設定",
+              slug: "recipes/proxy-tools",
+            },
+            { label: "Codex のキーリング", slug: "recipes/codex-keyring" },
+            { label: "X11 アプリの表示", slug: "recipes/x11-apps" },
           ],
         },
         {
           label: "セキュリティ",
           items: [
             {
-              label: "設計思想と信頼境界",
+              label: "隔離の範囲",
               slug: "security/model",
             },
             { label: "機能別リスク", slug: "security/risks" },

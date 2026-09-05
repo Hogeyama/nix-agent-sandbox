@@ -1,27 +1,15 @@
 ---
 title: ネットワーク制御
-description: target scope と request rule による HTTP(S) 通信の認可
+description: HTTP(S) の接続先とリクエストの許可設定
 ---
 
-## どんな機能？
+外部 API やパッケージ配布元への HTTP(S) 通信は `network.scopes` で許可します。まず接続先に一致する scope が選ばれ、その中のルールがメソッドやパスを判定します。既定では許可のない通信を拒否します。
 
-ネットワーク認可は二段階です。`network.scopes` が接続先 target を 1 つの scope に選び、scope 内の `rules` が HTTP リクエストを選びます。target 選択と request 受理を混ぜないことで、どのホストに出せるかと、そのホストで何を送れるかを別々に絞れます。旧来の flat allowlist と prompt 構成は現行スキーマで受け付けません。
+## 設定例
 
-## 主要な設定項目
+[対象プロファイル](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)に追加します。
 
-| 設定 | 既定 | 用途 |
-| --- | --- | --- |
-| `network.scopes` | 空 | target パターンごとの認可境界。より特異な target が選ばれる。 |
-| `scope.rules` | 空 | method、path、任意の body 条件で request を選ぶ。 |
-| `onMatch` | — | 一致した request を `"allow"`、`"review"`、`"deny"` にする。 |
-| `onIndeterminate` | `"deny"` | body 条件を判定できない場合を `"review"` または拒否にする。 |
-| `scope.fallback` | `"deny"` | scope 内で rule が引き受けない request の扱い。 |
-| `network.fallback` | `"deny"` | scope に属さない target の扱い。 |
-| `webSocket` | `"deny"` | HTTP Upgrade 後の WebSocket を許すか。 |
-
-## 最小の設定例
-
-Claude Code 用には、不変の組み込み preset を scope として割り当てます。preset の fallback は `"review"` です。未知の endpoint を approval で開けたくない構成では、Schema が示すように同じ scope を amend して `"deny"` にします。
+Claude Code 用の組み込みプリセットを指定する例です。プリセットに含まれない要求は拒否します。
 
 ```pkl
 network {
@@ -33,7 +21,7 @@ network {
 }
 ```
 
-独自 API では、scope が target を、rule が request を選びます。
+`api.example.com:443` の `/v1/items/**` への GET だけを許可する例です。
 
 ```pkl
 network {
@@ -53,34 +41,80 @@ network {
 }
 ```
 
-`match` は「どの rule が担当するか」を選びます。受理済みの request に必須の body 形状や値を求めるなら `expect` に置きます。条件を `match` に置くと、外れた request はより広い rule や scope の fallback へ進めます。
+`match` は「どのルールが担当するか」を選びます。受理済みのリクエストに必須の本文形状や値を求めるなら `expect` に置きます。条件を `match` に置くと、外れたリクエストは後続ルールや scope の fallback で許可される場合があります。
 
-## 秘密、注入、承認、監査
+## 設定項目
 
-scope または rule の `secrets` では、名前付き秘密を `"inject"`、`"mask"`、`"forbid"`、`"ignore"` として扱えます。`"inject"` は `inject` の参照を許し、proxy masking が有効なときは body・URL・client 由来 header に現れた値を `"mask"` と同じく伏せます。`mask.proxy = false` では inject 自体は有効ですが、それらの出現は unmasked で通り得ます。`"mask"` は出現を `****` に置換して送出し、`"forbid"` は出現した request を拒否して値そのものを記録しません。`"ignore"` は変更しません。許可された request にだけ `inject` で `literal:`、`secret:`、`template:` のヘッダー値を付けられます。`secret:` と template 内の参照には、その scope / rule で `"inject"` の秘密が必要です。
+| 設定 | 既定 | 用途 |
+| --- | --- | --- |
+| `network.scopes` | 空 | 接続先ごとのルールのまとまり。複数一致時は、より具体的な接続先パターンを優先。 |
+| `scope.rules` | 空 | メソッド、パス、任意の本文条件でリクエストを選ぶ。 |
+| `onMatch` | — | 一致したリクエストを `"allow"`、`"review"`、`"deny"` にする。 |
+| `onIndeterminate` | `"deny"` | 本文条件を判定できない場合を `"review"` または拒否にする。 |
+| `scope.fallback` | `"deny"` | scope 内でルールが引き受けないリクエストの扱い。 |
+| `network.fallback` | `"deny"` | scope に属さない接続先の扱い。 |
+| `webSocket` | `"deny"` | HTTP Upgrade 後の WebSocket を許すか。 |
 
-`onMatch = "review"`、`onViolation = "review"`、または `fallback = "review"` は承認待ちを作ります。`network.pendingTimeoutSeconds` の既定は 300 秒で、時間切れは拒否です。通常の request / fallback review は `once` のほか、target を単一の正確な host:port に固定する scope では `rule`、それ以外では `host-port` または `host` を選べます。再利用の同一性は rule ID・判定理由・target であり、scope fallback は `$fallback` という擬似 rule ID を使うため path は含みません。`expect` 違反の review は別で、`once` または `violation` を選び、rule ID・expect の位置・違反値で再利用されて target は含みません。
+## 認証・承認・記録
 
-`requestBodyAudit.enable = true` はマスク前の正確な request body をホストの監査 DB に保存しようとします。既定は保存しません。capture が読めない、body が大きすぎる、容量上限、入力不正、store failure の場合は `unavailable` 状態を記録し、認可処理は続きます。必要性、保持期間、最大容量を確認してから有効にしてください。
+### 秘密値とヘッダー
 
-## 注意点・セキュリティへの影響
+scope またはルールの `secrets` で、登録した秘密値の扱いを選びます。
 
-- `network.scopes` の target と rule、`onMatch = "allow"` / `"review"`、scope / network fallback、`webSocket = "allow"` は、外向き通信と approval の再利用範囲を広げます。許可 rule の `inject` header はその upstream へ secret を送る capability でもあります。最小の target、method、path、header に絞り、[network egress のリスク](/nix-agent-sandbox/security/risks/#network-egress)を確認してください。
-- Anthropic preset は配布物で上書きされる不変の scope です。既知の endpoint と body 条件を狭めており、既存の `expect` を緩めることはできません。既定の `fallback = "review"` を残す場合、fallback の再利用承認は path を含みません。endpoint を足すときは同じ scope を amend します。
-- WebSocket は既定で拒否です。`webSocket = "allow"` でも opening HTTP Upgrade だけが通常の rule / fallback で一度認可されます。メッセージごとの review は行いません。
-- raw TCP は scope ごとの HTTP rule の対象ではなく、非 HTTP の tunnel bytes は上流へ転送されません。HTTP の body 構造を保証したい場合は `expect` を使います。
+| 値 | 動作 |
+| --- | --- |
+| `"inject"` | `inject` からの参照を許可。プロキシのマスクが有効なら、送信元の URL・ヘッダー・本文に現れた値もマスク。 |
+| `"mask"` | 値を `****` に置換して送信。 |
+| `"forbid"` | 値を含む要求を拒否。秘密値そのものは記録しない。 |
+| `"ignore"` | 変更なし。 |
 
-mask 前の body を host に保存する opt-in の範囲と retention は、[request-body audit のリスク](/nix-agent-sandbox/security/risks/#request-body-audit)を参照してください。
+許可した要求にだけ、`inject` で `literal:`、`secret:`、`template:` のヘッダー値を追加できます。秘密の参照には、その scope / ルールで `"inject"` の指定が必要です。`mask.proxy = false` でも注入は有効ですが、送信元の URL・ヘッダー・本文の値はマスクされずに通る場合があります。
 
-<img src="/nix-agent-sandbox/images/network-prompt.png" width="720" alt="ネットワーク request の承認画面。対象、rule、要求内容を確認してから判断する。" />
+例えば、ホストの環境変数 `API_TOKEN` を使う場合は、上の `example-api` の設定と同じプロファイルに次を追加します。既存の GET・パス制限を残したまま、許可した要求の `Authorization` ヘッダーにだけ値を渡します。起動前にホスト側で `API_TOKEN` を設定してください。
 
-<img src="/nix-agent-sandbox/images/network-prompt-ui.png" width="720" alt="UI daemon のネットワーク承認カード。pending の request ごとに許可または拒否できる。" />
+```pkl
+secrets {
+  ["api-token"] { from = "env:API_TOKEN" }
+}
+network {
+  scopes {
+    ["example-api"] {
+      secrets { ["api-token"] = "inject" }
+      inject {
+        new Inject {
+          name = "Authorization"
+          value = #"template:Bearer ${api-token}"#
+        }
+      }
+    }
+  }
+}
+```
 
-スクリーンショットは review の操作例です。承認範囲は設定した rule、違反、fallback により決まるため、先に scope と rule を狭めます。
+設定を再信頼してセッションを起動し直し、認証を必要とする許可済みパスへの要求が成功することを確認します。トークンをコンテナの環境変数に渡す必要はありません。
+
+### 承認待ち
+
+`onMatch`、`onViolation`、`fallback` に `"review"` を指定すると承認待ちになります。`network.pendingTimeoutSeconds` の既定は 300 秒で、時間切れは拒否です。操作と再利用範囲は[通信・ホスト実行の承認](/nix-agent-sandbox/operations/approvals/)を参照してください。
+
+<img src="/nix-agent-sandbox/images/network-prompt-ui.png" width="720" alt="通信先と要求内容を確認する承認カード" />
+
+### 監査ログ
+
+許可・拒否の記録は[監査ログ](/nix-agent-sandbox/operations/audit/)で確認できます。`requestBodyAudit.enable = true` は、秘密を含み得るマスク前のリクエスト本文もホストに保存する設定です。既定では本文を保存しません。
+
+## 注意点
+
+- 通信先、メソッド、パスを必要な範囲に限定してください。ヘッダー注入は、その通信先に秘密値を送る許可でもあります。
+- Anthropic プリセットの既定の `fallback` は `"review"` です。未知の接続要求を拒否する場合は、設定例のように `"deny"` に変更します。既存の `expect` 条件は緩められません。
+- WebSocket は既定で拒否します。許可した場合も、認可するのは接続開始時の HTTP Upgrade だけです。メッセージごとの承認はありません。
+- 非 HTTP の TCP データは転送しません。HTTP 本文の必須条件は `expect` に指定します。
+
+ホスト上のサービスへの到達も含め、[ネットワーク通信のリスク](/nix-agent-sandbox/security/risks/#network-egress)を参照してください。
 
 ## 関連ページ
 
-- [シークレット・認証情報](/nix-agent-sandbox/features/secrets/) — secret disposition と mask の設定
-- [localhost ポート転送](/nix-agent-sandbox/features/port-forwarding/) — コンテナから host loopback service へ接続する経路
-- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — コンテナの service を host loopback で開く逆方向の経路
+- [シークレット・認証情報](/nix-agent-sandbox/features/secrets/) — 秘密値の扱いとマスクの設定
+- [localhost ポート転送](/nix-agent-sandbox/features/port-forwarding/) — コンテナからホストループバックサービスへ接続する経路
+- [コンテナポート公開](/nix-agent-sandbox/features/port-bind/) — コンテナのサービスをホストループバックで開く逆方向の経路
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `NetworkConfig`、`Scope`、`Rule` の全定義

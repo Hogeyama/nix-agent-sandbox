@@ -1,25 +1,15 @@
 ---
 title: セッション・通知
-description: dtach の再接続と agent hook による状態通知
+description: ターミナルの切り離し・再接続と入力待ち通知
 ---
 
-## どんな機能？
+ターミナルを切り離した後もエージェントを動かし続け、後から再接続できます。`session.multiplex = true` と、ホストの `dtach` が必要です。
 
-`session.multiplex` は nas を dtach session として起動します。terminal を detach しても agent は動き続け、後から再接続できます。agent hook の `nas hook` は session を「作業中」「入力待ち」「終了」として記録し、入力待ちでは desktop notification を送れます。
+入力待ちの通知は、エージェントの hook に `nas hook` を設定します。
 
-## いつ使う？
+## 設定例
 
-長い agent run を terminal 切断から守る、または複数の run のうち入力待ちのものを見つけたいときに使います。dtach が host にない環境では multiplex を有効にできません。
-
-## 主要な設定項目
-
-| 設定 | 既定 | 用途 |
-| --- | --- | --- |
-| `session.multiplex` | `false` | dtach で session を起動し、detach / attach を可能にする。 |
-| `session.detachKey` | `"^\\"` | 最初の attach で使う dtach の detach key。 |
-| `hook.notify` | `"auto"` | attention 時の通知を `"auto"`、`"desktop"`、`"off"` から選ぶ。 |
-
-## 最小の設定例
+[対象プロファイル](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)に追加します。
 
 ```pkl
 session = new SessionConfig {
@@ -32,20 +22,30 @@ hook = new HookConfig {
 }
 ```
 
-起動後は active session を確認して再接続できます。
+起動後は設定したキーでターミナルを切り離せます。既定の `^\` は Ctrl+\ です。再接続には一覧のセッション ID を指定します。
 
 ```sh
 nas session list
 nas session attach sess_abc123
 ```
 
-同じ dtach socket には複数 terminal から attach できます。すべて同じ agent process を表示・操作するため、入力を同時に送らないよう運用してください。`detachKey` は最初の attach に渡されますが、現在の `nas session attach` は profile を読み直さず dtach の既定 key で attach します。
+複数のターミナルから同じセッションに接続できます。入力も共有されるため、同時操作に注意してください。`nas session attach` で再接続した場合の切り離しキーは、プロファイルの指定にかかわらず dtach の既定値です。
 
-## agent hook の例
+## 設定項目
 
-hook は stdin の JSON payload を読み、`start`、`attention`、`stop` のいずれかを記録します。`attention` だけが通知対象です。`--when path=value` は JSON のドット区切り path に対する文字列の完全一致で、複数あればすべて一致したときだけ記録します。不一致、壊れた payload、通知や保存の失敗は agent hook を失敗させません。
+| 設定 | 既定 | 用途 |
+| --- | --- | --- |
+| `session.multiplex` | `false` | dtach でセッションを起動し、切り離しと再接続を可能にする。 |
+| `session.detachKey` | `"^\\"` | 初回接続時の切り離しキー。 |
+| `hook.notify` | `"auto"` | 入力待ち時の通知を `"auto"`、`"desktop"`、`"off"` から選ぶ。 |
 
-Claude Code（`~/.claude/settings.json` または `.claude/settings.json`）:
+## 通知の設定
+
+使用するエージェントの例を選んで設定します。`nas hook` は作業開始・入力待ち・終了を記録し、入力待ちの `attention` だけを通知します。既存の hook がある場合は、その設定を残して追加してください。
+
+### Claude Code
+
+`~/.claude/settings.json` または `.claude/settings.json` に設定します。
 
 ```jsonc
 {
@@ -59,7 +59,9 @@ Claude Code（`~/.claude/settings.json` または `.claude/settings.json`）:
 }
 ```
 
-GitHub Copilot CLI（repository の `.github/hooks/*.json`）では、`ask_user` の前後だけを `--when toolName=ask_user` で選びます。`notification` を無条件に attention にすると `permission_prompt` も拾うため設定しません。
+### GitHub Copilot CLI
+
+リポジトリの `.github/hooks/*.json` に設定します。この例では、`ask_user` の前後だけを `--when toolName=ask_user` で選びます。`notification` を無条件に attention にすると `permission_prompt` も拾うため設定しません。`--when path=value` は入力 JSON の値が完全一致した場合だけ記録します。複数指定時はすべての一致が必要です。条件の不一致や入力・保存の失敗は hook を失敗させません。
 
 ```json
 {
@@ -74,7 +76,9 @@ GitHub Copilot CLI（repository の `.github/hooks/*.json`）では、`ask_user`
 }
 ```
 
-OpenAI Codex CLI（`~/.codex/config.toml` または `.codex/config.toml`）:
+### OpenAI Codex CLI
+
+`~/.codex/config.toml` または `.codex/config.toml` に設定します。
 
 ```toml
 [[hooks.SessionStart]]
@@ -105,12 +109,11 @@ type = "command"
 command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind stop || true'"
 ```
 
-## 注意点・セキュリティへの影響
+## 注意点
 
-agent hook は `NAS_SESSION_ID` がある sandbox 内から実行されます。通知本文には hook payload の `message`、または既定文が表示されるため、秘密を message に含めないでください。`hook.notify = "off"` なら attention を記録しても desktop notification は送りません。
+エージェント hook は `NAS_SESSION_ID` があるコンテナ内から実行されます。通知本文には hook 入力データの `message`、または既定文が表示されるため、秘密を `message` に含めないでください。`hook.notify = "off"` なら attention を記録してもデスクトップ通知は送りません。
 
 ## 関連ページ
 
-- [Worktree](/nix-agent-sandbox/features/worktree/) — session ごとの作業 tree を分ける
-- [HostExec](/nix-agent-sandbox/features/hostexec/) — hook は host 側の session store へ状態を届ける
+- [Worktree](/nix-agent-sandbox/features/worktree/) — セッションごとの作業フォルダーの分離
 - [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `SessionConfig` と `HookConfig` の全定義

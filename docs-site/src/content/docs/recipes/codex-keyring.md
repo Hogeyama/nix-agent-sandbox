@@ -1,63 +1,47 @@
 ---
-title: Codex の keyring
-description: Secret Service の必要なメソッドだけを filtered DBus proxy 経由で渡す
+title: Codex のキーリング
+description: DBus 経由の Codex 認証情報の共有
 ---
 
-## 得られること
+ホストのキーリングに保存した Codex の認証情報を、コンテナから利用する設定です。DBus の Secret Service への呼び出しを、3 つのメソッドに限定します。
 
-Codex の `cli_auth_credentials_store = "keyring"` が、コンテナに session bus 全体を
-渡さず、Secret Service の認証情報を読むための 3 メソッドだけを使えます。
+## 前提条件
 
-## 前提
+- エージェントの API への通信許可を設定済み。Claude Code の例は[クイックスタート](/nix-agent-sandbox/getting-started/quick-start/)を参照。
 
-- ホストの Codex 設定で credential store を `keyring` にしている。
-- ホストの session bus と `xdg-dbus-proxy` が利用できる。
-- ホストに Secret Service provider があり、Codex の credential を保存済みである。
+- ホストの Codex 設定が `cli_auth_credentials_store = "keyring"` で、認証情報を保存済み。
+- ホストで Secret Service、セッションバス、`xdg-dbus-proxy` が利用可能。
+
+## 設定例
+
+エージェントとの通信を設定済みの `codex` プロファイルに、以下の設定を追加します。編集先は[プロファイルの編集](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)を参照してください。既存の設定項目がある場合は、その中に要素を追加し、通信先やルールを残してください。
 
 ```pkl
-amends "Schema.pkl"
-
-profiles {
-  ["codex"] {
-    agent = "codex"
-    dbus {
-      session {
-        enable = true
-        calls = new Listing {
-          new DbusRuleConfig {
-            name = "org.freedesktop.secrets"
-            rule = "org.freedesktop.Secret.Service.OpenSession"
-          }
-          new DbusRuleConfig {
-            name = "org.freedesktop.secrets"
-            rule = "org.freedesktop.Secret.Service.SearchItems"
-          }
-          new DbusRuleConfig {
-            name = "org.freedesktop.secrets"
-            rule = "org.freedesktop.Secret.Item.GetSecret"
-          }
-        }
+dbus {
+  session {
+    enable = true
+    calls = new Listing {
+      new DbusRuleConfig {
+        name = "org.freedesktop.secrets"
+        rule = "org.freedesktop.Secret.Service.OpenSession"
+      }
+      new DbusRuleConfig {
+        name = "org.freedesktop.secrets"
+        rule = "org.freedesktop.Secret.Service.SearchItems"
+      }
+      new DbusRuleConfig {
+        name = "org.freedesktop.secrets"
+        rule = "org.freedesktop.Secret.Item.GetSecret"
       }
     }
   }
 }
 ```
 
-## 権限と注意点
+設定を確認して `nas config trust` を実行し、`nas codex` で起動します。
 
-nas は host session bus の代わりに、per-session の filtered proxy socket だけを
-コンテナへ渡します。この例は `org.freedesktop.secrets` の任意呼び出しや他 service の
-利用を許さず、列挙した `OpenSession`、`SearchItems`、`GetSecret` だけを許可します。
+## 権限の範囲
 
-それでも `SearchItems` と `GetSecret` を許したことは、service がこのユーザーに既に
-認めている一致 item とその secret value を Codex が取得できる、という権限です。DBus
-filter は Secret Service 自身の access control を狭めず、その service が保持する
-authority は許可した呼び出しを通じて到達可能です。必要のない `talk`、`see`、
-`broadcasts`、広い `rule = "*"` は追加しないでください。
+許可するのは `OpenSession`、`SearchItems`、`GetSecret` です。他のサービスやメソッドを使う必要がなければ、`talk`、`see`、`broadcasts`、`rule = "*"` は追加しません。
 
-この filtered socket が到達させる resource は、[DBus のリスク](/nix-agent-sandbox/security/risks/#dbus)を参照してください。
-
-## 関連ページ
-
-- [シークレット・認証情報](/nix-agent-sandbox/features/secrets/)
-- [ファイル隔離・マウント](/nix-agent-sandbox/features/filesystem/)
+この制限は取得対象を Codex の認証情報だけに絞るものではありません。Secret Service がホストユーザーに認める範囲で、検索に一致した他の秘密値も取得できます。[DBus のリスク](/nix-agent-sandbox/security/risks/#dbus)を確認してください。
