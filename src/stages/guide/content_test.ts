@@ -111,6 +111,39 @@ describe("renderGuide", () => {
     expect(out).toContain("5432");
   });
 
+  test("states the localhost:<port> form for forwarded ports", () => {
+    const out = renderGuide(
+      makeFacts({
+        network: {
+          fallback: "deny",
+          pendingTimeoutSeconds: 300,
+          forwardPorts: [8080, 5432],
+        },
+      }),
+    );
+    expect(out).toContain("localhost:<port>");
+  });
+
+  test("description carries a ports symptom only when forwardPorts is non-empty", () => {
+    const bare = renderGuide(makeFacts());
+    const bareDescription =
+      bare.split("\n").find((l) => l.startsWith("description:")) ?? "";
+    expect(bareDescription).not.toContain("host port is refused");
+
+    const withPorts = renderGuide(
+      makeFacts({
+        network: {
+          fallback: "deny",
+          pendingTimeoutSeconds: 300,
+          forwardPorts: [8080],
+        },
+      }),
+    );
+    const withPortsDescription =
+      withPorts.split("\n").find((l) => l.startsWith("description:")) ?? "";
+    expect(withPortsDescription).toContain("host port is refused");
+  });
+
   test("warns that a hostexec approval is not a hang, with the timeout", () => {
     expect(renderGuide(makeFacts())).not.toContain("host");
 

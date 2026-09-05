@@ -52,7 +52,7 @@ export function profileToGuideFacts(
       forwardPorts: [...profile.network.proxy.forwardPorts],
     },
     hostexec:
-      profile.hostexec == null
+      profile.hostexec === undefined || profile.hostexec === null
         ? null
         : {
             promptEnabled:

@@ -24,6 +24,9 @@ function buildDescription(facts: GuideFacts): string {
   if (facts.maskEnabled) {
     symptoms.push("output contains values that look wrong");
   }
+  if (facts.network.forwardPorts.length > 0) {
+    symptoms.push("a connection to a host port is refused");
+  }
   return (
     "Read before retrying or working around an unexpected failure inside " +
     "the nas sandbox: " +
@@ -54,10 +57,13 @@ function networkSection(facts: GuideFacts): string {
 }
 
 function forwardedPortsSection(facts: GuideFacts): string {
+  const ports = facts.network.forwardPorts.join(", ");
   return [
     "## Forwarded ports",
     "",
-    `These host ports are reachable from inside the container: ${facts.network.forwardPorts.join(", ")}.`,
+    `These host ports are reachable from inside the container, at ` +
+      `\`localhost:<port>\` — the same port number, on \`localhost\`, not on ` +
+      `a gateway address or \`host.docker.internal\`: ${ports}.`,
     "Any other host port is not.",
   ].join("\n");
 }
