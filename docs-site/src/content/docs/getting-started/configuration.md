@@ -1,22 +1,54 @@
 ---
 title: 設定の基本
-description: 設定ファイルの編集先、プロファイル、共通設定の継承
+description: 設定の適用範囲、プロファイルの選択、設定例の追加方法
 ---
 
-nas の設定は Pkl 形式です。`nas config init` を実行すると、ユーザー共通の設定とプロジェクト固有の設定が生成されます。通常は `.nas/config.pkl` を編集します。
+機能ページの設定例を自分の設定に追加するための説明です。設定ファイルがまだない場合は、[クイックスタート](../quick-start/)で作成と最初の起動を済ませてください。
+
+## 設定の適用範囲
+
+設定を使いたい範囲に応じて、編集するファイルを選びます。
+
+| 適用範囲 | 編集するファイル |
+| --- | --- |
+| このプロジェクトだけ | プロジェクト内の `.nas/config.pkl` |
+| 複数のプロジェクトで共通 | `~/.config/nas/global.pkl` |
+
+`XDG_CONFIG_HOME` を指定している場合、共通設定の場所は `$XDG_CONFIG_HOME/nas/global.pkl` です。
+
+設定ファイルは Pkl 形式です。生成された `.nas/config.pkl` の先頭にある `amends "modulepath:/global.pkl"` は、共通設定を引き継ぐ指定です。プロジェクト側には、その設定から変えたい部分を書きます。共通設定のファイル自体は変更されません。
+
+## プロファイルと起動コマンド
+
+同じプロジェクトでも、使うエージェントや許可する機能を切り替えられます。この設定の組み合わせに名前を付けたものが「プロファイル」です。
+
+`profiles` の中の `["codex"]` はプロファイル名です。`nas codex` と起動すると、この名前の設定が選ばれます。一方、その中の `agent = "codex"` は、実行するエージェントの種類を指定します。プロファイル名は `dev` など別の名前にもできます。
+
+生成される共通設定には `claude` と `codex` があります。以下では `codex` に設定を追加します。Claude Code を使っている場合は、`claude` を編集してください。
 
 ## プロファイルの編集
 
-プロファイルは、エージェントとその実行設定をまとめたものです。たとえば `.nas/config.pkl` の `codex` に設定を追加すると、`nas codex` でその設定を使います。
+例として、ホストのキャッシュフォルダーを、このプロジェクトの Codex から読み取れるようにします。`~/.cache/my-tool` は、共有したい既存のフォルダーに置き換えてください。
 
-各機能ページの設定例は、対象プロファイルの `{ ... }` 内に追加します。`ui` と `observability` だけはトップレベルに指定します。次は、共通設定の `codex` に読み取り専用マウントを追加する例です。
+### 初期生成ファイル
+
+`nas config init` が生成した `.nas/config.pkl` では、末尾の `profiles` が次の形になっています。
 
 ```pkl
-amends "modulepath:/global.pkl"
-
 profiles {
-  ["claude"] = super["claude"]
-  ["codex"] = (super["codex"]) {
+  ["claude"] = extendProfile(super["claude"])
+  ["codex"] = extendProfile(super["codex"])
+}
+```
+
+`super["codex"]` は共通設定の `codex` を指します。`extendProfile` は、そのファイル内で定義されている関数です。この関数の中に書いた設定は、関数を呼び出している `claude` と `codex` の両方に適用されます。
+
+Codex にだけ追加する場合は、`codex` の行を次のように変更します。ファイル上部の `amends` と `extendProfile` の定義は残してください。
+
+```pkl
+profiles {
+  ["claude"] = extendProfile(super["claude"])
+  ["codex"] = (extendProfile(super["codex"])) {
     extraMounts {
       new { src = "~/.cache/my-tool"; dst = "~/.cache/my-tool"; mode = "ro" }
     }
@@ -24,52 +56,62 @@ profiles {
 }
 ```
 
-編集後は内容を確認して `nas config trust` を実行し、`nas codex` で起動します。
+`(extendProfile(super["codex"]))` で既存の設定を受け取り、その直後の `{ ... }` で今回の共有フォルダーを追加しています。共通設定や関数内に書かれた通信許可などは引き継ぎます。
 
-## 共通設定と継承
+### 編集済みのファイル
 
-ユーザー共通の設定は `~/.config/nas/global.pkl` にあります。`XDG_CONFIG_HOME` の指定があれば、その配下の `nas/global.pkl` を使います。プロジェクトの `.nas/config.pkl` は、同名プロファイルに変更を重ねます。
-
-`amends "modulepath:/global.pkl"` が共通設定を読み込みます。`env`、`extraMounts`、`hostexec.rules`、`network.proxy.forwardPorts` のリストは追加され、`network.scopes` と `secrets` のマッピングはキーごとにマージされます。
-
-プロジェクトをグローバル設定から独立させたい場合は、先頭を `amends "Schema.pkl"` に変えます。この場合はスキーマだけを継承するため、使用する `profiles` と、必要なら既定のプロファイルを選ぶ `default` をそのプロジェクトの `config.pkl` で定義します。
+クイックスタートの例では、`claude` はすでに `["claude"] = (super["claude"]) { ... }` の形になっています。この場合は、その波括弧の内側に、`network` と並べて次の `extraMounts` を追加します。既存の `network` は残してください。
 
 ```pkl
-amends "Schema.pkl"
-
-default = "claude"
-
-profiles {
-  ["claude"] { agent = "claude" }
+extraMounts {
+  new { src = "~/.cache/my-tool"; dst = "~/.cache/my-tool"; mode = "ro" }
 }
 ```
 
-## 信頼の確認
+すでに `extraMounts` がある場合は、ブロックをもう一つ作らず、その中へ `new { ... }` の行を追加します。他の機能でも、同じ設定項目がすでにあるかを確認してから編集してください。
 
-プロジェクトの `.nas/config.pkl` はホスト側のコマンド実行、マウント、ネットワーク設定に影響できます。そのため nas は、内容が変わったプロジェクト設定を自動では信頼しません。内容を確認してから、プロジェクトのルートで次を実行してください。
+## プロファイルの追加
+
+既存の設定を残して別の組み合わせを使う場合は、`profiles` の中に別名の項目を追加します。次は、共通設定の `codex` を引き継ぎ、Docker を有効にする `dev` の例です。
+
+```pkl
+["dev"] = (super["codex"]) {
+  docker { enable = true }
+}
+```
+
+この設定は `nas dev` で選びます。エージェントの種類と通信許可は共通設定の `codex` から引き継ぎます。プロジェクト側の `codex` にだけ追加した設定は引き継がないため、必要な通信設定をどちらに書いたか確認してください。
+
+プロファイル名を省略して `nas` で起動する場合は、ファイルの最上位にある `default` が選択する名前を決めます。初期設定は `default = "claude"` です。`dev` を既定にするには、`profiles` の外に `default = "dev"` と書きます。
+
+## プロファイル外の設定
+
+`ui` と `observability` はプロファイルごとに指定する項目ではありません。機能ページの例を、`profiles` の波括弧の外に追加してください。
+
+```pkl
+ui { port = 3939 }
+
+profiles {
+  ["claude"] = super["claude"]
+  ["codex"] = super["codex"]
+}
+```
+
+これは配置を示す例です。編集済みの `profiles` はそのまま残し、`ui` がすでにあれば既存のブロックを編集します。
+
+## 変更の反映
+
+プロジェクト設定はホストのファイル共有やコマンド実行にも影響するため、変更後には内容を確認して信頼し直します。ホストのターミナルで、プロジェクトのルートから実行してください。
 
 ```sh
 nas config trust
+nas codex
 ```
 
-信頼は `.nas/` 内のユーザー作成 `.pkl` ファイルの内容に結び付き、変更すると再承認が必要です。信頼を取り消すには `nas config untrust` を使います。
+`claude` や `dev` を編集した場合は、起動コマンドもその名前に変えます。設定は次に起動するセッションで使われます。
 
-`NAS_CONFIG_TRUST_ALL=1` は設定の信頼確認を完全に無効化します。設定によるホストへの影響は[プロジェクト設定の信頼](/nix-agent-sandbox/security/model/#repository-trust)で確認してください。
+キャッシュ共有の例では、起動したエージェントに指定フォルダーの内容を一覧させ、ホストと同じファイルが見えることを確認します。
 
-全フィールド、型、既定値はリポジトリの [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) を参照してください。
+`.nas/` 内のユーザー作成 `.pkl` ファイルを変更すると、再び信頼確認が必要です。信頼を取り消すコマンドは `nas config untrust` です。設定がホストに与える影響は[プロジェクト設定の信頼](/nix-agent-sandbox/security/model/#repository-trust)を参照してください。
 
-## 設定ファイルの一覧
-
-```text
-$XDG_CONFIG_HOME/nas/
-├── Schema.pkl          # 型付きスキーマ。CLI が更新を管理する
-└── global.pkl          # ユーザー共通の設定
-
-.nas/
-├── .gitignore          # .nas/ 配下を Git 管理から除外する
-├── PklProject          # Pkl の module path 定義。CLI が管理する
-├── Schema.pkl          # 型付きスキーマ。CLI が毎回更新する
-└── config.pkl          # プロジェクト固有の設定。通常はこれを編集する
-```
-
-`XDG_CONFIG_HOME` が未設定の場合、グローバル設定の場所は `~/.config/nas/` です。
+設定項目の型と既定値は [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) にあります。生成された `Schema.pkl` と `PklProject` は nas が管理するため、設定変更には使いません。
