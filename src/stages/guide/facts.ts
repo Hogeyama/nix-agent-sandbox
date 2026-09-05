@@ -2,8 +2,10 @@
  * Profile から、ガイド本文の分岐を駆動する事実だけを抽出する。
  *
  * この型はコンテナから読める内容の材料になる。したがって profile.env /
- * profile.secrets / hostexec.secrets / hostexec.rules / mask の中身は
- * 読まない（mask は null かどうかだけを見る）。security-constraints C1。
+ * profile.secrets / hostexec.secrets / mask の中身は読まない（mask は
+ * null かどうかだけを見る）。hostexec.rules は各 rule の `approval`
+ * フィールドだけを見る — env・inheritEnv・match など、シークレットや
+ * ホスト固有情報を運びうるフィールドは読まない。security-constraints C1。
  */
 
 import type { AgentType } from "../../agents/types.ts";
@@ -53,7 +55,9 @@ export function profileToGuideFacts(
       profile.hostexec == null
         ? null
         : {
-            promptEnabled: profile.hostexec.prompt.enable,
+            promptEnabled:
+              profile.hostexec.prompt.enable &&
+              profile.hostexec.rules.some((rule) => rule.approval === "prompt"),
             timeoutSeconds: profile.hostexec.prompt.timeoutSeconds,
           },
     dind: profile.docker.enable ? { shared: profile.docker.shared } : null,
