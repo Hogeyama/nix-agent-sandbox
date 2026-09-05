@@ -1470,7 +1470,8 @@ test("MountStage: planner emits container patch with structured mounts and dynam
     agentCommand: [
       "bash",
       "-c",
-      "curl -fsSL https://claude.ai/install.sh | bash && claude",
+      'curl -fsSL https://claude.ai/install.sh | bash && claude "$@"',
+      "claude",
     ],
     extraArgs: ["--safe"],
   });
@@ -1577,7 +1578,8 @@ test("MountStage run(): creates directories via MountSetupService and returns re
       agentCommand: [
         "bash",
         "-c",
-        "curl -fsSL https://claude.ai/install.sh | bash && claude",
+        'curl -fsSL https://claude.ai/install.sh | bash && claude "$@"',
+        "claude",
       ],
       extraArgs: [],
     },
