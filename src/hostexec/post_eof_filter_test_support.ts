@@ -1,7 +1,15 @@
 import { chmod, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const DEFAULT_TIMEOUT_MS = 2_000;
+/**
+ * These waits bound how long a filter process may take to appear or to be
+ * reaped, not how fast the code under test is expected to be. Two seconds was
+ * enough on an idle host; under a full parallel suite -- and inside a sandbox,
+ * where every `bun` here is another process on the same contended cores -- it
+ * turned prompt cleanup into a flaky failure. Ten still fails a filter that
+ * never goes away, which is what the assertion is for.
+ */
+const DEFAULT_TIMEOUT_MS = 10_000;
 const FILTER_POLL_INTERVAL_MS = 10;
 
 export interface FilterProcessIdentity {
@@ -112,7 +120,9 @@ export async function waitForFilterProcessesGone(
     if (Date.now() >= deadline) break;
     await Bun.sleep(FILTER_POLL_INTERVAL_MS);
   }
-  throw new Error("post-exit filter cleanup did not finish within 2 seconds");
+  throw new Error(
+    `post-exit filter cleanup did not finish within ${timeoutMs}ms`,
+  );
 }
 
 export async function forceFilterProcessesGone(

@@ -685,7 +685,7 @@ for await (const _chunk of Bun.stdin.stream()) await Bun.sleep(100);
     await rm(tempDir, { recursive: true, force: true });
   }
   if (!primaryError && cleanupError) throw cleanupError;
-});
+}, 30_000);
 
 test("runGatewayExecution kills after start for every pre-spawn failure", async () => {
   const cases: Array<{ message: unknown; error: string }> = [
@@ -930,7 +930,7 @@ test("runGatewayExecution interrupts post-exit filters when cancellation wins", 
     await rm(tempDir, { recursive: true, force: true });
   }
   if (!primaryError && cleanupError) throw cleanupError;
-});
+}, 30_000);
 
 test("runGatewayExecution kills when a mask filter cannot spawn", async () => {
   const harness = await openGatewayHarness();
@@ -1108,7 +1108,7 @@ for await (const _chunk of Bun.stdin.stream()) {
     await rm(tempDir, { recursive: true, force: true });
   }
   if (!primaryError && cleanupError) throw cleanupError;
-});
+}, 30_000);
 
 test("runGatewayExecution fails closed when the gateway disconnects before terminal state", async () => {
   const harness = await openGatewayHarness();
