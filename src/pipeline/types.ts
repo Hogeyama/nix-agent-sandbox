@@ -10,6 +10,7 @@ import type { DbusProxyService } from "../stages/dbus_proxy.ts";
 import type { DindService } from "../stages/dind.ts";
 import type { DisplayService } from "../stages/display.ts";
 import type { DockerBuildService } from "../stages/docker_build.ts";
+import type { GuideService } from "../stages/guide.ts";
 import type {
   HostExecBrokerService,
   HostExecSetupService,
@@ -95,6 +96,7 @@ export type StageServices =
   | ForwardPortRelayService
   | FsService
   | GitWorktreeService
+  | GuideService
   | HostExecBrokerService
   | HostExecSetupService
   | MaskFilterService
