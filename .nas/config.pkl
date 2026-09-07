@@ -126,7 +126,21 @@ local commonNetwork: NetworkConfig = new {
       }
     }
 
-    // 旧: 残りの allow(...) 全部。同じ帰結しか持たないホストは 1 スコープに畳める。
+    // chromium 開くと勝手にアクセスするやつ
+    ["chromium"] {
+      targets {
+        "accounts.google.com"
+        "android.clients.google.com"
+        "clients2.google.com"
+        "content-autofill.googleapis.com"
+        "dl.google.com"
+        "edgedl.me.gvt1.com"
+        "mtalk.google.com"
+        "www.google.com"
+      }
+      fallback = "deny"
+    }
+
     ["allowed"] {
       targets {
         // Anthropic / Claude
@@ -224,6 +238,7 @@ local anthropicPolicyNetwork: NetworkConfig = (commonNetwork) {
 }
 
 local commonHostexec: HostExecConfig = new {
+  installScript = true
   prompt {
     enable = true
     timeoutSeconds = 300
@@ -308,6 +323,10 @@ local baseProfile: Profile = new {
   secrets = commonSecrets
   hostexec = commonHostexec
   mask = commonMask
+
+  guide {
+    enable = true
+  }
 }
 
 local anthropicPolicyProfile: Profile = (baseProfile) {
