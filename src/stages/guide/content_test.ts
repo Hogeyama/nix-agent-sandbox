@@ -56,7 +56,8 @@ describe("renderGuide", () => {
         "the nas sandbox: network requests fail to resolve or are refused; " +
         "a command becomes unresponsive for minutes; a docker build fails " +
         "to reach the network. Explains which sandbox constraint causes " +
-        "each, and which ones no amount of retrying will get past.",
+        "each, and which ones no amount of retrying will get past. Also " +
+        "read when showing a playwright-cli browser to the user via xpra.",
     );
   });
 
@@ -145,7 +146,9 @@ describe("renderGuide", () => {
   });
 
   test("warns that a hostexec approval is not a hang, with the timeout", () => {
-    expect(renderGuide(makeFacts())).not.toContain("host");
+    expect(renderGuide(makeFacts())).not.toContain(
+      "Some commands run on the host",
+    );
 
     const out = renderGuide(
       makeFacts({ hostexec: { promptEnabled: true, timeoutSeconds: 300 } }),

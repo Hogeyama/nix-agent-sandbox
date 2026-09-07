@@ -3,7 +3,7 @@
  *
  * description は skill 機構によって常時 system prompt に載る。エージェントが
  * 失敗に遭遇した瞬間にガイドの存在へ気づけるかはここに懸かっているので、
- * 有効な機能に対応する症状だけを、症状の語彙で列挙する。
+ * 有効な機能に対応する症状と、ブラウザ表示の用途を記載する。
  */
 
 import type { GuideFacts } from "./facts.ts";
@@ -29,7 +29,8 @@ function buildDescription(facts: GuideFacts): string {
     "the nas sandbox: " +
     symptoms.join("; ") +
     ". Explains which sandbox constraint causes each, and which ones no " +
-    "amount of retrying will get past."
+    "amount of retrying will get past. Also read when showing a " +
+    "playwright-cli browser to the user via xpra."
   );
 }
 
@@ -89,6 +90,56 @@ function dindSection(): string {
   ].join("\n");
 }
 
+function visibleBrowserSection(): string {
+  return [
+    "## Show a playwright-cli browser to the user",
+    "",
+    "Use xpra to let the user watch the same browser you control. This needs",
+    "xpra on both sides, Xvfb and playwright-cli in nas, and a configured",
+    "hostexec command that can run xpra on the host. Run from a workspace",
+    "directory visible at the same absolute path on both sides, so the host",
+    "can reach the socket. Keep that directory and the variables below across commands.",
+    "",
+    "In nas, start a separate display when needed. Use an unused display number",
+    "(:100 below); if occupied, change it in every command. Use a fresh browser",
+    "session name (`visible` below), and reuse it throughout.",
+    "",
+    "```bash",
+    'NAS_XPRA_DIR="$PWD/.playwright-cli/xpra/$NAS_SESSION_ID"',
+    'mkdir -p "$NAS_XPRA_DIR"',
+    'xpra start :100 --socket-dir="$NAS_XPRA_DIR" --daemon=yes \\',
+    "  --xvfb='Xvfb +extension Composite -screen 0 1600x1000x24+32 -nolisten tcp -noreset' \\",
+    "  --notifications=no --pulseaudio=no --printing=no --webcam=no \\",
+    "  --mdns=no --start-new-commands=no --bell=no --speaker=no --microphone=no",
+    'xpra list --socket-dir="$NAS_XPRA_DIR"',
+    "DISPLAY=:100 playwright-cli -s=visible open about:blank --headed",
+    "playwright-cli -s=visible snapshot",
+    "```",
+    "",
+    "When the user needs to see it, run this from nas in a separate terminal",
+    "or a retained tool session; attach stays running while the viewer is open.",
+    "Continue browser operations with `playwright-cli -s=visible ...`.",
+    "",
+    "```bash",
+    'NAS_XPRA_DIR="$PWD/.playwright-cli/xpra/$NAS_SESSION_ID"',
+    'NAS_XPRA_SOCKET="$(find "$NAS_XPRA_DIR" -maxdepth 1 -type s -name \'*-100\' -print -quit)"',
+    'test -n "$NAS_XPRA_SOCKET" && hostexec xpra attach \\',
+    '  --desktop-scaling=off --encoding=rgb --video=no "socket://$NAS_XPRA_SOCKET"',
+    "```",
+    "",
+    "Disconnect the viewer with Ctrl-C in the attach session. When finished,",
+    "close the browser and stop the server in nas. Remove the session directory",
+    "only after confirming that the server stopped.",
+    "",
+    "```bash",
+    'NAS_XPRA_DIR="$PWD/.playwright-cli/xpra/$NAS_SESSION_ID"',
+    "playwright-cli -s=visible close",
+    'xpra stop :100 --socket-dir="$NAS_XPRA_DIR"',
+    'xpra list --socket-dir="$NAS_XPRA_DIR"',
+    "```",
+  ].join("\n");
+}
+
 export function renderGuide(facts: GuideFacts): string {
   const sections: string[] = [
     [
@@ -96,7 +147,8 @@ export function renderGuide(facts: GuideFacts): string {
       "",
       "You are running inside a container managed by nas. Several of its",
       "constraints produce failures that look like ordinary bugs, and reacting to",
-      "them as bugs wastes the whole attempt. This page lists those cases.",
+      "them as bugs wastes the whole attempt. This page lists those cases and",
+      "explains how to show a browser to the user.",
       "",
       "## Workspace",
       "",
@@ -114,6 +166,7 @@ export function renderGuide(facts: GuideFacts): string {
   if (facts.dind !== null) {
     sections.push(dindSection());
   }
+  sections.push(visibleBrowserSection());
   if (facts.extra !== null && facts.extra.trim() !== "") {
     sections.push(
       ["## Notes for this environment", "", facts.extra].join("\n"),
