@@ -17,6 +17,19 @@ is an entry point into that capability and is meaningless without its broker.
 hostexec = new HostExecConfig {
   installScript = true
   prompt { enable = true }
+  rules {
+    new {
+      id = "hostexec"
+      match {
+        argv0 = "hostexec"
+        argRegex = "^(?!-h(?: |$)|--help(?: |$)|--$).+"
+      }
+      cwd { mode = "workspace-or-session-tmp" }
+      inheritEnv { mode = "unsafe-inherit-all" }
+      approval = "prompt"
+      fallback = "container"
+    }
+  }
 }
 ```
 
@@ -28,20 +41,22 @@ hostexec bun run test
 hostexec -- bun run test
 ```
 
-The option supplies an internal rule with prompt approval,
-`workspace-or-session-tmp` cwd, `unsafe-inherit-all`, and container fallback.
-The default remains disabled and no existing user rule changes.
-
-The rule's argument matcher deliberately excludes an empty argv, `--` alone,
-and invocations whose first argument is `-h` or `--help`. Those requests fall
-back immediately to the container script, which prints usage without creating
-an approval request.
+The option installs only the command; it does not add or alter authorization.
+The user must add a normal `hostexec.rules` entry, choosing approval, cwd,
+environment inheritance, and fallback explicitly. The example preserves the
+repository's current escape-hatch policy. Its argument matcher excludes an
+empty argv, `--` alone, and invocations whose first argument is `-h` or
+`--help`, allowing those requests to fall back immediately to local usage.
+The default remains disabled and existing profiles retain their behavior.
 
 ## Source and runtime layout
 
 The single canonical shell source moves from `scripts/hostexec` to
 `src/hostexec/hostexec`. TypeScript imports that file as text so `bun build
---compile` embeds it; there is no second string-literal copy.
+--compile` embeds it; there is no second string-literal copy. This repository
+keeps a tracked relative symlink at `scripts/hostexec` for compatibility with
+its current development config and documentation. Other workspaces receive no
+such path.
 
 At session setup, HostExecSetupService writes the embedded bytes as executable
 `<host wrapperRoot>/bin/hostexec`. The existing wrapper-directory mount exposes
@@ -63,8 +78,8 @@ symlink.
 The planner adds `/opt/nas/hostexec/bin/hostexec` to
 `NAS_HOSTEXEC_INTERCEPT_PATHS`. The existing LD_PRELOAD interceptor therefore
 captures the shell's `execve` of the PATH-resolved script before its body runs.
-The internal rule itself matches the bare name `hostexec`, which continues to
-match the absolute request path by basename.
+An explicitly configured bare rule matching `hostexec` continues to match the
+absolute request path by basename.
 
 If the request is denied with container fallback, the interceptor permits the
 original exec. The mounted script then warns that execution is in the container
@@ -73,26 +88,27 @@ of help, argument parsing, and fallback behavior.
 
 ## Broker execution
 
-After a request matches the internal installed-command rule and is approved,
-the broker removes one optional leading `--`, then runs the first remaining
-argument with the rest instead of trying to execute a host binary named
-`hostexec`. The resolved cwd and inherited env still come from that rule.
+After a request for the installed command matches an explicitly configured rule
+and is approved, the broker removes one optional leading `--`, then runs the
+first remaining argument with the rest instead of trying to execute a host
+binary named `hostexec`. The resolved cwd and inherited env come from the
+matched user rule.
 
-The internal behavior is not selected by rule ID. HostExecStage creates the
-rule object and passes that exact object separately to the broker together with
-the config containing it. The broker uses object identity to select payload
-execution. A user rule with the same ID or match string therefore remains an
-ordinary rule and cannot acquire argv rewriting. User rules stay before the
-internal rule, preserving current first-match precedence.
+HostExecStage passes the exact container path of the installed command to the
+broker only when `installScript` is enabled. Payload execution is selected by
+an exact normalized match between the request argv0 and that nas-managed path,
+not by rule ID or basename. A user-controlled executable elsewhere named
+`hostexec` therefore remains an ordinary hostexec target. The selected rule is
+still required: installation alone grants nothing.
 
 Approval fingerprints, pending requests, and audit records retain the original
 wrapper invocation and its full arguments. Approval for
 `hostexec bun run test` therefore does not authorize a different payload.
 
-An empty invocation, `--` alone, and help flags do not need host approval. They
-do not match the internal rule, so the interceptor follows the existing
-container fallback path and lets the wrapper print usage. No synthetic gateway
-exit path is needed.
+With the recommended rule, an empty invocation, `--` alone, and help flags do
+not need host approval. They do not match, so the interceptor follows the
+existing container fallback path and lets the wrapper print usage. A user may
+choose a broader rule; normal first-match and approval behavior then applies.
 
 ## Integrity model
 
@@ -114,7 +130,9 @@ rules remain integrity-checked exactly as before.
 - No secret value or host-only broker directory is mounted.
 - The runtime wrapper directory is mounted read-only in the container.
 - Nothing appears in or shadows the workspace.
-- Only the stage-created rule object can activate payload execution.
+- Installation alone creates no authorization rule.
+- Payload execution requires both a matched user rule and the exact
+  nas-managed installed-command path.
 - Command, cwd, environment, approval, audit, masking, cancellation, and exit
   reporting continue through the existing gateway path.
 - Missing intercept artifacts retain the current actionable startup error.
@@ -123,13 +141,13 @@ rules remain integrity-checked exactly as before.
 
 - Pkl loading covers the default `false` and explicit `true` values.
 - Planner tests cover the embedded executable plan, absence of a client symlink
-  named `hostexec`, the absolute interceptor path, internal-rule ordering, and
+  named `hostexec`, the absolute interceptor path, unchanged rule ordering, and
   disabled behavior.
 - Setup-service tests cover executable creation and partial-failure cleanup.
-- Broker tests cover payload argv selection with and without `--`, inability of
-  a same-ID user rule to trigger rewriting, unchanged approval/audit identity,
-  and unchanged ordinary rules. Match tests cover local fallback for usage and
-  help invocations.
+- Broker tests cover payload argv selection with and without `--`, exact-path
+  selection, disabled behavior, unchanged approval/audit identity, and ordinary
+  rules elsewhere named `hostexec`. Match tests cover the recommended local
+  fallback for usage and help invocations.
 - An artifact-capability-guarded integration test runs an installed command
   through the gateway and verifies both host success and denied container
   fallback.
@@ -138,7 +156,7 @@ rules remain integrity-checked exactly as before.
 
 - Adding any generated or mounted path to a repository.
 - Installing a persistent global executable on the host.
-- Automatically enabling hostexec or weakening existing approval policy.
+- Automatically adding a hostexec rule or weakening existing approval policy.
 - General user-configurable command rewriting.
 - Adding nas-operation instructions to the agent skill; that remains the
   separate first scratchpad item.
@@ -157,5 +175,7 @@ persistent repository copy was rejected for the same reason plus update and
 collision policy. Executing the runtime shell script on the host was rejected
 because it introduces an extra mutable executable and requires translating the
 container path back to a host path. General argv rewriting was rejected because
-the only required case is the nas-owned escape hatch; passing the exact internal
-rule object keeps that exception unforgeable from Pkl configuration.
+the only required case is the nas-managed installed path. Automatically adding
+a rule was also rejected: installation is a filesystem/runtime concern, while
+approval, cwd, environment, and fallback are security policy and must remain
+explicit in `hostexec.rules`.
