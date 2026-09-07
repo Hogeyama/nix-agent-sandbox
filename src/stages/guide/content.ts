@@ -30,7 +30,10 @@ function buildDescription(facts: GuideFacts): string {
     symptoms.join("; ") +
     ". Explains which sandbox constraint causes each, and which ones no " +
     "amount of retrying will get past. Also read when showing a " +
-    "playwright-cli browser to the user via xpra."
+    "playwright-cli browser to the user via xpra." +
+    (facts.hostexec?.installScript === true
+      ? " Also read when exposing a port from nas to the host."
+      : "")
   );
 }
 
@@ -63,6 +66,25 @@ function forwardedPortsSection(facts: GuideFacts): string {
       `\`localhost:<port>\` — the same port number, on \`localhost\`, not on ` +
       `a gateway address or \`host.docker.internal\`: ${ports}.`,
     "Any other host port is not.",
+  ].join("\n");
+}
+
+function portExposureSection(): string {
+  return [
+    "## Expose a port to the host",
+    "",
+    "To expose a service's port on the host, run this in nas",
+    "(8765 in this example):",
+    "",
+    "```bash",
+    'hostexec nas network bind "$NAS_SESSION_ID:8765"',
+    "```",
+    "",
+    "Replace 8765 with the port your service uses. Give the user the host",
+    "address and port returned by this command. The host port may differ",
+    "from the port in nas. Keep the service running while it is needed.",
+    "The relay connects to `127.0.0.1` inside nas, so listening on that",
+    "loopback address is sufficient.",
   ].join("\n");
 }
 
@@ -175,6 +197,9 @@ export function renderGuide(facts: GuideFacts): string {
   }
   if (facts.hostexec !== null) {
     sections.push(hostexecSection(facts.hostexec));
+  }
+  if (facts.hostexec?.installScript === true) {
+    sections.push(portExposureSection());
   }
   if (facts.dind !== null) {
     sections.push(dindSection());
