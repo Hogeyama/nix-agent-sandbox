@@ -20,6 +20,7 @@ export interface GuideNetworkFacts {
 }
 
 export interface GuideHostExecFacts {
+  readonly installScript: boolean;
   readonly promptEnabled: boolean;
   readonly timeoutSeconds: number;
 }
@@ -55,9 +56,13 @@ export function profileToGuideFacts(
       profile.hostexec === undefined || profile.hostexec === null
         ? null
         : {
+            installScript: profile.hostexec.installScript,
             promptEnabled:
               profile.hostexec.prompt.enable &&
-              profile.hostexec.rules.some((rule) => rule.approval === "prompt"),
+              (profile.hostexec.installScript ||
+                profile.hostexec.rules.some(
+                  (rule) => rule.approval === "prompt",
+                )),
             timeoutSeconds: profile.hostexec.prompt.timeoutSeconds,
           },
     dind: profile.docker.enable ? { shared: profile.docker.shared } : null,

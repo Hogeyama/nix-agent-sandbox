@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GUIDE_CONFIG,
+  DEFAULT_HOSTEXEC_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   type Profile,
 } from "../../config/types.ts";
@@ -39,6 +40,37 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 }
 
 describe("profileToGuideFacts", () => {
+  test.each([
+    false,
+    true,
+  ])("carries hostexec.installScript=%s for browser attachment", (installScript) => {
+    const facts = profileToGuideFacts(
+      makeProfile({
+        hostexec: { ...DEFAULT_HOSTEXEC_CONFIG, installScript },
+      }),
+      "/w",
+    );
+
+    expect(facts.hostexec?.installScript).toBe(installScript);
+  });
+
+  test("accounts for the installed hostexec command's built-in prompt rule", () => {
+    for (const enable of [false, true]) {
+      const facts = profileToGuideFacts(
+        makeProfile({
+          hostexec: {
+            ...DEFAULT_HOSTEXEC_CONFIG,
+            installScript: true,
+            rules: [],
+            prompt: { ...DEFAULT_HOSTEXEC_CONFIG.prompt, enable },
+          },
+        }),
+        "/w",
+      );
+      expect(facts.hostexec?.promptEnabled).toBe(enable);
+    }
+  });
+
   test("carries the network fallback and forwarded ports", () => {
     const facts = profileToGuideFacts(
       makeProfile({
@@ -93,6 +125,7 @@ describe("profileToGuideFacts", () => {
     );
 
     expect(facts.hostexec).toEqual({
+      installScript: false,
       promptEnabled: false,
       timeoutSeconds: 300,
     });
@@ -136,6 +169,7 @@ describe("profileToGuideFacts", () => {
     );
 
     expect(facts.hostexec).toEqual({
+      installScript: false,
       promptEnabled: false,
       timeoutSeconds: 300,
     });
@@ -179,6 +213,7 @@ describe("profileToGuideFacts", () => {
     );
 
     expect(facts.hostexec).toEqual({
+      installScript: false,
       promptEnabled: true,
       timeoutSeconds: 300,
     });
@@ -213,6 +248,7 @@ describe("profileToGuideFacts", () => {
     );
 
     expect(facts.hostexec).toEqual({
+      installScript: false,
       promptEnabled: false,
       timeoutSeconds: 300,
     });
@@ -253,6 +289,7 @@ describe("profileToGuideFacts", () => {
     );
 
     expect(facts.hostexec).toEqual({
+      installScript: false,
       promptEnabled: true,
       timeoutSeconds: 300,
     });

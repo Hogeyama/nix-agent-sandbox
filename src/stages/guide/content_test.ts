@@ -28,6 +28,32 @@ function parseFrontmatter(out: string): unknown {
 }
 
 describe("renderGuide", () => {
+  test("uses hostexec to attach only when its command is installed", () => {
+    const out = renderGuide(
+      makeFacts({
+        hostexec: {
+          installScript: true,
+          promptEnabled: true,
+          timeoutSeconds: 300,
+        },
+      }),
+    );
+    expect(out).toContain("hostexec xpra attach");
+    expect(out).toContain("run this from nas");
+    expect(out).not.toContain("give the printed command to the user");
+  });
+
+  test.each([
+    null,
+    { installScript: false, promptEnabled: true, timeoutSeconds: 300 },
+  ])("provides a host-side attach command when the hostexec command is unavailable (%j)", (hostexec) => {
+    const out = renderGuide(makeFacts({ hostexec }));
+    expect(out).not.toContain("hostexec xpra attach");
+    expect(out).toContain("give the printed command to the user");
+    expect(out).toContain("host terminal");
+    expect(out).toContain("printf 'xpra attach");
+  });
+
   test("emits frontmatter with the skill name and a description", () => {
     const out = renderGuide(makeFacts());
     const lines = out.split("\n");
@@ -41,7 +67,11 @@ describe("renderGuide", () => {
   test("emits frontmatter that parses as YAML with the exact description", () => {
     const out = renderGuide(
       makeFacts({
-        hostexec: { promptEnabled: true, timeoutSeconds: 300 },
+        hostexec: {
+          installScript: false,
+          promptEnabled: true,
+          timeoutSeconds: 300,
+        },
         dind: { shared: false },
       }),
     );
@@ -151,7 +181,13 @@ describe("renderGuide", () => {
     );
 
     const out = renderGuide(
-      makeFacts({ hostexec: { promptEnabled: true, timeoutSeconds: 300 } }),
+      makeFacts({
+        hostexec: {
+          installScript: false,
+          promptEnabled: true,
+          timeoutSeconds: 300,
+        },
+      }),
     );
     expect(out).toContain("300");
     expect(out).toContain("not a hang");
@@ -184,7 +220,11 @@ describe("renderGuide", () => {
 
     const full = renderGuide(
       makeFacts({
-        hostexec: { promptEnabled: true, timeoutSeconds: 300 },
+        hostexec: {
+          installScript: false,
+          promptEnabled: true,
+          timeoutSeconds: 300,
+        },
         dind: { shared: false },
       }),
     );
@@ -196,7 +236,13 @@ describe("renderGuide", () => {
 
   test("description does not claim unresponsiveness when hostexec never prompts", () => {
     const out = renderGuide(
-      makeFacts({ hostexec: { promptEnabled: false, timeoutSeconds: 300 } }),
+      makeFacts({
+        hostexec: {
+          installScript: false,
+          promptEnabled: false,
+          timeoutSeconds: 300,
+        },
+      }),
     );
     const parsed = parseFrontmatter(out) as { description: string };
     expect(parsed.description).not.toContain("unresponsive");
@@ -224,7 +270,11 @@ describe("renderGuide", () => {
           pendingTimeoutSeconds: 120,
           forwardPorts: [],
         },
-        hostexec: { promptEnabled: true, timeoutSeconds: 300 },
+        hostexec: {
+          installScript: false,
+          promptEnabled: true,
+          timeoutSeconds: 300,
+        },
       }),
     );
     const bothDescription = (parseFrontmatter(both) as { description: string })

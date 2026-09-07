@@ -90,13 +90,25 @@ function dindSection(): string {
   ].join("\n");
 }
 
-function visibleBrowserSection(): string {
+function visibleBrowserSection(facts: GuideFacts): string {
+  const installed = facts.hostexec?.installScript === true;
+  const attachInstructions = installed
+    ? "When the user needs to see it, run this from nas in a separate terminal\n" +
+      "or a retained tool session. hostexec runs the viewer on the host under\n" +
+      "the configured approval rules; attach stays running while the viewer is open."
+    : "The hostexec command is not enabled. Run this in nas, then give the printed command to the user\n" +
+      "to run in a host terminal. It contains the absolute socket path, so the\n" +
+      "host terminal does not need nas's environment variables.";
+  const attachCommand = installed
+    ? 'test -n "$NAS_XPRA_SOCKET" && hostexec xpra attach \\\n' +
+      '  --desktop-scaling=off --encoding=rgb --video=no "socket://$NAS_XPRA_SOCKET"'
+    : "test -n \"$NAS_XPRA_SOCKET\" && printf 'xpra attach --desktop-scaling=off --encoding=rgb --video=no %q\\n' \\\n" +
+      '  "socket://$NAS_XPRA_SOCKET"';
   return [
     "## Show a playwright-cli browser to the user",
     "",
     "Use xpra to let the user watch the same browser you control. This needs",
-    "xpra on both sides, Xvfb and playwright-cli in nas, and a configured",
-    "hostexec command that can run xpra on the host. Run from a workspace",
+    "xpra on both sides, and Xvfb and playwright-cli in nas. Run from a workspace",
     "directory visible at the same absolute path on both sides, so the host",
     "can reach the socket. Keep that directory and the variables below across commands.",
     "",
@@ -116,18 +128,19 @@ function visibleBrowserSection(): string {
     "playwright-cli -s=visible snapshot",
     "```",
     "",
-    "When the user needs to see it, run this from nas in a separate terminal",
-    "or a retained tool session; attach stays running while the viewer is open.",
+    "`xpra attach` opens a viewer on the host, connecting to the xpra server's",
+    "socket to display the same browser already running in nas.",
+    attachInstructions,
     "Continue browser operations with `playwright-cli -s=visible ...`.",
     "",
     "```bash",
     'NAS_XPRA_DIR="$PWD/.playwright-cli/xpra/$NAS_SESSION_ID"',
     'NAS_XPRA_SOCKET="$(find "$NAS_XPRA_DIR" -maxdepth 1 -type s -name \'*-100\' -print -quit)"',
-    'test -n "$NAS_XPRA_SOCKET" && hostexec xpra attach \\',
-    '  --desktop-scaling=off --encoding=rgb --video=no "socket://$NAS_XPRA_SOCKET"',
+    attachCommand,
     "```",
     "",
-    "Disconnect the viewer with Ctrl-C in the attach session. When finished,",
+    "Disconnect the viewer with Ctrl-C in the attach terminal or tool session.",
+    "The browser and server keep running after disconnection. When finished,",
     "close the browser and stop the server in nas. Remove the session directory",
     "only after confirming that the server stopped.",
     "",
@@ -166,7 +179,7 @@ export function renderGuide(facts: GuideFacts): string {
   if (facts.dind !== null) {
     sections.push(dindSection());
   }
-  sections.push(visibleBrowserSection());
+  sections.push(visibleBrowserSection(facts));
   if (facts.extra !== null && facts.extra.trim() !== "") {
     sections.push(
       ["## Notes for this environment", "", facts.extra].join("\n"),
