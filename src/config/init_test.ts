@@ -158,17 +158,17 @@ describe("initConfig", () => {
     mkdirSync(globalDir, { recursive: true });
     writeFileSync(
       path.join(globalDir, "Schema.pkl"),
-      "/// @version 0.0.1\n/// old schema\nopen module nas.Config\n",
+      "/// @version 0.14.0\n/// old schema\nopen module nas.Config\n",
     );
 
     const result = await initConfig({ projectDir });
 
-    // Global Schema.pkl should be overwritten (0.13.0 > 0.0.1)
+    // Installing the new hostexec option must refresh an existing 0.14.0 schema.
     expect(result.written).toContain(path.join(globalDir, "Schema.pkl"));
 
     // Verify the content is the new bundled version
     const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
-    expect(content).toContain("@version 0.14.0");
+    expect(content).toContain("@version 0.14.1");
   });
 
   test("global Schema.pkl is skipped when existing version is same or newer", async () => {
@@ -205,7 +205,7 @@ describe("initConfig", () => {
     // Should be overwritten regardless of version
     expect(result.written).toContain(path.join(nasDir, "Schema.pkl"));
     const content = readFileSync(path.join(nasDir, "Schema.pkl"), "utf8");
-    expect(content).toContain("@version 0.14.0");
+    expect(content).toContain("@version 0.14.1");
   });
 
   test("global Schema.pkl is skipped when bundled Schema.pkl has no version", async () => {

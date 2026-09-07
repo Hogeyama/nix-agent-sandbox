@@ -264,18 +264,13 @@ pub fn collectArgv(alloc: Allocator, argv: [*:null]const ?[*:0]const u8) ![]cons
 /// `stdin_capable`: whether the calling client owns fd 0 on behalf of the
 /// command being run. The standalone client and the LD_PRELOAD hooks for
 /// execve/execv/execvp/execvpe pass true — the calling process image *becomes*
-/// the command, so fd 0 legitimately is its stdin. posix_spawn/posix_spawnp
-/// pass false: `posixSpawnViaBroker` ignores `file_actions` and forks, so the
-/// child's fd 0 is really the *caller's*, and the caller keeps running (and
-/// may read fd 0 itself) after the spawn returns. Passing its fd here would
-/// give the host child input owned by a process that continues running.
+/// the command, so fd 0 legitimately is its stdin. Spawn also enters the
+/// standalone client after libc has applied the requested file actions.
 pub fn callBroker(
     pathname: [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
     stdin_capable: bool,
 ) BrokerCallResult {
-    const alloc = std.heap.c_allocator;
-
     // Reaching either client means hostexec is active: the standalone binary is
     // only entered through a wrapper symlink, and the shared library calls this
     // function only after an intercept-path match. Missing routing metadata is
@@ -290,7 +285,26 @@ pub fn callBroker(
         return .{ .exit_code = 1, .outcome = .failed };
     };
 
-    return callBrokerInner(alloc, socket_path, session_id, pathname, argv, stdin_capable) catch |err| {
+    return callBrokerAt(socket_path, session_id, pathname, argv, stdin_capable);
+}
+
+/// Private spawn transport envelope, distinct from ordinary wrapper arguments.
+pub const spawn_client_argv0: [:0]const u8 = "/opt/nas/hostexec/libexec/nas-hostexec-client";
+pub const spawn_client_flag: [:0]const u8 = "--nas-intercept-spawn";
+pub const spawn_search_flag: [:0]const u8 = "--nas-intercept-spawn-search";
+
+pub fn callBrokerAt(
+    socket_path: []const u8,
+    session_id: []const u8,
+    pathname: [*:0]const u8,
+    argv: [*:null]const ?[*:0]const u8,
+    stdin_capable: bool,
+) BrokerCallResult {
+    if (socket_path.len == 0 or session_id.len == 0) {
+        writeAll(std.posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete; refusing to run the command locally\n");
+        return .{ .exit_code = 1, .outcome = .failed };
+    }
+    return callBrokerInner(std.heap.c_allocator, socket_path, session_id, pathname, argv, stdin_capable) catch |err| {
         // Everything from here on is a broker that was configured but could not
         // be reached or spoke nonsense. Running the command locally would be
         // fail-open — the command was configured to go through the broker, and

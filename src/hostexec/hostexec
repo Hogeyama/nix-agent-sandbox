@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Run a command on the host instead of inside the nas sandbox.
+#
+# nas installs this script in its session wrapper directory and intercepts
+# that exact container path before the body runs. The broker launches the
+# payload directly after approval. See --help.
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+usage: hostexec <command> [args...]
+       hostexec -- <command> [args...]
+
+Run a command on the host instead of inside the nas sandbox.
+
+    hostexec wl-copy 'hello from the sandbox'
+
+    Copy text to the host's clipboard. This example requires a Wayland
+    desktop with wl-copy installed on the host.
+
+How it works
+
+    nas writes this script into a private per-session directory that is first
+    on the container PATH and mounted read-only. The interceptor recognizes
+    that exact installed path. After approval, the broker runs the payload
+    directly on the host with the host's environment.
+
+    This body runs only for local help or container fallback. It never talks
+    to the broker itself.
+
+The settings that enable it
+
+    Enable the command in your profile. No rules are required:
+
+        hostexec = new HostExecConfig {
+          installScript = true
+        }
+
+    Run from the workspace or session temporary directory. Commands require
+    approval and inherit the host's environment, including credentials, so
+    check the command before approving it. Explicit user rules take precedence.
+
+    The approval key covers the whole original argv, so approving one clipboard
+    command for a session does not approve a command that copies different text.
+
+Where no rule matches
+
+    With container fallback, the command still runs -- in the container --
+    and this script says so on stderr. An explicit denial returns an error
+    instead of running the payload. A command that silently changes which
+    machine it runs on is the confusion this script exists to remove.
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+    usage >&2
+    exit 64
+fi
+
+case "$1" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --)
+        shift
+        if [[ $# -eq 0 ]]; then
+            usage >&2
+            exit 64
+        fi
+        ;;
+esac
+
+# Set for the container by the hostexec stage, absent from the host process
+# whose environment the broker passes on. Reaching this line with it set means
+# no rule matched and nothing was forwarded anywhere.
+if [[ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]]; then
+    echo "[hostexec] no rule matched: running in the container, not on the host." >&2
+    echo "[hostexec] see 'hostexec --help' for setup instructions." >&2
+fi
+
+exec "$@"

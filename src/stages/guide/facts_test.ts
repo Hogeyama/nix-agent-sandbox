@@ -78,6 +78,7 @@ describe("profileToGuideFacts", () => {
     const facts = profileToGuideFacts(
       makeProfile({
         hostexec: {
+          installScript: false,
           prompt: {
             enable: true,
             timeoutSeconds: 300,
@@ -101,6 +102,7 @@ describe("profileToGuideFacts", () => {
     const facts = profileToGuideFacts(
       makeProfile({
         hostexec: {
+          installScript: false,
           prompt: {
             enable: true,
             timeoutSeconds: 300,
@@ -143,6 +145,7 @@ describe("profileToGuideFacts", () => {
     const facts = profileToGuideFacts(
       makeProfile({
         hostexec: {
+          installScript: false,
           prompt: {
             enable: true,
             timeoutSeconds: 300,
@@ -185,6 +188,7 @@ describe("profileToGuideFacts", () => {
     const facts = profileToGuideFacts(
       makeProfile({
         hostexec: {
+          installScript: false,
           prompt: {
             enable: false,
             timeoutSeconds: 300,
@@ -224,6 +228,7 @@ describe("profileToGuideFacts", () => {
     const facts = profileToGuideFacts(
       makeProfile({
         hostexec: {
+          installScript: false,
           prompt: {
             enable: true,
             timeoutSeconds: 300,

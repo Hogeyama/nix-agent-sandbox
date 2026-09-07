@@ -1,8 +1,9 @@
 // hostexec_intercept.zig — LD_PRELOAD shared library that intercepts exec-family
 // calls and delegates matching commands to the hostexec broker over a Unix socket.
 //
-// This is the client for rules whose argv0 is a relative or absolute path;
-// bare-command rules are caught via PATH by `client_main.zig` instead. Both
+// This is the client for rules whose argv0 is a relative or absolute path,
+// including the installed hostexec script. Ordinary bare-command rules are
+// caught via PATH by `client_main.zig` instead. Both
 // share `protocol.zig` from the point the intercept decision has been made.
 //
 // Environment variables consumed:
@@ -10,12 +11,14 @@
 //   NAS_HOSTEXEC_SOCKET           – path to the broker's Unix domain socket
 //   NAS_HOSTEXEC_SESSION_ID       – session identifier sent in every request
 //   NAS_HOSTEXEC_INTERCEPT_DEBUG  – if set, emit debug messages to stderr
+//   NAS_HOSTEXEC_CLIENT_PATH      – standalone client used for posix_spawn
 
 const std = @import("std");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 const protocol = @import("protocol.zig");
+const intercept_paths = @import("intercept_paths.zig");
 const callBroker = protocol.callBroker;
 const debugLog = protocol.debugLog;
 const doExit = protocol.doExit;
@@ -24,6 +27,7 @@ const doExit = protocol.doExit;
 const c = @cImport({
     @cInclude("dlfcn.h");
     @cInclude("spawn.h");
+    @cInclude("errno.h");
 });
 
 // ─── libc types ──────────────────────────────────────────────────────
@@ -91,15 +95,7 @@ pub fn resolvePath(alloc: Allocator, pathname: [*:0]const u8) ![]const u8 {
 }
 
 /// Check if `resolved` matches any entry in the newline-separated intercept list.
-pub fn matchesInterceptPaths(resolved: []const u8, intercept_paths_env: []const u8) bool {
-    var iter = std.mem.splitScalar(u8, intercept_paths_env, '\n');
-    while (iter.next()) |entry| {
-        const trimmed = std.mem.trim(u8, entry, &[_]u8{ ' ', '\t', '\r' });
-        if (trimmed.len == 0) continue;
-        if (std.mem.eql(u8, resolved, trimmed)) return true;
-    }
-    return false;
-}
+pub const matchesInterceptPaths = intercept_paths.matchesInterceptPaths;
 
 /// Full intercept decision: resolve the path, then match.
 pub fn shouldIntercept(alloc: Allocator, pathname: [*:0]const u8) bool {
@@ -110,6 +106,28 @@ pub fn shouldIntercept(alloc: Allocator, pathname: [*:0]const u8) bool {
     defer alloc.free(resolved);
 
     return matchesInterceptPaths(resolved, intercept_paths_env);
+}
+
+/// Resolve the same first executable that libc's PATH search would select.
+/// Stop at an unrelated executable: a later installed command must not shadow
+/// a caller's earlier PATH entry. execvpe, like execvp, searches the caller's
+/// PATH, not the PATH in the environment supplied for the new process.
+fn interceptedSearchPath(alloc: Allocator, pathname: [*:0]const u8) ?[:0]u8 {
+    const name = std.mem.span(pathname);
+    if (std.mem.indexOfScalar(u8, name, '/') != null) {
+        if (!shouldIntercept(alloc, pathname)) return null;
+        return alloc.dupeZ(u8, name) catch null;
+    }
+    if (name.len == 0) return null;
+    const path_env = posix.getenv("PATH") orelse intercept_paths.default_path;
+    const candidate = intercept_paths.findExecutable(alloc, name, path_env) catch return null;
+    defer alloc.free(candidate);
+    const canonical = std.fs.cwd().realpathAlloc(alloc, candidate) catch return null;
+    defer alloc.free(canonical);
+    const resolved = alloc.dupeZ(u8, canonical) catch return null;
+    if (shouldIntercept(alloc, resolved.ptr)) return resolved;
+    alloc.free(resolved);
+    return null;
 }
 
 // ─── Exported hooks ─────────────────────────────────────────────────
@@ -145,13 +163,10 @@ export fn execv(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) cal
 }
 
 export fn execvp(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) callconv(.c) c_int {
-    const path_slice = std.mem.span(pathname);
-    // Intercept if pathname contains '/' (POSIX: any slash means path, not PATH lookup)
-    const should_check = std.mem.indexOfScalar(u8, path_slice, '/') != null;
-
-    if (should_check and shouldIntercept(std.heap.c_allocator, pathname)) {
-        debugLog("intercepting execvp: {s}", .{path_slice});
-        const result = callBroker(pathname, argv, true);
+    if (interceptedSearchPath(std.heap.c_allocator, pathname)) |resolved| {
+        defer std.heap.c_allocator.free(resolved);
+        debugLog("intercepting execvp: {s}", .{resolved});
+        const result = callBroker(resolved.ptr, argv, true);
         if (result.outcome != .fallback) {
             doExit(result.exit_code);
         }
@@ -164,13 +179,10 @@ export fn execvp(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) ca
 }
 
 export fn execvpe(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8, envp: [*:null]const ?[*:0]const u8) callconv(.c) c_int {
-    const path_slice = std.mem.span(pathname);
-    // Intercept if pathname contains '/' (POSIX: any slash means path, not PATH lookup)
-    const should_check = std.mem.indexOfScalar(u8, path_slice, '/') != null;
-
-    if (should_check and shouldIntercept(std.heap.c_allocator, pathname)) {
-        debugLog("intercepting execvpe: {s}", .{path_slice});
-        const result = callBroker(pathname, argv, true);
+    if (interceptedSearchPath(std.heap.c_allocator, pathname)) |resolved| {
+        defer std.heap.c_allocator.free(resolved);
+        debugLog("intercepting execvpe: {s}", .{resolved});
+        const result = callBroker(resolved.ptr, argv, true);
         if (result.outcome != .fallback) {
             doExit(result.exit_code);
         }
@@ -192,7 +204,7 @@ export fn posix_spawn(
 ) callconv(.c) c_int {
     if (shouldIntercept(std.heap.c_allocator, pathname)) {
         debugLog("intercepting posix_spawn: {s}", .{std.mem.span(pathname)});
-        return posixSpawnViaBroker(pid, pathname, argv);
+        return posixSpawnViaBroker(pid, pathname, file_actions, attrp, argv, envp, false);
     }
     const real = getRealPosixSpawn() orelse return 127;
     return real(pid, pathname, file_actions, attrp, argv, envp);
@@ -206,45 +218,62 @@ export fn posix_spawnp(
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
 ) callconv(.c) c_int {
-    const path_slice = std.mem.span(pathname);
-    // Intercept if pathname contains '/' (POSIX: any slash means path, not PATH lookup)
-    const should_check = std.mem.indexOfScalar(u8, path_slice, '/') != null;
-
-    if (should_check and shouldIntercept(std.heap.c_allocator, pathname)) {
-        debugLog("intercepting posix_spawnp: {s}", .{path_slice});
-        return posixSpawnViaBroker(pid, pathname, argv);
+    // File actions may chdir/fchdir before libc searches PATH. For configured
+    // command names, postpone selection until the relay has received those
+    // actions; the parent cwd cannot tell which executable will be selected.
+    const configured = posix.getenv("NAS_HOSTEXEC_INTERCEPT_PATHS") orelse "";
+    if (file_actions != null and intercept_paths.matchesInterceptName(std.mem.span(pathname), configured)) {
+        return posixSpawnViaBroker(pid, pathname, file_actions, attrp, argv, envp, true);
+    }
+    if (interceptedSearchPath(std.heap.c_allocator, pathname)) |resolved| {
+        defer std.heap.c_allocator.free(resolved);
+        debugLog("intercepting posix_spawnp: {s}", .{resolved});
+        // A differently named symlink may also select an intercepted parent
+        // target. Recheck that PATH lookup after cwd-changing file actions.
+        const search = file_actions != null and std.mem.indexOfScalar(u8, std.mem.span(pathname), '/') == null;
+        return posixSpawnViaBroker(pid, if (search) pathname else resolved.ptr, file_actions, attrp, argv, envp, search);
     }
     const real = getRealPosixSpawnp() orelse return 127;
     return real(pid, pathname, file_actions, attrp, argv, envp);
 }
 
-/// posix_spawn wrapper: fork(), child calls broker + _exit(), parent gets child pid.
+/// Let libc apply all spawn actions/attributes to the actual command process.
+/// The standalone client then contacts the broker and can exec the original
+/// path on fallback, preserving the returned PID, descriptors and environment.
 fn posixSpawnViaBroker(
     pid: *c.pid_t,
     pathname: [*:0]const u8,
+    file_actions: ?*const posix_spawn_file_actions_t,
+    attrp: ?*const posix_spawnattr_t,
     argv: [*:null]const ?[*:0]const u8,
+    envp: [*:null]const ?[*:0]const u8,
+    search_in_child: bool,
 ) c_int {
-    const fork_result = std.posix.fork() catch {
-        debugLog("fork failed in posix_spawn wrapper", .{});
-        return 127;
-    };
-
-    if (fork_result == 0) {
-        // Child process. stdin_capable is false: this child was forked, not
-        // exec'd, so its fd 0 is the spawn caller's — draining it here would
-        // steal input from a process that keeps running after posix_spawn
-        // returns.
-        const result = callBroker(pathname, argv, false);
-        if (result.outcome == .fallback) {
-            // Cannot fallback in posix_spawn child; exit with error
-            doExit(127);
-        }
-        doExit(result.exit_code);
+    const alloc = std.heap.c_allocator;
+    const real = getRealPosixSpawn() orelse return c.ENOSYS;
+    const client_path: [:0]const u8 = posix.getenv("NAS_HOSTEXEC_CLIENT_PATH") orelse protocol.spawn_client_argv0;
+    const original = std.mem.span(argv);
+    const prefix_len: usize = if (search_in_child) 7 else 5;
+    const forwarded = alloc.allocSentinel(?[*:0]const u8, original.len + prefix_len, null) catch return c.ENOMEM;
+    defer alloc.free(forwarded);
+    forwarded[0] = protocol.spawn_client_argv0.ptr;
+    forwarded[1] = if (search_in_child) protocol.spawn_search_flag.ptr else protocol.spawn_client_flag.ptr;
+    // Carry routing separately: envp may deliberately omit all NAS variables.
+    // This is session metadata, never secret values, and fallback sees envp
+    // unchanged. Missing parent metadata still fails closed in the client.
+    const socket_path: [:0]const u8 = posix.getenv("NAS_HOSTEXEC_SOCKET") orelse "";
+    const session_id: [:0]const u8 = posix.getenv("NAS_HOSTEXEC_SESSION_ID") orelse "";
+    forwarded[2] = socket_path.ptr;
+    forwarded[3] = session_id.ptr;
+    forwarded[4] = pathname;
+    if (search_in_child) {
+        const search_path: [:0]const u8 = posix.getenv("PATH") orelse intercept_paths.default_path;
+        const configured: [:0]const u8 = posix.getenv("NAS_HOSTEXEC_INTERCEPT_PATHS") orelse "";
+        forwarded[5] = search_path.ptr;
+        forwarded[6] = configured.ptr;
     }
-
-    // Parent process
-    pid.* = @intCast(fork_result);
-    return 0;
+    @memcpy(forwarded[prefix_len..], original);
+    return real(pid, client_path.ptr, file_actions, attrp, forwarded.ptr, envp);
 }
 
 // ─── Unit tests ─────────────────────────────────────────────────────

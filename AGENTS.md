@@ -28,7 +28,7 @@ bun run compile            # Build standalone binary (bun build --compile)
 - `bun test src/` is **not** a unit run: `src/` holds `*integration_test.ts` files, some of
   which spawn `docker` at import time even when their tests skip. Use `bun run test:unit`
   while iterating. See `.claude/skills/test-policy/SKILL.md`.
-- Tests run in the container; `./scripts/hostexec bun run test` runs the suite on the
+- Tests run in the container; `hostexec bun run test` runs the suite on the
   host instead and prompts for approval. The two do not agree: a test whose
   `docker build` has to reach the network cannot pass in a sandbox, because a DinD
   build container has no route out (`apt-get` resolves nothing, while the base image

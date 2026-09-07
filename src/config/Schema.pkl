@@ -1,4 +1,4 @@
-/// @version 0.14.0
+/// @version 0.14.1
 /// Typed schema for nas (Nix Agent Sandbox) configuration.
 ///
 /// User configuration files (`.nas/config.pkl`) `amends` this module to
@@ -797,6 +797,10 @@ class HostExecRule {
 }
 
 class HostExecConfig {
+  /// セッション中だけ `hostexec` コマンドを読み取り専用の PATH に提供する。
+  /// rules の設定は不要。承認後、ホストの環境変数を引き継いで実行する。
+  installScript: Boolean = false
+
   prompt: HostExecPromptConfig = new {}
 
   /// `"secret:<name>"` で hostexec ルールの env から参照するシークレット。

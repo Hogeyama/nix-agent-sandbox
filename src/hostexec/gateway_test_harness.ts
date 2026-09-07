@@ -449,6 +449,7 @@ export async function startGatewayTestHarness(
             shellOptions.pathEnv ??
             `${wrapperDir}:${realDir}:${process.env.PATH ?? ""}`,
           NAS_HOSTEXEC_WRAPPER_DIR: wrapperDir,
+          NAS_HOSTEXEC_CLIENT_PATH: artifacts.clientPath ?? "",
           ...(shellOptions.socketPath === null
             ? {}
             : {

@@ -64,6 +64,7 @@ function makeConfig(
 
 function makeHostexec(overrides: Partial<HostExecConfig> = {}): HostExecConfig {
   return {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 300,

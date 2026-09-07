@@ -8,7 +8,7 @@
  */
 
 import * as path from "node:path";
-import { Effect, Schedule, type Scope } from "effect";
+import { Cause, Effect, Schedule, type Scope } from "effect";
 import {
   DEFAULT_HOSTEXEC_CONFIG,
   type HostExecRule,
@@ -30,6 +30,11 @@ import {
   hostExecInternalSocketPath,
   hostExecSessionBrokerDir,
 } from "../../hostexec/registry.ts";
+import {
+  HOSTEXEC_SCRIPT_COMMAND,
+  HOSTEXEC_SCRIPT_CONTAINER_PATH,
+  HOSTEXEC_SCRIPT_CONTENT,
+} from "../../hostexec/script.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import { selectAppliedSecrets } from "../../network/secrets.ts";
@@ -94,6 +99,10 @@ export function validateAbsoluteArgv0(ruleId: string, argv0: string): void {
 export interface HostExecPlan {
   readonly directories: ReadonlyArray<{ path: string; mode: number }>;
   readonly symlinks: ReadonlyArray<{ target: string; path: string }>;
+  readonly script?: {
+    readonly runtimePath: string;
+    readonly content: string;
+  };
   readonly mounts: readonly MountSpec[];
   readonly dockerArgs: string[];
   readonly envVars: Record<string, string>;
@@ -127,6 +136,7 @@ export interface HostExecPlan {
     readonly auditDir: string | undefined;
     readonly agent: StageInput["profile"]["agent"];
     readonly integrityTargets: readonly string[];
+    readonly installedScriptPath: string | undefined;
   };
 }
 
@@ -204,6 +214,20 @@ const NAS_HOOK_RULE: HostExecRule = {
   fallback: "container",
 };
 
+/** Opt-in escape hatch: ask before running the payload in the host environment. */
+const NAS_HOSTEXEC_RULE: HostExecRule = {
+  id: "__nas_hostexec",
+  match: {
+    argv0: HOSTEXEC_SCRIPT_CONTAINER_PATH,
+    argRegex: "^(?!-h(?: |$)|--help(?: |$)|--$).+",
+  },
+  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+  env: {},
+  inheritEnv: { mode: "unsafe-inherit-all", keys: [] },
+  approval: "prompt",
+  fallback: "container",
+};
+
 export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   // Both container-side clients are build artifacts whose host paths can only
   // be learned by looking at the filesystem. That lookup is a probe resolved
@@ -219,8 +243,9 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
       "[nas] hostexec: nas-hostexec-gateway is missing. Build with `cd src/hostexec/intercept && zig build` or reinstall nas before starting a hostexec session.",
     );
   }
-  const config =
-    input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
+  const config = structuredClone(
+    input.profile.hostexec ?? DEFAULT_HOSTEXEC_CONFIG,
+  );
   config.rules = [...config.rules, NAS_HOOK_RULE];
   // validateAbsoluteArgv0 はパスの健全性のみを検証する。具体的には `/` 単独、
   // 末尾スラッシュ、`.`/`..` セグメントを拒否する。ホストexecの差し替え防止は
@@ -257,6 +282,13 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   const wrapperBinDir = path.join(wrapperRoot, "bin");
   const sessionTmpDir = path.join(wrapperRoot, "tmp");
   const containerSessionTmp = path.join(SESSION_TMP_ROOT, input.sessionId);
+  const workDir = workspace.workDir;
+  const script: HostExecPlan["script"] = config.installScript
+    ? {
+        runtimePath: path.join(wrapperBinDir, HOSTEXEC_SCRIPT_COMMAND),
+        content: HOSTEXEC_SCRIPT_CONTENT,
+      }
+    : undefined;
 
   const directories: HostExecPlan["directories"] = [
     { path: runtimePaths.runtimeDir, mode: 0o755 },
@@ -278,7 +310,10 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   const argv0Names = new Set(
     config.rules
       .map((rule) => rule.match.argv0)
-      .filter(isBareCommandHostExecArgv0),
+      .filter(isBareCommandHostExecArgv0)
+      .filter(
+        (argv0) => !config.installScript || argv0 !== HOSTEXEC_SCRIPT_COMMAND,
+      ),
   );
   for (const argv0 of argv0Names) {
     symlinks.push({
@@ -303,12 +338,20 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
     ),
   ];
 
-  const workDir = workspace.workDir;
   const workspaceRoot = workspace.mountDir ?? workspace.workDir;
-  const interceptPaths = [
+  const hostIntegrityTargets = [
     ...relativeArgv0s.map((a) => path.resolve(workDir, a)),
     ...absoluteArgv0s,
   ];
+  const interceptPaths = config.installScript
+    ? [...hostIntegrityTargets, HOSTEXEC_SCRIPT_CONTAINER_PATH]
+    : hostIntegrityTargets;
+
+  // This is a container-only entry point, not a host integrity target.
+  // Append after user policies so an explicit restriction still wins.
+  if (config.installScript) {
+    config.rules.push(structuredClone(NAS_HOSTEXEC_RULE));
+  }
 
   const mounts: MountSpec[] = [];
   const dockerArgs = [
@@ -323,6 +366,7 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   const envVars: Record<string, string> = {
     NAS_HOSTEXEC_SOCKET: execSocketPath,
     NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
+    NAS_HOSTEXEC_CLIENT_PATH: HOSTEXEC_CLIENT_CONTAINER_PATH,
     NAS_HOSTEXEC_SESSION_ID: input.sessionId,
   };
 
@@ -377,6 +421,7 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   return {
     directories,
     symlinks,
+    script,
     mounts,
     dockerArgs,
     envVars,
@@ -405,7 +450,10 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
       uiIdleTimeout: input.config.ui.idleTimeout,
       auditDir: input.probes.auditDir,
       agent: input.profile.agent,
-      integrityTargets: interceptPaths,
+      integrityTargets: hostIntegrityTargets,
+      installedScriptPath: config.installScript
+        ? HOSTEXEC_SCRIPT_CONTAINER_PATH
+        : undefined,
     },
   };
 }
@@ -430,10 +478,23 @@ function runHostExec(
     const brokerService = yield* HostExecBrokerService;
     const container = buildContainerState(input, plan);
 
-    yield* setupService.prepareWorkspace({
-      directories: plan.directories,
-      symlinks: plan.symlinks,
-    });
+    yield* Effect.acquireRelease(
+      setupService.prepareWorkspace({
+        directories: plan.directories,
+        symlinks: plan.symlinks,
+        script: plan.script,
+      }),
+      (handle) =>
+        handle
+          .close()
+          .pipe(
+            Effect.catchAllCause((cause) =>
+              Effect.logWarning(
+                `HostExecStage setup cleanup failed: ${Cause.pretty(cause)}`,
+              ),
+            ),
+          ),
+    );
 
     let maskFilter: MaskFilterConfig | undefined;
     const intent = plan.maskFilterIntent;
@@ -479,6 +540,7 @@ function runHostExec(
         auditDir: spec.auditDir,
         agent: spec.agent,
         integrityTargets: spec.integrityTargets,
+        installedScriptPath: spec.installedScriptPath,
         maskFilter,
       }),
       (handle) => releaseHostExecBroker(handle),

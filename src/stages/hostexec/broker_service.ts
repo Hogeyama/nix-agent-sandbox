@@ -47,6 +47,7 @@ export interface HostExecBrokerConfig {
   readonly auditDir?: string;
   readonly maskFilter?: MaskFilterConfig;
   readonly integrityTargets?: readonly string[];
+  readonly installedScriptPath?: string;
 }
 
 export interface GatewayProcess {
@@ -262,6 +263,7 @@ export function startBrokerLive(
         auditDir: config.auditDir,
         maskFilter: config.maskFilter,
         integrityTargets: config.integrityTargets,
+        installedScriptPath: config.installedScriptPath,
       });
       return await startBrokerWithCleanup(
         broker,

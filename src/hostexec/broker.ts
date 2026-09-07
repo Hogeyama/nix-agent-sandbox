@@ -99,6 +99,8 @@ interface HostExecBrokerOptions {
    * integrity を snapshot し、execute ごとに再検証する。
    */
   integrityTargets?: readonly string[];
+  /** Exact container path of the optional nas-managed hostexec command. */
+  installedScriptPath?: string;
 }
 
 interface PendingWaiter {
@@ -283,6 +285,7 @@ export class HostExecBroker {
   private readonly notificationTasks = new Set<Promise<void>>();
   private readonly maskFilter?: MaskFilterConfig;
   private readonly integrityTargets: readonly string[];
+  private readonly installedScriptPath?: string;
   private readonly integrityBaseline = new Map<string, IntegritySnapshot>();
   private readonly diagnostics: HostExecProcessDiagnostics;
 
@@ -300,7 +303,15 @@ export class HostExecBroker {
     this.auditDir = options.auditDir;
     this.secretStore = new SecretStore(this.config.secrets);
     this.maskFilter = options.maskFilter;
-    this.integrityTargets = options.integrityTargets ?? [];
+    this.installedScriptPath = normalizeInstalledScriptPath(
+      options.installedScriptPath,
+    );
+    this.integrityTargets = (options.integrityTargets ?? []).filter(
+      (target) =>
+        !this.installedScriptPath ||
+        !path.isAbsolute(target) ||
+        path.normalize(target) !== this.installedScriptPath,
+    );
     this.diagnostics = new HostExecProcessDiagnostics(
       options.paths.runtimeDir,
       options.sessionId,
@@ -1158,6 +1169,11 @@ export class HostExecBroker {
     request: ExecuteRequest,
     resolved: ResolvedExecution,
   ): Promise<IntegrityVerdict> {
+    // The installed path exists only in the container mount. The broker never
+    // executes it on the host, so it is deliberately outside host-file
+    // integrity checking even when the matching user rule uses an absolute
+    // argv0.
+    if (this.isInstalledScriptRequest(request.argv0)) return "pass";
     // この early return は冗長な高速パスとして機能する。呼び出し元
     // （HostExecStage）は LD_PRELOAD 型 argv0 が指す全てのホストパスを
     // integrityTargets に列挙する契約として規定されており、integrityTargets が
@@ -1269,11 +1285,27 @@ export class HostExecBroker {
     reader: GatewayLineReader,
     cancellation: AbortSignal,
   ): Promise<void> {
-    const commandArgv0 =
-      isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
-      path.isAbsolute(resolved.rule.match.argv0)
+    const installedPayload = this.isInstalledScriptRequest(request.argv0)
+      ? installedScriptPayload(request.args)
+      : undefined;
+    // Empty/help wrapper invocations remain local usage requests. This check
+    // intentionally happens only after rule matching and approval, preserving
+    // explicit deny and prompt semantics for broad user rules.
+    if (installedPayload === null) {
+      await writeGatewayMessage(
+        socket,
+        { type: "fallback", requestId: request.requestId },
+        "awaiting_decision",
+      );
+      return;
+    }
+    const commandArgv0 = installedPayload
+      ? installedPayload.argv0
+      : isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
+          path.isAbsolute(resolved.rule.match.argv0)
         ? request.argv0
         : path.basename(request.argv0);
+    const commandArgs = installedPayload?.args ?? request.args;
     resolved.envVars.PWD = resolved.cwd;
     let processIdentity: Awaited<
       ReturnType<typeof readProcessIdentity>
@@ -1286,7 +1318,7 @@ export class HostExecBroker {
         type: "start",
         requestId: request.requestId,
         argv0: commandArgv0,
-        args: request.args,
+        args: commandArgs,
         cwd: resolved.cwd,
         env: resolved.envVars,
       },
@@ -1297,7 +1329,7 @@ export class HostExecBroker {
         await this.diagnostics.record("command_spawned", {
           requestId: request.requestId,
           command: commandArgv0,
-          argumentCount: request.args.length,
+          argumentCount: commandArgs.length,
           process: processIdentity,
         });
       },
@@ -1305,13 +1337,36 @@ export class HostExecBroker {
         await this.diagnostics.record("command_exited", {
           requestId: request.requestId,
           command: commandArgv0,
-          argumentCount: request.args.length,
+          argumentCount: commandArgs.length,
           process: processIdentity,
           exitCode,
         });
       },
     });
   }
+
+  private isInstalledScriptRequest(argv0: string): boolean {
+    return (
+      this.installedScriptPath !== undefined &&
+      path.isAbsolute(argv0) &&
+      path.normalize(argv0) === this.installedScriptPath
+    );
+  }
+}
+
+function normalizeInstalledScriptPath(
+  value: string | undefined,
+): string | undefined {
+  return value && path.isAbsolute(value) ? path.normalize(value) : undefined;
+}
+
+function installedScriptPayload(
+  requestArgs: readonly string[],
+): { argv0: string; args: string[] } | null {
+  if (requestArgs[0] === "-h" || requestArgs[0] === "--help") return null;
+  const payload = requestArgs[0] === "--" ? requestArgs.slice(1) : requestArgs;
+  if (payload.length === 0) return null;
+  return { argv0: payload[0], args: payload.slice(1) };
 }
 
 async function writeGatewayMessage(

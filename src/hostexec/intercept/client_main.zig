@@ -7,6 +7,8 @@
 // argv[0] = the symlink. The request is forwarded to the broker; if no rule
 // matches, the broker answers `fallback` and this program execs the real binary
 // found further along PATH.
+// The interceptor also spawns this client with a private argv envelope when
+// libc must apply posix_spawn file actions and attributes before brokerage.
 //
 // It shares `protocol.zig` with the LD_PRELOAD library, so the request shape,
 // the stdin policy, and the "never fall back after output was written" rule are
@@ -23,6 +25,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const protocol = @import("protocol.zig");
+const intercept_paths = @import("intercept_paths.zig");
 
 /// Exit code for "the command could not be run at all", matching the shell's
 /// convention for a missing binary.
@@ -42,6 +45,15 @@ pub fn main() void {
     };
     for (argv_os, 0..) |arg, i| argv_z[i] = arg;
 
+    // Only the explicit client entry point accepts the private spawn envelope.
+    // A wrapper command with the same first argument must reach normal rules.
+    if (argv_os.len >= 2 and std.mem.eql(u8, std.mem.span(argv_os[0]), protocol.spawn_client_argv0)) {
+        const search = std.mem.eql(u8, std.mem.span(argv_os[1]), protocol.spawn_search_flag);
+        if (search or std.mem.eql(u8, std.mem.span(argv_os[1]), protocol.spawn_client_flag)) {
+            runSpawn(alloc, argv_z, search);
+        }
+    }
+
     // stdin_capable is true: this process *is* the command the caller asked
     // for, so its fd 0 is the command's stdin.
     const result = protocol.callBroker(argv_os[0], argv_z.ptr, true);
@@ -49,6 +61,41 @@ pub fn main() void {
         protocol.doExit(result.exit_code);
     }
     fallbackExec(alloc, argv_z);
+}
+
+fn runSpawn(alloc: Allocator, argv: [:null]?[*:0]const u8, search: bool) noreturn {
+    const prefix_len: usize = if (search) 7 else 5;
+    if (argv.len <= prefix_len) protocol.doExit(exit_command_not_found);
+    var pathname = argv[4].?;
+    var request_path = pathname;
+    var intercept = true;
+    if (search) {
+        // libc has now applied the caller's chdir/fchdir actions. Search with
+        // the parent's PATH, not the independently supplied child environment.
+        const selected = intercept_paths.findExecutable(alloc, std.mem.span(pathname), std.mem.span(argv[5].?)) catch {
+            protocol.writeAll(2, "nas-hostexec-client: spawn command not found on PATH\n");
+            protocol.doExit(exit_command_not_found);
+        };
+        pathname = selected.ptr;
+        const canonical = std.fs.cwd().realpathAlloc(alloc, selected) catch protocol.doExit(exit_command_not_found);
+        request_path = (alloc.dupeZ(u8, canonical) catch protocol.doExit(exit_command_not_found)).ptr;
+        intercept = intercept_paths.matchesInterceptPaths(canonical, std.mem.span(argv[6].?));
+    }
+    if (intercept) {
+        const result = protocol.callBrokerAt(
+            std.mem.span(argv[2].?),
+            std.mem.span(argv[3].?),
+            request_path,
+            argv[prefix_len..].ptr,
+            true,
+        );
+        if (result.outcome != .fallback) protocol.doExit(result.exit_code);
+    }
+    // Raw exec avoids re-entering LD_PRELOAD and asking twice. No metadata
+    // was injected into environ, so fallback gets exactly the spawn envp.
+    const err = std.posix.execveZ(pathname, argv[prefix_len..].ptr, std.c.environ);
+    protocol.debugLog("spawn fallback exec failed: {s}", .{@errorName(err)});
+    protocol.doExit(exit_command_not_found);
 }
 
 /// Exec the real binary that PATH would have found had the wrapper directory

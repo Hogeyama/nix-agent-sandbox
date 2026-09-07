@@ -44,10 +44,43 @@ nas hostexec test --profile <profile> -- /usr/bin/uptime
 
 <img src="/nix-agent-sandbox/images/hostexec-prompt.png" width="720" alt="実行コマンド、引数、作業ディレクトリを示す HostExec の承認画面" />
 
+## `hostexec` コマンドの導入
+
+任意のコマンドを明示的にホストへ委譲したい場合は、対象プロファイルで
+`installScript = true` にします。起動したコンテナの PATH に `hostexec` が
+追加されます。リポジトリにファイルは作られず、セッション終了時に削除されます。
+
+`rules` の設定は不要です。実行時に承認を求め、承認されたコマンドにはホストの
+環境変数を引き継ぎます。実行元はワークスペースまたはセッション一時領域に限ります。
+既存の `hostexec` 設定があれば、そのブロックに `installScript = true` を追加してください。
+
+```pkl
+hostexec = new HostExecConfig {
+  installScript = true
+}
+```
+
+設定を確認して `nas config trust` を実行し、新しいセッションで使います。
+たとえば、Wayland デスクトップで `wl-copy` が使えるホストなら、
+ホストのクリップボードへコピーできます。
+
+```sh
+hostexec wl-copy 'hello from the sandbox'
+```
+
+承認すると、文字列がホストのクリップボードにコピーされます。引数や作業
+ディレクトリが異なる要求には、その承認は再利用されません。
+承認したコマンドはホストの権限と環境で動くため、実行内容を確認してください。
+自分で `hostexec` に一致するルールを設定した場合は、そちらが優先されます。
+
+ルール不一致ではコンテナ実行へ戻り、スクリプトが実行場所を stderr に表示します。
+承認拒否・時間切れ・`approval = "deny"` ではエラーになります。
+
 ## 設定項目
 
 | 設定 | 既定 | 用途 |
 | --- | --- | --- |
+| `installScript` | `false` | 承認付きの `hostexec` をセッション内の PATH に追加する。`rules` の設定は不要。 |
 | `rules[].id` | — | 監査と承認の再利用に使う識別子。 |
 | `rules[].match.argv0` | — | コマンド名、絶対パス、または相対パスを完全一致で指定。 |
 | `rules[].match.argRegex` | なし | 引数をスペースで連結した文字列に対する正規表現。 |
@@ -68,7 +101,7 @@ nas hostexec test --profile <profile> -- /usr/bin/uptime
 
 ### 不一致時の動作
 
-ルール不一致はコンテナ実行へのフォールバック応答になりますが、実行成功の保証はありません。LD_PRELOAD 経由では終了コード 127 になる場合があり、ラッパー経由でもコンテナ内の実行ファイルが必要です。現在の実装では `HostExecRule.fallback` を変更しても、この動作は変わりません。一致したルールの `approval = "deny"` はエラーを返します。
+ルール不一致はコンテナ実行へのフォールバック応答になりますが、実行成功の保証はありません。コンテナ内にも実行ファイルと必要な環境がなければ失敗します。現在の実装では `HostExecRule.fallback` を変更しても、この動作は変わりません。一致したルールの `approval = "deny"` はエラーを返します。
 
 ## 関連ページ
 

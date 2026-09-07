@@ -12,6 +12,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
 import { INTERCEPT_LIB_CONTAINER_PATH } from "../../hostexec/intercept_path.ts";
+import { matchRule } from "../../hostexec/match.ts";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
@@ -66,6 +67,7 @@ function makeProfile(): Profile {
     secrets: {},
     guide: DEFAULT_GUIDE_CONFIG,
     hostexec: {
+      installScript: false,
       prompt: {
         enable: true,
         timeoutSeconds: 300,
@@ -369,6 +371,170 @@ test("HostExecStage plan: sets LD_PRELOAD for relative argv0 intercept", async (
   expect(
     plan.dockerArgs.some((arg) => arg.includes(INTERCEPT_LIB_CONTAINER_PATH)),
   ).toEqual(true);
+});
+
+test("HostExecStage plan: installation alone provides a prompted host command", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.installScript = true;
+  profile.hostexec!.rules = [];
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const input = {
+    ...makeSharedInput(profile, makeHostEnv(runtimeDir)),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input);
+
+  expect(plan).not.toBeNull();
+  if (!plan) return;
+
+  const runtimePath = path.join(
+    runtimeDir,
+    "nas",
+    "hostexec",
+    "wrappers",
+    "test-session-id",
+    "bin",
+    "hostexec",
+  );
+  expect(plan.script).toEqual({
+    runtimePath,
+    content: expect.stringContaining('exec "$@"'),
+  });
+  expect(plan.mounts).toContainEqual({
+    source: path.dirname(runtimePath),
+    target: "/opt/nas/hostexec/bin",
+    readOnly: true,
+  });
+  expect(
+    plan.symlinks.some((link) => path.basename(link.path) === "hostexec"),
+  ).toBe(false);
+  expect(plan.envVars.LD_PRELOAD).toBe(INTERCEPT_LIB_CONTAINER_PATH);
+  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toBe(
+    "/opt/nas/hostexec/bin/hostexec",
+  );
+  expect(plan.broker.integrityTargets).not.toContain(
+    "/opt/nas/hostexec/bin/hostexec",
+  );
+  expect(plan.broker.installedScriptPath).toBe(
+    "/opt/nas/hostexec/bin/hostexec",
+  );
+  const rules = plan.broker.hostexec!.rules;
+  expect(rules.map((rule) => rule.id)).toEqual([
+    "__nas_hook",
+    "__nas_hostexec",
+  ]);
+  const installed = plan.broker.installedScriptPath!;
+  expect(matchRule(rules, installed, ["wl-copy", "hello"])?.rule).toEqual({
+    id: "__nas_hostexec",
+    match: {
+      argv0: installed,
+      argRegex: "^(?!-h(?: |$)|--help(?: |$)|--$).+",
+    },
+    cwd: { mode: "workspace-or-session-tmp", allow: [] },
+    env: {},
+    inheritEnv: { mode: "unsafe-inherit-all", keys: [] },
+    approval: "prompt",
+    fallback: "container",
+  });
+  for (const args of [[], ["--help"], ["-h"], ["--"]]) {
+    expect(matchRule(rules, installed, args)).toBeNull();
+  }
+  expect(matchRule(rules, "/tmp/hostexec", ["wl-copy", "hello"])).toBeNull();
+  expect(profile.hostexec!.rules).toEqual([]);
+});
+
+test("HostExecStage plan: user denial takes precedence over installed hostexec defaults", () => {
+  const profile = makeProfile();
+  profile.hostexec!.installScript = true;
+  profile.hostexec!.rules = [
+    {
+      id: "deny-hostexec",
+      match: { argv0: "hostexec" },
+      cwd: { mode: "workspace-or-session-tmp", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "deny",
+      fallback: "container",
+    },
+  ];
+  const plan = planHostExec({
+    ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
+    ...makeStageState(),
+  })!;
+  expect(
+    matchRule(plan.broker.hostexec!.rules, plan.broker.installedScriptPath!, [
+      "wl-copy",
+      "hello",
+    ])?.rule.approval,
+  ).toBe("deny");
+});
+
+test("HostExecStage plan: leaves an ordinary hostexec rule on the client path when installation is disabled", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules.push({
+    id: "hostexec-user-policy",
+    match: { argv0: "hostexec" },
+    cwd: { mode: "workspace-or-session-tmp", allow: [] },
+    env: {},
+    inheritEnv: { mode: "unsafe-inherit-all", keys: [] },
+    approval: "prompt",
+    fallback: "container",
+  });
+  const input = {
+    ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input);
+
+  expect(plan).not.toBeNull();
+  if (!plan) return;
+
+  expect(plan.script).toBeUndefined();
+  expect(
+    plan.symlinks.some((link) => path.basename(link.path) === "hostexec"),
+  ).toBe(true);
+  expect(plan.broker.hostexec!.rules.map((rule) => rule.id)).toEqual([
+    "git-readonly",
+    "hostexec-user-policy",
+    "__nas_hook",
+  ]);
+  expect(plan.broker.installedScriptPath).toBeUndefined();
+  expect(plan.envVars.LD_PRELOAD).toBeUndefined();
+  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toBeUndefined();
+});
+
+test("HostExecStage: releases the installed script when the stage scope closes", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.installScript = true;
+  const sharedInput = makeSharedInput(
+    profile,
+    makeHostEnv("/tmp/nas-test-runtime"),
+  );
+  let closes = 0;
+  const setupLayer = makeHostExecSetupServiceFake({
+    prepareWorkspace: () =>
+      Effect.succeed({
+        close: () =>
+          Effect.sync(() => {
+            closes += 1;
+          }),
+      }),
+  });
+  const scope = Effect.runSync(Scope.make());
+
+  await Effect.runPromise(
+    createHostExecStage(sharedInput)
+      .run(makeStageState())
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(setupLayer),
+        Effect.provide(makeHostExecBrokerServiceFake()),
+      ),
+  );
+  expect(closes).toBe(0);
+
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+  expect(closes).toBe(1);
 });
 
 test("HostExecStage plan: uses workspace slice for LD_PRELOAD intercept and broker root", async () => {
@@ -898,8 +1064,9 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
   expect(result.container?.mounts.length).toBeGreaterThan(0);
 });
 
-test("HostExecStage: run delegates directories and symlinks to HostExecSetupService", async () => {
+test("HostExecStage: run delegates workspace setup to HostExecSetupService", async () => {
   const profile = makeProfile();
+  profile.hostexec!.installScript = true;
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const sharedInput = makeSharedInput(profile, hostEnv);
@@ -912,6 +1079,7 @@ test("HostExecStage: run delegates directories and symlinks to HostExecSetupServ
     prepareWorkspace: (p) =>
       Effect.sync(() => {
         capturedPlan = p;
+        return { close: () => Effect.void };
       }),
   });
   const brokerLayer = makeHostExecBrokerServiceFake();
@@ -933,6 +1101,7 @@ test("HostExecStage: run delegates directories and symlinks to HostExecSetupServ
   expect(capturedPlan).not.toBeNull();
   expect(capturedPlan!.directories).toEqual(plan.directories);
   expect(capturedPlan!.symlinks).toEqual(plan.symlinks);
+  expect(capturedPlan!.script).toEqual(plan.script);
 });
 
 test("HostExecStage: run merges hostexec mounts and env into container and hostexec slices", async () => {
@@ -991,6 +1160,7 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
     ]),
   );
   expect(result.container?.env.static).toEqual({
+    NAS_HOSTEXEC_CLIENT_PATH: "/opt/nas/hostexec/libexec/nas-hostexec-client",
     EXISTING_ENV: "1",
     NAS_HOSTEXEC_SOCKET:
       "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id/exec/sock",

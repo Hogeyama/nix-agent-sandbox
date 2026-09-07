@@ -1,141 +1,50 @@
-# Hostexec Script Installation Implementation Plan
+# Hostexec Command Installation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use subagent-driven-development for the independent setup and broker tasks, followed by automated review. Human review gates were explicitly waived by the user.
 
-**Goal:** Add an opt-in `hostexec.installScript` setting that supplies a safe, session-scoped `./scripts/hostexec` command.
+**Goal:** Provide `hostexec` on the container PATH through `hostexec.installScript = true`.
 
-**Architecture:** HostExecStage adds a reserved rule, materializes an embedded script through HostExecSetupService, and overlays it read-only at the container workspace path. HostExecBroker recognizes only that reserved rule and shifts its arguments to the real host command while retaining the original request for approval and audit identity.
+**Architecture:** Embed `src/hostexec/hostexec` as the single source, write it into the session wrapper bin directory, and use the existing read-only mount. The broker unwraps payload argv only at the configured installed path, after authorization. Installation supplies a default prompt rule, following explicit user policies.
 
-**Tech Stack:** Bun, TypeScript, Effect, Pkl, `bun:test`, Docker integration tests.
+**Tech Stack:** Bun, TypeScript, Effect, Pkl.
 
 ## Global Constraints
 
-- Read and follow `AGENTS.md`, `skills/effect-separation/SKILL.md`, `skills/security-constraints/SKILL.md`, and `skills/test-policy/SKILL.md` before changing code.
-- Stages may call pure planners and intentful services only; filesystem operations belong in HostExecSetupService.
-- Never expose the hostexec control socket or mount secrets into the container.
-- The script mount is read-only and must not overwrite or shadow an existing workspace path.
-- The default is `installScript = false`; existing profiles retain their behavior.
-- User rules precede nas internal rules and therefore retain first-match precedence.
-- Use Bun tests and keep Docker-dependent coverage in `*integration_test.ts` with capability guards and cleanup.
-- Do not modify or commit the user's existing `.nas/config.pkl`, `docs/todo/scratchpad.md`, or `docs/todo/playwright-cli-visible-browser.md` changes.
+- Follow AGENTS.md and the effect-separation, security-constraints, and test-policy skills.
+- No workspace runtime mounts or generated repository files.
+- Remove `scripts/hostexec` without a compatibility symlink.
+- Installation supplies a prompt rule with the host environment. Preserve user rule order and precedence.
+- Expose neither secrets nor the control socket to the container.
+- Keep full original request argv for authorization fingerprints and audit.
+- Preserve other user changes in `.nas/config.pkl` and unrelated files.
 
----
+### Task 1: Configuration, asset, and setup lifecycle
 
-### Task 1: Configuration and session-scoped script setup
+- [x] Add Pkl/TypeScript `installScript`, default false; test actual Pkl loading.
+- [x] Import the canonical executable as text and verify compiled embedding.
+- [x] Install the executable in `<wrapperRoot>/bin/hostexec`; skip the ordinary client symlink for that name while enabled.
+- [x] Add `/opt/nas/hostexec/bin/hostexec` to interceptor paths and expose it to the broker as `installedScriptPath?: string`. Do not include the container-only path in host integrity targets.
+- [x] Own script cleanup through an Effect handle; cover successful close, setup failure, and broker-start failure. No workspace collision logic is needed.
+- [x] Update planner/setup tests and config comments; run focused tests and type checking.
 
-**Files:**
-- Modify: `src/config/types.ts`
-- Modify: `src/config/Schema.pkl`
-- Modify: `src/config/load_integration_test.ts`
-- Create: `src/hostexec/script.ts`
-- Modify: `src/stages/hostexec/setup_service.ts`
-- Modify: `src/stages/hostexec/setup_service_test.ts`
-- Modify: `src/stages/hostexec/stage.ts`
-- Modify: `src/stages/hostexec/stage_test.ts`
-- Modify: `src/config/templates/config.pkl`
+### Task 2: Authorized payload execution
 
-**Interfaces:**
-- Produces: `HostExecConfig.installScript: boolean` with default `false`.
-- Produces: exported reserved rule ID and embedded script content from `src/hostexec/script.ts`.
-- Produces: `HostExecWorkspacePlan.script?: { runtimePath; workspacePath; content }` handled atomically by `HostExecSetupService.prepareWorkspace`.
-- Produces: a read-only script mount and internal rule when enabled.
+- [x] Forward `installedScriptPath?: string` through HostExecBrokerService to HostExecBroker.
+- [x] Resolve user rules or the default prompt rule before unwrapping the installed path's payload.
+- [x] Strip one optional `--` and preserve argument boundaries. Other executable paths keep ordinary behavior.
+- [x] Handle empty/help invocation through local script fallback after authorization where applicable. Deny still returns an error.
+- [x] Exempt only the installed path from host-file integrity lookup; retain user rule integrity elsewhere.
+- [x] Test with the real broker protocol: match/no-match, prompt/allow/deny, help/empty, argv boundaries, disabled behavior, and original request identity.
 
-- [ ] **Step 1: Write failing configuration and planner tests**
+### Task 3: Documentation and verification
 
-Add tests asserting that Pkl defaults `installScript` to false, loads true,
-and that `planHostExec` only adds the reserved rule, runtime script plan,
-read-only `<workDir>/scripts/hostexec` mount, and LD_PRELOAD intercept path when
-enabled. Assert user rules remain before the reserved rule.
+- [x] Document one-setting installation without user rules, a host-clipboard example, and existing deny/no-match behavior in the HostExec feature page.
+- [x] Review the full change for security, correctness, lifecycle, and test coverage; fix findings.
+- [x] Run formatting, lint/type checks, unit tests, and relevant broker/compiled asset checks. Run the full suite once as the final repository check; clearly report any environmental failures or skips.
+- [x] Commit only the task's changes and report the working option plus verification results.
 
-- [ ] **Step 2: Run focused tests and verify the missing field/plan failures**
+### Review corrections
 
-Run: `bun test src/config/load_integration_test.ts src/stages/hostexec/stage_test.ts`
-
-Expected: FAIL because `installScript` and the generated script plan do not exist.
-
-- [ ] **Step 3: Write failing setup-service tests**
-
-Test a temp workspace and runtime root. Assert `prepareWorkspace` writes mode
-`0o755`, rejects an existing workspace path without changing it, and removes a
-partially created runtime script if a later setup operation fails. Use FsService
-or a focused fake consistent with the existing service architecture.
-
-- [ ] **Step 4: Run the setup-service test and verify RED**
-
-Run: `bun test src/stages/hostexec/setup_service_test.ts`
-
-Expected: FAIL because script setup is not implemented.
-
-- [ ] **Step 5: Implement configuration, embedded asset, planner, and setup**
-
-Add `installScript` to both configuration schemas and
-`DEFAULT_HOSTEXEC_CONFIG`. Export constants for the reserved rule ID, relative
-path, and script content. Extend the setup plan with an optional script intent;
-the live service checks the workspace collision, creates the runtime parent,
-writes the executable, and cleans it on failure. Extend `planHostExec` to add the
-reserved rule after user rules and mount the runtime file read-only at the
-workspace script path.
-
-- [ ] **Step 6: Run Task 1 tests and unit suite**
-
-Run: `bun test src/config/load_integration_test.ts src/stages/hostexec/setup_service_test.ts src/stages/hostexec/stage_test.ts`
-
-Then: `bun run test:unit`
-
-Expected: PASS.
-
-- [ ] **Step 7: Commit Task 1**
-
-Commit only Task 1 files with a Conventional Commits message explaining why
-the script is runtime-mounted rather than copied into repositories.
-
-### Task 2: Reserved-rule execution and documentation
-
-**Files:**
-- Modify: `src/hostexec/broker.ts`
-- Modify: `src/hostexec/broker_integration_test.ts`
-- Modify: `docs/features/hostexec.md` (or the current hostexec documentation page located by repository search)
-- Modify: `docs/todo/scratchpad.md` only if it is tracked and the target item can be changed without including unrelated user edits; otherwise leave it untouched.
-
-**Interfaces:**
-- Consumes: reserved rule ID from `src/hostexec/script.ts`.
-- Produces: a pure helper that maps `(ruleId, request.argv0, request.args)` to the gateway command or usage error.
-- Preserves: request capability and audit identity use the original wrapper argv.
-
-- [ ] **Step 1: Write failing broker tests**
-
-Add focused tests showing the reserved rule launches `args[0]` with
-`args.slice(1)`, rejects empty args with exit status 64, and ordinary rules
-still launch the original argv0 and args. Assert approval/audit normalization
-continues to contain `./scripts/hostexec` and the full payload.
-
-- [ ] **Step 2: Run focused broker tests and verify RED**
-
-Run: `bun test src/hostexec/broker_integration_test.ts --test-name-pattern 'installed hostexec script'`
-
-Expected: FAIL because the broker still launches the wrapper path.
-
-- [ ] **Step 3: Implement narrow command rewriting**
-
-Add a pure command-selection helper and call it only after rule resolution and
-approval, immediately before gateway start. Match the exact reserved rule ID;
-do not expose rewriting through user configuration. Convert empty invocation
-to the wrapper's usage behavior without spawning a process.
-
-- [ ] **Step 4: Document the option**
-
-Document the Pkl snippet, read-only session lifecycle, collision error,
-approval semantics, unsafe environment inheritance, and default-disabled
-behavior. Do not claim that `hostexec` is on PATH.
-
-- [ ] **Step 5: Run Task 2 tests and full verification**
-
-Run the focused broker test, then `bun run check`, `bun run test:unit`, and once
-at the end `bun run test`.
-
-Expected: all applicable checks pass; environment-gated tests may report skips.
-
-- [ ] **Step 6: Commit Task 2**
-
-Commit Task 2 files with a Conventional Commits message explaining why argv
-rewriting is restricted to the nas-owned rule.
+- [x] Make installation usable without rules; test prompt defaults, help, exact-path matching, and user-denial precedence.
+- [x] Cover PATH-search entry points and spawn fallback with native regressions.
+- [x] Verify changes, review the complete diff, and prepare the feature fixup.

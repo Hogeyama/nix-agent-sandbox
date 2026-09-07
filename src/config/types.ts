@@ -125,6 +125,7 @@ export interface HostExecRule {
 }
 
 export interface HostExecConfig {
+  installScript: boolean;
   prompt: HostExecPromptConfig;
   secrets: Record<string, SecretConfig>;
   rules: HostExecRule[];
@@ -369,6 +370,7 @@ export const DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG: HostExecInheritEnvConfig = {
 };
 
 export const DEFAULT_HOSTEXEC_CONFIG: HostExecConfig = {
+  installScript: false,
   prompt: DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   secrets: {},
   rules: [],

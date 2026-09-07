@@ -340,6 +340,7 @@ function collectStdout(result: StreamingResult): string {
 
 function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
   return {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 30,
@@ -1541,6 +1542,328 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
     );
     expect(result.exitCode).toEqual(0);
     expect(collectStdout(result)).toEqual("ok");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: installed command unwraps payload and keeps local usage fallback", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const installedPath = "/opt/nas/hostexec/bin/hostexec";
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    installedScriptPath: installedPath,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "hostexec-any",
+          match: { argv0: "hostexec" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    for (const [requestId, args] of [
+      ["req_installed_direct", ["node", "-e", "console.log('direct')"]],
+      ["req_installed_dash", ["--", "node", "-e", "console.log('dash')"]],
+    ] as const) {
+      const requestArgv0 =
+        requestId === "req_installed_direct"
+          ? "/opt/nas/hostexec/bin/../bin/hostexec"
+          : installedPath;
+      const result = await sendStreamingRequest(
+        execSocketPath,
+        request([...args], workspace, requestId, requestArgv0),
+      );
+      expect(result.exitCode).toEqual(0);
+      expect(collectStdout(result).trim()).toEqual(
+        requestId === "req_installed_direct" ? "direct" : "dash",
+      );
+    }
+
+    for (const [requestId, args] of [
+      ["req_installed_empty", []],
+      ["req_installed_separator", ["--"]],
+      ["req_installed_short_help", ["-h"]],
+      ["req_installed_help", ["--help"]],
+    ] as const) {
+      const response = await sendTestGatewayRequest(
+        execSocketPath,
+        request([...args], workspace, requestId, installedPath),
+      );
+      expect(response.type).toEqual("fallback");
+    }
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: installed payload approval retains wrapper request identity", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const installedPath = "/opt/nas/hostexec/bin/hostexec";
+  const originalArgs = ["--", "node", "-e", "console.log('approved-payload')"];
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    installedScriptPath: installedPath,
+    auditDir,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "hostexec-prompt",
+          match: { argv0: "hostexec" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const resultPromise = sendStreamingRequest(
+      execSocketPath,
+      request(originalArgs, workspace, "req_installed_prompt", installedPath),
+    );
+    const pending = await waitForPendingEntries(paths, 1);
+    expect(pending[0].argv0).toEqual(installedPath);
+    expect(pending[0].args).toEqual(originalArgs);
+    expect(pending[0].capability?.normalizedArgv).toEqual([
+      installedPath,
+      ...originalArgs,
+    ]);
+    await sendHostExecControlRequest(controlSocketPath, {
+      type: "approve",
+      requestId: "req_installed_prompt",
+      scope: "once",
+    });
+    const result = await resultPromise;
+    expect(collectStdout(result).trim()).toEqual("approved-payload");
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    expect(logs[0].command).toEqual([installedPath, ...originalArgs].join(" "));
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: installed command requires exact configured path and preserves deny", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const installedPath = "/opt/nas/hostexec/bin/hostexec";
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    installedScriptPath: installedPath,
+    integrityTargets: [installedPath],
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "deny-hostexec",
+          match: { argv0: installedPath },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "deny",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const denied = await sendTestGatewayRequest(
+      execSocketPath,
+      request(["--help"], workspace, "req_installed_deny", installedPath),
+    );
+    expect(denied.type).toEqual("error");
+
+    const other = await sendTestGatewayRequest(
+      execSocketPath,
+      request(
+        ["node", "-e", "console.log('must-not-unwrap')"],
+        workspace,
+        "req_installed_other",
+        "/elsewhere/hostexec",
+      ),
+    );
+    expect(other.type).toEqual("fallback");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: disabled or differently configured installed path executes hostexec normally", async () => {
+  for (const installedScriptPath of [
+    undefined,
+    "/opt/nas/hostexec/bin/hostexec",
+  ]) {
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+    const paths = await resolveHostExecRuntimePaths(runtimeDir);
+    const workspace = await mkdtemp(
+      path.join(tmpdir(), "nas-hostexec-workspace-"),
+    );
+    const ordinaryHostexec = path.join(workspace, "hostexec");
+    await writeFile(
+      ordinaryHostexec,
+      '#!/bin/sh\nprintf \'%s|%s\' "$1" "$2"\n',
+    );
+    await chmod(ordinaryHostexec, 0o755);
+    const broker = new HostExecBroker({
+      paths,
+      sessionId: "sess_test",
+      profileName: "test",
+      notify: "off",
+      workspaceRoot: workspace,
+      sessionTmpDir: `${runtimeDir}/tmp`,
+      installedScriptPath,
+      hostexec: makeConfig({
+        rules: [
+          {
+            id: "ordinary-hostexec",
+            match: { argv0: ordinaryHostexec },
+            cwd: { mode: "workspace-only", allow: [] },
+            env: {},
+            inheritEnv: { mode: "minimal", keys: [] },
+            approval: "allow",
+            fallback: "deny",
+          },
+        ],
+      }),
+    });
+    const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+    const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+    await broker.start(execSocketPath, controlSocketPath);
+    try {
+      const result = await sendStreamingRequest(
+        execSocketPath,
+        request(
+          ["node", "payload-arg"],
+          workspace,
+          `req_ordinary_${installedScriptPath ? "other" : "disabled"}`,
+          ordinaryHostexec,
+        ),
+      );
+      expect(result.exitCode).toEqual(0);
+      expect(collectStdout(result)).toEqual("node|payload-arg");
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+});
+
+test("HostExecBroker: installed absolute rule bypasses only its own integrity target", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const installedPath = "/opt/nas/hostexec/bin/hostexec";
+  const checkedPath = path.join(workspace, "checked.sh");
+  await writeFile(checkedPath, "#!/bin/sh\nprintf original\n");
+  await chmod(checkedPath, 0o755);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    installedScriptPath: installedPath,
+    integrityTargets: [installedPath, checkedPath],
+    hostexec: makeConfig({
+      prompt: { enable: false },
+      rules: [
+        {
+          id: "installed-absolute",
+          match: { argv0: installedPath },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+        {
+          id: "checked-absolute",
+          match: { argv0: checkedPath },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const installed = await sendStreamingRequest(
+      execSocketPath,
+      request(["true"], workspace, "req_integrity_installed", installedPath),
+    );
+    expect(installed.exitCode).toEqual(0);
+
+    await writeFile(checkedPath, "#!/bin/sh\nprintf changed\n");
+    await chmod(checkedPath, 0o755);
+    const checked = await sendTestGatewayRequest(
+      execSocketPath,
+      request([], workspace, "req_integrity_other", checkedPath),
+    );
+    expect(checked.type).toEqual("error");
+    if (checked.type === "error") {
+      expect(checked.message).toContain("target changed since session start");
+    }
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -3006,6 +3329,7 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     process.env.HOSTEXEC_INTEGRITY_METADATA_TEST_TOKEN = metadataSecret;
 
     const config: HostExecConfig = {
+      installScript: false,
       prompt: {
         enable: true,
         timeoutSeconds: 300,
@@ -3124,6 +3448,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
   await chmod(scriptPath, 0o755);
 
   const config: HostExecConfig = {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 300,
@@ -3254,6 +3579,7 @@ test("HostExecBroker: allow rule denies when target changed and prompt is disabl
   await chmod(scriptPath, 0o755);
 
   const config: HostExecConfig = {
+    installScript: false,
     prompt: {
       enable: false,
       timeoutSeconds: 300,
@@ -3334,6 +3660,7 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
   await chmod(scriptPath, 0o755);
 
   const config: HostExecConfig = {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 300,
@@ -3443,6 +3770,7 @@ test("HostExecBroker: symlinked workspace root does not break the integrity base
   await chmod(scriptPath, 0o755);
 
   const config: HostExecConfig = {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 300,
@@ -3524,6 +3852,7 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
   await chmod(scriptPath, 0o000);
 
   const config: HostExecConfig = {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 300,
@@ -3631,6 +3960,7 @@ test("HostExecBroker: an integrity check error is audited and reported instead o
   const brokenArgv0 = path.join(regularFile, "child");
 
   const config: HostExecConfig = {
+    installScript: false,
     prompt: {
       enable: true,
       timeoutSeconds: 300,

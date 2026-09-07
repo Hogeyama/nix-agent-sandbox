@@ -206,6 +206,46 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
+  "loadConfig: defaults hostexec.installScript to false",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    hostexec = new HostExecConfig {}
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      expect(config.profiles.dev.hostexec?.installScript).toBe(false);
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: loads hostexec.installScript when enabled",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    hostexec = new HostExecConfig {
+      installScript = true
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      expect(config.profiles.dev.hostexec?.installScript).toBe(true);
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: searches upward for .nas/config.pkl",
   async () => {
     await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {

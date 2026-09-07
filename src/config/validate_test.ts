@@ -727,6 +727,7 @@ test("validate: hostexec env rejects unknown secret references", () => {
         profiles: {
           test: makeProfile({
             hostexec: {
+              installScript: false,
               prompt: {
                 enable: true,
                 timeoutSeconds: 300,
@@ -760,6 +761,7 @@ test("validate: hostexec env rejects non-secret references", () => {
         profiles: {
           test: makeProfile({
             hostexec: {
+              installScript: false,
               prompt: {
                 enable: true,
                 timeoutSeconds: 300,
@@ -792,6 +794,7 @@ test("validate: hostexec env accepts valid secret references", () => {
       profiles: {
         test: makeProfile({
           hostexec: {
+            installScript: false,
             prompt: {
               enable: true,
               timeoutSeconds: 300,
@@ -836,6 +839,7 @@ test("validate: hostexec warns on identical match rules", () => {
         profiles: {
           test: makeProfile({
             hostexec: {
+              installScript: false,
               prompt: {
                 enable: true,
                 timeoutSeconds: 300,
@@ -885,6 +889,7 @@ test("validate: hostexec warns when catch-all shadows specific rule", () => {
         profiles: {
           test: makeProfile({
             hostexec: {
+              installScript: false,
               prompt: {
                 enable: true,
                 timeoutSeconds: 300,
@@ -935,6 +940,7 @@ test("validate: hostexec no warning when specific rule comes before catch-all", 
         profiles: {
           test: makeProfile({
             hostexec: {
+              installScript: false,
               prompt: {
                 enable: true,
                 timeoutSeconds: 300,
