@@ -161,18 +161,6 @@ describe("renderGuide", () => {
     expect(out).toContain("apt-get");
   });
 
-  test("mentions masking only when mask is configured", () => {
-    expect(renderGuide(makeFacts())).not.toContain("masked");
-    expect(renderGuide(makeFacts({ maskEnabled: true }))).toContain("masked");
-  });
-
-  test("mentions the display sandbox only when it is not none", () => {
-    expect(renderGuide(makeFacts())).not.toContain("xpra");
-    expect(renderGuide(makeFacts({ displaySandbox: "xpra" }))).toContain(
-      "xpra",
-    );
-  });
-
   test("appends the user's extra section verbatim", () => {
     const out = renderGuide(
       makeFacts({ extra: "Run `just fmt` before committing." }),

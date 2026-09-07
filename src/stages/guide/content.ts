@@ -1,5 +1,5 @@
 /**
- * GuideFacts から SKILL.md 全文を組み立てる（純粋）。
+ * GuideFacts から SKILL.md 全文を組み立てる。
  *
  * description は skill 機構によって常時 system prompt に載る。エージェントが
  * 失敗に遭遇した瞬間にガイドの存在へ気づけるかはここに懸かっているので、
@@ -20,9 +20,6 @@ function buildDescription(facts: GuideFacts): string {
   }
   if (facts.dind !== null) {
     symptoms.push("a docker build fails to reach the network");
-  }
-  if (facts.maskEnabled) {
-    symptoms.push("output contains values that look wrong");
   }
   if (facts.network.forwardPorts.length > 0) {
     symptoms.push("a connection to a host port is refused");
@@ -92,24 +89,6 @@ function dindSection(): string {
   ].join("\n");
 }
 
-function maskSection(): string {
-  return [
-    "## Output is masked",
-    "",
-    "Secret values are masked out of command output before you see it. A value",
-    "that looks truncated or replaced is masked, not corrupt — reading it again",
-    "will not reveal more.",
-  ].join("\n");
-}
-
-function displaySection(facts: GuideFacts): string {
-  return [
-    "## GUI applications",
-    "",
-    `Graphical applications run under a ${facts.displaySandbox} display sandbox rather than the host's display.`,
-  ].join("\n");
-}
-
 export function renderGuide(facts: GuideFacts): string {
   const sections: string[] = [
     [
@@ -134,12 +113,6 @@ export function renderGuide(facts: GuideFacts): string {
   }
   if (facts.dind !== null) {
     sections.push(dindSection());
-  }
-  if (facts.maskEnabled) {
-    sections.push(maskSection());
-  }
-  if (facts.displaySandbox !== "none") {
-    sections.push(displaySection(facts));
   }
   if (facts.extra !== null && facts.extra.trim() !== "") {
     sections.push(
