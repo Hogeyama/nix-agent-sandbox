@@ -1344,9 +1344,9 @@ const GatewayIntegration = struct {
     external_reader: IntegrationReader,
     deinitialized: bool = false,
 
-    fn init(allocator: Allocator, tmp: anytype) !GatewayIntegration {
-        var root: ?[]u8 = try tmp.dir.realpathAlloc(allocator, ".");
-        errdefer if (root) |value| allocator.free(value);
+    fn init(allocator: Allocator) !GatewayIntegration {
+        var root: ?[]u8 = try test_paths.makeSocketDir(allocator);
+        errdefer if (root) |value| test_paths.removeSocketDir(allocator, value);
         var external_socket: ?[]u8 = try std.fs.path.join(allocator, &.{ root.?, "external.sock" });
         errdefer if (external_socket) |value| allocator.free(value);
         var internal_socket: ?[]u8 = try std.fs.path.join(allocator, &.{ root.?, "internal.sock" });
@@ -1411,7 +1411,7 @@ const GatewayIntegration = struct {
         removeStaleSocket(self.internal_socket) catch {};
         self.broker_reader.deinit();
         self.external_reader.deinit();
-        self.allocator.free(self.root);
+        test_paths.removeSocketDir(self.allocator, self.root);
         self.allocator.free(self.external_socket);
         self.allocator.free(self.internal_socket);
         self.* = undefined;
@@ -2564,17 +2564,13 @@ test "external disconnect cleans a real descendant process group" {
 }
 
 test "gateway integration preserves a no-read delegated stdin" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runNoReadRequest();
 }
 
 test "gateway initial execute resumes after a partial broker send" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
 
     try gateway.sendLargeExecute("partial-send", null);
@@ -2583,9 +2579,7 @@ test "gateway initial execute resumes after a partial broker send" {
 }
 
 test "gateway shutdown closes stdin while broker does not read initial execute" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
 
     const handler_pid = try gateway.waitForHandlerPid();
@@ -2623,10 +2617,7 @@ test "gateway shutdown closes stdin while broker does not read initial execute" 
 }
 
 test "gateway shutdown reaps a running command with a stalled broker queue" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
 
     const handler_pid = try gateway.waitForHandlerPid();
@@ -2664,9 +2655,7 @@ test "gateway event loop admits delayed maximum broker frames" {
         .{ .request_id = "maximum-crlf", .crlf = true },
     };
     for (cases) |case| {
-        var tmp = std.testing.tmpDir(.{});
-        defer tmp.cleanup();
-        var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+        var gateway = try GatewayIntegration.init(std.testing.allocator);
         defer gateway.deinit();
 
         try gateway.sendExecute("integration", case.request_id, .none, null);
@@ -2679,9 +2668,7 @@ test "gateway event loop admits delayed maximum broker frames" {
 }
 
 test "gateway parent shutdown cooperatively cleans a pre-start handler" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
 
     const handler_pid = try gateway.waitForHandlerPid();
@@ -2704,9 +2691,7 @@ test "gateway parent shutdown cooperatively cleans a pre-start handler" {
 }
 
 test "gateway parent shutdown waits for running command-group cleanup" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
 
     const handler_pid = try gateway.waitForHandlerPid();
@@ -2734,17 +2719,13 @@ test "gateway parent shutdown waits for running command-group cleanup" {
 }
 
 test "gateway integration returns pre-start fallback without spawning" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runPreStartFallback();
 }
 
 test "gateway reports a missing executable before closing the broker" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
 
     try gateway.sendExecute("integration", "missing-executable", .none, null);
@@ -2769,41 +2750,31 @@ test "gateway reports a missing executable before closing the broker" {
 }
 
 test "gateway integration rejects session and descriptor mismatches" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runSessionAndFdMismatch();
 }
 
 test "gateway integration forwards only masked chunks through the external socket" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runMaskedForwarding();
 }
 
 test "gateway integration kills the command on post-start fallback" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runPostStartFallback();
 }
 
 test "gateway integration cleans command groups after external disconnect" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runExternalDisconnect();
 }
 
 test "gateway integration cleans command groups after internal disconnect" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    var gateway = try GatewayIntegration.init(std.testing.allocator);
     defer gateway.deinit();
     try gateway.runInternalDisconnect();
 }

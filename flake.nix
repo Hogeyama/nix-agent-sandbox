@@ -3,7 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # nas は Linux 専用。依存 flake でも廃止済みの Intel Darwin を評価しない。
+    systems.url = "github:nix-systems/default-linux";
     flake-utils.url = "github:numtide/flake-utils";
+    flake-utils.inputs.systems.follows = "systems";
     nix-bundle-elf = {
       url = "github:Hogeyama/nix-bundle-elf";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -12,6 +15,7 @@
     bun2nix = {
       url = "github:nix-community/bun2nix";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.systems.follows = "systems";
     };
   };
 
@@ -30,6 +34,11 @@
         pkgs = nixpkgs.legacyPackages.${system}.extend overlays.diffity;
         b2n = bun2nix.packages.${system}.default;
         bundle-script = nix-bundle-elf.lib.${system}.bundle-script;
+
+        # src/hostexec/intercept, src/maskfs, src/mask-filter は Zig 0.15 の
+        # API を前提に書かれている。pkgs.zig は nixpkgs 側の alias で、追従する
+        # と breaking release でビルドが黙って壊れるため明示的に固定する。
+        zig = pkgs.zig_0_15;
 
         # nixpkgs.pkl は JVM 版なので Apple の release から直接取得する。
         # （JVM版は起動に800msくらいかかる）
@@ -74,7 +83,7 @@
           pname = "hostexec-intercept";
           version = "0.1.0";
           src = ./src/hostexec/intercept;
-          nativeBuildInputs = [ pkgs.zig ];
+          nativeBuildInputs = [ zig ];
           dontConfigure = true;
           dontFixup = true;
           doCheck = true;
@@ -114,7 +123,7 @@
             ];
           };
           sourceRoot = "source/maskfs";
-          nativeBuildInputs = [ pkgs.zig pkgs.pkg-config ];
+          nativeBuildInputs = [ zig pkgs.pkg-config ];
           buildInputs = [ pkgs.fuse3 ];
           dontConfigure = true;
           doCheck = true;
@@ -145,7 +154,7 @@
             ];
           };
           sourceRoot = "source/mask-filter";
-          nativeBuildInputs = [ pkgs.zig ];
+          nativeBuildInputs = [ zig ];
           dontConfigure = true;
           dontFixup = true;
           doCheck = true;
@@ -285,7 +294,7 @@
             # xpra 本体は opt-in なのでホスト提供に任せるが、xauth は
             # closure が小さく、無いと DisplayStage が起動時に落ちる。
             pkgs.xauth
-            pkgs.zig
+            zig
             pkgs.fuse3
             pkgs.pkg-config
             # テストヘルパの実行に使う。nas 本体の実行時依存ではないが、

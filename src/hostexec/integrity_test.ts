@@ -93,6 +93,13 @@ test("readFileIntegrity: detects an in-place content swap of the same byte lengt
   try {
     const p = path.join(dir, "f.sh");
     await writeFile(p, "hello");
+    // mtime を整数ミリ秒に固定してから snapshot を取る。stat が返す mtimeMs は
+    // ファイルシステムのナノ秒精度をそのまま載せるので小数部を持ちうるが、
+    // utimes に渡す Date はミリ秒までしか表現できず、その小数部を復元できない。
+    // 固定しておかないと「mtime を元に戻した」状況を再現できず、下の
+    // mtimeMs 一致アサーションが環境次第で落ちる。
+    const mtime = new Date(1_700_000_000_000);
+    await utimes(p, mtime, mtime);
     const first = await readFileIntegrity(p);
     if (first === "absent") throw new Error("unexpected absent");
 
@@ -101,7 +108,7 @@ test("readFileIntegrity: detects an in-place content swap of the same byte lengt
     // 変化しない。fast-path が残存していれば、inode+mtimeMs+size の一致だけを
     // 理由に first をそのまま返却し、この置換を検出できない。
     await writeFile(p, "world");
-    await utimes(p, new Date(first.mtimeMs), new Date(first.mtimeMs));
+    await utimes(p, mtime, mtime);
 
     const second = await readFileIntegrity(p);
     expect(second).not.toBe("absent");
