@@ -60,6 +60,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const os = @import("posix");
 const relay_mod = @import("relay.zig");
 
 const Relay = relay_mod.Relay;
@@ -138,7 +139,7 @@ var g_child_pid: std.atomic.Value(i32) = .init(0);
 var g_sig_write_fd: std.atomic.Value(i32) = .init(-1);
 
 /// SIGCHLD ハンドラ。self-pipe に 1 バイト書いて poll(2) を起こすだけ。
-fn onSigChld(_: i32) callconv(.c) void {
+fn onSigChld(_: posix.SIG) callconv(.c) void {
     const fd = g_sig_write_fd.load(.monotonic);
     if (fd < 0) return;
     const byte: [1]u8 = .{0};
@@ -150,12 +151,12 @@ fn onSigChld(_: i32) callconv(.c) void {
 ///
 /// 端末由来の SIGINT などはプロセスグループ全体に配送されるので子は既に
 /// 受け取っており、この転送で二重配送になるが、シェルにとっては無害。
-fn onForwardSig(sig: i32) callconv(.c) void {
+fn onForwardSig(sig: posix.SIG) callconv(.c) void {
     const pid = g_child_pid.load(.monotonic);
     if (pid > 0) _ = std.c.kill(pid, sig);
 }
 
-fn installHandler(sig: u6, comptime handler: *const fn (i32) callconv(.c) void) void {
+fn installHandler(sig: posix.SIG, comptime handler: posix.Sigaction.handler_fn) void {
     const act: posix.Sigaction = .{
         .handler = .{ .handler = handler },
         .mask = posix.sigemptyset(),
@@ -164,7 +165,7 @@ fn installHandler(sig: u6, comptime handler: *const fn (i32) callconv(.c) void) 
     posix.sigaction(sig, &act, null);
 }
 
-fn setDisposition(sig: u6, handler: ?posix.Sigaction.handler_fn) void {
+fn setDisposition(sig: posix.SIG, handler: ?posix.Sigaction.handler_fn) void {
     const act: posix.Sigaction = .{
         .handler = .{ .handler = handler },
         .mask = posix.sigemptyset(),
@@ -176,7 +177,7 @@ fn setDisposition(sig: u6, handler: ?posix.Sigaction.handler_fn) void {
 /// exec 前の子で既定へ戻すシグナル。SIGPIPE は特に重要で、親が SIG_IGN に
 /// している無視状態は execve を越えて継承されるため、戻さないと `yes | head`
 /// のような子側のパイプ終了が壊れる。
-const CHILD_RESET_SIGNALS = [_]u6{
+const CHILD_RESET_SIGNALS = [_]posix.SIG{
     posix.SIG.CHLD,
     posix.SIG.INT,
     posix.SIG.TERM,
@@ -221,7 +222,7 @@ const Stream = struct {
     fn abandonDestination(self: *Stream) void {
         self.dst_closed = true;
         if (!self.pipe_closed) {
-            posix.close(self.pipe_fd);
+            os.close(self.pipe_fd);
             self.pipe_closed = true;
         }
         self.pipe_done = true;
@@ -260,7 +261,7 @@ fn drainPipeOnce(gpa: std.mem.Allocator, s: *Stream, buf: []u8) !void {
 /// waitpid(2) のステータスをシェル互換の終了コードへ変換する。
 pub fn exitCodeFromStatus(status: u32) u8 {
     if (posix.W.IFEXITED(status)) return @truncate(posix.W.EXITSTATUS(status));
-    if (posix.W.IFSIGNALED(status)) return @truncate(128 +% @as(u32, posix.W.TERMSIG(status)));
+    if (posix.W.IFSIGNALED(status)) return @truncate(128 +% @intFromEnum(posix.W.TERMSIG(status)));
     return 1;
 }
 
@@ -300,24 +301,24 @@ pub fn run(
     defer err_relay.deinit(allocator);
 
     // SIGCHLD 通知用 self-pipe。ハンドラ内から書くので NONBLOCK にしておく。
-    const sig_pipe = try posix.pipe2(.{ .NONBLOCK = true });
+    const sig_pipe = try os.pipe2(.{ .NONBLOCK = true });
     g_sig_write_fd.store(sig_pipe[1], .monotonic);
     installHandler(posix.SIG.CHLD, onSigChld);
-    for ([_]u6{ posix.SIG.INT, posix.SIG.TERM, posix.SIG.HUP, posix.SIG.QUIT }) |sig| {
+    for ([_]posix.SIG{ posix.SIG.INT, posix.SIG.TERM, posix.SIG.HUP, posix.SIG.QUIT }) |sig| {
         installHandler(sig, onForwardSig);
     }
 
-    const out_pipe = try posix.pipe();
-    const err_pipe = try posix.pipe();
+    const out_pipe = try os.pipe();
+    const err_pipe = try os.pipe();
 
-    const pid = try posix.fork();
+    const pid = try os.fork();
     if (pid == 0) {
         // --- 子プロセス ---
         // シグナルハンドラは execve でリセットされるが、SIG_IGN の無視状態は
         // 継承されるうえ、exec 自体に失敗した場合にも備えて明示的に既定へ戻す。
         for (CHILD_RESET_SIGNALS) |sig| setDisposition(sig, posix.SIG.DFL);
-        posix.dup2(out_pipe[1], posix.STDOUT_FILENO) catch posix.exit(EXIT_EXEC_FAILED);
-        posix.dup2(err_pipe[1], posix.STDERR_FILENO) catch posix.exit(EXIT_EXEC_FAILED);
+        os.dup2(out_pipe[1], posix.STDOUT_FILENO) catch os.exit(EXIT_EXEC_FAILED);
+        os.dup2(err_pipe[1], posix.STDERR_FILENO) catch os.exit(EXIT_EXEC_FAILED);
         // socket fd は CLOEXEC で作ってあるが、明示的にも閉じる。子へ漏れると
         // 注入オラクルになる: ストリーム途中に 1 バイト差し込むとサーバ側の
         // マッチが崩れて原文が返るため、差し込んだ値を知っていれば原文を
@@ -327,14 +328,14 @@ pub fn run(
             sig_pipe[0], sig_pipe[1], out_relay.fd, err_relay.fd,
         };
         for (child_close) |fd| {
-            if (fd > posix.STDERR_FILENO) posix.close(fd);
+            if (fd > posix.STDERR_FILENO) os.close(fd);
         }
-        const err = posix.execveZ(program_z, argv_z.ptr, envp_z.ptr);
+        const err = os.execveZ(program_z, argv_z.ptr, envp_z.ptr);
         // 子の stderr は既にパイプ (= マスク経路) なので、この診断は
         // マスクを通ってから出る。program はエージェントが与えた文字列で
         // シークレット由来ではない。
         std.debug.print("nas-mask-filter: exec {s} failed: {}\n", .{ program, err });
-        posix.exit(EXIT_EXEC_FAILED);
+        os.exit(EXIT_EXEC_FAILED);
     }
 
     // --- 親プロセス (スーパーバイザ) ---
@@ -343,8 +344,8 @@ pub fn run(
     // プロセスを残さない。
     errdefer _ = std.c.kill(pid, posix.SIG.KILL);
     // 書き込み端は子だけが持つ。親が握ったままだと EOF が来ない。
-    posix.close(out_pipe[1]);
-    posix.close(err_pipe[1]);
+    os.close(out_pipe[1]);
+    os.close(err_pipe[1]);
 
     var streams = [2]Stream{
         .{ .pipe_fd = out_pipe[0], .dst_fd = posix.STDOUT_FILENO, .relay = &out_relay },
@@ -403,7 +404,7 @@ pub fn run(
                 break :blk if (child_status == null) -1 else DRAIN_IDLE_MS;
             }
             // phase 3。パイプはもう読まないので、socket 側だけを別期限で待つ。
-            const now = std.time.milliTimestamp();
+            const now = os.milliTimestamp();
             const deadline = drain_deadline orelse d: {
                 const v = now + SOCKET_DRAIN_MS;
                 drain_deadline = v;
@@ -473,7 +474,7 @@ pub fn run(
             if (fds[idx].revents != 0) {
                 var sink: [64]u8 = undefined;
                 _ = posix.read(sig_pipe[0], &sink) catch {};
-                const res = posix.waitpid(pid, posix.W.NOHANG);
+                const res = os.waitpid(pid, posix.W.NOHANG);
                 if (res.pid == pid) child_status = res.status;
             }
         }
@@ -481,7 +482,7 @@ pub fn run(
         if (pipes_all_done and progress) drain_deadline = null;
     }
 
-    const status = child_status orelse posix.waitpid(pid, 0).status;
+    const status = child_status orelse os.waitpid(pid, 0).status;
     return exitCodeFromStatus(status);
 }
 

@@ -1,17 +1,18 @@
 const std = @import("std");
+const posix = @import("posix");
 
 pub const StdinSelection = union(enum) {
     none,
-    pass_fd: std.posix.fd_t,
+    pass_fd: posix.fd_t,
     reject_read_write,
     /// fd 0 is the same socket as an output descriptor. Only `prepareStdin`
     /// produces this; `selectStdin` does not look at other descriptors.
     reject_output_alias,
 };
 
-pub fn selectStdin(fd: std.posix.fd_t, capable: bool) StdinSelection {
+pub fn selectStdin(fd: posix.fd_t, capable: bool) StdinSelection {
     if (!capable) return .none;
-    if (std.posix.isatty(fd)) return .none;
+    if (posix.isatty(fd)) return .none;
     return switch (accessMode(fd)) {
         .read_only => .{ .pass_fd = fd },
         // A read-write descriptor is only forwardable once its write direction
@@ -33,7 +34,7 @@ const AccessMode = enum { read_only, write_only, read_write, unknown };
 /// The std.posix fcntl wrapper treats EBADF as an unreachable race. This
 /// classification intentionally accepts a closed descriptor as input, so use
 /// libc directly.
-fn accessMode(fd: std.posix.fd_t) AccessMode {
+fn accessMode(fd: posix.fd_t) AccessMode {
     const raw_flags = std.c.fcntl(fd, std.c.F.GETFL, @as(c_int, 0));
     if (raw_flags < 0) return .unknown;
     return switch (@as(usize, @intCast(raw_flags)) & 0o3) {
@@ -66,18 +67,18 @@ const zero_length_probe: [1]u8 = .{0};
 /// The `writeSideShutDown` probe is also only side-effect-free on stream sockets.
 /// On a datagram or seqpacket socket a zero-length `send` delivers an empty
 /// message, which the peer cannot tell apart from end-of-input.
-fn isUnixStreamSocket(fd: std.posix.fd_t) bool {
-    const domain = socketOption(fd, std.posix.SO.DOMAIN) orelse return false;
-    const kind = socketOption(fd, std.posix.SO.TYPE) orelse return false;
-    return domain == std.posix.AF.UNIX and kind == std.posix.SOCK.STREAM;
+fn isUnixStreamSocket(fd: posix.fd_t) bool {
+    const domain = socketOption(fd, posix.SO.DOMAIN) orelse return false;
+    const kind = socketOption(fd, posix.SO.TYPE) orelse return false;
+    return domain == posix.AF.UNIX and kind == posix.SOCK.STREAM;
 }
 
 /// A socket-level integer option, or null when `fd` is not a socket or the option
 /// cannot be read.
-fn socketOption(fd: std.posix.fd_t, option: u32) ?c_int {
+fn socketOption(fd: posix.fd_t, option: u32) ?c_int {
     var value: c_int = undefined;
-    var len: std.posix.socklen_t = @sizeOf(c_int);
-    if (std.c.getsockopt(fd, std.posix.SOL.SOCKET, @intCast(option), &value, &len) != 0) return null;
+    var len: posix.socklen_t = @sizeOf(c_int);
+    if (std.c.getsockopt(fd, posix.SOL.SOCKET, @intCast(option), &value, &len) != 0) return null;
     if (len != @sizeOf(c_int)) return null;
     return value;
 }
@@ -93,13 +94,13 @@ fn socketOption(fd: std.posix.fd_t, option: u32) ?c_int {
 ///
 /// Callers must establish that `fd` is a stream socket first; see
 /// `isUnixStreamSocket`.
-fn writeSideShutDown(fd: std.posix.fd_t) bool {
+fn writeSideShutDown(fd: posix.fd_t) bool {
     const rc = std.c.send(fd, &zero_length_probe, 0, std.os.linux.MSG.NOSIGNAL);
     if (rc >= 0) return false;
     // Anything other than EPIPE leaves the write direction unproven: a pipe or
     // regular file answers ENOTSOCK and cannot be closed one-directionally at
     // all, so it stays non-forwardable.
-    return std.posix.errno(rc) == .PIPE;
+    return posix.errno(rc) == .PIPE;
 }
 
 /// Classify fd 0 the way `selectStdin` does, but first close the write
@@ -129,19 +130,19 @@ fn writeSideShutDown(fd: std.posix.fd_t) bool {
 /// the next write. Such a caller used to get a clean refusal instead, so this is
 /// a real if narrow regression, accepted because the alternative is to keep
 /// failing every libuv-spawned child.
-pub fn prepareStdin(fd: std.posix.fd_t, capable: bool) StdinSelection {
+pub fn prepareStdin(fd: posix.fd_t, capable: bool) StdinSelection {
     return prepareStdinAmong(fd, capable, &.{
-        std.posix.STDOUT_FILENO,
-        std.posix.STDERR_FILENO,
+        posix.STDOUT_FILENO,
+        posix.STDERR_FILENO,
     });
 }
 
 /// `prepareStdin` with the output descriptors named explicitly, so the
 /// aliasing refusal is testable without touching the real fd 1 and fd 2.
 fn prepareStdinAmong(
-    fd: std.posix.fd_t,
+    fd: posix.fd_t,
     capable: bool,
-    outputs: []const std.posix.fd_t,
+    outputs: []const posix.fd_t,
 ) StdinSelection {
     const initial = selectStdin(fd, capable);
     switch (initial) {
@@ -174,33 +175,33 @@ fn prepareStdinAmong(
     // The std.posix wrapper treats ENOTSOCK as an unreachable race, and a
     // read-write pipe or regular file reaches exactly that path, so go through
     // libc and let every failure stay non-forwardable.
-    if (std.c.shutdown(fd, std.posix.SHUT.WR) < 0) return .reject_read_write;
+    if (std.c.shutdown(fd, posix.SHUT.WR) < 0) return .reject_read_write;
     return selectStdin(fd, capable);
 }
 
 /// Whether both descriptors name the same socket. Socket inodes are unique, so
 /// matching device and inode means one `shutdown` would affect both; the two ends
 /// of a socketpair are distinct sockets and do not match.
-fn sharesSocket(a: std.posix.fd_t, b: std.posix.fd_t) bool {
-    var stat_a: std.c.Stat = undefined;
-    var stat_b: std.c.Stat = undefined;
+fn sharesSocket(a: posix.fd_t, b: posix.fd_t) bool {
+    var stat_a: posix.Stat = undefined;
+    var stat_b: posix.Stat = undefined;
     // An unusable descriptor cannot be an alias, so failure means "not shared".
-    if (std.c.fstat(a, &stat_a) != 0) return false;
-    if (std.c.fstat(b, &stat_b) != 0) return false;
-    return stat_a.dev == stat_b.dev and stat_a.ino == stat_b.ino;
+    if (posix.fstat(a, &stat_a) != 0) return false;
+    if (posix.fstat(b, &stat_b) != 0) return false;
+    return stat_a.mask.INO and stat_b.mask.INO and stat_a.dev_major == stat_b.dev_major and stat_a.dev_minor == stat_b.dev_minor and stat_a.ino == stat_b.ino;
 }
 
 pub const ReceivedLine = struct {
     allocator: std.mem.Allocator,
     line: []u8,
-    stdin_fd: ?std.posix.fd_t,
+    stdin_fd: ?posix.fd_t,
     deinitialized: bool = false,
 
     pub fn deinit(self: *ReceivedLine) void {
         if (self.deinitialized) return;
         self.deinitialized = true;
         if (self.stdin_fd) |fd| {
-            std.posix.close(fd);
+            posix.close(fd);
             self.stdin_fd = null;
         }
         self.allocator.free(self.line);
@@ -208,23 +209,23 @@ pub const ReceivedLine = struct {
     }
 };
 
-pub fn sendLine(socket_fd: std.posix.fd_t, line: []const u8, stdin_fd: ?std.posix.fd_t) !void {
-    return sendLineWith(std.posix.sendmsg, std.posix.write, socket_fd, line, stdin_fd);
+pub fn sendLine(socket_fd: posix.fd_t, line: []const u8, stdin_fd: ?posix.fd_t) !void {
+    return sendLineWith(posix.sendmsg, posix.write, socket_fd, line, stdin_fd);
 }
 
 fn sendLineWith(
     comptime sendFn: anytype,
     comptime writeFn: anytype,
-    socket_fd: std.posix.fd_t,
+    socket_fd: posix.fd_t,
     line: []const u8,
-    stdin_fd: ?std.posix.fd_t,
+    stdin_fd: ?posix.fd_t,
 ) !void {
-    var iov = [_]std.posix.iovec_const{.{
+    var iov = [_]posix.iovec_const{.{
         .base = line.ptr,
         .len = line.len,
     }};
 
-    var control: [cmsgSpace(@sizeOf(std.posix.fd_t))]u8 align(@alignOf(LinuxCmsghdr)) = undefined;
+    var control: [cmsgSpace(@sizeOf(posix.fd_t))]u8 align(@alignOf(LinuxCmsghdr)) = undefined;
     var message = std.os.linux.msghdr_const{
         .name = null,
         .namelen = 0,
@@ -238,11 +239,11 @@ fn sendLineWith(
     if (stdin_fd) |fd| {
         const header: *LinuxCmsghdr = @ptrCast(@alignCast(&control));
         header.* = .{
-            .len = cmsgLen(@sizeOf(std.posix.fd_t)),
-            .level = std.posix.SOL.SOCKET,
+            .len = cmsgLen(@sizeOf(posix.fd_t)),
+            .level = posix.SOL.SOCKET,
             .type = scm_rights,
         };
-        const fd_ptr: *std.posix.fd_t = @ptrCast(@alignCast(control[0..].ptr + cmsgAlign(@sizeOf(LinuxCmsghdr))));
+        const fd_ptr: *posix.fd_t = @ptrCast(@alignCast(control[0..].ptr + cmsgAlign(@sizeOf(LinuxCmsghdr))));
         fd_ptr.* = fd;
         message.control = &control;
         message.controllen = control.len;
@@ -263,15 +264,15 @@ fn sendLineWith(
     }
 }
 
-pub fn receiveLine(allocator: std.mem.Allocator, socket_fd: std.posix.fd_t, max_bytes: usize) !ReceivedLine {
-    var line: std.ArrayList(u8) = .{};
+pub fn receiveLine(allocator: std.mem.Allocator, socket_fd: posix.fd_t, max_bytes: usize) !ReceivedLine {
+    var line: std.ArrayList(u8) = .empty;
     defer line.deinit(allocator);
 
-    var received_fd: ?std.posix.fd_t = null;
-    errdefer if (received_fd) |fd| std.posix.close(fd);
+    var received_fd: ?posix.fd_t = null;
+    errdefer if (received_fd) |fd| posix.close(fd);
 
     var data: [initial_data_bytes]u8 = undefined;
-    var iov = [_]std.posix.iovec{.{
+    var iov = [_]posix.iovec{.{
         .base = data[0..].ptr,
         .len = data.len,
     }};
@@ -322,7 +323,7 @@ pub fn receiveLine(allocator: std.mem.Allocator, socket_fd: std.posix.fd_t, max_
         // newline immediately after the limit is accepted while any other
         // byte is rejected without growing the buffer past its bound.
         const read_len: usize = if (line.items.len >= max_bytes) 1 else data.len;
-        const count = try std.posix.read(socket_fd, data[0..read_len]);
+        const count = try posix.read(socket_fd, data[0..read_len]);
         if (count == 0) return error.EndOfStream;
         chunk = data[0..count];
     }
@@ -351,13 +352,13 @@ fn cmsgSpace(payload_len: usize) usize {
     return cmsgAlign(@sizeOf(LinuxCmsghdr)) + cmsgAlign(payload_len);
 }
 
-const receive_control_bytes = cmsgSpace(@sizeOf(std.posix.fd_t) * max_receive_fds);
+const receive_control_bytes = cmsgSpace(@sizeOf(posix.fd_t) * max_receive_fds);
 
-fn recvmsg(socket_fd: std.posix.fd_t, message: *std.os.linux.msghdr) !usize {
+fn recvmsg(socket_fd: posix.fd_t, message: *std.os.linux.msghdr) !usize {
     while (true) {
-        const result = std.c.recvmsg(socket_fd, message, std.os.linux.MSG.CMSG_CLOEXEC);
-        if (result >= 0) return @intCast(result);
-        switch (std.posix.errno(result)) {
+        const result = std.os.linux.recvmsg(socket_fd, message, std.os.linux.MSG.CMSG_CLOEXEC);
+        switch (std.os.linux.errno(result)) {
+            .SUCCESS => return result,
             .INTR => continue,
             .AGAIN => return error.WouldBlock,
             .BADF => return error.BadFileDescriptor,
@@ -367,7 +368,7 @@ fn recvmsg(socket_fd: std.posix.fd_t, message: *std.os.linux.msghdr) !usize {
     }
 }
 
-fn parseControlMessages(control: []const u8, received_fd: *?std.posix.fd_t) !void {
+fn parseControlMessages(control: []const u8, received_fd: *?posix.fd_t) !void {
     var offset: usize = 0;
     var first_error: ?anyerror = null;
     var received_count: usize = 0;
@@ -387,22 +388,22 @@ fn parseControlMessages(control: []const u8, received_fd: *?std.posix.fd_t) !voi
         const payload_offset = cmsgAlign(@sizeOf(LinuxCmsghdr));
         if (payload_offset > length) {
             if (first_error == null) first_error = error.MalformedControlMessage;
-        } else if (header.level != std.posix.SOL.SOCKET or header.type != scm_rights) {
+        } else if (header.level != posix.SOL.SOCKET or header.type != scm_rights) {
             if (first_error == null) first_error = error.UnknownControlMessage;
         } else {
             const payload_len = length - payload_offset;
-            if (payload_len == 0 or payload_len % @sizeOf(std.posix.fd_t) != 0) {
+            if (payload_len == 0 or payload_len % @sizeOf(posix.fd_t) != 0) {
                 if (first_error == null) first_error = error.MalformedControlMessage;
             } else {
-                const count = payload_len / @sizeOf(std.posix.fd_t);
+                const count = payload_len / @sizeOf(posix.fd_t);
                 const payload = control[offset + payload_offset .. offset + length];
                 received_count += count;
                 for (0..count) |index| {
-                    const fd_ptr: *const std.posix.fd_t = @ptrCast(@alignCast(payload.ptr + index * @sizeOf(std.posix.fd_t)));
+                    const fd_ptr: *const posix.fd_t = @ptrCast(@alignCast(payload.ptr + index * @sizeOf(posix.fd_t)));
                     if (received_fd.* == null) {
                         received_fd.* = fd_ptr.*;
                     } else {
-                        std.posix.close(fd_ptr.*);
+                        posix.close(fd_ptr.*);
                     }
                 }
             }
@@ -420,9 +421,9 @@ fn parseControlMessages(control: []const u8, received_fd: *?std.posix.fd_t) !voi
 }
 
 test "selectStdin passes a read-only pipe" {
-    const fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    const fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         selectStdin(fds[0], true),
@@ -430,47 +431,47 @@ test "selectStdin passes a read-only pipe" {
 }
 
 test "selectStdin rejects a non-tty read-write socket" {
-    var fds: [2]std.posix.fd_t = undefined;
+    var fds: [2]posix.fd_t = undefined;
     try std.testing.expectEqual(
         @as(c_int, 0),
         std.c.socketpair(
-            @intCast(std.posix.AF.UNIX),
-            @intCast(std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC),
+            @intCast(posix.AF.UNIX),
+            @intCast(posix.SOCK.STREAM | posix.SOCK.CLOEXEC),
             0,
             &fds,
         ),
     );
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
 }
 
 test "selectStdin rejects an incapable caller" {
-    const fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    const fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.none, selectStdin(fds[0], false));
 }
 
 test "selectStdin rejects a closed fd" {
-    const fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    const fds = try posix.pipe2(.{ .CLOEXEC = true });
+    posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.none, selectStdin(fds[0], true));
 }
 
 test "selectStdin ignores a write-only fd" {
-    const fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    const fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.none, selectStdin(fds[1], true));
 }
 
 test "selectStdin accepts a socket whose write side is shut down" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
-    try std.posix.shutdown(fds[0], .send);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
+    try posix.shutdown(fds[0], .send);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         selectStdin(fds[0], true),
@@ -483,37 +484,37 @@ test "selectStdin accepts a socket whose write side is shut down" {
 // would let it pass a still-writable descriptor through the gateway's check.
 test "selectStdin rejects a read-write socket whose send buffer is full" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try fillSendBuffer(fds[0]);
     try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
 }
 
 test "prepareStdin shuts down the write side of a read-write socket and delegates it" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         prepareStdin(fds[0], true),
     );
     try std.testing.expectError(
         error.BrokenPipe,
-        std.posix.send(fds[0], "secret", std.os.linux.MSG.NOSIGNAL),
+        posix.send(fds[0], "secret", std.os.linux.MSG.NOSIGNAL),
     );
 }
 
 test "prepareStdin keeps the delegated socket readable from its peer" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         prepareStdin(fds[0], true),
     );
-    try std.testing.expectEqual(@as(usize, 5), try std.posix.write(fds[1], "hello"));
+    try std.testing.expectEqual(@as(usize, 5), try posix.write(fds[1], "hello"));
     var buf: [8]u8 = undefined;
-    const read_len = try std.posix.read(fds[0], &buf);
+    const read_len = try posix.read(fds[0], &buf);
     try std.testing.expectEqualStrings("hello", buf[0..read_len]);
 }
 
@@ -525,9 +526,9 @@ test "prepareStdin keeps the delegated socket readable from its peer" {
 // makes a one-shot check at the trust boundary sound.
 test "selectStdin rejects a shut-down socket whose write direction can be reopened" {
     const fds = testTcpConnectedPair() catch return error.SkipZigTest;
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
-    try std.posix.shutdown(fds[0], .send);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
+    try posix.shutdown(fds[0], .send);
     try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
 }
 
@@ -535,36 +536,36 @@ test "selectStdin rejects a shut-down socket whose write direction can be reopen
 // socket delivers it as an empty message, which a reader cannot distinguish from
 // end-of-input, so the socket kind has to be checked before probing.
 test "selectStdin rejects a read-write datagram socket without delivering a message" {
-    var fds: [2]std.posix.fd_t = undefined;
+    var fds: [2]posix.fd_t = undefined;
     try std.testing.expectEqual(
         @as(c_int, 0),
         std.c.socketpair(
-            @intCast(std.posix.AF.UNIX),
-            @intCast(std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK),
+            @intCast(posix.AF.UNIX),
+            @intCast(posix.SOCK.DGRAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK),
             0,
             &fds,
         ),
     );
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
     var buf: [8]u8 = undefined;
-    try std.testing.expectError(error.WouldBlock, std.posix.read(fds[1], &buf));
+    try std.testing.expectError(error.WouldBlock, posix.read(fds[1], &buf));
 }
 
 test "sharesSocket detects a second descriptor for the same socket" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
-    const duplicate = try std.posix.dup(fds[0]);
-    defer std.posix.close(duplicate);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
+    const duplicate = try posix.dup(fds[0]);
+    defer posix.close(duplicate);
     try std.testing.expect(sharesSocket(fds[0], duplicate));
 }
 
 test "sharesSocket separates the two ends of one socketpair" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expect(!sharesSocket(fds[0], fds[1]));
 }
 
@@ -575,10 +576,10 @@ test "sharesSocket separates the two ends of one socketpair" {
 // diagnostic it used to get.
 test "prepareStdinAmong refuses a read-write socket that is also an output descriptor" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
-    const output = try std.posix.dup(fds[0]);
-    defer std.posix.close(output);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
+    const output = try posix.dup(fds[0]);
+    defer posix.close(output);
     try std.testing.expectEqual(
         StdinSelection.reject_output_alias,
         prepareStdinAmong(fds[0], true, &.{output}),
@@ -586,7 +587,7 @@ test "prepareStdinAmong refuses a read-write socket that is also an output descr
     // Left untouched: the refusal must not have closed the write direction.
     try std.testing.expectEqual(
         @as(usize, 1),
-        try std.posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
+        try posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
     );
 }
 
@@ -596,8 +597,8 @@ test "prepareStdinAmong refuses a read-write socket that is also an output descr
 // `AF_UNSPEC` still answers EINVAL, so no write direction can come back.
 test "selectStdin delegates a read-write socket whose peer already closed" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    posix.close(fds[1]);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         selectStdin(fds[0], true),
@@ -607,10 +608,10 @@ test "selectStdin delegates a read-write socket whose peer already closed" {
 // The aliasing refusal must not depend on how the write direction was lost.
 test "prepareStdinAmong refuses an aliased socket whose peer already closed" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    std.posix.close(fds[1]);
-    const output = try std.posix.dup(fds[0]);
-    defer std.posix.close(output);
+    defer posix.close(fds[0]);
+    posix.close(fds[1]);
+    const output = try posix.dup(fds[0]);
+    defer posix.close(output);
     try std.testing.expectEqual(
         StdinSelection.reject_output_alias,
         prepareStdinAmong(fds[0], true, &.{output}),
@@ -619,22 +620,22 @@ test "prepareStdinAmong refuses an aliased socket whose peer already closed" {
 
 test "prepareStdin leaves a socket it cannot make forwardable unmutated" {
     const fds = testTcpConnectedPair() catch return error.SkipZigTest;
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.reject_read_write, prepareStdin(fds[0], true));
     try std.testing.expectEqual(
         @as(usize, 1),
-        try std.posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
+        try posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
     );
 }
 
 test "prepareStdinAmong delegates a read-write socket that no output descriptor shares" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     const unrelated = try testSocketPair();
-    defer std.posix.close(unrelated[0]);
-    defer std.posix.close(unrelated[1]);
+    defer posix.close(unrelated[0]);
+    defer posix.close(unrelated[1]);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         prepareStdinAmong(fds[0], true, &.{unrelated[0]}),
@@ -642,35 +643,35 @@ test "prepareStdinAmong delegates a read-write socket that no output descriptor 
 }
 
 test "prepareStdin rejects a read-write descriptor that is not a socket" {
-    const fd = try std.posix.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
-    defer std.posix.close(fd);
+    const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
+    defer posix.close(fd);
     try std.testing.expectEqual(StdinSelection.reject_read_write, prepareStdin(fd, true));
 }
 
 test "prepareStdin passes a read-only pipe without touching it" {
-    const fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    const fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(
         StdinSelection{ .pass_fd = fds[0] },
         prepareStdin(fds[0], true),
     );
-    try std.testing.expectEqual(@as(usize, 2), try std.posix.write(fds[1], "hi"));
+    try std.testing.expectEqual(@as(usize, 2), try posix.write(fds[1], "hi"));
 }
 
 test "prepareStdin ignores an incapable caller without shutting the socket down" {
     const fds = try testSocketPair();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
+    defer posix.close(fds[0]);
+    defer posix.close(fds[1]);
     try std.testing.expectEqual(StdinSelection.none, prepareStdin(fds[0], false));
     try std.testing.expectEqual(
         @as(usize, 1),
-        try std.posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
+        try posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
     );
 }
 
 test "selectStdin ignores a tty when /dev/ptmx is available" {
-    const fd = std.posix.open("/dev/ptmx", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0) catch |err| switch (err) {
+    const fd = posix.open("/dev/ptmx", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0) catch |err| switch (err) {
         error.FileNotFound,
         error.AccessDenied,
         error.PermissionDenied,
@@ -679,7 +680,7 @@ test "selectStdin ignores a tty when /dev/ptmx is available" {
         => return,
         else => return err,
     };
-    defer std.posix.close(fd);
+    defer posix.close(fd);
     try std.testing.expectEqual(StdinSelection.none, selectStdin(fd, true));
 }
 
@@ -694,14 +695,14 @@ fn testCmsgAlign(n: usize) usize {
     return (n + a - 1) & ~@as(usize, a - 1);
 }
 
-fn writeTestRightsHeader(control: []u8, offset: usize, fd: std.posix.fd_t) void {
+fn writeTestRightsHeader(control: []u8, offset: usize, fd: posix.fd_t) void {
     const header: *TestCmsghdr = @ptrCast(@alignCast(control.ptr + offset));
     header.* = .{
-        .len = testCmsgAlign(@sizeOf(TestCmsghdr)) + @sizeOf(std.posix.fd_t),
-        .level = std.posix.SOL.SOCKET,
+        .len = testCmsgAlign(@sizeOf(TestCmsghdr)) + @sizeOf(posix.fd_t),
+        .level = posix.SOL.SOCKET,
         .type = 1,
     };
-    const fd_ptr: *std.posix.fd_t = @ptrCast(@alignCast(
+    const fd_ptr: *posix.fd_t = @ptrCast(@alignCast(
         control.ptr + offset + testCmsgAlign(@sizeOf(TestCmsghdr)),
     ));
     fd_ptr.* = fd;
@@ -712,10 +713,10 @@ const TestDescriptorError = error{
     DescriptorProbeFailed,
 };
 
-fn isClosed(fd: std.posix.fd_t) TestDescriptorError!bool {
+fn isClosed(fd: posix.fd_t) TestDescriptorError!bool {
     const result = std.c.fcntl(fd, std.c.F.GETFD, @as(c_int, 0));
     if (result >= 0) return false;
-    return switch (std.posix.errno(result)) {
+    return switch (posix.errno(result)) {
         .BADF => true,
         .INTR => error.DescriptorProbeInterrupted,
         else => error.DescriptorProbeFailed,
@@ -723,18 +724,18 @@ fn isClosed(fd: std.posix.fd_t) TestDescriptorError!bool {
 }
 
 test "isClosed distinguishes open and closed descriptors" {
-    const fd = try std.posix.open("/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
     var owned = true;
-    defer if (owned) std.posix.close(fd);
+    defer if (owned) posix.close(fd);
 
     try std.testing.expect(!(try isClosed(fd)));
-    std.posix.close(fd);
+    posix.close(fd);
     owned = false;
     try std.testing.expect(try isClosed(fd));
 }
 
 fn sendTestAncillary(
-    socket_fd: std.posix.fd_t,
+    socket_fd: posix.fd_t,
     line: []const u8,
     payload: []const u8,
     level: i32,
@@ -755,7 +756,7 @@ fn sendTestAncillary(
     };
     @memcpy(control[payload_offset..][0..payload.len], payload);
 
-    var iov = [_]std.posix.iovec_const{.{
+    var iov = [_]posix.iovec_const{.{
         .base = line.ptr,
         .len = line.len,
     }};
@@ -772,13 +773,13 @@ fn sendTestAncillary(
     if (sent < 0 or @as(usize, @intCast(sent)) != line.len) return error.TestSendFailed;
 }
 
-fn testSocketPair() ![2]std.posix.fd_t {
-    var fds: [2]std.posix.fd_t = undefined;
+fn testSocketPair() ![2]posix.fd_t {
+    var fds: [2]posix.fd_t = undefined;
     try std.testing.expectEqual(
         @as(c_int, 0),
         std.c.socketpair(
-            @intCast(std.posix.AF.UNIX),
-            @intCast(std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC),
+            @intCast(posix.AF.UNIX),
+            @intCast(posix.SOCK.STREAM | posix.SOCK.CLOEXEC),
             0,
             &fds,
         ),
@@ -788,64 +789,64 @@ fn testSocketPair() ![2]std.posix.fd_t {
 
 /// A connected loopback TCP pair, returned as `.{ client, server }`. Returns an
 /// error when the sandbox has no usable loopback, so callers can skip.
-fn testTcpConnectedPair() ![2]std.posix.fd_t {
-    const listener = try std.posix.socket(
-        std.posix.AF.INET,
-        std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+fn testTcpConnectedPair() ![2]posix.fd_t {
+    const listener = try posix.socket(
+        posix.AF.INET,
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
         0,
     );
-    defer std.posix.close(listener);
+    defer posix.close(listener);
 
-    var address = try std.net.Address.parseIp4("127.0.0.1", 0);
-    try std.posix.bind(listener, &address.any, address.getOsSockLen());
-    try std.posix.listen(listener, 1);
-    var bound_len: std.posix.socklen_t = address.getOsSockLen();
-    try std.posix.getsockname(listener, &address.any, &bound_len);
+    var address: posix.sockaddr.in = .{ .family = posix.AF.INET, .port = 0, .addr = std.mem.nativeToBig(u32, 0x7f000001), .zero = @splat(0) };
+    try posix.bind(listener, @ptrCast(&address), @sizeOf(posix.sockaddr.in));
+    try posix.listen(listener, 1);
+    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    try posix.getsockname(listener, @ptrCast(&address), &bound_len);
 
-    const client = try std.posix.socket(
-        std.posix.AF.INET,
-        std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+    const client = try posix.socket(
+        posix.AF.INET,
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
         0,
     );
-    errdefer std.posix.close(client);
-    try std.posix.connect(client, &address.any, bound_len);
-    const server = try std.posix.accept(listener, null, null, std.posix.SOCK.CLOEXEC);
+    errdefer posix.close(client);
+    try posix.connect(client, @ptrCast(&address), bound_len);
+    const server = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
     return .{ client, server };
 }
 
 /// Write until the socket's send buffer refuses more, then restore the
 /// original blocking mode so the caller probes a blocking full socket.
-fn fillSendBuffer(fd: std.posix.fd_t) !void {
-    const original = try std.posix.fcntl(fd, std.posix.F.GETFL, 0);
-    const nonblock: u32 = @bitCast(std.posix.O{ .NONBLOCK = true });
-    _ = try std.posix.fcntl(fd, std.posix.F.SETFL, original | nonblock);
-    defer _ = std.posix.fcntl(fd, std.posix.F.SETFL, original) catch 0;
+fn fillSendBuffer(fd: posix.fd_t) !void {
+    const original = try posix.fcntl(fd, posix.F.GETFL, 0);
+    const nonblock: u32 = @bitCast(posix.O{ .NONBLOCK = true });
+    _ = try posix.fcntl(fd, posix.F.SETFL, original | nonblock);
+    defer _ = posix.fcntl(fd, posix.F.SETFL, original) catch 0;
 
     var blob: [4096]u8 = undefined;
     @memset(&blob, 'z');
     while (true) {
-        _ = std.posix.send(fd, &blob, std.os.linux.MSG.NOSIGNAL) catch |err| switch (err) {
+        _ = posix.send(fd, &blob, std.os.linux.MSG.NOSIGNAL) catch |err| switch (err) {
             error.WouldBlock => return,
             else => return err,
         };
     }
 }
 
-fn reserveNextFd() !std.posix.fd_t {
-    const fd = try std.posix.open("/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
-    std.posix.close(fd);
+fn reserveNextFd() !posix.fd_t {
+    const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    posix.close(fd);
     return fd;
 }
 
-fn expectReusableFdSlots(first: std.posix.fd_t, count: usize) !void {
-    var opened: [128]std.posix.fd_t = undefined;
+fn expectReusableFdSlots(first: posix.fd_t, count: usize) !void {
+    var opened: [128]posix.fd_t = undefined;
     try std.testing.expect(count <= opened.len);
     var opened_count: usize = 0;
-    defer for (opened[0..opened_count]) |fd| std.posix.close(fd);
+    defer for (opened[0..opened_count]) |fd| posix.close(fd);
     while (opened_count < count) : (opened_count += 1) {
-        const fd = try std.posix.open("/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+        const fd = try posix.open("/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
         opened[opened_count] = fd;
-        try std.testing.expectEqual(first + @as(std.posix.fd_t, @intCast(opened_count)), fd);
+        try std.testing.expectEqual(first + @as(posix.fd_t, @intCast(opened_count)), fd);
     }
 }
 
@@ -855,7 +856,7 @@ var partial_write_bytes: usize = 0;
 var partial_control_seen: bool = false;
 
 fn partialSend(
-    socket_fd: std.posix.fd_t,
+    socket_fd: posix.fd_t,
     message: *const std.os.linux.msghdr_const,
     flags: u32,
 ) !usize {
@@ -866,7 +867,7 @@ fn partialSend(
     return 3;
 }
 
-fn partialWrite(socket_fd: std.posix.fd_t, bytes: []const u8) !usize {
+fn partialWrite(socket_fd: posix.fd_t, bytes: []const u8) !usize {
     _ = socket_fd;
     partial_write_calls += 1;
     partial_write_bytes = bytes.len;
@@ -891,7 +892,7 @@ test "sendLine finishes a positive partial send with write without resending rig
 test "parseControlMessages rejects a short cmsg header" {
     var control: [@sizeOf(TestCmsghdr) - 1]u8 align(@alignOf(TestCmsghdr)) = undefined;
     @memset(control[0..], 0);
-    var received_fd: ?std.posix.fd_t = null;
+    var received_fd: ?posix.fd_t = null;
     try std.testing.expectError(
         error.MalformedControlMessage,
         parseControlMessages(control[0..], &received_fd),
@@ -899,15 +900,15 @@ test "parseControlMessages rejects a short cmsg header" {
 }
 
 test "parseControlMessages rejects an out-of-bounds cmsg length" {
-    var control: [cmsgSpace(@sizeOf(std.posix.fd_t))]u8 align(@alignOf(TestCmsghdr)) = undefined;
+    var control: [cmsgSpace(@sizeOf(posix.fd_t))]u8 align(@alignOf(TestCmsghdr)) = undefined;
     @memset(control[0..], 0);
     const header: *TestCmsghdr = @ptrCast(@alignCast(control[0..].ptr));
     header.* = .{
         .len = control.len + 1,
-        .level = std.posix.SOL.SOCKET,
+        .level = posix.SOL.SOCKET,
         .type = 1,
     };
-    var received_fd: ?std.posix.fd_t = null;
+    var received_fd: ?posix.fd_t = null;
     try std.testing.expectError(
         error.MalformedControlMessage,
         parseControlMessages(control[0..], &received_fd),
@@ -920,10 +921,10 @@ test "parseControlMessages rejects empty and misaligned rights payloads" {
     const empty_header: *TestCmsghdr = @ptrCast(@alignCast(empty_control[0..].ptr));
     empty_header.* = .{
         .len = cmsgAlign(@sizeOf(TestCmsghdr)),
-        .level = std.posix.SOL.SOCKET,
+        .level = posix.SOL.SOCKET,
         .type = 1,
     };
-    var empty_received_fd: ?std.posix.fd_t = null;
+    var empty_received_fd: ?posix.fd_t = null;
     try std.testing.expectError(
         error.MalformedControlMessage,
         parseControlMessages(empty_control[0..], &empty_received_fd),
@@ -934,10 +935,10 @@ test "parseControlMessages rejects empty and misaligned rights payloads" {
     const misaligned_header: *TestCmsghdr = @ptrCast(@alignCast(misaligned_control[0..].ptr));
     misaligned_header.* = .{
         .len = cmsgAlign(@sizeOf(TestCmsghdr)) + 1,
-        .level = std.posix.SOL.SOCKET,
+        .level = posix.SOL.SOCKET,
         .type = 1,
     };
-    var misaligned_received_fd: ?std.posix.fd_t = null;
+    var misaligned_received_fd: ?posix.fd_t = null;
     try std.testing.expectError(
         error.MalformedControlMessage,
         parseControlMessages(misaligned_control[0..], &misaligned_received_fd),
@@ -945,27 +946,27 @@ test "parseControlMessages rejects empty and misaligned rights payloads" {
 }
 
 test "parseControlMessages rejects multiple one-fd rights headers" {
-    const pipe_fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(pipe_fds[0]);
-    defer std.posix.close(pipe_fds[1]);
-    const first = try std.posix.dup(pipe_fds[0]);
+    const pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(pipe_fds[0]);
+    defer posix.close(pipe_fds[1]);
+    const first = try posix.dup(pipe_fds[0]);
     var first_owned = true;
-    defer if (first_owned) std.posix.close(first);
-    const second = try std.posix.dup(pipe_fds[0]);
+    defer if (first_owned) posix.close(first);
+    const second = try posix.dup(pipe_fds[0]);
     var second_owned = true;
     defer if (second_owned) {
         // The parser may already have closed this descriptor. Use libc here
-        // because std.posix.close treats EBADF as an unreachable race.
+        // because posix.close treats EBADF as an unreachable race.
         _ = std.c.close(second);
     };
 
-    var control: [2 * cmsgSpace(@sizeOf(std.posix.fd_t))]u8 align(@alignOf(TestCmsghdr)) = undefined;
+    var control: [2 * cmsgSpace(@sizeOf(posix.fd_t))]u8 align(@alignOf(TestCmsghdr)) = undefined;
     @memset(control[0..], 0);
     writeTestRightsHeader(control[0..], 0, first);
-    writeTestRightsHeader(control[0..], cmsgSpace(@sizeOf(std.posix.fd_t)), second);
+    writeTestRightsHeader(control[0..], cmsgSpace(@sizeOf(posix.fd_t)), second);
 
-    var received_fd: ?std.posix.fd_t = null;
-    defer if (received_fd) |fd| std.posix.close(fd);
+    var received_fd: ?posix.fd_t = null;
+    defer if (received_fd) |fd| posix.close(fd);
     var parse_error: ?anyerror = null;
     parseControlMessages(control[0..], &received_fd) catch |err| {
         parse_error = err;
@@ -975,18 +976,18 @@ test "parseControlMessages rejects multiple one-fd rights headers" {
     // unexpected parser error from returning through guards that still point
     // at descriptors already retained or closed by the parser.
     if (received_fd) |fd| {
-        std.posix.close(fd);
+        posix.close(fd);
         received_fd = null;
         first_owned = false;
     } else if (first_owned) {
-        std.posix.close(first);
+        posix.close(first);
         first_owned = false;
     }
     const second_closed = isClosed(second) catch |err| return err;
     if (second_closed) {
         second_owned = false;
     } else {
-        std.posix.close(second);
+        posix.close(second);
         second_owned = false;
     }
 
@@ -1001,11 +1002,11 @@ test "parseControlMessages rejects multiple one-fd rights headers" {
 
 test "sendLine and receiveLine pass one stdin fd with the line" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
-    const pipe_fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(pipe_fds[0]);
-    defer std.posix.close(pipe_fds[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
+    const pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(pipe_fds[0]);
+    defer posix.close(pipe_fds[1]);
 
     try sendLine(sockets[0], "{\"type\":\"execute\"}\n", pipe_fds[0]);
     var received = try receiveLine(std.testing.allocator, sockets[1], 4096);
@@ -1013,9 +1014,9 @@ test "sendLine and receiveLine pass one stdin fd with the line" {
     try std.testing.expectEqualStrings("{\"type\":\"execute\"}", received.line);
     try std.testing.expect(received.stdin_fd != null);
 
-    _ = try std.posix.write(pipe_fds[1], "payload");
+    _ = try posix.write(pipe_fds[1], "payload");
     var buf: [7]u8 = undefined;
-    try std.testing.expectEqual(@as(usize, 7), try std.posix.read(received.stdin_fd.?, &buf));
+    try std.testing.expectEqual(@as(usize, 7), try posix.read(received.stdin_fd.?, &buf));
     try std.testing.expectEqualStrings("payload", &buf);
 
     const received_flags = std.c.fcntl(received.stdin_fd.?, std.c.F.GETFD, @as(c_int, 0));
@@ -1025,8 +1026,8 @@ test "sendLine and receiveLine pass one stdin fd with the line" {
 
 test "sendLine and receiveLine support a request without an fd" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
 
     try sendLine(sockets[0], "{\"stdinMode\":\"none\"}\n", null);
     var received = try receiveLine(std.testing.allocator, sockets[1], 4096);
@@ -1037,10 +1038,10 @@ test "sendLine and receiveLine support a request without an fd" {
 
 test "receiveLine completes a line split across the initial recvmsg and a read" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
 
-    _ = try std.posix.write(sockets[0], "{\"split\":");
+    _ = try posix.write(sockets[0], "{\"split\":");
     var suffix_writer_state = SuffixWriterState{
         .fd = sockets[0],
         .failed = std.atomic.Value(bool).init(false),
@@ -1058,13 +1059,13 @@ test "receiveLine completes a line split across the initial recvmsg and a read" 
 }
 
 const SuffixWriterState = struct {
-    fd: std.posix.fd_t,
+    fd: posix.fd_t,
     failed: std.atomic.Value(bool),
 };
 
 fn writeSuffix(state: *SuffixWriterState) void {
-    std.Thread.sleep(20 * std.time.ns_per_ms);
-    _ = std.posix.write(state.fd, "true}\n") catch {
+    posix.sleep(20 * std.time.ns_per_ms);
+    _ = posix.write(state.fd, "true}\n") catch {
         state.failed.store(true, .release);
     };
 }
@@ -1081,11 +1082,11 @@ test "suffix writer reports a failed write after join" {
 
 test "receiveLine rejects a line over the maximum size" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
-    const pipe_fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(pipe_fds[0]);
-    defer std.posix.close(pipe_fds[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
+    const pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(pipe_fds[0]);
+    defer posix.close(pipe_fds[1]);
     const first_available = try reserveNextFd();
 
     try sendLine(sockets[0], "12345\n", pipe_fds[0]);
@@ -1098,22 +1099,22 @@ test "receiveLine rejects a line over the maximum size" {
 
 test "receiveLine rejects multiple received descriptors" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
-    const first = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(first[0]);
-    defer std.posix.close(first[1]);
-    const second = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(second[0]);
-    defer std.posix.close(second[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
+    const first = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(first[0]);
+    defer posix.close(first[1]);
+    const second = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(second[0]);
+    defer posix.close(second[1]);
     const first_available = try reserveNextFd();
-    const descriptors = [_]std.posix.fd_t{ first[0], second[0] };
+    const descriptors = [_]posix.fd_t{ first[0], second[0] };
 
     try sendTestAncillary(
         sockets[0],
         "{\"stdinMode\":\"fd\"}\n",
         std.mem.sliceAsBytes(&descriptors),
-        std.posix.SOL.SOCKET,
+        posix.SOL.SOCKET,
         1,
     );
     try std.testing.expectError(
@@ -1125,20 +1126,20 @@ test "receiveLine rejects multiple received descriptors" {
 
 test "receiveLine rejects MSG_CTRUNC" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
 
-    var pipes: [128][2]std.posix.fd_t = undefined;
-    var descriptors: [128]std.posix.fd_t = undefined;
+    var pipes: [128][2]posix.fd_t = undefined;
+    var descriptors: [128]posix.fd_t = undefined;
     var initialized: usize = 0;
     defer {
         for (pipes[0..initialized]) |pair| {
-            std.posix.close(pair[0]);
-            std.posix.close(pair[1]);
+            posix.close(pair[0]);
+            posix.close(pair[1]);
         }
     }
     while (initialized < pipes.len) : (initialized += 1) {
-        pipes[initialized] = try std.posix.pipe2(.{ .CLOEXEC = true });
+        pipes[initialized] = try posix.pipe2(.{ .CLOEXEC = true });
         descriptors[initialized] = pipes[initialized][0];
     }
     const first_available = try reserveNextFd();
@@ -1147,7 +1148,7 @@ test "receiveLine rejects MSG_CTRUNC" {
         sockets[0],
         "{\"stdinMode\":\"fd\"}\n",
         std.mem.sliceAsBytes(&descriptors),
-        std.posix.SOL.SOCKET,
+        posix.SOL.SOCKET,
         1,
     );
     try std.testing.expectError(
@@ -1159,16 +1160,16 @@ test "receiveLine rejects MSG_CTRUNC" {
 
 test "receiveLine rejects unknown ancillary data" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
     var enabled: c_int = 1;
-    try std.posix.setsockopt(
+    try posix.setsockopt(
         sockets[1],
-        std.posix.SOL.SOCKET,
-        std.posix.SO.PASSCRED,
+        posix.SOL.SOCKET,
+        posix.SO.PASSCRED,
         std.mem.asBytes(&enabled),
     );
-    _ = try std.posix.write(sockets[0], "{\"type\":\"execute\"}\n");
+    _ = try posix.write(sockets[0], "{\"type\":\"execute\"}\n");
 
     try std.testing.expectError(
         error.UnknownControlMessage,
@@ -1178,11 +1179,11 @@ test "receiveLine rejects unknown ancillary data" {
 
 test "ReceivedLine.deinit closes the fd and is idempotent" {
     const sockets = try testSocketPair();
-    defer std.posix.close(sockets[0]);
-    defer std.posix.close(sockets[1]);
-    const pipe_fds = try std.posix.pipe2(.{ .CLOEXEC = true });
-    defer std.posix.close(pipe_fds[0]);
-    defer std.posix.close(pipe_fds[1]);
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
+    const pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer posix.close(pipe_fds[0]);
+    defer posix.close(pipe_fds[1]);
 
     try sendLine(sockets[0], "line\n", pipe_fds[0]);
     var received = try receiveLine(std.testing.allocator, sockets[1], 4096);

@@ -36,19 +36,21 @@ const supervise = @import("supervise.zig");
 
 const allocator = std.heap.page_allocator;
 
-fn readSecretsFromFile(file_path: []const u8) ![][]u8 {
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
-    const reader = file.deprecatedReader();
-    const count = try reader.readInt(u32, .little);
+fn readSecretsFromFile(io: std.Io, file_path: []const u8) ![][]u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, file_path, .{});
+    defer file.close(io);
+    var buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(io, &buffer);
+    const reader = &file_reader.interface;
+    const count = try reader.takeInt(u32, .little);
     if (count > 1024) return error.TooManySecrets;
     const list = try allocator.alloc([]u8, count);
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        const len = try reader.readInt(u32, .little);
+        const len = try reader.takeInt(u32, .little);
         if (len == 0 or len > 16 * 1024 * 1024) return error.InvalidSecretLength;
         const s = try allocator.alloc(u8, len);
-        try reader.readNoEof(s);
+        try reader.readSliceAll(s);
         list[i] = s;
     }
     return list;
@@ -154,20 +156,20 @@ fn superviseDiagnostic(err: anyerror) []const u8 {
 
 /// フィルタ / サーブモード用にシークレットフレームを読む。
 /// supervise はホスト側ブローカーへ中継するだけなので呼ばない。
-fn loadSecrets() !?[][]u8 {
-    const env_path = std.posix.getenv("NAS_MASK_SECRETS_FILE") orelse {
+fn loadSecrets(io: std.Io, environ: std.process.Environ) !?[][]u8 {
+    const env_path = environ.getPosix("NAS_MASK_SECRETS_FILE") orelse {
         std.debug.print("nas-mask-filter: NAS_MASK_SECRETS_FILE not set\n", .{});
         return null;
     };
-    return try readSecretsFromFile(env_path);
+    return try readSecretsFromFile(io, env_path);
 }
 
-pub fn main() !u8 {
+pub fn main(init: std.process.Init) !u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    const argv = try std.process.argsAlloc(arena_alloc);
+    const argv = try init.minimal.args.toSlice(arena_alloc);
     const mode = parseMode(argv[1..]) catch |err| {
         std.debug.print("nas-mask-filter: {}\n{s}", .{ err, usage_text });
         return 2;
@@ -180,7 +182,7 @@ pub fn main() !u8 {
         .supervise => &.{},
         // secrets を読めないままフィルタ / サーバを動かすとマスクなしで
         // 素通しになってしまうため、fail-closed で中断する。
-        .serve, .filter => (loadSecrets() catch |err| {
+        .serve, .filter => (loadSecrets(init.io, init.minimal.environ) catch |err| {
             std.debug.print("nas-mask-filter: failed to read secrets: {}\n", .{err});
             return 1;
         }) orelse return 2,
@@ -213,9 +215,10 @@ pub fn main() !u8 {
             };
         },
         .filter => {
-            const stdin = std.fs.File.stdin();
-            const stdout = std.fs.File.stdout();
-            mask_stream.streamMask(stdin.deprecatedReader(), stdout.deprecatedWriter(), secrets) catch |err| {
+            var read_buffer: [64 * 1024]u8 = undefined;
+            var stdin = std.Io.File.stdin().readerStreaming(init.io, &read_buffer);
+            var stdout = std.Io.File.stdout().writerStreaming(init.io, &.{});
+            mask_stream.streamMask(&stdin.interface, &stdout.interface, secrets) catch |err| {
                 std.debug.print("nas-mask-filter: stream error: {}\n", .{err});
                 return 1;
             };
@@ -351,12 +354,12 @@ test "parseSuperviseArgs: --socket after -- is passed through to the child" {
 // ---------------------------------------------------------------------------
 
 // std.testing.tmpDir を使って secrets_frame 形式のバイト列を書き込み、
-// readSecretsFromFile が std.fs.cwd().openFile で開ける絶対パスを返す。
-fn writeTempFile(tmp: *testing.TmpDir, bytes: []const u8) ![]const u8 {
-    const file = try tmp.dir.createFile("secrets.bin", .{});
-    defer file.close();
-    try file.writeAll(bytes);
-    return try tmp.dir.realpathAlloc(testing.allocator, "secrets.bin");
+// readSecretsFromFile が std.Io.Dir.cwd().openFile で開ける絶対パスを返す。
+fn writeTempFile(tmp: *testing.TmpDir, bytes: []const u8) ![:0]const u8 {
+    const file = try tmp.dir.createFile(testing.io, "secrets.bin", .{});
+    defer file.close(testing.io);
+    try file.writeStreamingAll(testing.io, bytes);
+    return try tmp.dir.realPathFileAlloc(testing.io, "secrets.bin", testing.allocator);
 }
 
 test "readSecretsFromFile: 0 secrets" {
@@ -365,7 +368,7 @@ test "readSecretsFromFile: 0 secrets" {
     const path = try writeTempFile(&tmp, &[_]u8{ 0, 0, 0, 0 });
     defer testing.allocator.free(path);
 
-    const secrets = try readSecretsFromFile(path);
+    const secrets = try readSecretsFromFile(testing.io, path);
     try testing.expectEqual(@as(usize, 0), secrets.len);
 }
 
@@ -375,7 +378,7 @@ test "readSecretsFromFile: more than 1024 secrets is an error" {
     const path = try writeTempFile(&tmp, &[_]u8{ 0x01, 0x04, 0x00, 0x00 }); // count = 1025
     defer testing.allocator.free(path);
 
-    try testing.expectError(error.TooManySecrets, readSecretsFromFile(path));
+    try testing.expectError(error.TooManySecrets, readSecretsFromFile(testing.io, path));
 }
 
 test "readSecretsFromFile: 0-length secret is an error" {
@@ -386,7 +389,7 @@ test "readSecretsFromFile: 0-length secret is an error" {
     const path = try writeTempFile(&tmp, &bytes);
     defer testing.allocator.free(path);
 
-    try testing.expectError(error.InvalidSecretLength, readSecretsFromFile(path));
+    try testing.expectError(error.InvalidSecretLength, readSecretsFromFile(testing.io, path));
 }
 
 test "readSecretsFromFile: secret length over 16MB is an error" {
@@ -400,7 +403,7 @@ test "readSecretsFromFile: secret length over 16MB is an error" {
     const path = try writeTempFile(&tmp, &bytes);
     defer testing.allocator.free(path);
 
-    try testing.expectError(error.InvalidSecretLength, readSecretsFromFile(path));
+    try testing.expectError(error.InvalidSecretLength, readSecretsFromFile(testing.io, path));
 }
 
 test "readSecretsFromFile: truncated file is an error" {
@@ -414,5 +417,5 @@ test "readSecretsFromFile: truncated file is an error" {
     const path = try writeTempFile(&tmp, &bytes);
     defer testing.allocator.free(path);
 
-    try testing.expectError(error.EndOfStream, readSecretsFromFile(path));
+    try testing.expectError(error.EndOfStream, readSecretsFromFile(testing.io, path));
 }

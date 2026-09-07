@@ -143,8 +143,13 @@ pub fn streamMask(
     var stream = try MaskStream.init(std.heap.page_allocator, secrets);
     defer stream.deinit(std.heap.page_allocator);
     while (true) {
-        const n = try reader.read(stream.readBuf());
-        if (n == 0) break;
+        // readSliceShort waits for a full buffer or EOF; readVec preserves
+        // incremental pipe output and reports EOF separately from a zero read.
+        var buffers = [_][]u8{stream.readBuf()};
+        const n = reader.readVec(&buffers) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
         try stream.push(n, writer);
     }
     try stream.finish(writer);
@@ -157,11 +162,11 @@ pub fn streamMask(
 const testing = std.testing;
 
 fn testStreamMask(input: []const u8, secrets: []const []const u8) ![]u8 {
-    var input_stream = std.io.fixedBufferStream(input);
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(testing.allocator);
-    try streamMask(input_stream.reader(), output.writer(testing.allocator), secrets);
-    return try output.toOwnedSlice(testing.allocator);
+    var input_stream = std.Io.Reader.fixed(input);
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    try streamMask(&input_stream, &output.writer, secrets);
+    return try output.toOwnedSlice();
 }
 
 test "streamMask: no secrets -> passthrough" {
@@ -253,8 +258,9 @@ const ChunkedReader = struct {
     pos: usize = 0,
     chunk_idx: usize = 0,
 
-    fn read(self: *ChunkedReader, buf: []u8) !usize {
-        if (self.chunk_idx >= self.chunks.len) return 0;
+    fn readVec(self: *ChunkedReader, buffers: [][]u8) std.Io.Reader.Error!usize {
+        const buf = buffers[0];
+        if (self.chunk_idx >= self.chunks.len) return error.EndOfStream;
         const want = self.chunks[self.chunk_idx];
         self.chunk_idx += 1;
         const remaining = self.data.len - self.pos;
@@ -267,10 +273,10 @@ const ChunkedReader = struct {
 
 fn testStreamMaskChunked(input: []const u8, chunks: []const usize, secrets: []const []const u8) ![]u8 {
     var reader = ChunkedReader{ .data = input, .chunks = chunks };
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(testing.allocator);
-    try streamMask(&reader, output.writer(testing.allocator), secrets);
-    return try output.toOwnedSlice(testing.allocator);
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    try streamMask(&reader, &output.writer, secrets);
+    return try output.toOwnedSlice();
 }
 
 test "streamMask: self-overlapping secret at chunk boundary" {
@@ -296,9 +302,9 @@ test "MaskStream: incremental push mirrors streamMask" {
     var stream = try MaskStream.init(testing.allocator, &.{"hunter2"});
     defer stream.deinit(testing.allocator);
 
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(testing.allocator);
-    var writer = output.writer(testing.allocator);
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    const writer = &output.writer;
 
     const input = "pw=hunter2 and hunter2 again";
     var pos: usize = 0;
@@ -306,10 +312,10 @@ test "MaskStream: incremental push mirrors streamMask" {
         const n = @min(@as(usize, 3), input.len - pos);
         const buf = stream.readBuf();
         @memcpy(buf[0..n], input[pos .. pos + n]);
-        try stream.push(n, &writer);
+        try stream.push(n, writer);
         pos += n;
     }
-    try stream.finish(&writer);
+    try stream.finish(writer);
 
-    try testing.expectEqualStrings("pw=******* and ******* again", output.items);
+    try testing.expectEqualStrings("pw=******* and ******* again", output.written());
 }

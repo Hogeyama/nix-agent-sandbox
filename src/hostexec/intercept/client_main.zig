@@ -22,6 +22,7 @@
 //   NAS_HOSTEXEC_WRAPPER_DIR – container path of the wrapper symlink directory
 
 const std = @import("std");
+const posix = @import("posix");
 const Allocator = std.mem.Allocator;
 
 const protocol = @import("protocol.zig");
@@ -31,15 +32,15 @@ const intercept_paths = @import("intercept_paths.zig");
 /// convention for a missing binary.
 const exit_command_not_found = 127;
 
-pub fn main() void {
+pub fn main(init: std.process.Init.Minimal) void {
     const alloc = std.heap.c_allocator;
-    const argv_os = std.os.argv;
+    const argv_os = init.args.vector;
     if (argv_os.len == 0) {
         protocol.writeAll(2, "nas-hostexec-client: empty argv\n");
         protocol.doExit(exit_command_not_found);
     }
 
-    // callBroker wants a null-terminated argv; std.os.argv is a plain slice.
+    // callBroker wants a null-terminated argv; init.args.vector is a plain slice.
     const argv_z = alloc.allocSentinel(?[*:0]const u8, argv_os.len, null) catch {
         protocol.doExit(exit_command_not_found);
     };
@@ -77,7 +78,7 @@ fn runSpawn(alloc: Allocator, argv: [:null]?[*:0]const u8, search: bool) noretur
             protocol.doExit(exit_command_not_found);
         };
         pathname = selected.ptr;
-        const canonical = std.fs.cwd().realpathAlloc(alloc, selected) catch protocol.doExit(exit_command_not_found);
+        const canonical = posix.realpathAlloc(alloc, selected) catch protocol.doExit(exit_command_not_found);
         request_path = (alloc.dupeZ(u8, canonical) catch protocol.doExit(exit_command_not_found)).ptr;
         intercept = intercept_paths.matchesInterceptPaths(canonical, std.mem.span(argv[6].?));
     }
@@ -93,7 +94,7 @@ fn runSpawn(alloc: Allocator, argv: [:null]?[*:0]const u8, search: bool) noretur
     }
     // Raw exec avoids re-entering LD_PRELOAD and asking twice. No metadata
     // was injected into environ, so fallback gets exactly the spawn envp.
-    const err = std.posix.execveZ(pathname, argv[prefix_len..].ptr, std.c.environ);
+    const err = posix.execveZ(pathname, argv[prefix_len..].ptr, std.c.environ);
     protocol.debugLog("spawn fallback exec failed: {s}", .{@errorName(err)});
     protocol.doExit(exit_command_not_found);
 }
@@ -113,8 +114,8 @@ fn fallbackExec(alloc: Allocator, argv_z: [:null]?[*:0]const u8) noreturn {
         protocol.doExit(1);
     }
 
-    const path_env = std.posix.getenv("PATH") orelse "";
-    const wrapper_dir = std.posix.getenv("NAS_HOSTEXEC_WRAPPER_DIR") orelse "";
+    const path_env = posix.getenv("PATH") orelse "";
+    const wrapper_dir = posix.getenv("NAS_HOSTEXEC_WRAPPER_DIR") orelse "";
     const self_real = realpathAlloc(alloc, "/proc/self/exe");
     defer if (self_real) |s| alloc.free(s);
 
@@ -131,13 +132,13 @@ fn fallbackExec(alloc: Allocator, argv_z: [:null]?[*:0]const u8) noreturn {
     // argv[0] must not come back through the wrapper symlink.
     argv_z[0] = binary_z.ptr;
     protocol.debugLog("falling back to {s}", .{binary});
-    const err = std.posix.execveZ(binary_z.ptr, argv_z.ptr, std.c.environ);
+    const err = posix.execveZ(binary_z.ptr, argv_z.ptr, std.c.environ);
     protocol.debugLog("fallback exec failed: {s}", .{@errorName(err)});
     protocol.doExit(exit_command_not_found);
 }
 
 fn realpathAlloc(alloc: Allocator, path: []const u8) ?[]const u8 {
-    return std.fs.cwd().realpathAlloc(alloc, path) catch null;
+    return posix.realpathAlloc(alloc, path) catch null;
 }
 
 /// Search PATH for the real binary behind `argv0`, skipping this program's own
@@ -192,9 +193,8 @@ pub fn findFallbackBinary(
 
 fn isExecutableFile(path: []const u8) bool {
     // access(X_OK) alone is not enough: it succeeds for directories too.
-    const stat = std.fs.cwd().statFile(path) catch return false;
-    if (stat.kind != .file) return false;
-    std.posix.access(path, std.posix.X_OK) catch return false;
+    if (!posix.isRegularFile(path)) return false;
+    posix.access(path, posix.X_OK) catch return false;
     return true;
 }
 
@@ -253,11 +253,11 @@ test "findFallbackBinary: skips the wrapper symlink even without /proc/self/exe"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root = try tmp.dir.realpathAlloc(alloc, ".");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(root);
 
-    try tmp.dir.makeDir("wrapper");
-    try tmp.dir.makeDir("real");
+    try tmp.dir.createDir(std.testing.io, "wrapper", .default_dir);
+    try tmp.dir.createDir(std.testing.io, "real", .default_dir);
     const wrapper_dir = try std.fs.path.join(alloc, &.{ root, "wrapper" });
     defer alloc.free(wrapper_dir);
     const real_dir = try std.fs.path.join(alloc, &.{ root, "real" });
@@ -267,7 +267,7 @@ test "findFallbackBinary: skips the wrapper symlink even without /proc/self/exe"
     try writeExecutable(tmp.dir, "real/git");
     const client_path = try std.fs.path.join(alloc, &.{ root, "nas-hostexec-client" });
     defer alloc.free(client_path);
-    try tmp.dir.symLink(client_path, "wrapper/git", .{});
+    try tmp.dir.symLink(std.testing.io, client_path, "wrapper/git", .{});
 
     const path_env = try std.mem.join(alloc, ":", &.{ wrapper_dir, real_dir });
     defer alloc.free(path_env);
@@ -287,11 +287,11 @@ test "findFallbackBinary: skips the wrapper directory and returns the real binar
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root = try tmp.dir.realpathAlloc(alloc, ".");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(root);
 
-    try tmp.dir.makeDir("wrapper");
-    try tmp.dir.makeDir("real");
+    try tmp.dir.createDir(std.testing.io, "wrapper", .default_dir);
+    try tmp.dir.createDir(std.testing.io, "real", .default_dir);
     const wrapper_dir = try std.fs.path.join(alloc, &.{ root, "wrapper" });
     defer alloc.free(wrapper_dir);
     const real_dir = try std.fs.path.join(alloc, &.{ root, "real" });
@@ -303,7 +303,7 @@ test "findFallbackBinary: skips the wrapper directory and returns the real binar
     try writeExecutable(tmp.dir, "real/git");
     const client_path = try std.fs.path.join(alloc, &.{ root, "nas-hostexec-client" });
     defer alloc.free(client_path);
-    try tmp.dir.symLink(client_path, "wrapper/git", .{});
+    try tmp.dir.symLink(std.testing.io, client_path, "wrapper/git", .{});
 
     const path_env = try std.mem.join(alloc, ":", &.{ wrapper_dir, real_dir });
     defer alloc.free(path_env);
@@ -321,7 +321,7 @@ test "findFallbackBinary: takes the basename of an absolute argv0" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root = try tmp.dir.realpathAlloc(alloc, ".");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(root);
     try writeExecutable(tmp.dir, "git");
 
@@ -339,16 +339,16 @@ test "findFallbackBinary: skips directories and non-executable files" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root = try tmp.dir.realpathAlloc(alloc, ".");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(root);
 
     // `a/git` is a directory, `b/git` is a non-executable file, `c/git` is the
     // real one. access(X_OK) succeeds on directories, so the first entry is the
     // one that catches a missing kind check.
-    try tmp.dir.makePath("a/git");
-    try tmp.dir.makePath("b");
-    try tmp.dir.writeFile(.{ .sub_path = "b/git", .data = "not executable" });
-    try tmp.dir.makePath("c");
+    try tmp.dir.createDirPath(std.testing.io, "a/git");
+    try tmp.dir.createDirPath(std.testing.io, "b");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "b/git", .data = "not executable" });
+    try tmp.dir.createDirPath(std.testing.io, "c");
     try writeExecutable(tmp.dir, "c/git");
 
     const path_env = try std.fmt.allocPrint(alloc, "{s}/a:{s}/b:{s}/c", .{ root, root, root });
@@ -364,7 +364,7 @@ test "findFallbackBinary: reports not found when PATH has no match" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root = try tmp.dir.realpathAlloc(alloc, ".");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(root);
 
     try std.testing.expectError(
@@ -378,7 +378,7 @@ test "findFallbackBinary: empty PATH entries are skipped" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const root = try tmp.dir.realpathAlloc(alloc, ".");
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", alloc);
     defer alloc.free(root);
     try writeExecutable(tmp.dir, "git");
 
@@ -390,8 +390,8 @@ test "findFallbackBinary: empty PATH entries are skipped" {
     try std.testing.expect(std.mem.endsWith(u8, found, "/git"));
 }
 
-fn writeExecutable(dir: std.fs.Dir, sub_path: []const u8) !void {
-    var file = try dir.createFile(sub_path, .{ .mode = 0o755 });
-    defer file.close();
-    try file.writeAll("#!/bin/sh\n");
+fn writeExecutable(dir: std.Io.Dir, sub_path: []const u8) !void {
+    var file = try dir.createFile(std.testing.io, sub_path, .{ .permissions = .executable_file });
+    defer file.close(std.testing.io);
+    try posix.writeAll(file.handle, "#!/bin/sh\n");
 }

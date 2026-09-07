@@ -1,5 +1,5 @@
 const std = @import("std");
-const posix = std.posix;
+const posix = @import("posix");
 
 pub const default_path: [:0]const u8 = "/bin:/usr/bin";
 
@@ -31,8 +31,7 @@ pub fn findExecutable(alloc: std.mem.Allocator, name: []const u8, path_env: []co
     while (dirs.next()) |dir| {
         const candidate = try std.fs.path.join(alloc, &.{ if (dir.len == 0) "." else dir, name });
         defer alloc.free(candidate);
-        const stat = std.fs.cwd().statFile(candidate) catch continue;
-        if (stat.kind != .file) continue;
+        if (!posix.isRegularFile(candidate)) continue;
         posix.access(candidate, posix.X_OK) catch continue;
         return alloc.dupeZ(u8, candidate);
     }

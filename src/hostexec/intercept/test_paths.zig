@@ -8,6 +8,7 @@
 //! path has a length limit the rest of the code does not.
 
 const std = @import("std");
+const posix = @import("posix");
 const options = @import("hostexec_test_options");
 
 pub fn executable(comptime name: []const u8) []const u8 {
@@ -20,7 +21,7 @@ pub fn executable(comptime name: []const u8) []const u8 {
     @compileError("unknown hostexec test executable: " ++ name);
 }
 
-pub fn addToolPath(env: *std.process.EnvMap) !void {
+pub fn addToolPath(env: *std.process.Environ.Map) !void {
     try env.put("PATH", if (options.bin_dir.len == 0) "/bin:/usr/bin" else options.bin_dir);
 }
 
@@ -38,19 +39,19 @@ pub fn addToolPath(env: *std.process.EnvMap) !void {
 /// `removeSocketDir`.
 pub fn makeSocketDir(allocator: std.mem.Allocator) ![]u8 {
     var suffix: [8]u8 = undefined;
-    std.crypto.random.bytes(&suffix);
+    posix.randomBytes(&suffix);
     const hex = std.fmt.bytesToHex(suffix, .lower);
-    const base = std.posix.getenv("TMPDIR") orelse "/tmp";
+    const base = posix.getenv("TMPDIR") orelse "/tmp";
     const path = try std.fmt.allocPrint(allocator, "{s}/nas-hostexec-{s}", .{ base, &hex });
     errdefer allocator.free(path);
     // 0o700 because the sockets inside accept commands: TMPDIR is shared, and
     // the tests are the only party that may reach them.
-    try std.posix.mkdir(path, 0o700);
+    try posix.mkdir(path, 0o700);
     return path;
 }
 
 /// Removes a directory from `makeSocketDir` and frees its path.
 pub fn removeSocketDir(allocator: std.mem.Allocator, path: []u8) void {
-    std.fs.deleteTreeAbsolute(path) catch {};
+    std.Io.Dir.cwd().deleteTree(std.testing.io, path) catch {};
     allocator.free(path);
 }

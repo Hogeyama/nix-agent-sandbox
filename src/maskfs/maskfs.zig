@@ -8,6 +8,9 @@ const std = @import("std");
 const mask = @import("mask");
 
 const c = @cImport({
+    // glibc's fortified variadic wrappers cannot be translated to Zig.
+    // Import the libc declarations; all call sites below are Zig code.
+    @cUndef("_FORTIFY_SOURCE");
     @cDefine("FUSE_USE_VERSION", "317");
     @cDefine("_FILE_OFFSET_BITS", "64");
     @cInclude("fuse3/fuse.h");
@@ -55,7 +58,7 @@ inline fn castFi(fi: ?*c.struct_fuse_file_info) ?*FuseFileInfo {
 // グローバル状態 (シングルスレッド前提: -s で mount する)
 // ---------------------------------------------------------------------------
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa = std.heap.DebugAllocator(.{}){};
 const allocator = gpa.allocator();
 
 var src_fd: c_int = -1;
@@ -214,7 +217,7 @@ fn xReaddir(
             const e = std.c._errno().*;
             return if (e != 0) -e else 0;
         };
-        if (filler.?(buf, &ent.*.d_name, null, 0, 0) != 0) break;
+        if (filler.?(buf, @ptrCast(&ent.*.d_name), null, 0, 0) != 0) break;
     }
     return 0;
 }
@@ -392,18 +395,19 @@ fn xFsync(path: [*c]const u8, datasync: c_int, fi_raw: ?*c.fuse_file_info) callc
 // stdin フレーミング: u32le count, then count x [u32le len + bytes]
 // ---------------------------------------------------------------------------
 
-fn readSecretsFromStdin() ![][]u8 {
-    const stdin = std.fs.File.stdin();
-    const reader = stdin.deprecatedReader();
-    const count = try reader.readInt(u32, .little);
+fn readSecretsFromStdin(io: std.Io) ![][]u8 {
+    var buffer: [4096]u8 = undefined;
+    var stdin_reader = std.Io.File.stdin().readerStreaming(io, &buffer);
+    const reader = &stdin_reader.interface;
+    const count = try reader.takeInt(u32, .little);
     if (count > 1024) return error.TooManySecrets;
     const list = try allocator.alloc([]u8, count);
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        const len = try reader.readInt(u32, .little);
+        const len = try reader.takeInt(u32, .little);
         if (len == 0 or len > 16 * 1024 * 1024) return error.InvalidSecretLength;
         const s = try allocator.alloc(u8, len);
-        try reader.readNoEof(s);
+        try reader.readSliceAll(s);
         list[i] = s;
     }
     return list;
@@ -413,8 +417,8 @@ fn readSecretsFromStdin() ![][]u8 {
 // main
 // ---------------------------------------------------------------------------
 
-pub fn main() !u8 {
-    const argv = std.os.argv;
+pub fn main(init: std.process.Init) !u8 {
+    const argv = try init.minimal.args.toSlice(init.arena.allocator());
     if (argv.len < 4) {
         std.debug.print("usage: nas-maskfs <sourceDir> <mountpoint> --write-policy=readonly|passthrough [--allow-other]\n", .{});
         return 2;
@@ -423,7 +427,7 @@ pub fn main() !u8 {
     const mountpoint = argv[2];
     var allow_other = false;
     for (argv[3..]) |arg| {
-        const a = std.mem.span(arg);
+        const a = arg;
         if (std.mem.eql(u8, a, "--write-policy=readonly")) {
             write_policy = .readonly;
         } else if (std.mem.eql(u8, a, "--write-policy=passthrough")) {
@@ -436,7 +440,7 @@ pub fn main() !u8 {
         }
     }
 
-    secrets = try readSecretsFromStdin();
+    secrets = try readSecretsFromStdin(init.io);
     max_len = mask.maxSecretLen(secrets);
     if (secrets.len == 0) {
         std.debug.print("nas-maskfs: refusing to start with zero secrets\n", .{});
@@ -444,7 +448,7 @@ pub fn main() !u8 {
     }
     initStaticBufs();
 
-    src_fd = c.open(source, c.O_RDONLY | c.O_DIRECTORY);
+    src_fd = c.open(source.ptr, c.O_RDONLY | c.O_DIRECTORY);
     if (src_fd == -1) {
         std.debug.print("nas-maskfs: cannot open source dir\n", .{});
         return 1;
@@ -473,10 +477,10 @@ pub fn main() !u8 {
     ops.utimens = xUtimens;
 
     // fuse_main 引数: foreground + single-thread + permissions
-    var fuse_args: std.ArrayList([*c]const u8) = .{};
+    var fuse_args: std.ArrayList([*c]const u8) = .empty;
     defer fuse_args.deinit(allocator);
     try fuse_args.append(allocator, "nas-maskfs");
-    try fuse_args.append(allocator, mountpoint);
+    try fuse_args.append(allocator, mountpoint.ptr);
     try fuse_args.append(allocator, "-f");
     try fuse_args.append(allocator, "-s");
     try fuse_args.append(allocator, "-o");
@@ -484,7 +488,7 @@ pub fn main() !u8 {
 
     const rc = c.fuse_main_fn(
         @intCast(fuse_args.items.len),
-        @constCast(@ptrCast(fuse_args.items.ptr)),
+        @ptrCast(@constCast(fuse_args.items.ptr)),
         &ops,
         null,
     );
