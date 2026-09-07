@@ -5,6 +5,7 @@
  * 仕様の側と突き合わせること。値は仕様の Pkl をそのまま写している。
  */
 
+import anthropicFixture from "../fixtures/authz/anthropic-v1.json";
 import type { AuthzConfig, Expect } from "./config.ts";
 
 /** 要件 1: GraphQL の読み取りだけ自動許可する。 */
@@ -92,23 +93,25 @@ export function githubPathsExample(): AuthzConfig {
   };
 }
 
-/** `anthropic@1` が許可する content block のタグ集合。 */
-const CONTENT_TAGS: readonly string[] = [
-  "text",
-  "image",
-  "document",
-  "thinking",
-  "redacted_thinking",
-  "tool_use",
-  "tool_result",
-  "server_tool_use",
-  "web_search_tool_result",
-  "code_execution_tool_result",
-  "mcp_tool_use",
-  "mcp_tool_result",
-  "search_result",
-  "container_upload",
-];
+/** 許容タグは Schema.pkl から生成された fixture を参照する。 */
+const contentGuard = anthropicFixture.scopes
+  .flatMap((scope) => scope.rules)
+  .find((rule) => rule.id === "anthropic.messages")
+  ?.expect.find(
+    (condition) =>
+      condition.kind === "unionShape" &&
+      "at" in condition &&
+      condition.at === "/**/content/*",
+  );
+if (
+  !contentGuard ||
+  !("allowed" in contentGuard) ||
+  !Array.isArray(contentGuard.allowed) ||
+  !contentGuard.allowed.every((tag): tag is string => typeof tag === "string")
+) {
+  throw new Error("Anthropic fixture is missing its content-block tag guard");
+}
+const CONTENT_TAGS: readonly string[] = contentGuard.allowed;
 
 const CONTENT_BLOCKS: readonly Expect[] = [
   {

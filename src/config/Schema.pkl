@@ -461,6 +461,7 @@ const local anthropicContentTags: Listing<String> = new {
   "redacted_thinking"
   "tool_use"
   "tool_result"
+  "tool_reference"
   "server_tool_use"
   "web_search_tool_result"
   "code_execution_tool_result"
