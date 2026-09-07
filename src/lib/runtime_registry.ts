@@ -197,6 +197,8 @@ export interface GcResult {
   removedSessions: string[];
   removedPendingDirs: string[];
   removedBrokerSockets: string[];
+  /** Left for a later sweep because the current user cannot remove them. */
+  skippedBrokerDirs: string[];
 }
 
 export async function gcRuntime<S extends BaseSessionEntry>(
@@ -205,6 +207,22 @@ export async function gcRuntime<S extends BaseSessionEntry>(
   const removedSessions: string[] = [];
   const removedPendingDirs: string[] = [];
   const removedBrokerSockets: string[] = [];
+  const skippedBrokerDirs = new Set<string>();
+
+  async function removeBrokerDir(dir: string, socket: string): Promise<void> {
+    if (skippedBrokerDirs.has(dir)) return;
+    try {
+      await safeRemove(dir, { recursive: true });
+      removedBrokerSockets.push(socket);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM") throw error;
+      // Broker cleanup is opportunistic: an inaccessible leftover must not
+      // prevent listing or approving requests for other, live sessions.
+      // Do not chmod/chown a directory that may still be mounted in Docker.
+      skippedBrokerDirs.add(dir);
+    }
+  }
 
   const sessions = await listSessionRegistries<S>(paths);
   for (const entry of sessions) {
@@ -215,10 +233,10 @@ export async function gcRuntime<S extends BaseSessionEntry>(
     await removeSessionRegistry(paths, entry.sessionId);
     await removePendingDir(paths, entry.sessionId);
     removedPendingDirs.push(entry.sessionId);
-    await safeRemove(sessionBrokerDir(paths, entry.sessionId), {
-      recursive: true,
-    });
-    removedBrokerSockets.push(entry.brokerSocket);
+    await removeBrokerDir(
+      sessionBrokerDir(paths, entry.sessionId),
+      entry.brokerSocket,
+    );
   }
 
   const liveSessionIds = new Set(
@@ -245,12 +263,16 @@ export async function gcRuntime<S extends BaseSessionEntry>(
       if (!entry.isDirectory()) continue;
       if (liveSessionIds.has(entry.name)) continue;
       const subdir = path.join(paths.brokersDir, entry.name);
-      await safeRemove(subdir, { recursive: true });
-      removedBrokerSockets.push(path.join(subdir, "sock"));
+      await removeBrokerDir(subdir, path.join(subdir, "sock"));
     }
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
-  return { removedSessions, removedPendingDirs, removedBrokerSockets };
+  return {
+    removedSessions,
+    removedPendingDirs,
+    removedBrokerSockets,
+    skippedBrokerDirs: [...skippedBrokerDirs],
+  };
 }
