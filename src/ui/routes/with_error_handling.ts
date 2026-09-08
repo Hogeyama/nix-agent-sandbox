@@ -16,6 +16,7 @@ import {
   InvalidRequestError,
   NoSuchBindingError,
   RelayUnavailableError,
+  SessionRestartRequiredError,
   SessionUnreachableError,
 } from "../../domain/port_bind/types.ts";
 import { LaunchValidationError } from "../launch.ts";
@@ -29,7 +30,7 @@ import { json } from "../router.ts";
  * - InvalidRequestError → 400
  * - ContainerNotRunningError → 409
  * - HostPortTakenError / BindingConflictError / AmbiguousHostPortError /
- *   ContainerPortTakenError → 409
+ *   ContainerPortTakenError / SessionRestartRequiredError → 409
  * - NotNasManagedContainerError → 403
  * - NoSuchBindingError → 404
  * - Error message starts with "Session not found:" → 404
@@ -64,7 +65,8 @@ export function mapErrorToResponse(e: unknown): Response {
     e instanceof HostPortTakenError ||
     e instanceof BindingConflictError ||
     e instanceof AmbiguousHostPortError ||
-    e instanceof ContainerPortTakenError
+    e instanceof ContainerPortTakenError ||
+    e instanceof SessionRestartRequiredError
   ) {
     return json({ error: e.message }, 409);
   }

@@ -15,7 +15,10 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
-import type { PortBindSessionEntry } from "../../network/port_bind_protocol.ts";
+import {
+  PORT_BIND_PROTOCOL_VERSION,
+  type PortBindSessionEntry,
+} from "../../network/port_bind_protocol.ts";
 import { readSessionRegistry } from "../../network/port_bind_registry.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
@@ -232,6 +235,7 @@ test("PortBindServiceLive owns the relay files and session registry", async () =
     expect(script).toContain("NAS_PORT_RELAY_SOCKET");
     expect(await exists(plan.relaySocketSource)).toEqual(true);
     expect(await exists(plan.controlSocket)).toEqual(true);
+    expect(registry?.protocolVersion).toBe(PORT_BIND_PROTOCOL_VERSION);
     expect(registry?.bindings).toEqual([]);
 
     await Effect.runPromise(handle.close());

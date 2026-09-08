@@ -8,6 +8,7 @@ import {
   type PortBindBroker,
   startPortBindBroker,
 } from "../../network/port_bind_broker.ts";
+import { PORT_BIND_PROTOCOL_VERSION } from "../../network/port_bind_protocol.ts";
 import {
   relayScriptPath,
   removeSessionRegistry,
@@ -65,6 +66,7 @@ export async function registerPortBindStartup(
   plan: PortBindPlan,
 ): Promise<void> {
   await writeSessionRegistry(paths, {
+    protocolVersion: PORT_BIND_PROTOCOL_VERSION,
     sessionId: plan.sessionId,
     pid: process.pid,
     // The control socket does not exist until broker startup. The copied

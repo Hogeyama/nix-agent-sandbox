@@ -6,6 +6,7 @@ import {
 import {
   ContainerPortTakenError,
   RelayUnavailableError,
+  SessionRestartRequiredError,
 } from "../../domain/port_bind/types.ts";
 import { LaunchValidationError } from "../launch.ts";
 import {
@@ -94,4 +95,11 @@ test("mapErrorToResponse: ContainerPortTakenError → 409, RelayUnavailableError
     new RelayUnavailableError("the container is not running"),
   );
   expect(unavailable.status).toBe(503);
+});
+
+test("mapErrorToResponse: SessionRestartRequiredError → 409", async () => {
+  const error = new SessionRestartRequiredError("s1", "remote forwarding");
+  const response = mapErrorToResponse(error);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: error.message });
 });

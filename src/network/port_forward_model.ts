@@ -11,6 +11,15 @@ export interface ForwardSpec extends PortPair {
   direction: ForwardDirection;
 }
 
+export type AddForwardRequest =
+  | { direction: "local"; containerPort: number; hostPort: number | null }
+  | { direction: "remote"; containerPort: number; hostPort: number };
+
+export type ForwardSelector =
+  | { direction: "local"; hostPort: number }
+  | { direction: "local"; containerPort: number }
+  | { direction: "remote"; containerPort: number };
+
 export interface InitialForward extends ForwardSpec {
   owners: ForwardOwner[];
 }

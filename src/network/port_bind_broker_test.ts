@@ -13,10 +13,11 @@ import {
   type PersistedPorts,
   startPortBindBroker,
 } from "./port_bind_broker.ts";
-import type {
-  ObservedListener,
-  PortBinding,
-  PortForward,
+import {
+  type ObservedListener,
+  PORT_BIND_PROTOCOL_VERSION,
+  type PortBinding,
+  type PortForward,
 } from "./port_bind_protocol.ts";
 import {
   type EnsureRelayResult,
@@ -902,6 +903,70 @@ test("the control socket answers forward and unforward requests", async () => {
   );
 });
 
+test("the common control wire validates shape and returns managed state", async () => {
+  await withForwardBroker(
+    {},
+    async ({ broker, controlSocketPath, echoPort }) => {
+      const ask = async (request: unknown) => {
+        const socket = await connectUnix(controlSocketPath);
+        await writeJsonLine(socket, request);
+        const line = await readJsonLine(socket);
+        socket.destroy();
+        return line === null ? null : JSON.parse(line);
+      };
+      const added = await ask({
+        type: "add-forward",
+        direction: "remote",
+        containerPort: 5432,
+        hostPort: echoPort,
+      });
+      expect(added).toMatchObject({
+        ok: true,
+        entry: {
+          direction: "remote",
+          containerPort: 5432,
+          hostPort: echoPort,
+          owners: ["dynamic"],
+          state: "active",
+        },
+        probe: "ok",
+      });
+      expect(
+        await ask({
+          type: "add-forward",
+          direction: "remote",
+          containerPort: 5432,
+          hostPort: echoPort + 1,
+        }),
+      ).toMatchObject({ ok: false, error: "binding-conflict" });
+      for (const extra of [{ owner: "internal" }, { origin: "internal" }]) {
+        expect(
+          await ask({
+            type: "add-forward",
+            direction: "remote",
+            containerPort: 6379,
+            hostPort: echoPort,
+            ...extra,
+          }),
+        ).toMatchObject({ ok: false, error: "invalid-request" });
+      }
+      expect(
+        await ask({
+          type: "remove-forward",
+          direction: "remote",
+          containerPort: 5432,
+        }),
+      ).toEqual({
+        ok: true,
+        removed: true,
+        retainedInternal: false,
+        listenerClosed: true,
+      });
+      expect(broker.listPortForwards()).toEqual([]);
+    },
+  );
+});
+
 test("common additions serialize ownership and share the remote listener", async () => {
   await withForwardBroker(
     {},
@@ -926,6 +991,7 @@ test("common additions serialize ownership and share the remote listener", async
         },
       ]);
       expect(written.at(-1)?.portForwards).toEqual(broker.listPortForwards());
+      expect(written.at(-1)?.protocolVersion).toBe(PORT_BIND_PROTOCOL_VERSION);
       const removed = await broker.removePortForward(spec);
       expect(removed).toEqual({
         removed: true,

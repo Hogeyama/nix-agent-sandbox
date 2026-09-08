@@ -14,6 +14,7 @@ import {
   isReachableScope,
   type ListenerWatchState,
   MAX_CONTROL_BYTES,
+  PORT_BIND_PROTOCOL_VERSION,
   type PortBindCandidate,
   type PortBinding,
   type PortForward,
@@ -27,10 +28,12 @@ import {
 } from "./port_bind_relay.ts";
 
 import {
+  type AddForwardRequest,
   type AddForwardResult,
   copyManagedForward,
   createsForwardCycle,
   type ForwardOwner,
+  type ForwardSelector,
   type ForwardSpec,
   type ForwardState,
   forwardKey,
@@ -77,6 +80,7 @@ export function hostPortCandidates(
 
 /** Everything the session registry records about open ports. */
 export interface PersistedPorts {
+  protocolVersion: typeof PORT_BIND_PROTOCOL_VERSION;
   portForwards: ManagedForward[];
   bindings: PortBinding[];
   forwards: PortForward[];
@@ -204,6 +208,48 @@ function parseControlRequest(line: string): ControlRequest {
   ) {
     return request as ControlRequest;
   }
+  if (
+    request.type === "add-forward" &&
+    request.direction === "local" &&
+    hasKeys(request, ["containerPort", "direction", "hostPort", "type"]) &&
+    validPort(request.containerPort) &&
+    (request.hostPort === null || validPort(request.hostPort))
+  ) {
+    return request as ControlRequest;
+  }
+  if (
+    request.type === "add-forward" &&
+    request.direction === "remote" &&
+    hasKeys(request, ["containerPort", "direction", "hostPort", "type"]) &&
+    validPort(request.containerPort) &&
+    validPort(request.hostPort)
+  ) {
+    return request as ControlRequest;
+  }
+  if (
+    request.type === "remove-forward" &&
+    request.direction === "local" &&
+    hasKeys(request, ["direction", "hostPort", "type"]) &&
+    validPort(request.hostPort)
+  ) {
+    return request as ControlRequest;
+  }
+  if (
+    request.type === "remove-forward" &&
+    request.direction === "local" &&
+    hasKeys(request, ["containerPort", "direction", "type"]) &&
+    validPort(request.containerPort)
+  ) {
+    return request as ControlRequest;
+  }
+  if (
+    request.type === "remove-forward" &&
+    request.direction === "remote" &&
+    hasKeys(request, ["containerPort", "direction", "type"]) &&
+    validPort(request.containerPort)
+  ) {
+    return request as ControlRequest;
+  }
   throw new ControlError("invalid-request", "request shape is invalid");
 }
 
@@ -253,7 +299,11 @@ export async function startPortBindBroker(opts: {
     projectPortForwards(listPortForwards()).bindings;
   const persist = () => {
     const portForwards = listPortForwards();
-    return opts.persist({ portForwards, ...projectPortForwards(portForwards) });
+    return opts.persist({
+      protocolVersion: PORT_BIND_PROTOCOL_VERSION,
+      portForwards,
+      ...projectPortForwards(portForwards),
+    });
   };
   // Registry failures never become authority to restore revoked connections.
   const persistRevocation = async () => {
@@ -692,7 +742,10 @@ export async function startPortBindBroker(opts: {
     return mutateUser(() => remove(requested));
   };
 
-  const bind: PortBindBroker["bind"] = (req) => {
+  const addLocal = (req: {
+    containerPort: number;
+    hostPort: number | null;
+  }): Promise<AddForwardResult> => {
     const requested = { ...req };
     return mutateUser(async () => {
       const existing = managed.get(
@@ -759,27 +812,46 @@ export async function startPortBindBroker(opts: {
           acquired,
         );
       }
-      return { hostPort: result.entry.hostPort, probe: result.probe };
+      return result;
+    });
+  };
+
+  const bind: PortBindBroker["bind"] = async (req) => {
+    const result = await addLocal(req);
+    return { hostPort: result.entry.hostPort, probe: result.probe };
+  };
+
+  const removeSelected = async (
+    selector: ForwardSelector,
+  ): Promise<RemoveForwardResult> => {
+    const entry =
+      "hostPort" in selector
+        ? [...managed.values()].find(
+            (candidate) =>
+              candidate.direction === "local" &&
+              candidate.hostPort === selector.hostPort,
+          )
+        : managed.get(forwardKey(selector));
+    if (!entry) {
+      throw new ControlError(
+        "no-such-binding",
+        "no forwarding matches that selector",
+      );
+    }
+    return await remove({
+      direction: entry.direction,
+      containerPort: entry.containerPort,
     });
   };
 
   const unbind: PortBindBroker["unbind"] = (key) => {
     const requested = { ...key };
+    const selector: ForwardSelector =
+      requested.containerPort !== undefined
+        ? { direction: "local", containerPort: requested.containerPort }
+        : { direction: "local", hostPort: requested.hostPort as number };
     return mutateUser(async () => {
-      const entry = [...managed.values()].find(
-        (entry) =>
-          entry.direction === "local" &&
-          ((requested.containerPort !== undefined &&
-            entry.containerPort === requested.containerPort) ||
-            (requested.hostPort !== undefined &&
-              entry.hostPort === requested.hostPort)),
-      );
-      if (!entry)
-        throw new ControlError(
-          "no-such-binding",
-          "no binding matches that key",
-        );
-      await remove(entry);
+      await removeSelected(selector);
     });
   };
 
@@ -798,6 +870,18 @@ export async function startPortBindBroker(opts: {
   const unforward: PortBindBroker["unforward"] = async (containerPort) => {
     await removePortForward({ direction: "remote", containerPort });
   };
+
+  const addForwardRequest = async (
+    request: AddForwardRequest,
+  ): Promise<AddForwardResult> => {
+    return request.direction === "remote"
+      ? await addPortForward(request, "dynamic")
+      : await addLocal(request);
+  };
+
+  const removeForwardSelector = async (
+    selector: ForwardSelector,
+  ): Promise<RemoveForwardResult> => mutateUser(() => removeSelected(selector));
 
   const watchState = (
     ensured: Awaited<ReturnType<RelayGateway["watchListeners"]>>,
@@ -856,6 +940,10 @@ export async function startPortBindBroker(opts: {
       let response: ControlResponse;
       if (request.type === "bind") {
         response = { ok: true, ...(await bind(request)) };
+      } else if (request.type === "add-forward") {
+        response = { ok: true, ...(await addForwardRequest(request)) };
+      } else if (request.type === "remove-forward") {
+        response = { ok: true, ...(await removeForwardSelector(request)) };
       } else if (request.type === "candidates") {
         response = { ok: true, ...(await candidates()) };
       } else if (request.type === "forward") {

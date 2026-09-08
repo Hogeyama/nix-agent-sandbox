@@ -67,6 +67,15 @@ export class SessionUnreachableError extends Error {
   }
 }
 
+export class SessionRestartRequiredError extends Error {
+  constructor(sessionId: string, operation: string) {
+    super(
+      `session ${sessionId} does not support ${operation}; restart the session with the current nas version`,
+    );
+    this.name = "SessionRestartRequiredError";
+  }
+}
+
 export class AmbiguousHostPortError extends Error {
   constructor(hostPort: number, sessionIds: string[]) {
     super(

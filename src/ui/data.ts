@@ -16,11 +16,16 @@ import {
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
+  type AddForwardRequest,
+  type AddForwardResult,
+  type ForwardSelector,
   makePortBindClient,
   type PortBindCandidates,
+  type PortBindKey,
+  type PortForwardKey,
   type PortForwardResult,
-} from "../domain/port_bind/service.ts";
-import type { PortBindKey, PortForwardKey } from "../domain/port_bind/types.ts";
+  type RemoveForwardResult,
+} from "../domain/port_bind.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
 import { getSocketDir } from "../dtach/client.ts";
@@ -231,6 +236,22 @@ export async function denyNetwork(
 }
 
 const portBindClient = makePortBindClient();
+
+export async function addPortForward(
+  ctx: UiDataContext,
+  sessionId: string,
+  request: AddForwardRequest,
+): Promise<AddForwardResult> {
+  return await portBindClient.add(ctx.portsPaths, sessionId, request);
+}
+
+export async function removePortForward(
+  ctx: UiDataContext,
+  sessionId: string,
+  selector: ForwardSelector,
+): Promise<RemoveForwardResult> {
+  return await portBindClient.remove(ctx.portsPaths, sessionId, selector);
+}
 
 export async function bindPort(
   ctx: UiDataContext,
