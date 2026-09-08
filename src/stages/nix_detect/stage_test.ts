@@ -18,7 +18,8 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
   return {
     agent: "claude",
     agentArgs: [],
-    nix: { enable: nixEnable, mountSocket: true, extraPackages: [] },
+    direnv: { enable: false },
+    nix: { enable: nixEnable, mountSocket: true },
     docker: { enable: false, shared: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },

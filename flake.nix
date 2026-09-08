@@ -181,6 +181,7 @@
 
           cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
           cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
+          cp ${self}/src/docker/embed/direnv-exec.sh $out/docker/embed/
           cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
           cp ${self}/src/docker/embed/port-relay.mjs $out/docker/embed/
           cp ${self}/src/docker/mitmproxy/nas_addon.py $out/docker/mitmproxy/
@@ -286,6 +287,8 @@
           packages = [
             pkgs.bun
             b2n
+            pkgs.direnv
+            pkgs.jq
             pkgs.nodejs
             pkgs.pnpm
             pkgs.chromium

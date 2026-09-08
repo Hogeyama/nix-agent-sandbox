@@ -36,6 +36,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agent: "claude",
     agentArgs: [],
     session: DEFAULT_SESSION_CONFIG,
+    direnv: { enable: false },
     nix: DEFAULT_NIX_CONFIG,
     docker: DEFAULT_DOCKER_CONFIG,
     gcloud: DEFAULT_GCLOUD_CONFIG,
@@ -984,73 +985,16 @@ test("validate: hostexec no warning when specific rule comes before catch-all", 
 // nix.extraPackages の入力検証 (F1)
 // ---------------------------------------------------------------------------
 
-test("validate: nix.extraPackages accepts valid package names", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          nix: {
-            ...DEFAULT_NIX_CONFIG,
-            extraPackages: ["ripgrep", "fd", "jq"],
-          },
-        }),
-      },
-    }),
-  );
-  expect(config.profiles.test.nix.extraPackages).toEqual([
-    "ripgrep",
-    "fd",
-    "jq",
-  ]);
-});
-
-test("validate: nix.extraPackages rejects entries starting with dash", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            nix: { ...DEFAULT_NIX_CONFIG, extraPackages: ["--malicious"] },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("flag injection");
-});
-
-test("validate: nix.extraPackages rejects entries containing ..", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            nix: {
-              ...DEFAULT_NIX_CONFIG,
-              extraPackages: ["../../../etc/passwd"],
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("path traversal");
-});
-
-test("validate: nix.extraPackages reports both flag injection and path traversal", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            nix: {
-              ...DEFAULT_NIX_CONFIG,
-              extraPackages: ["-..evil"],
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("flag injection");
-});
+for (const value of [[], ["ripgrep"], null]) {
+  test(`validate: retired nix.extraPackages rejects ${JSON.stringify(value)}`, () => {
+    const config = makeConfig();
+    config.profiles.test.nix = { ...config.profiles.test.nix };
+    Object.assign(config.profiles.test.nix, { extraPackages: value });
+    expect(() => validateConfig(config)).toThrow(
+      'profile "test": nix.extraPackages is no longer supported',
+    );
+  });
+}
 
 // ---------------------------------------------------------------------------
 // display.size フォーマット検証 (F2)

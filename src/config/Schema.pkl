@@ -1,4 +1,4 @@
-/// @version 0.14.1
+/// @version 0.15.3
 /// Typed schema for nas (Nix Agent Sandbox) configuration.
 ///
 /// User configuration files (`.nas/config.pkl`) `amends` this module to
@@ -61,6 +61,7 @@ class Profile {
 
   session: SessionConfig = new {}
   nix: NixConfig = new {}
+  direnv: DirenvConfig = new {}
   docker: DockerConfig = new {}
   gcloud: GcloudConfig = new {}
   aws: AwsConfig = new {}
@@ -128,9 +129,11 @@ class NixConfig {
 
   /// ホストの nix daemon にソケット経由で接続する。
   mountSocket: Boolean = true
+}
 
-  /// `nix shell` で追加するパッケージ（`nix develop` 前に適用）。
-  extraPackages: Listing<String> = new {}
+class DirenvConfig {
+  /// 起動時に許可済みの .envrc をコンテナ内で読み込む。
+  enable: Boolean = false
 }
 
 class DockerConfig {

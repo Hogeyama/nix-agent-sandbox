@@ -9,6 +9,9 @@ amends "modulepath:/global.pkl"
 /// Listings (env, extraMounts, hostexec.rules, network.proxy.forwardPorts) are
 /// appended to; Mappings (network.scopes, secrets) are merged by key.
 local function extendProfile(p: Profile): Profile = (p) {
+  // Load the project's approved .envrc when the session starts.
+  // direnv { enable = true }
+
   // Provide `hostexec <command>` on PATH, with approval and the host environment.
   // No rules are required. Preserve inherited hostexec settings when enabling it.
   // hostexec {

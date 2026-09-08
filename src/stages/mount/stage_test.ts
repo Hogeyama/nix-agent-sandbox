@@ -33,11 +33,7 @@ import {
   type MountDirectoryEntry,
   makeMountSetupServiceFake,
 } from "./mount_setup_service.ts";
-import {
-  createMountStage,
-  planMount,
-  serializeNixExtraPackages,
-} from "./stage.ts";
+import { createMountStage, planMount } from "./stage.ts";
 
 // ============================================================
 // テスト用ヘルパー — 全て純粋なリテラル構築
@@ -60,7 +56,8 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
-    nix: { enable: false, mountSocket: false, extraPackages: [] },
+    direnv: { enable: false },
+    nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
@@ -110,6 +107,7 @@ const defaultClaudeProbes: AgentProbes = {
 function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
   return {
     agentProbes: defaultClaudeProbes,
+    direnvDataDir: null,
     nixConfRealPath: null,
     nixBinPath: null,
     gitConfigExists: false,
@@ -735,36 +733,6 @@ test("MountStage: extra-mount relative dst with inner ../ that stays inside work
 });
 
 // ============================================================
-// serializeNixExtraPackages
-// ============================================================
-
-test("serializeNixExtraPackages: single package", () => {
-  expect(serializeNixExtraPackages(["nixpkgs#gh"])).toEqual("nixpkgs#gh");
-});
-
-test("serializeNixExtraPackages: multiple packages", () => {
-  expect(
-    serializeNixExtraPackages(["nixpkgs#gh", "nixpkgs#ripgrep", "nixpkgs#fd"]),
-  ).toEqual("nixpkgs#gh\nnixpkgs#ripgrep\nnixpkgs#fd");
-});
-
-test("serializeNixExtraPackages: trims whitespace", () => {
-  expect(serializeNixExtraPackages(["  nixpkgs#gh  ", " nixpkgs#fd "])).toEqual(
-    "nixpkgs#gh\nnixpkgs#fd",
-  );
-});
-
-test("serializeNixExtraPackages: filters empty strings", () => {
-  expect(
-    serializeNixExtraPackages(["nixpkgs#gh", "", "  ", "nixpkgs#fd"]),
-  ).toEqual("nixpkgs#gh\nnixpkgs#fd");
-});
-
-test("serializeNixExtraPackages: all empty returns null", () => {
-  expect(serializeNixExtraPackages([""])).toEqual(null);
-  expect(serializeNixExtraPackages(["  ", "   "])).toEqual(null);
-  expect(serializeNixExtraPackages([])).toEqual(null);
-});
 
 // ============================================================
 // docker (DinD rootless)
@@ -885,7 +853,7 @@ test("MountStage: NAS_UID and NAS_GID absent when uid/gid null", () => {
 
 test("MountStage: nix disabled does not mount /nix", () => {
   const profile = makeProfile({
-    nix: { enable: false, mountSocket: true, extraPackages: [] },
+    nix: { enable: false, mountSocket: true },
   });
   const { input, mountProbes } = makeInput({ profile });
   const plan = planMount(input, mountProbes);
@@ -895,7 +863,7 @@ test("MountStage: nix disabled does not mount /nix", () => {
 
 test("MountStage: nix enabled but mountSocket false skips socket", () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: false, extraPackages: [] },
+    nix: { enable: true, mountSocket: false },
   });
   const { input, mountProbes } = makeInput({
     profile,
@@ -907,7 +875,7 @@ test("MountStage: nix enabled but mountSocket false skips socket", () => {
 
 test("MountStage: nix enabled with mountSocket mounts /nix when host has nix", () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: true, extraPackages: [] },
+    nix: { enable: true, mountSocket: true },
   });
   const probes: ProbeResults = { ...defaultProbeResults, hasHostNix: true };
   const mountProbes = makeMountProbes({ nixBinPath: "/nix/store/xxx/bin/nix" });
@@ -925,7 +893,7 @@ test("MountStage: nix enabled with mountSocket mounts /nix when host has nix", (
 
 test("MountStage: nix enabled but host has no nix does not mount /nix", () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: true, extraPackages: [] },
+    nix: { enable: true, mountSocket: true },
   });
   const probes: ProbeResults = { ...defaultProbeResults, hasHostNix: false };
   const { input, mountProbes } = makeInput({
@@ -937,27 +905,9 @@ test("MountStage: nix enabled but host has no nix does not mount /nix", () => {
   expect(plan.dockerArgs.includes("/nix:/nix")).toEqual(false);
 });
 
-test("MountStage: nix extra-packages set when nix enabled and host has nix", () => {
-  const profile = makeProfile({
-    nix: {
-      enable: true,
-      mountSocket: true,
-      extraPackages: ["nixpkgs#gh", "nixpkgs#jq"],
-    },
-  });
-  const probes: ProbeResults = { ...defaultProbeResults, hasHostNix: true };
-  const { input, mountProbes } = makeInput({
-    profile,
-    probes,
-    slices: { nix: { enabled: true } },
-  });
-  const plan = planMount(input, mountProbes);
-  expect(plan.envVars.NIX_EXTRA_PACKAGES).toEqual("nixpkgs#gh\nnixpkgs#jq");
-});
-
 test("MountStage: nix conf outside /nix is mounted to temp path", () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: true, extraPackages: [] },
+    nix: { enable: true, mountSocket: true },
   });
   const probes: ProbeResults = { ...defaultProbeResults, hasHostNix: true };
   const mountProbes = makeMountProbes({
@@ -980,7 +930,7 @@ test("MountStage: nix conf outside /nix is mounted to temp path", () => {
 
 test("MountStage: nix conf under /nix uses original path", () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: true, extraPackages: [] },
+    nix: { enable: true, mountSocket: true },
   });
   const probes: ProbeResults = { ...defaultProbeResults, hasHostNix: true };
   const mountProbes = makeMountProbes({
@@ -1363,7 +1313,7 @@ test("MountStage: RO mount is emitted AFTER the workspace RW mount", () => {
 
 test("MountStage: structured workspace, nix, and dbus slices drive planning", () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: true, extraPackages: [] },
+    nix: { enable: true, mountSocket: true },
   });
   const { input, mountProbes } = makeInput({
     profile,
@@ -1497,7 +1447,7 @@ test("MountStage: minimal profile produces valid docker args", () => {
 
 test("MountStage run(): creates directories via MountSetupService and returns result", async () => {
   const profile = makeProfile({
-    nix: { enable: true, mountSocket: true, extraPackages: [] },
+    nix: { enable: true, mountSocket: true },
   });
   const hostEnv: HostEnv = {
     ...defaultHostEnv,
@@ -1535,7 +1485,7 @@ test("MountStage run(): creates directories via MountSetupService and returns re
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
   const createdPaths = createdDirs.map((d) => d.path);
-  expect(createdPaths).toContain("/home/testuser/.cache/nas");
+  expect(createdPaths).not.toContain("/home/testuser/.cache/nas");
   expect(createdPaths).toContain("/home/testuser/.cache/nix");
 
   expect(result.container!.extraRunArgs).toBeDefined();
@@ -1546,10 +1496,6 @@ test("MountStage run(): creates directories via MountSetupService and returns re
     mounts: [
       { source: TEST_WORK_DIR, target: TEST_WORK_DIR },
       { source: "/nix", target: "/nix" },
-      {
-        source: "/home/testuser/.cache/nas",
-        target: `${CONTAINER_HOME}/.cache/nas`,
-      },
       {
         source: "/home/testuser/.cache/nix",
         target: `${CONTAINER_HOME}/.cache/nix`,
@@ -1673,3 +1619,92 @@ test("MountStage run(): preserves structured base container state", async () => 
       "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   });
 });
+
+for (const enabled of [false, true]) {
+  for (const data of [null, "/host/data/direnv"]) {
+    test(`MountStage: native direnv approvals enabled=${enabled} data=${data}`, () => {
+      const { input, mountProbes } = makeInput({
+        profile: makeProfile({ direnv: { enable: enabled } }),
+        mountProbes: makeMountProbes({ direnvDataDir: data }),
+      });
+      const plan = planMount(input, mountProbes);
+      if (enabled) expect(plan.envVars.NAS_DIRENV_ENABLED).toBe("true");
+      else expect(plan.envVars.NAS_DIRENV_ENABLED).toBeUndefined();
+      expect(plan.containerPatch.mounts).toContainEqual({
+        source: TEST_WORK_DIR,
+        target: TEST_WORK_DIR,
+      });
+      const approvals = plan.containerPatch.mounts?.filter(
+        (m) => m.source === data,
+      );
+      expect(approvals).toEqual(
+        enabled && data
+          ? [
+              {
+                source: data,
+                target: `${CONTAINER_HOME}/.local/share/direnv`,
+                readOnly: true,
+              },
+            ]
+          : [],
+      );
+      expect(plan.dockerArgs.join(" ")).not.toContain(".config/direnv");
+    });
+  }
+}
+for (const [value, target] of [
+  ["/custom/data", "/custom/data"],
+  ["~/data", `${CONTAINER_HOME}/data`],
+  ["data", `${TEST_WORK_DIR}/data`],
+  ["", `${CONTAINER_HOME}/.local/share`],
+]) {
+  test(`MountStage: direnv uses resolved static XDG_DATA_HOME ${value}`, () => {
+    const { input, mountProbes } = makeInput({
+      profile: makeProfile({ direnv: { enable: true } }),
+      mountProbes: makeMountProbes({
+        direnvDataDir: "/host/data/direnv",
+        resolvedEnvEntries: [envEntry("XDG_DATA_HOME", value)],
+      }),
+    });
+    const plan = planMount(input, mountProbes);
+    expect(plan.containerPatch.mounts).toContainEqual({
+      source: "/host/data/direnv",
+      target: `${target}/direnv`,
+      readOnly: true,
+    });
+    if (value) expect(plan.envVars.XDG_DATA_HOME).toBe(target);
+  });
+}
+
+test("MountStage: dynamic XDG_DATA_HOME operations do not move startup approvals", () => {
+  const { input, mountProbes } = makeInput({
+    profile: makeProfile({ direnv: { enable: true } }),
+    mountProbes: makeMountProbes({
+      direnvDataDir: "/host/data/direnv",
+      resolvedEnvEntries: [
+        envEntry("XDG_DATA_HOME", "/later", "suffix", { separator: ":" }),
+      ],
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/host/data/direnv",
+    target: `${CONTAINER_HOME}/.local/share/direnv`,
+    readOnly: true,
+  });
+  expect(plan.envVars.XDG_DATA_HOME).toBeUndefined();
+  expect(plan.containerPatch.env?.dynamicOps).toHaveLength(1);
+});
+
+for (const value of ["~/../outside", "../outside"]) {
+  test(`MountStage: direnv data path obeys container path boundaries (${value})`, () => {
+    const { input, mountProbes } = makeInput({
+      profile: makeProfile({ direnv: { enable: true } }),
+      mountProbes: makeMountProbes({
+        direnvDataDir: "/host/data/direnv",
+        resolvedEnvEntries: [envEntry("XDG_DATA_HOME", value)],
+      }),
+    });
+    expect(() => planMount(input, mountProbes)).toThrow("escapes");
+  });
+}

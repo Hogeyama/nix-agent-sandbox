@@ -51,6 +51,8 @@ export type ResolvedEnvEntry =
 
 /** MountStage が必要とする全ての I/O 結果 */
 export interface MountProbes {
+  /** Existing host native approval data; mounted read-only when enabled. */
+  direnvDataDir: string | null;
   /** エージェント固有の probe 結果 */
   agentProbes: AgentProbes;
   /** /etc/nix/nix.conf の実体パス (readlink -f の結果, 存在しなければ null) */
@@ -117,6 +119,10 @@ export async function resolveMountProbes(
   gpgAgentSocket: string | null,
 ): Promise<MountProbes> {
   const home = hostEnv.home;
+
+  const direnvDataDir = profile.direnv.enable
+    ? await resolveDirenvDataDir(hostEnv, workDir)
+    : null;
 
   // エージェント probe
   const agentProbes = resolveAgentProbes(profile.agent, home);
@@ -185,6 +191,7 @@ export async function resolveMountProbes(
     ]);
 
   return {
+    direnvDataDir,
     agentProbes,
     nixConfRealPath,
     nixBinPath,
@@ -508,4 +515,21 @@ async function runCommandForEnv(
     throw new Error(`[nas] ${sourceName} returned empty output`);
   }
   return output;
+}
+
+async function resolveDirenvDataDir(
+  host: HostEnv,
+  workDir: string,
+): Promise<string | null> {
+  const dataHome = host.env.get("XDG_DATA_HOME") || `${host.home}/.local/share`;
+  const directory = path.join(
+    resolveHostMountPath(dataHome, workDir, host.home),
+    "direnv",
+  );
+  try {
+    return (await stat(directory)).isDirectory() ? directory : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }

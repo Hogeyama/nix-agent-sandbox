@@ -168,7 +168,7 @@ describe("initConfig", () => {
 
     // Verify the content is the new bundled version
     const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
-    expect(content).toContain("@version 0.14.1");
+    expect(content).toContain("@version 0.15.3");
   });
 
   test("global Schema.pkl is skipped when existing version is same or newer", async () => {
@@ -205,7 +205,7 @@ describe("initConfig", () => {
     // Should be overwritten regardless of version
     expect(result.written).toContain(path.join(nasDir, "Schema.pkl"));
     const content = readFileSync(path.join(nasDir, "Schema.pkl"), "utf8");
-    expect(content).toContain("@version 0.14.1");
+    expect(content).toContain("@version 0.15.3");
   });
 
   test("global Schema.pkl is skipped when bundled Schema.pkl has no version", async () => {

@@ -121,7 +121,7 @@ test.skipIf(!hasPkl)(
 local baseProfile: Profile = new {
   agent = "claude"
   session { multiplex = true }
-  nix { extraPackages { "nixpkgs#gh" } }
+  direnv { enable = true }
 }
 
 profiles {

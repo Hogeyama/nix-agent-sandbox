@@ -11,7 +11,7 @@ import type { DockerLabels } from "./nas_resources.ts";
 const EMBEDDED_ASSET_GROUPS = [
   {
     baseDir: resolveAssetDir("docker/embed", import.meta.url, "./embed/"),
-    files: ["Dockerfile", "entrypoint.sh", "local-proxy.mjs"],
+    files: ["Dockerfile", "entrypoint.sh", "direnv-exec.sh", "local-proxy.mjs"],
   },
 ] as const;
 

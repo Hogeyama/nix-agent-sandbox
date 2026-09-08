@@ -5,7 +5,7 @@ FROM ubuntu:26.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl ca-certificates bash docker.io docker-compose-v2 \
   gh ripgrep fd-find python3 python-is-python3 \
-  gnupg unzip jq \
+  gnupg unzip jq direnv \
   fonts-noto-cjk fonts-noto-color-emoji fontconfig \
   locales \
   && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
@@ -24,8 +24,9 @@ RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 RUN userdel -r ubuntu 2>/dev/null && groupdel ubuntu 2>/dev/null || true
 
 COPY entrypoint.sh /entrypoint.sh
+COPY direnv-exec.sh /usr/local/bin/nas-direnv-exec
 COPY local-proxy.mjs /usr/local/bin/local-proxy.mjs
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /usr/local/bin/nas-direnv-exec
 
 # エージェントバイナリのマウント先
 RUN mkdir -p /usr/local/bin /home /nix

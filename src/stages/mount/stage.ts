@@ -231,16 +231,7 @@ export function planMount(
       envVars.NIX_REMOTE = "daemon";
       envVars.NIX_ENABLED = "true";
 
-      // nix print-dev-env キャッシュ用ディレクトリ
       const xdgCache = host.env.get("XDG_CACHE_HOME") || `${host.home}/.cache`;
-      const nasCacheDir = `${xdgCache}/nas`;
-      directories.push({
-        path: nasCacheDir,
-        mode: 0o755,
-        removeOnTeardown: false,
-      });
-      addMount(args, mounts, nasCacheDir, `${containerHome}/.cache/nas`);
-
       // ホストの ~/.cache/nix
       const hostNixCache = `${xdgCache}/nix`;
       directories.push({
@@ -249,13 +240,6 @@ export function planMount(
         removeOnTeardown: false,
       });
       addMount(args, mounts, hostNixCache, `${containerHome}/.cache/nix`);
-
-      const nixExtraPackages = serializeNixExtraPackages(
-        profile.nix.extraPackages,
-      );
-      if (nixExtraPackages) {
-        envVars.NIX_EXTRA_PACKAGES = nixExtraPackages;
-      }
 
       // nix バイナリの実体パス
       if (probes.nixBinPath) {
@@ -376,7 +360,17 @@ export function planMount(
         `[nas] Invalid env var name from profile.env[${resolved.index}].${resolved.keySource}: ${resolved.key}`,
       );
     }
-    const value = expandTilde(resolved.value, containerHome);
+    const value =
+      profile.direnv.enable &&
+      resolved.key === "XDG_DATA_HOME" &&
+      resolved.mode === "set" &&
+      resolved.value
+        ? resolveContainerMountPath(
+            resolved.value,
+            containerHome,
+            containerWorkDir,
+          )
+        : expandTilde(resolved.value, containerHome);
     switch (resolved.mode) {
       case "prefix":
         if (resolved.key in mergedEnvVars) {
@@ -420,6 +414,24 @@ export function planMount(
         }
         break;
       }
+    }
+  }
+
+  if (profile.direnv.enable) {
+    envVars.NAS_DIRENV_ENABLED = "true";
+    const staticDataHome = mergedEnvVars.XDG_DATA_HOME;
+    const dataHome = staticDataHome
+      ? resolveContainerMountPath(
+          staticDataHome,
+          containerHome,
+          containerWorkDir,
+        )
+      : `${containerHome}/.local/share`;
+    // direnv must see the same absolute path that Docker mounts, including
+    // relative profile values resolved against the container workspace.
+    if (staticDataHome) envVars.XDG_DATA_HOME = dataHome;
+    if (probes.direnvDataDir !== null) {
+      addMount(args, mounts, probes.direnvDataDir, `${dataHome}/direnv`, true);
     }
   }
 
@@ -680,12 +692,4 @@ function parseMountSpec(rawMount: string): MountSpec {
   const source = mountValue.slice(0, separatorIndex);
   const target = mountValue.slice(separatorIndex + 1);
   return readOnly ? { source, target, readOnly: true } : { source, target };
-}
-
-export function serializeNixExtraPackages(packages: string[]): string | null {
-  const normalized = packages
-    .map((pkg) => pkg.trim())
-    .filter((pkg) => pkg.length > 0);
-  if (normalized.length === 0) return null;
-  return normalized.join("\n");
 }

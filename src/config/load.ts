@@ -15,10 +15,9 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
-import {
-  type Diagnostic,
-  detectLegacyIdentifiers,
-} from "../network/authz/validate.ts";
+import { fileURLToPath } from "node:url";
+import { moduleReferences } from "../lib/pkl_source.ts";
+import { detectLegacyIdentifiers } from "../network/authz/validate.ts";
 import { initConfig, resolveSchemaAsset } from "./init.ts";
 import {
   findNixConfig,
@@ -27,6 +26,7 @@ import {
   migrateYml2Pkl,
 } from "./migrate.ts";
 import { getGlobalConfigDir } from "./paths.ts";
+import { retiredNixSourceErrors } from "./retired_nix.ts";
 import { ensureConfigTrusted, recordConfigTrust } from "./trust.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
@@ -37,6 +37,8 @@ const CONFIG_DIR = ".nas";
 const CONFIG_FILENAME = "config.pkl";
 const SCHEMA_FILENAME = "Schema.pkl";
 const PKL_PROJECT_FILENAME = "PklProject";
+const CONFIG_MODULE_URI = "modulepath:/config.pkl";
+const GLOBAL_MODULE_URI = "modulepath:/global.pkl";
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
@@ -90,15 +92,14 @@ async function reportLegacyIdentifiers(configPath: string): Promise<void> {
   const source = await readFile(configPath, "utf8");
   const diagnostics = [
     ...(await legacyIdentifiersInGlobal(source)),
-    ...detectLegacyIdentifiers(source, path.basename(configPath)),
+    ...detectLegacyIdentifiers(source, path.basename(configPath)).map(
+      (d) => d.message,
+    ),
+    ...retiredNixSourceErrors(source, path.basename(configPath)),
   ];
   if (diagnostics.length === 0) return;
-  throw new Error(
-    diagnostics.map((diagnostic) => diagnostic.message).join("\n\n"),
-  );
+  throw new Error(diagnostics.join("\n\n"));
 }
-
-const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
 
 /**
  * config.pkl が取り込むグローバル設定を走査する。
@@ -109,10 +110,15 @@ const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
  */
 async function legacyIdentifiersInGlobal(
   configSource: string,
-): Promise<readonly Diagnostic[]> {
-  if (!GLOBAL_MODULE_REFERENCE.test(configSource)) return [];
-
+): Promise<readonly string[]> {
   const globalPath = path.join(getGlobalConfigDir(), "global.pkl");
+  if (
+    !moduleReferences(configSource).some((uri) =>
+      referencesDefaultGlobal(uri, globalPath),
+    )
+  )
+    return [];
+
   let source: string;
   try {
     source = await readFile(globalPath, "utf8");
@@ -123,7 +129,34 @@ async function legacyIdentifiersInGlobal(
 
   // ここだけ絶対パスで示す。global.pkl はプロジェクトの外にあり、名前だけでは
   // どこを直せばいいのか分からない。
-  return detectLegacyIdentifiers(source, globalPath);
+  return [
+    ...detectLegacyIdentifiers(source, globalPath).map((d) => d.message),
+    ...retiredNixSourceErrors(source, globalPath),
+  ];
+}
+
+/**
+ * evalPklConfig imports config.pkl as modulepath:/config.pkl. Resolve relative
+ * references against that identity before comparing them with the root global
+ * module. A direct file URI is the same config only when its filesystem path
+ * is the actual default global path.
+ */
+function referencesDefaultGlobal(uri: string, globalPath: string): boolean {
+  let resolved: URL;
+  try {
+    resolved = new URL(uri, CONFIG_MODULE_URI);
+  } catch {
+    return false;
+  }
+
+  if (resolved.href === GLOBAL_MODULE_URI) return true;
+  if (resolved.protocol !== "file:") return false;
+
+  try {
+    return path.resolve(fileURLToPath(resolved)) === path.resolve(globalPath);
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -10,6 +10,7 @@ import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
 import { validateAuthzConfig } from "../network/authz/validate.ts";
 import { LOCAL_PROXY_PORT } from "../network/ports.ts";
+import { NIX_EXTRA_PACKAGES_MIGRATION } from "./retired_nix.ts";
 import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
 
 export class ConfigValidationError extends Error {
@@ -77,7 +78,9 @@ function validateProfile(name: string, profile: Profile): string[] {
   );
 
   // --- nix.extraPackages の入力検証 ---
-  errors.push(...validateNixExtraPackages(name, profile.nix.extraPackages));
+  if ("extraPackages" in profile.nix) {
+    errors.push(`profile "${name}": ${NIX_EXTRA_PACKAGES_MIGRATION}`);
+  }
 
   // --- display.size フォーマット検証 ---
   errors.push(...validateDisplaySize(name, profile.display.size));
@@ -305,30 +308,6 @@ function validateEnvEntries(
           `profile "${profileName}": env[${i}].separator is required when mode is "${mode}"`,
         );
       }
-    }
-  }
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// Nix extraPackages validation (F1)
-// ---------------------------------------------------------------------------
-
-function validateNixExtraPackages(
-  profileName: string,
-  extraPackages: string[],
-): string[] {
-  const errors: string[] = [];
-  for (const [i, pkg] of extraPackages.entries()) {
-    if (pkg.startsWith("-")) {
-      errors.push(
-        `profile "${profileName}": nix.extraPackages[${i}] ("${pkg}") must not start with "-" (flag injection)`,
-      );
-    }
-    if (pkg.includes("..")) {
-      errors.push(
-        `profile "${profileName}": nix.extraPackages[${i}] ("${pkg}") must not contain ".." (path traversal)`,
-      );
     }
   }
   return errors;

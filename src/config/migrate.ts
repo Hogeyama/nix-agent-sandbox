@@ -14,6 +14,7 @@ import {
   initConfig,
 } from "./init.ts";
 import { getGlobalConfigDir } from "./paths.ts";
+import { normalizeLegacyNixPackages } from "./retired_nix.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,7 +27,6 @@ const KEBAB_KEYS = new Set([
   "default-scope",
   "detach-key",
   "extra-mounts",
-  "extra-packages",
   "forward-agent",
   "forward-ports",
   "idle-timeout",
@@ -215,7 +215,7 @@ export function objectToPklSource(
   opts?: { amendsHeader?: string },
 ): string {
   const header = `amends "${escapeString(opts?.amendsHeader ?? "Schema.pkl")}"\n`;
-  const lines = objectToLines(obj, 0, "");
+  const lines = objectToLines(normalizeLegacyNixPackages(obj), 0, "");
   if (lines.length === 0) {
     return header;
   }
@@ -542,11 +542,12 @@ async function migrateLocal(
     await assertNotExists(outputPath);
   }
 
+  // Validate conversion before scaffolding so rejected legacy settings do not
+  // leave a runnable default config behind.
+  const pklSource = await yamlFileToPklSource(inputPath);
+
   // Scaffold .nas/ directory via initConfig
   const scaffoldResult = await initConfig({ projectDir: cwd });
-
-  // Read and convert
-  const pklSource = await yamlFileToPklSource(inputPath);
 
   // Write output (initConfig may have created config.pkl, overwrite it)
   await writeFile(outputPath, pklSource);
@@ -571,14 +572,14 @@ async function migrateGlobal(
     await assertNotExists(outputPath);
   }
 
+  // Validate conversion before modifying the global config directory.
+  const pklSource = await yamlFileToPklSource(inputPath);
+
   // Ensure global dir exists
   await mkdir(globalDir, { recursive: true });
 
   // Ensure Schema.pkl is up-to-date in global dir (version-aware upsert).
   await ensureGlobalSchema(globalDir);
-
-  // Read and convert
-  const pklSource = await yamlFileToPklSource(inputPath);
 
   // Write output
   await writeFile(outputPath, pklSource);

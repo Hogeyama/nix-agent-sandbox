@@ -44,7 +44,8 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
-    nix: { enable: false, mountSocket: false, extraPackages: [] },
+    direnv: { enable: false },
+    nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
@@ -102,6 +103,7 @@ function makeStageInput(
 function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
   return {
     agentProbes: {} as MountProbes["agentProbes"],
+    direnvDataDir: null,
     nixConfRealPath: null,
     nixBinPath: null,
     gitConfigExists: false,

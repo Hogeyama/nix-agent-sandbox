@@ -30,7 +30,7 @@ export default defineConfig({
     "/recipes/codex-keyring/":
       "/nix-agent-sandbox/configuration/authentication/#codex-のキーリング",
     "/features/nix/":
-      "/nix-agent-sandbox/configuration/development/#nix-の開発環境",
+      "/nix-agent-sandbox/configuration/development/#nix-の共有",
     "/features/docker/":
       "/nix-agent-sandbox/configuration/development/#テスト用-docker",
     "/features/display/": "/nix-agent-sandbox/configuration/gui/",
