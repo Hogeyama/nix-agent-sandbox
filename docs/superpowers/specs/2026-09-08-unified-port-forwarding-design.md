@@ -19,12 +19,19 @@ Date: 2026-09-08
 
 ## 利用時の動作
 
-方向は「接続を始める側 → サービスがある側」を意味する。
+名前は SSH の `-L` / `LocalForward` と `-R` / `RemoteForward` に合わせる。
+local は nas を起動するホスト、remote は対象コンテナに固定する。
+コンテナ内から hostexec 経由で操作しても、この基準は変えない。
+L/R は待受を置く側を表し、矢印は「接続を始める側 → サービスがある側」を表す。
 
-| 方向 | 接続するアドレス | 転送先 |
-| --- | --- | --- |
-| `host-to-container` | host の `127.0.0.1:hostPort` | container の `127.0.0.1:containerPort` |
-| `container-to-host` | container の `127.0.0.1:containerPort` | host の `127.0.0.1:hostPort` |
+| CLI / config | 方向 | 接続するアドレス | 転送先 |
+| --- | --- | --- | --- |
+| `-L` / `localForwards` | host → container | host の `127.0.0.1:hostPort` | container の `127.0.0.1:containerPort` |
+| `-R` / `remoteForwards` | container → host | container の `127.0.0.1:containerPort` | host の `127.0.0.1:hostPort` |
+
+参照: [OpenSSH ssh(1)](https://man.openbsd.org/ssh.1)、
+[ssh_config(5)](https://man.openbsd.org/ssh_config.5)。
+SSH と名前・待受側の意味を揃え、転送先アドレスは nas の loopback 制約に従う。
 
 両方向とも TCP を扱い、異なるポート番号を指定できる。UDP、LAN 公開、
 任意の転送先アドレス指定はこの変更に含めない。
@@ -36,8 +43,9 @@ config を書き換えない。config 由来の転送も動的に削除でき、
 
 ## 共通設定
 
-新しい設定は profile の `network.portForwards` とし、各要素に
-`direction`、`hostPort`、`containerPort` を持たせる。ポートは 1–65535。
+新しい設定は profile の `network.localForwards` と `network.remoteForwards`。
+各要素に `hostPort`、`containerPort` を持たせる。ポートは 1–65535。
+設定キーが方向を決めるため、要素内に `direction` は書かない。
 config では両ポートを必須とし、指定番号を勝手に変更しない。
 
 評価後の設定例:
@@ -45,16 +53,19 @@ config では両ポートを必須とし、指定番号を勝手に変更しな�
 ```json
 {
   "network": {
-    "portForwards": [
-      { "direction": "host-to-container", "hostPort": 3000, "containerPort": 3000 },
-      { "direction": "container-to-host", "hostPort": 5432, "containerPort": 15432 }
+    "localForwards": [
+      { "hostPort": 8080, "containerPort": 3000 }
+    ],
+    "remoteForwards": [
+      { "hostPort": 5432, "containerPort": 15432 }
     ]
   }
 }
 ```
 
 Pkl schema に対応する要素型を追加し、実装時に実行可能な Pkl 設定例を
-ユーザーガイドへ載せる。UI と CLI の一覧は方向、両ポート、由来
+ユーザーガイドへ載せる。内部では二つのリストを方向付きの共通モデルへ正規化する。
+UI と CLI の一覧は方向、両ポート、由来
 (`config` / `dynamic` / `internal`)、稼働状態を共通の情報として使う。
 
 同一方向・同一 containerPort をセッション内の転送キーとする。
@@ -64,30 +75,37 @@ config 内の完全重複は一つに正規化し、同じキーの異なる対�
 
 ## CLI と UI
 
-既存の `nas network bind` / `unbind` を拡張する。方向省略時は従来どおり
-`host-to-container`。引数の役割は方向によって入れ替えない。
+既存の `nas network bind` / `unbind` を拡張する。
+新構文は `bind SESSION -L listenPort:targetPort` または
+`bind SESSION -R listenPort:targetPort`。長い名前はそれぞれ
+`--local-forward` / `--remote-forward` とする。
+SSH と同じく左が待受、右が転送先。アドレスは両側とも `127.0.0.1` 固定のため省略する。
+1 回の操作で 1 件を指定し、L/R の併用・繰り返しは usage error とする。
 
 ```sh
-nas network bind SESSION:3000 3000
-nas network bind --direction container-to-host SESSION:15432 5432
-nas network unbind --direction container-to-host SESSION:15432
+nas network bind SESSION -L 8080:3000
+nas network bind SESSION -R 15432:5432
+nas network unbind SESSION -L 8080
+nas network unbind SESSION -R 15432
 nas network bind
 ```
 
-最後のコマンドは両方向を一覧表示する。`--direction` で絞り込める。
-既存の JSON 出力にも方向と由来を追加する。
+`unbind` は指定方向の待受ポートをセッション内で特定して削除する。
+最後のコマンドは両方向を一覧表示する。既存の JSON 出力にも方向と由来を追加する。
+利用者に見せる方向の指定は L/R に統一する。
 
-host → container の hostPort 省略時の候補選択は現在の動作を維持する。
-container → host で hostPort を省略した場合は containerPort と同じ番号を
-転送先にする。この方向では待受ポートである containerPort は常に明示される。
-明示した待受ポートが使用中なら、両方向とも別番号へ自動変更しない。
+新構文は両ポートを明示し、使用中の待受ポートを別番号へ自動変更しない。
+既存の `bind SESSION:containerPort [hostPort]` は local forwarding の互換構文として
+残し、hostPort 省略時の候補選択も現在の動作を維持する。
+既存構文と L/R オプションの混在は拒否する。
 
-`unbind <host-port>` と方向省略時の session キーは既存方向だけを対象にする。
-新しい方向は `--direction container-to-host SESSION:containerPort` で指定し、
+既存の `unbind <host-port>` と `unbind SESSION:containerPort` は
+local forwarding だけを対象とする。remote forwarding は新構文で削除し、
 hostPort だけの削除は認めない（同じ host サービスを複数の転送で使えるため）。
 引数なしの削除候補には両方向を表示し、選んだ方向とキーで削除する。
 
-UI の Ports パネルに方向選択と両ポート入力を用意する。一覧にも方向を明記し、
+UI の Ports パネルに `Local (host → container)` / `Remote (container → host)`
+の選択と両ポート入力を用意する。一覧にも方向を明記し、
 host → container のみホストブラウザで開くリンクを表示する。
 現在のコンテナ内 listener 検出は host → container の追加候補に用いる。
 host 側のサービス自動検出は追加しない。
@@ -95,9 +113,9 @@ host 側のサービス自動検出は追加しない。
 ## 既存設定と内部転送
 
 `network.proxy.forwardPorts` は互換入力として受理し、各番号を
-`container-to-host`、`hostPort = containerPort` の共通設定へ正規化する。
+`network.remoteForwards` の `hostPort = containerPort` の対応へ正規化する。
 新旧設定を合わせて重複・競合を検証する。ユーザー設定を自動書換えしない。
-新しい説明と設定例では `network.portForwards` を使う。
+新しい説明と設定例では `network.localForwards` / `network.remoteForwards` を使う。
 
 ユーザー指定により、schema の変更は後方互換にする。Pkl の `ProxyConfig` 型と
 `forwardPorts` フィールド、既存の構築構文を残し、旧設定だけでも起動できる。
@@ -108,8 +126,8 @@ stderr へ更新案内の warn を出す。空の schema デフォルトや nas 
 出さない。新旧併記で重複が吸収されても、旧設定が残っている間は案内する。
 JSON の標準出力を汚さず、UI の poll や接続ごとに繰り返さない。
 警告には profile 名、旧キー、新キー、および同じポート対応の置換例を含める。
-たとえば 5432 の旧設定は、`direction = "container-to-host"`、
-`hostPort = 5432`、`containerPort = 5432` の要素へ移すことを案内する。
+たとえば 5432 の旧設定は、`network.remoteForwards` に
+`hostPort = 5432`、`containerPort = 5432` の要素を置くことを案内する。
 実装時には新しい Pkl 型を使ったコピー可能な例と、移行ガイドへの参照を付ける。
 非推奨の案内だけとし、この変更で削除期限を設定しない。
 
@@ -181,6 +199,8 @@ nas 自身の proxy・DinD 等の予約ポートを container 待受に使う要
 ## 検証と受け入れ条件
 
 - 新旧 config の正規化、範囲、重複、方向付きキー、CLI の既存引数互換性。
+- L/R と localForwards/remoteForwards の方向一致、異番号での待受・転送先の対応、
+  新構文の削除が待受ポートを使うこと、旧構文との混在・複数指定の拒否。
 - 旧 Pkl 構文の評価と起動互換性、profile ごとの移行 warn、空の旧設定・
   新形式のみの場合に warn が出ないこと、JSON 標準出力への非混入。
 - 両方向で config による開始、実行中の追加・削除、異番号の対応。
@@ -202,6 +222,11 @@ Docker や外部ネットワーク条件による skip は実行済みの検証�
 config を共通の管理状態の初期入力とすることで、設定由来か動的追加かで
 削除・一覧・競合の動作が分かれるのを防ぐ。既存 broker と relay の拡張なら、
 ホストが転送を許可する境界と、既存の CLI/UI・registry を活用できる。
+
+利用者向けの名前には SSH の local/remote forwarding を採用する。
+既存知識で待受側を判断でき、CLI の L/R と config のキーが直接対応する。
+local の基準はホストに固定し、実行場所で意味が逆転しないようにする。
+設定を二つのリストで表しても、正規化後の管理は一つに保つ。
 
 ## 他のアプローチを採らない理由
 
