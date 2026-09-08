@@ -131,6 +131,7 @@ export const PortBindServiceLive: Layer.Layer<
                   brokerSocket: plan.controlSocket,
                   bindings: ports.bindings,
                   forwards: ports.forwards,
+                  portForwards: ports.portForwards,
                 });
               const broker = await startPortBindBroker({
                 controlSocketPath: plan.controlSocket,
@@ -139,7 +140,7 @@ export const PortBindServiceLive: Layer.Layer<
                 reservedPorts: plan.reservedPorts,
               });
               try {
-                await persist({ bindings: [], forwards: [] });
+                await persist({ bindings: [], forwards: [], portForwards: [] });
               } catch (error) {
                 await broker.close();
                 throw error;

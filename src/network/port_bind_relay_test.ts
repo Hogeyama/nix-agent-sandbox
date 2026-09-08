@@ -566,7 +566,7 @@ test("a forward is recorded on ok and re-sent to a reconnecting relay", async ()
           ) === true,
       );
 
-      await gateway.unforward(5432);
+      expect(await gateway.unforward(5432)).toEqual({ listenerClosed: true });
       expect(gateway.forwards()).toEqual([]);
       await waitFor(
         () =>
@@ -664,11 +664,35 @@ test("a client line for a forwarded port is piped to the host port", async () =>
       // client-first protocol delivers them.
       client.write("client 5432\nping");
       expect((await firstChunk(client)).toString()).toEqual("ping");
-      client.destroy();
+      const closed = waitForClose(client);
+      expect(await gateway.unforward(5432)).toEqual({ listenerClosed: true });
+      await closed;
     } finally {
       relay.socket.destroy();
       await gateway.close();
       await new Promise<void>((resolve) => echo.close(() => resolve()));
+    }
+  });
+});
+
+test("unforward without a relay revokes permission but cannot confirm listener closure", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+      reEnsureDelayMs: 1000,
+    });
+    const relay = ackingControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      await gateway.forward(5432, 5432);
+      relay.socket.destroy();
+      await waitFor(() => !gateway.isRelayConnected());
+      expect(await gateway.unforward(5432)).toEqual({ listenerClosed: false });
+      expect(gateway.forwards()).toEqual([]);
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
     }
   });
 });

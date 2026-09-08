@@ -159,7 +159,8 @@ export interface RelayGateway {
    */
   forward(containerPort: number, hostPort: number): Promise<void>;
   /** Drop the forward; the relay's listener is closed if the relay is up. */
-  unforward(containerPort: number): Promise<void>;
+  // biome-ignore lint/suspicious/noConfusingVoidType: compatibility with gateway adapters that predate listener acknowledgements.
+  unforward(containerPort: number): Promise<{ listenerClosed: boolean } | void>;
   forwards(): PortForward[];
   close(): Promise<void>;
 }
@@ -187,6 +188,7 @@ export async function startRelayGateway(opts: {
   const observed = new Map<number, ListenerScope>();
   /** containerPort -> forward. The record; the relay's listeners follow it. */
   const forwardTable = new Map<number, PortForward>();
+  const forwardConnections = new Map<number, Set<Socket>>();
   let control: Socket | null = null;
   let watching = false;
   let closed = false;
@@ -335,6 +337,20 @@ export async function startRelayGateway(opts: {
       port: forward.hostPort,
       allowHalfOpen: true,
     });
+    const streams = forwardConnections.get(containerPort) ?? new Set<Socket>();
+    forwardConnections.set(containerPort, streams);
+    for (const stream of [socket, target]) {
+      streams.add(stream);
+      stream.once("close", () => {
+        streams.delete(stream);
+        if (
+          streams.size === 0 &&
+          forwardConnections.get(containerPort) === streams
+        ) {
+          forwardConnections.delete(containerPort);
+        }
+      });
+    }
     const onDialError = (error: Error) => {
       logDebug(
         `[nas] port-forward: host ${forward.hostPort} unreachable: ${error}`,
@@ -553,13 +569,21 @@ export async function startRelayGateway(opts: {
       }
     },
     unforward: async (containerPort) => {
-      if (!forwardTable.delete(containerPort)) return;
-      if (!control || control.destroyed) return;
+      forwardTable.delete(containerPort);
+      for (const socket of forwardConnections.get(containerPort) ?? [])
+        socket.destroy();
+      forwardConnections.delete(containerPort);
+      if (!control || control.destroyed) return { listenerClosed: false };
       try {
+        // A failed forward may have created the relay listener before its ACK
+        // was lost. Ask the relay to tear it down even when the local record
+        // has already been rolled back.
         await send("unforward", containerPort);
+        return { listenerClosed: true };
       } catch (error) {
-        // A relay that vanished mid-request has no listener left to close.
+        // Permission is already revoked even if listener teardown is unconfirmed.
         logDebug(`[nas] port-relay: unforward ${containerPort}: ${error}`);
+        return { listenerClosed: false };
       }
     },
     forwards: () =>

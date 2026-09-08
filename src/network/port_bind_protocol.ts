@@ -1,4 +1,8 @@
 import type { BaseSessionEntry } from "../lib/runtime_registry.ts";
+import {
+  copyManagedForward,
+  type ManagedForward,
+} from "./port_forward_model.ts";
 
 /** One open host-port-to-container-port mapping. */
 export interface PortBinding {
@@ -46,10 +50,56 @@ export type HostProbeResult = "ok" | "no-answer";
 export interface PortBindSessionEntry extends BaseSessionEntry {
   bindings: PortBinding[];
   forwards?: PortForward[];
+  /** Canonical state. Missing only in registries written by older sessions. */
+  portForwards?: ManagedForward[];
 }
 
 export function sessionForwards(entry: PortBindSessionEntry): PortForward[] {
-  return entry.forwards ?? [];
+  return projectPortForwards(sessionPortForwards(entry)).forwards;
+}
+
+export function sessionPortForwards(
+  entry: PortBindSessionEntry,
+): ManagedForward[] {
+  if (entry.portForwards !== undefined)
+    return entry.portForwards.map(copyManagedForward);
+  return [
+    ...entry.bindings.map(
+      (binding): ManagedForward => ({
+        ...binding,
+        direction: "local",
+        owners: ["dynamic"],
+        state: "active",
+      }),
+    ),
+    ...(entry.forwards ?? []).map(
+      (forward): ManagedForward => ({
+        ...forward,
+        direction: "remote",
+        owners: ["dynamic"],
+        state: "active",
+      }),
+    ),
+  ].map(copyManagedForward);
+}
+
+export function projectPortForwards(entries: readonly ManagedForward[]): {
+  bindings: PortBinding[];
+  forwards: PortForward[];
+} {
+  const project = ({ containerPort, hostPort, createdAt }: ManagedForward) => ({
+    containerPort,
+    hostPort,
+    createdAt,
+  });
+  return {
+    bindings: entries
+      .filter((entry) => entry.direction === "local")
+      .map(project),
+    forwards: entries
+      .filter((entry) => entry.direction === "remote")
+      .map(project),
+  };
 }
 
 /**

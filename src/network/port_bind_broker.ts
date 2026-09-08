@@ -18,12 +18,25 @@ import {
   type PortBinding,
   type PortForward,
   type ProbeResult,
+  projectPortForwards,
 } from "./port_bind_protocol.ts";
 import {
   pipeSockets,
   type RelayGateway,
   RelayNotReadyError,
 } from "./port_bind_relay.ts";
+
+import {
+  type AddForwardResult,
+  copyManagedForward,
+  createsForwardCycle,
+  type ForwardOwner,
+  type ForwardSpec,
+  forwardKey,
+  type ManagedForward,
+  type RemoveForwardResult,
+  removeUserOwners,
+} from "./port_forward_model.ts";
 
 const HOST = "127.0.0.1";
 const MAX_CANDIDATES = 65;
@@ -62,12 +75,21 @@ export function hostPortCandidates(
 
 /** Everything the session registry records about open ports. */
 export interface PersistedPorts {
+  portForwards: ManagedForward[];
   bindings: PortBinding[];
   forwards: PortForward[];
 }
 
 export interface PortBindBroker {
   readonly controlSocketPath: string;
+  listPortForwards(): ManagedForward[];
+  addPortForward(
+    spec: ForwardSpec,
+    owner: ForwardOwner,
+  ): Promise<AddForwardResult>;
+  removePortForward(
+    key: Pick<ForwardSpec, "direction" | "containerPort">,
+  ): Promise<RemoveForwardResult>;
   bind(req: {
     containerPort: number;
     hostPort: number | null;
@@ -208,17 +230,30 @@ export async function startPortBindBroker(opts: {
   const reserved = new Set(opts.reservedPorts ?? []);
   const watchLeaseMs = opts.watchLeaseMs ?? WATCH_LEASE_MS;
   const open = new Map<number, OpenBinding>();
+  const managed = new Map<string, ManagedForward>();
   let watchLease: ReturnType<typeof setTimeout> | undefined;
   let mutationTail = Promise.resolve();
   let closing = false;
 
+  const listPortForwards = (): ManagedForward[] =>
+    [...managed.values()].map(copyManagedForward);
   const snapshot = (): PortBinding[] =>
-    [...open.values()].map((entry) => entry.binding);
-  const persist = (ports: Partial<PersistedPorts>) =>
-    opts.persist({
-      bindings: ports.bindings ?? snapshot(),
-      forwards: ports.forwards ?? opts.gateway.forwards(),
-    });
+    projectPortForwards(listPortForwards()).bindings;
+  const persist = () => {
+    const portForwards = listPortForwards();
+    return opts.persist({ portForwards, ...projectPortForwards(portForwards) });
+  };
+  // Registry failures never become authority to restore revoked connections.
+  const persistRevocation = async () => {
+    try {
+      await persist();
+    } catch (error) {
+      await persist().catch((retryError) =>
+        logDebug(`[nas] port-forward registry retry failed: ${retryError}`),
+      );
+      throw error;
+    }
+  };
 
   const mutate = <T>(action: () => Promise<T>): Promise<T> => {
     if (closing) return Promise.reject(new Error("broker is closed"));
@@ -282,168 +317,311 @@ export async function startPortBindBroker(opts: {
     });
   };
 
-  const bind: PortBindBroker["bind"] = (req) =>
-    mutate(async () => {
-      const existing = open.get(req.containerPort);
+  const validateSpec = (spec: ForwardSpec) => {
+    if (
+      (spec.direction !== "local" && spec.direction !== "remote") ||
+      !validPort(spec.containerPort) ||
+      !validPort(spec.hostPort)
+    ) {
+      throw new ControlError(
+        "invalid-request",
+        "direction and ports are invalid",
+      );
+    }
+  };
+
+  const probe = async (spec: ForwardSpec): Promise<ProbeResult> => {
+    try {
+      return spec.direction === "local"
+        ? await opts.gateway.probe(spec.containerPort)
+        : await probeHostPort(spec.hostPort);
+    } catch (error) {
+      if (error instanceof RelayNotReadyError) {
+        return error.reason === "container-not-running"
+          ? "container-not-running"
+          : "relay-unreachable";
+      }
+      return "no-answer";
+    }
+  };
+
+  // Called only under mutationTail, including the legacy automatic-port adapter.
+  const add = async (
+    spec: ForwardSpec,
+    owner: ForwardOwner,
+    prepared?: OpenBinding,
+  ): Promise<AddForwardResult> => {
+    let acquired = prepared;
+    let inserted = false;
+    const key = forwardKey(spec);
+    try {
+      validateSpec(spec);
+      if (!["config", "dynamic", "internal"].includes(owner)) {
+        throw new ControlError("invalid-request", "invalid forward owner");
+      }
+      const existing = managed.get(key);
       if (existing) {
-        if (
-          req.hostPort !== null &&
-          req.hostPort !== 0 &&
-          req.hostPort !== existing.binding.hostPort
-        ) {
+        if (existing.hostPort !== spec.hostPort) {
           throw new ControlError(
             "binding-conflict",
-            `container port ${req.containerPort} is already bound to ${existing.binding.hostPort}`,
+            `container port ${spec.containerPort} already maps to host port ${existing.hostPort}`,
           );
         }
+        if (!existing.owners.includes(owner)) {
+          const updated = { ...existing, owners: [...existing.owners, owner] };
+          managed.set(key, updated);
+          try {
+            await persist();
+          } catch (error) {
+            managed.set(key, existing);
+            throw error;
+          }
+        }
         return {
-          hostPort: existing.binding.hostPort,
-          probe: await opts.gateway.probe(req.containerPort),
+          entry: copyManagedForward(managed.get(key) ?? existing),
+          probe: await probe(spec),
         };
       }
-
-      const connections = new Set<Socket>();
-      let server: Server | null = null;
-      for (const candidate of hostPortCandidates(
-        req.containerPort,
-        req.hostPort,
-      )) {
-        try {
-          server = await listenOn(candidate, req.containerPort, connections);
-          break;
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== "EADDRINUSE" && code !== "EACCES") throw error;
-        }
-      }
-      if (!server) {
+      if (spec.direction === "remote" && reserved.has(spec.containerPort)) {
         throw new ControlError(
-          "host-port-taken",
-          req.hostPort !== null
-            ? `host port ${req.hostPort} is unavailable`
-            : `no free host port near ${req.containerPort}`,
+          "container-port-taken",
+          `container port ${spec.containerPort} is used by nas itself`,
         );
       }
-
-      const address = server.address();
-      const chosen =
-        address && typeof address === "object"
-          ? address.port
-          : req.containerPort;
-      const binding: PortBinding = {
-        containerPort: req.containerPort,
-        hostPort: chosen,
-        createdAt: now().toISOString(),
-      };
-      const entry = { binding, server, connections };
-      try {
-        await persist({ bindings: [...snapshot(), binding] });
-      } catch (error) {
-        await closeBinding(entry);
-        throw error;
+      if (
+        spec.direction === "local" &&
+        [...managed.values()].some(
+          (entry) =>
+            entry.direction === "local" && entry.hostPort === spec.hostPort,
+        )
+      ) {
+        throw new ControlError(
+          "binding-conflict",
+          `host port ${spec.hostPort} already has a local forward`,
+        );
       }
-      open.set(req.containerPort, entry);
-      return {
-        hostPort: chosen,
-        probe: await opts.gateway.probe(req.containerPort),
+      if (createsForwardCycle([...managed.values()], spec)) {
+        throw new ControlError(
+          "binding-conflict",
+          "the forwarding mapping creates a cycle",
+        );
+      }
+      const entry: ManagedForward = {
+        direction: spec.direction,
+        containerPort: spec.containerPort,
+        hostPort: spec.hostPort,
+        owners: [owner],
+        createdAt: now().toISOString(),
+        state: "pending",
       };
-    });
+      managed.set(key, entry);
+      inserted = true;
+      if (spec.direction === "local") {
+        if (!acquired) {
+          const connections = new Set<Socket>();
+          try {
+            const server = await listenOn(
+              spec.hostPort,
+              spec.containerPort,
+              connections,
+            );
+            acquired = { binding: entry, server, connections };
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "EADDRINUSE" && code !== "EACCES") throw error;
+            throw new ControlError(
+              "host-port-taken",
+              `host port ${spec.hostPort} is unavailable`,
+            );
+          }
+        }
+        open.set(spec.containerPort, acquired);
+      } else {
+        try {
+          await opts.gateway.forward(spec.containerPort, spec.hostPort);
+        } catch (error) {
+          if (error instanceof RelayNotReadyError) {
+            throw new ControlError(
+              "relay-unavailable",
+              error.reason === "container-not-running"
+                ? "the container is not running"
+                : "the relay could not be started",
+            );
+          }
+          throw new ControlError(
+            "container-port-taken",
+            `container port ${spec.containerPort} could not be opened: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      entry.state = "active";
+      await persist();
+      // Probe describes the target, independently of the established listener.
+      return { entry: copyManagedForward(entry), probe: await probe(spec) };
+    } catch (error) {
+      if (inserted) {
+        managed.delete(key);
+        if (spec.direction === "local") open.delete(spec.containerPort);
+        else await opts.gateway.unforward(spec.containerPort);
+      }
+      if (acquired) await closeBinding(acquired);
+      throw error;
+    }
+  };
 
-  const unbind: PortBindBroker["unbind"] = (key) =>
-    mutate(async () => {
-      const entry = [...open.values()].find(
-        (candidate) =>
-          (key.containerPort !== undefined &&
-            candidate.binding.containerPort === key.containerPort) ||
-          (key.hostPort !== undefined &&
-            candidate.binding.hostPort === key.hostPort),
+  const addPortForward: PortBindBroker["addPortForward"] = (spec, owner) => {
+    const requested = { ...spec };
+    return mutate(() => add(requested, owner));
+  };
+
+  const remove = async (
+    key: Pick<ForwardSpec, "direction" | "containerPort">,
+  ): Promise<RemoveForwardResult> => {
+    const id = forwardKey(key);
+    const entry = managed.get(id);
+    if (!entry)
+      throw new ControlError(
+        "no-such-binding",
+        "no forwarding matches that key",
       );
-      if (!entry) {
+    const retained = removeUserOwners(entry);
+    if (retained) {
+      const removed = retained.owners.length !== entry.owners.length;
+      if (removed) {
+        managed.set(id, retained);
+        await persistRevocation();
+      }
+      return { removed, retainedInternal: true, listenerClosed: false };
+    }
+    managed.delete(id);
+    let listenerClosed = false;
+    if (entry.direction === "local") {
+      const binding = open.get(entry.containerPort);
+      open.delete(entry.containerPort);
+      if (binding) {
+        await closeBinding(binding);
+        listenerClosed = true;
+      }
+    } else {
+      // Gateway revokes permission synchronously before awaiting listener ACK.
+      const result = await opts.gateway.unforward(entry.containerPort);
+      listenerClosed = result?.listenerClosed ?? false;
+    }
+    await persistRevocation();
+    return { removed: true, retainedInternal: false, listenerClosed };
+  };
+
+  const removePortForward: PortBindBroker["removePortForward"] = (key) => {
+    const requested = { ...key };
+    return mutate(() => remove(requested));
+  };
+
+  const bind: PortBindBroker["bind"] = (req) => {
+    const requested = { ...req };
+    return mutate(async () => {
+      const existing = managed.get(
+        forwardKey({
+          direction: "local",
+          containerPort: requested.containerPort,
+        }),
+      );
+      let result: AddForwardResult;
+      if (
+        existing ||
+        (requested.hostPort !== null && requested.hostPort !== 0)
+      ) {
+        result = await add(
+          {
+            direction: "local",
+            containerPort: requested.containerPort,
+            hostPort:
+              requested.hostPort ||
+              existing?.hostPort ||
+              requested.containerPort,
+          },
+          "dynamic",
+        );
+      } else {
+        if (!validPort(requested.containerPort))
+          throw new ControlError("invalid-request", "invalid container port");
+        let acquired: OpenBinding | undefined;
+        for (const candidate of hostPortCandidates(
+          requested.containerPort,
+          requested.hostPort,
+        )) {
+          const connections = new Set<Socket>();
+          try {
+            const server = await listenOn(
+              candidate,
+              requested.containerPort,
+              connections,
+            );
+            const hostPort = (server.address() as { port: number }).port;
+            acquired = {
+              server,
+              connections,
+              binding: {
+                containerPort: requested.containerPort,
+                hostPort,
+                createdAt: now().toISOString(),
+              },
+            };
+            break;
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "EADDRINUSE" && code !== "EACCES") throw error;
+          }
+        }
+        if (!acquired)
+          throw new ControlError(
+            "host-port-taken",
+            `no free host port near ${requested.containerPort}`,
+          );
+        result = await add(
+          { direction: "local", ...acquired.binding },
+          "dynamic",
+          acquired,
+        );
+      }
+      return { hostPort: result.entry.hostPort, probe: result.probe };
+    });
+  };
+
+  const unbind: PortBindBroker["unbind"] = (key) => {
+    const requested = { ...key };
+    return mutate(async () => {
+      const entry = [...managed.values()].find(
+        (entry) =>
+          entry.direction === "local" &&
+          ((requested.containerPort !== undefined &&
+            entry.containerPort === requested.containerPort) ||
+            (requested.hostPort !== undefined &&
+              entry.hostPort === requested.hostPort)),
+      );
+      if (!entry)
         throw new ControlError(
           "no-such-binding",
           "no binding matches that key",
         );
-      }
-      const remaining = snapshot().filter(
-        (binding) => binding.containerPort !== entry.binding.containerPort,
-      );
-      await persist({ bindings: remaining });
-      await closeBinding(entry);
-      open.delete(entry.binding.containerPort);
+      await remove(entry);
     });
+  };
 
-  const forward: PortBindBroker["forward"] = (req) =>
-    mutate(async () => {
-      if (reserved.has(req.containerPort)) {
-        throw new ControlError(
-          "container-port-taken",
-          `container port ${req.containerPort} is used by nas itself`,
-        );
-      }
-      const existing = opts.gateway
-        .forwards()
-        .find((entry) => entry.containerPort === req.containerPort);
-      if (existing) {
-        if (existing.hostPort !== req.hostPort) {
-          throw new ControlError(
-            "binding-conflict",
-            `container port ${req.containerPort} already forwards to host port ${existing.hostPort}`,
-          );
-        }
-        return {
-          containerPort: existing.containerPort,
-          hostPort: existing.hostPort,
-          hostProbe: await probeHostPort(existing.hostPort),
-        };
-      }
+  const forward: PortBindBroker["forward"] = async (req) => {
+    const result = await addPortForward(
+      { direction: "remote", ...req },
+      "dynamic",
+    );
+    return {
+      containerPort: result.entry.containerPort,
+      hostPort: result.entry.hostPort,
+      hostProbe: result.probe === "ok" ? "ok" : "no-answer",
+    };
+  };
 
-      try {
-        await opts.gateway.forward(req.containerPort, req.hostPort);
-      } catch (error) {
-        if (error instanceof RelayNotReadyError) {
-          throw new ControlError(
-            "relay-unavailable",
-            error.reason === "container-not-running"
-              ? "the container is not running"
-              : "the relay could not be started",
-          );
-        }
-        throw new ControlError(
-          "container-port-taken",
-          `container port ${req.containerPort} could not be opened: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-      try {
-        await persist({});
-      } catch (error) {
-        await opts.gateway.unforward(req.containerPort);
-        throw error;
-      }
-      return {
-        containerPort: req.containerPort,
-        hostPort: req.hostPort,
-        hostProbe: await probeHostPort(req.hostPort),
-      };
-    });
-
-  const unforward: PortBindBroker["unforward"] = (containerPort) =>
-    mutate(async () => {
-      const forwards = opts.gateway.forwards();
-      if (!forwards.some((entry) => entry.containerPort === containerPort)) {
-        throw new ControlError(
-          "no-such-binding",
-          `container port ${containerPort} is not forwarded`,
-        );
-      }
-      await persist({
-        forwards: forwards.filter(
-          (entry) => entry.containerPort !== containerPort,
-        ),
-      });
-      await opts.gateway.unforward(containerPort);
-    });
+  const unforward: PortBindBroker["unforward"] = async (containerPort) => {
+    await removePortForward({ direction: "remote", containerPort });
+  };
 
   const watchState = (
     ensured: Awaited<ReturnType<RelayGateway["watchListeners"]>>,
@@ -468,7 +646,15 @@ export async function startPortBindBroker(opts: {
         .filter(
           (listener) =>
             !open.has(listener.containerPort) &&
-            !reserved.has(listener.containerPort),
+            !reserved.has(listener.containerPort) &&
+            ![...managed.values()].some(
+              (entry) =>
+                entry.direction === "remote" &&
+                entry.containerPort === listener.containerPort &&
+                (entry.state === "active" ||
+                  entry.state === "pending" ||
+                  entry.owners.includes("internal")),
+            ),
         )
         .map((listener) => ({
           ...listener,
@@ -532,12 +718,15 @@ export async function startPortBindBroker(opts: {
 
   return {
     controlSocketPath: opts.controlSocketPath,
+    listPortForwards,
+    addPortForward,
+    removePortForward,
     bind,
     unbind,
     listBindings: snapshot,
     forward,
     unforward,
-    listForwards: () => opts.gateway.forwards(),
+    listForwards: () => projectPortForwards(listPortForwards()).forwards,
     candidates,
     close: async () => {
       closing = true;
@@ -546,6 +735,7 @@ export async function startPortBindBroker(opts: {
       await mutationTail;
       for (const entry of open.values()) await closeBinding(entry);
       open.clear();
+      managed.clear();
       const controlClosed = new Promise<void>((resolve, reject) => {
         control.close((error) => (error ? reject(error) : resolve()));
       });
