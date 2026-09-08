@@ -1,6 +1,6 @@
 # 双方向のポート転送を統一する
 
-Status: Draft — user review pending
+Status: Approved — 2026-09-08
 
 Date: 2026-09-08
 
@@ -12,10 +12,11 @@ Date: 2026-09-08
 説明順は利用時の動作、設定と操作、互換性、通信経路、失敗時の扱い、検証とする。
 詳細な関数分割とコミット順序は、承認後の実装計画で扱う。
 
-現状、`network.proxy.forwardPorts` は container → host の同番号の転送を
-起動時に作る。host → container は `nas network bind` / `unbind` と UI で
-実行中に操作できる。ユーザーは、両方向で config と on-demand の両方を
-利用できる形への統一を指定した。
+`network.proxy.forwardPorts` は container → host の同番号の転送を起動時に作る。
+host → container は `nas network bind` / `unbind` と UI で実行中に操作できる。
+実装計画時点では container → host の `forward` / `unforward` も存在するが、
+config 由来の転送はその動的管理に含まれない。ユーザーは、両方向で config と
+on-demand の両方を利用できる形への統一を指定した。
 
 ## 利用時の動作
 
@@ -109,6 +110,8 @@ UI の Ports パネルに `Local (host → container)` / `Remote (container → 
 host → container のみホストブラウザで開くリンクを表示する。
 現在のコンテナ内 listener 検出は host → container の追加候補に用いる。
 host 側のサービス自動検出は追加しない。
+既存の `forward` / `unforward` と `forward SESSION` のホストポート候補表示は
+互換入口として維持し、新しい UI にホスト自動検出を追加する作業は含めない。
 
 ## 既存設定と内部転送
 
