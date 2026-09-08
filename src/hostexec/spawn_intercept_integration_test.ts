@@ -8,6 +8,8 @@ import {
 
 const artifacts = await resolveGatewayTestArtifacts();
 const python = Bun.which("python3");
+const echo = Bun.which("echo");
+const cat = Bun.which("cat");
 const available = Boolean(
   python &&
     artifacts.clientPath &&
@@ -83,7 +85,7 @@ finally:
 
 for (const mode of ["chdir", "fchdir"]) {
   for (const interceptedLocation of ["parent", "child"]) {
-    test.skipIf(!available || !chdirActionsAvailable)(
+    test.skipIf(!available || !chdirActionsAvailable || !echo)(
       `posix_spawnp: ${mode} selects the child cwd executable (${interceptedLocation} intercepted)`,
       async () => {
         const harness = await startGatewayTestHarness({
@@ -91,7 +93,7 @@ for (const mode of ["chdir", "fchdir"]) {
           decide: (request) => ({
             type: "start",
             spec: {
-              argv0: "/bin/echo",
+              argv0: echo!,
               args: ["host"],
               cwd: request.cwd,
               env: {},
@@ -243,7 +245,7 @@ test.skipIf(!available)(
 );
 
 for (const mode of ["execvp", "execvpe", "posix_spawnp"]) {
-  test.skipIf(!available)(
+  test.skipIf(!available || !echo)(
     `installed hostexec: ${mode} resolves the first PATH executable before interception`,
     async () => {
       const harness = await startGatewayTestHarness({
@@ -251,7 +253,7 @@ for (const mode of ["execvp", "execvpe", "posix_spawnp"]) {
         decide: (request) => ({
           type: "start",
           spec: {
-            argv0: "/bin/echo",
+            argv0: echo!,
             args: ["host"],
             cwd: request.cwd,
             env: {},
@@ -297,14 +299,14 @@ for (const mode of ["execvp", "execvpe", "posix_spawnp"]) {
   );
 }
 
-test.skipIf(!available)(
+test.skipIf(!available || !cat)(
   "installed hostexec: spawned host command receives the file-action stdin",
   async () => {
     const harness = await startGatewayTestHarness({
       artifacts,
       decide: (request) => ({
         type: "start",
-        spec: { argv0: "/bin/cat", args: [], cwd: request.cwd, env: {} },
+        spec: { argv0: cat!, args: [], cwd: request.cwd, env: {} },
       }),
     });
     try {
@@ -394,7 +396,7 @@ test.skipIf(!available)(
 );
 
 for (const decision of ["fallback", "start", "error"] as const) {
-  test.skipIf(!available)(
+  test.skipIf(!available || (decision === "start" && !echo))(
     `installed hostexec: posix_spawn ${decision} preserves spawn state and denial`,
     async () => {
       const harness = await startGatewayTestHarness({
@@ -404,7 +406,7 @@ for (const decision of ["fallback", "start", "error"] as const) {
             ? {
                 type: "start",
                 spec: {
-                  argv0: "/bin/echo",
+                  argv0: echo!,
                   args: ["host"],
                   cwd: request.cwd,
                   env: {},
