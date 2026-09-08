@@ -174,6 +174,22 @@ test("observability + ports: claude => env endpoint port matches receiver port a
       owners: ["internal"],
     });
 
+    profile.network.remoteForwards = [
+      { hostPort: receiverPort, containerPort: receiverPort },
+    ];
+    expect(
+      planPortBind({
+        ...stageInput,
+        container: containerOut,
+        observability,
+      }).initialForwards,
+    ).toContainEqual({
+      direction: "remote",
+      hostPort: receiverPort,
+      containerPort: receiverPort,
+      owners: ["config", "internal"],
+    });
+
     return receiverPort;
   });
 

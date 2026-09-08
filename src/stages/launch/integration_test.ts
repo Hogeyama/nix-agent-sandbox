@@ -21,6 +21,7 @@ import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import {
   chmod,
+  copyFile,
   mkdir,
   readdir,
   readFile,
@@ -29,14 +30,27 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { createServer, type Server, type Socket } from "node:net";
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
 import { shellEscape } from "../../dtach/client.ts";
+import { startPortBindBroker } from "../../network/port_bind_broker.ts";
+import {
+  brokerSocketPath,
+  relayScriptPath,
+  relaySocketPath,
+  resolvePortsRuntimePaths,
+} from "../../network/port_bind_registry.ts";
+import { startRelayGateway } from "../../network/port_bind_relay.ts";
 import { DockerServiceLive } from "../../services/docker.ts";
 import { FsServiceLive } from "../../services/fs.ts";
 import { DockerBuildServiceLive } from "../../stages/docker_build.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "../docker_build.ts";
 import { encodeMaskSecrets } from "../maskfs/secrets_frame.ts";
+import {
+  CONTAINER_RELAY_SCRIPT,
+  CONTAINER_RELAY_SOCKET,
+} from "../port_bind/stage.ts";
 
 const IMAGE_NAME = "nas-sandbox";
 
@@ -563,6 +577,147 @@ async function dockerRun(
     new Response(proc.stderr).text(),
   ]);
   return { code, stdout, stderr };
+}
+
+async function listen(server: Server): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve((server.address() as { port: number }).port);
+    });
+  });
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function runConfiguredRemoteSession(
+  options: { conflict?: boolean } = {},
+): Promise<{
+  code: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const workDir = await makeTempDir("nas-initial-forward-");
+  const paths = await resolvePortsRuntimePaths(workDir);
+  const sessionId = `session-${crypto.randomUUID()}`;
+  const socketPath = relaySocketPath(paths, sessionId);
+  const scriptPath = relayScriptPath(paths, sessionId);
+  const containerPort = options.conflict ? 23_456 : 15_432;
+  const hostSockets = new Set<Socket>();
+  const hostEcho = createServer({ allowHalfOpen: true }, (socket) => {
+    hostSockets.add(socket);
+    socket.once("close", () => hostSockets.delete(socket));
+    let request = Buffer.alloc(0);
+    socket.on("data", (chunk: Buffer) => {
+      request = Buffer.concat([request, chunk]);
+      const newline = request.indexOf(0x0a);
+      if (newline !== -1) {
+        socket.end(
+          Buffer.concat([Buffer.from("echo:"), request.subarray(0, newline)]),
+        );
+      }
+    });
+  });
+  let gateway: Awaited<ReturnType<typeof startRelayGateway>> | undefined;
+  let broker: Awaited<ReturnType<typeof startPortBindBroker>> | undefined;
+
+  try {
+    const hostPort = await listen(hostEcho);
+    await mkdir(path.dirname(scriptPath), { recursive: true });
+    await copyFile(
+      new URL("../../docker/embed/port-relay.mjs", import.meta.url),
+      scriptPath,
+    );
+    gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () =>
+        gateway?.isRelayConnected() ? "ready" : "unreachable",
+      onRelayConnected: () => broker?.onRelayConnected(),
+      currentForwards: () =>
+        broker
+          ?.listPortForwards()
+          .filter((entry) => entry.direction === "remote") ?? [],
+      onForwardState: (port, state, error) => {
+        broker?.onForwardState(port, state, error);
+      },
+    });
+    broker = await startPortBindBroker({
+      controlSocketPath: brokerSocketPath(paths, sessionId),
+      gateway,
+      persist: async () => {},
+    });
+    await broker.prepareInitial([
+      {
+        direction: "remote",
+        hostPort,
+        containerPort,
+        owners: ["config"],
+      },
+    ]);
+
+    const extraArgs = [
+      "--mount",
+      `type=bind,src=${socketPath},dst=${CONTAINER_RELAY_SOCKET},readonly`,
+      "--mount",
+      `type=bind,src=${scriptPath},dst=${CONTAINER_RELAY_SCRIPT},readonly`,
+    ];
+    if (options.conflict) {
+      const wrapperPath = path.join(workDir, "conflict-entrypoint.sh");
+      await writeFile(
+        wrapperPath,
+        `#!/bin/bash
+/usr/local/bin/bun -e 'Bun.listen({ hostname: "127.0.0.1", port: Number(process.argv[1]), socket: { data() {} } }); await new Promise(() => {});' "$NAS_TEST_CONFLICT_PORT" &
+for _ in $(seq 1 200); do
+  if echo >/dev/tcp/127.0.0.1/"$NAS_TEST_CONFLICT_PORT" 2>/dev/null; then break; fi
+  sleep 0.01
+done
+exec /entrypoint.sh "$@"
+`,
+      );
+      await chmod(wrapperPath, 0o755);
+      extraArgs.push(
+        "--mount",
+        `type=bind,src=${wrapperPath},dst=/nas-test-entrypoint.sh,readonly`,
+        "--entrypoint",
+        "/nas-test-entrypoint.sh",
+      );
+    }
+
+    const result = await dockerRun(
+      options.conflict
+        ? ["/bin/sh", "-c", 'printf ran > "$WORKSPACE/agent-ran"']
+        : [
+            "/usr/local/bin/bun",
+            "-e",
+            'import { connect } from "node:net"; const socket = connect({ host: "127.0.0.1", port: Number(process.argv[1]) }); const chunks = []; socket.once("connect", () => socket.write("first-connection\\n")); socket.on("data", (chunk) => chunks.push(chunk)); socket.on("end", () => process.stdout.write(Buffer.concat(chunks))); socket.on("error", () => process.exit(1));',
+            String(containerPort),
+          ],
+      {
+        workDir,
+        envVars: {
+          NAS_PORT_RELAY_STARTUP: "1",
+          NAS_PORT_RELAY_SOCKET: CONTAINER_RELAY_SOCKET,
+          ...(options.conflict
+            ? { NAS_TEST_CONFLICT_PORT: String(containerPort) }
+            : {}),
+        },
+        extraArgs,
+      },
+    );
+    return result;
+  } finally {
+    for (const socket of hostSockets) socket.destroy();
+    await broker?.close().catch(() => {});
+    await gateway?.close().catch(() => {});
+    await closeServer(hostEcho).catch(() => {});
+    if (options.conflict) {
+      expect(existsSync(path.join(workDir, "agent-ran"))).toBe(false);
+    }
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 // ============================================================
@@ -1439,4 +1594,30 @@ test.skipIf(!canRunImage)(
     expect(result.code).toEqual(0);
     expect(result.stdout.trim()).toEqual("not-mounted");
   },
+);
+
+test.skipIf(!canRunImage || !canBindMount)(
+  "Integration: configured Remote forwarding serves the agent's first connection in every new session",
+  async () => {
+    const first = await runConfiguredRemoteSession();
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain("echo:first-connection");
+
+    const next = await runConfiguredRemoteSession();
+    expect(next.code).toBe(0);
+    expect(next.stdout).toContain("echo:first-connection");
+  },
+  120_000,
+);
+
+test.skipIf(!canRunImage || !canBindMount)(
+  "Integration: an occupied initial Remote listener prevents agent side effects",
+  async () => {
+    const result = await runConfiguredRemoteSession({ conflict: true });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Initial port forwarding failed or timed out",
+    );
+  },
+  120_000,
 );

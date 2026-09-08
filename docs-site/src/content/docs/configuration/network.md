@@ -69,6 +69,32 @@ network {
 
 review の要求は[UI で内容と範囲を確認して許可・拒否](/nix-agent-sandbox/work/approvals/)します。`network.pendingTimeoutSeconds` の既定は300秒で、時間切れは拒否です。deny の要求は Pending には出ません。
 
+## localhost のポート転送
+
+プロファイルには、新しいセッションで最初から必要な TCP 転送を設定できます。どちらも `127.0.0.1` だけを使い、`hostPort` と `containerPort` は 1〜65535 の整数を明示します。
+
+| 設定 | 待受 | 接続先 | 用途 |
+| --- | --- | --- | --- |
+| `localForwards` | ホストの `hostPort` | コンテナの `containerPort` | 開発サーバーをホストで確認する |
+| `remoteForwards` | コンテナの `containerPort` | ホストの `hostPort` | ホストの DB・API をコンテナから使う |
+
+```pkl
+network {
+  localForwards {
+    new PortForwardConfig { hostPort = 8080; containerPort = 3000 }
+  }
+  remoteForwards {
+    new PortForwardConfig { hostPort = 5432; containerPort = 15432 }
+  }
+}
+```
+
+設定は新しいセッションの初期値です。設定由来の転送も実行中に UI または `nas network unbind` で解除できます。解除は現在のセッションだけに適用され、リレーが再接続しても戻りません。プロファイルを変えなければ、次の新しいセッションでは再び適用されます。
+
+旧 `network.proxy.forwardPorts` も同じ番号の Remote 転送として引き続き動きますが、非空の場合は移行の警告が出ます。リポジトリの `docs/migration/port-forwarding.md` にある置き換え手順を参照してください。
+
+作業中の追加・解除は、方向に応じて[開発サーバーの確認](/nix-agent-sandbox/work/preview/)または[ホストの DB・API への接続](/nix-agent-sandbox/configuration/host-services/)を参照してください。
+
 ### ルールの選択条件と必須条件
 
 `match` はどのルールが担当するかを選びます。必ず満たしてほしい本文の形や値は `expect` に置きます。match にだけ置くと、外れた要求が後続ルールや fallback で許可される場合があります。

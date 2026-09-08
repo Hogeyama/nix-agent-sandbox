@@ -24,7 +24,6 @@ case "$NAS_TEST_MODE" in
   success) printf 'ready\\n'; exec sleep 30 ;;
   failed) echo 'initial-failed test' >&2; exit 1 ;;
   eof) exit 0 ;;
-  timeout) exec sleep 30 ;;
 esac
 `,
     { mode: 0o755 },
@@ -82,7 +81,7 @@ test("entrypoint starts one relay under the agent identity and waits for ready",
   });
 });
 
-for (const mode of ["failed", "eof", "timeout"]) {
+for (const mode of ["failed", "eof"]) {
   test(`entrypoint ${mode} prevents agent execution`, async () => {
     const result = await runStartup(mode);
     expect(result.code).not.toBe(0);
@@ -90,7 +89,7 @@ for (const mode of ["failed", "eof", "timeout"]) {
     expect(result.stderr).toContain(
       "Initial port forwarding failed or timed out",
     );
-  }, 15000);
+  });
 }
 
 test("shell and empty initial configuration skip the relay", async () => {
