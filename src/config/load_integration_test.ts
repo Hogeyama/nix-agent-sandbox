@@ -1148,9 +1148,61 @@ test.skipIf(!hasPkl)(
     );
   },
 );
-for (const referenced of [false, true]) {
+for (const { name, reference, referenced } of [
+  { name: "unreferenced", reference: "", referenced: false },
+  {
+    name: "amends",
+    reference: 'amends "modulepath:/global.pkl"',
+    referenced: true,
+  },
+  {
+    name: "import",
+    reference: 'import "modulepath:/global.pkl"',
+    referenced: true,
+  },
+  {
+    name: "comment between import and URI",
+    reference: 'import /* module */ "modulepath:/global.pkl"',
+    referenced: true,
+  },
+  {
+    name: "raw import",
+    reference: 'import #"modulepath:/global.pkl"#',
+    referenced: true,
+  },
+  {
+    name: "block comment",
+    reference: '/*\nimport "modulepath:/global.pkl"\n*/',
+    referenced: false,
+  },
+  {
+    name: "line comment",
+    reference: '// import "modulepath:/global.pkl"',
+    referenced: false,
+  },
+  {
+    name: "normal string",
+    reference: String.raw`local example = "import \"modulepath:/global.pkl\""`,
+    referenced: false,
+  },
+  {
+    name: "raw string",
+    reference: 'local example = #"import "modulepath:/global.pkl""#',
+    referenced: false,
+  },
+  {
+    name: "multiline string",
+    reference: 'local example = """\nimport "modulepath:/global.pkl"\n"""',
+    referenced: false,
+  },
+  {
+    name: "raw multiline string",
+    reference: 'local example = ##"""\nimport "modulepath:/global.pkl"\n"""##',
+    referenced: false,
+  },
+]) {
   test.skipIf(!hasPkl)(
-    `loadConfig: retired nix in global is inspected only when referenced (${referenced})`,
+    `loadConfig: retired nix in global is inspected only when referenced (${name})`,
     async () => {
       const root = await mkdtemp(
         path.join(tmpdir(), "nas-retired-nix-global-"),
@@ -1170,9 +1222,9 @@ for (const referenced of [false, true]) {
           'amends "Schema.pkl"\nprofiles { ["dev"] { nix { extraPackages {} } } }',
         );
         await withNasConfig(
-          referenced
-            ? 'amends "modulepath:/global.pkl"'
-            : 'amends "Schema.pkl"\nprofiles { ["dev"] { agent = "claude" } }',
+          name === "amends"
+            ? reference
+            : `amends "Schema.pkl"\n${reference}\nprofiles { ["dev"] { agent = "claude" } }`,
           async (dir) => {
             if (referenced)
               await expect(loadConfig(dir)).rejects.toThrow(

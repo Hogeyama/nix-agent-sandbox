@@ -13,8 +13,37 @@
  * ファイルの残り全部が伏せられ、この検査が黙って無効になる。
  */
 export function maskNonCode(source: string): string {
+  return scanSource(source);
+}
+
+/** Module URI literals following executable amends/import tokens. */
+export function moduleReferences(source: string): string[] {
+  const strings: Array<{ start: number; content: string }> = [];
+  const code = scanSource(source, (start, content) => {
+    strings.push({ start, content });
+  });
+  return strings.flatMap(({ start, content }) =>
+    /(?:^|[^A-Za-z0-9_$])(?:amends|import)\s*(?:\(\s*)?$/.test(
+      code.slice(0, start),
+    )
+      ? [content.trim()]
+      : [],
+  );
+}
+
+function scanSource(
+  source: string,
+  onString?: (start: number, content: string) => void,
+): string {
   type Frame =
-    | { readonly kind: "string"; readonly pounds: number; multiline: boolean }
+    | {
+        readonly kind: "string";
+        readonly pounds: number;
+        readonly multiline: boolean;
+        readonly start: number;
+        readonly contentStart: number;
+        interpolated: boolean;
+      }
     | { kind: "interpolation"; depth: number };
 
   const out: string[] = [];
@@ -25,9 +54,8 @@ export function maskNonCode(source: string): string {
     at += length;
   };
   const hide = (length: number): void => {
-    for (const char of source.slice(at, at + length)) {
-      out.push(char === "\n" ? "\n" : " ");
-    }
+    // Preserve UTF-16 offsets as well as lines for the retained URI literals.
+    out.push(source.slice(at, at + length).replace(/[^\n]/g, " "));
     at += length;
   };
 
@@ -51,6 +79,9 @@ export function maskNonCode(source: string): string {
           kind: "string",
           pounds: opener.pounds,
           multiline: opener.multiline,
+          start: at,
+          contentStart: at + opener.length,
+          interpolated: false,
         });
         hide(opener.length);
         continue;
@@ -75,6 +106,7 @@ export function maskNonCode(source: string): string {
     const escapePrefix = `\\${"#".repeat(top.pounds)}`;
     if (source.startsWith(escapePrefix, at)) {
       if (source[at + escapePrefix.length] === "(") {
+        top.interpolated = true;
         stack.push({ kind: "interpolation", depth: 0 });
         hide(escapePrefix.length + 1);
         continue;
@@ -84,6 +116,9 @@ export function maskNonCode(source: string): string {
     }
     const closer = `${top.multiline ? '"""' : '"'}${"#".repeat(top.pounds)}`;
     if (source.startsWith(closer, at)) {
+      if (!top.interpolated) {
+        onString?.(top.start, source.slice(top.contentStart, at));
+      }
       stack.pop();
       hide(closer.length);
       continue;

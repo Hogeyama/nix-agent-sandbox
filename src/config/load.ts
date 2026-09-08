@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
+import { moduleReferences } from "../lib/pkl_source.ts";
 import { detectLegacyIdentifiers } from "../network/authz/validate.ts";
 import { initConfig, resolveSchemaAsset } from "./init.ts";
 import {
@@ -97,8 +98,6 @@ async function reportLegacyIdentifiers(configPath: string): Promise<void> {
   throw new Error(diagnostics.join("\n\n"));
 }
 
-const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
-
 /**
  * config.pkl が取り込むグローバル設定を走査する。
  *
@@ -109,7 +108,12 @@ const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
 async function legacyIdentifiersInGlobal(
   configSource: string,
 ): Promise<readonly string[]> {
-  if (!GLOBAL_MODULE_REFERENCE.test(configSource)) return [];
+  if (
+    !moduleReferences(configSource).some((uri) =>
+      /(?:^|\/)global\.pkl$/.test(uri),
+    )
+  )
+    return [];
 
   const globalPath = path.join(getGlobalConfigDir(), "global.pkl");
   let source: string;
