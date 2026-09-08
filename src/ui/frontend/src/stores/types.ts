@@ -8,6 +8,8 @@
  * representations via `?? null`.
  */
 
+import type { ManagedForward } from "../../../../network/port_forward_model";
+
 // SSE-received payload subset describing a container.
 export type ContainerInfoLike = {
   name: string;
@@ -173,6 +175,8 @@ export type PortBindSessionLike = {
   bindings: PortBindingLike[];
   // Absent from entries written before forwards existed.
   forwards?: PortForwardLike[];
+  // Canonical common projection. Absent only on legacy SSE snapshots.
+  portForwards?: ManagedForward[];
 };
 
 // SSE-received payload subset describing one audit log entry, mirroring

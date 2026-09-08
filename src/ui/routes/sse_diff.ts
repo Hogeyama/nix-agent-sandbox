@@ -28,7 +28,7 @@ import type { NasContainerInfo } from "../../domain/container.ts";
 import type { HostExecPendingEntry } from "../../hostexec/types.ts";
 import {
   type PortBindSessionEntry,
-  sessionForwards,
+  sessionPortForwards,
 } from "../../network/port_bind_protocol.ts";
 import type { PendingEntry } from "../../network/protocol.ts";
 import type { SessionsData, TerminalSessionInfo } from "../data.ts";
@@ -157,27 +157,18 @@ export function diffSnapshots(
     events.push({ event: "containers", data: { items: next.containers } });
   }
 
+  const portBindings = next.portBindings.map((session) => ({
+    ...session,
+    portForwards: sessionPortForwards(session),
+  }));
   const portBindingsJson = JSON.stringify(
-    next.portBindings.flatMap((session) => [
-      ...session.bindings.map((binding) => [
-        session.sessionId,
-        "in",
-        binding.containerPort,
-        binding.hostPort,
-      ]),
-      ...sessionForwards(session).map((forward) => [
-        session.sessionId,
-        "out",
-        forward.containerPort,
-        forward.hostPort,
-      ]),
-    ]),
+    portBindings.map((session) => [session.sessionId, session.portForwards]),
   );
   const portBindingsChanged = portBindingsJson !== prev.portBindings;
   if (portBindingsChanged) {
     events.push({
       event: "port-bindings",
-      data: { items: next.portBindings },
+      data: { items: portBindings },
     });
   }
 

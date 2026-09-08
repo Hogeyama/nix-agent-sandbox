@@ -1127,22 +1127,60 @@ body::after {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--line-soft);
 }
-.port-binding-list {
+.port-forward-list {
   padding: 0 14px;
 }
-.port-binding-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
+.port-forward-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
   font-size: 11px;
   color: var(--muted);
 }
-.port-binding-row a {
+.port-forward-row:last-child {
+  border-bottom: 0;
+}
+.port-forward-row-head,
+.port-forward-row-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.port-forward-row-head > :first-child {
+  color: var(--cream);
+  font-weight: 600;
+}
+.port-forward-state {
+  min-width: 0;
+  color: var(--muted-2);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.port-forward-state.is-unavailable,
+.port-forward-state.is-failed {
+  color: var(--rose);
+}
+.port-forward-state.is-pending {
   color: var(--amber-hi);
 }
-.port-binding-row button,
-.port-binding-form button {
+.port-forward-route {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  padding: 6px 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.port-forward-route a {
+  color: var(--amber-hi);
+}
+.port-forward-row-foot {
+  color: var(--muted-2);
+  font-size: 10px;
+}
+.port-forward-row button,
+.port-forward-form button {
   margin-left: auto;
   border: 1px solid var(--line);
   background: transparent;
@@ -1150,8 +1188,8 @@ body::after {
   font: inherit;
   cursor: pointer;
 }
-.port-binding-row button:disabled,
-.port-binding-form button:disabled {
+.port-forward-row button:disabled,
+.port-forward-form button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -1198,19 +1236,47 @@ body::after {
   font-size: 10px;
 }
 
-.port-binding-form {
-  display: flex;
-  gap: 8px;
+.port-forward-form {
+  display: grid;
+  gap: 7px;
   padding: 8px 14px 0;
 }
-.port-binding-form input {
+.port-forward-form label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted-2);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.port-forward-form select,
+.port-forward-form input {
   min-width: 0;
   width: 100%;
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--cream);
   font: inherit;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
   padding: 5px 7px;
+}
+.port-forward-endpoints {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 7px;
+}
+.port-forward-form > button {
+  justify-self: end;
+  padding: 4px 8px;
+}
+.port-forward-notice {
+  margin: 8px 14px 0;
+  color: var(--muted-2);
+  font-size: 10px;
+  overflow-wrap: anywhere;
 }
 .port-binding-error {
   margin: 8px 14px 0;

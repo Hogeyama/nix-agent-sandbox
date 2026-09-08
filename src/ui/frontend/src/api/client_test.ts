@@ -16,9 +16,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   ackSessionTurn,
+  addPortForward,
   approveHostExec,
   approveNetwork,
-  bindPort,
   denyHostExec,
   denyNetwork,
   fetchPricingSnapshot,
@@ -29,11 +29,11 @@ import {
   getRequestBody,
   HttpError,
   openDocument,
+  removePortForward,
   renameSession,
   request,
   startShell,
   stopContainer,
-  unbindPort,
 } from "./client";
 
 type FetchFn = typeof globalThis.fetch;
@@ -497,37 +497,112 @@ describe("denyNetwork", () => {
   });
 });
 
-describe("port bindings", () => {
-  test("bindPort requests an automatically selected host port", async () => {
-    const fetchMock = installFetch(async () =>
-      jsonResponse({ hostPort: 49152, probe: "ok" }),
-    );
+describe("port forwards", () => {
+  test("addPortForward posts the common direction and endpoint body", async () => {
+    const response = {
+      entry: {
+        direction: "remote" as const,
+        hostPort: 5432,
+        containerPort: 15432,
+        owners: ["dynamic" as const],
+        createdAt: "2026-09-08T00:00:00Z",
+        state: "active" as const,
+      },
+      probe: "no-answer" as const,
+    };
+    const fetchMock = installFetch(async () => jsonResponse(response));
 
-    const result = await bindPort("sess-1", 3000);
+    const result = await addPortForward("sess-1", {
+      direction: "remote",
+      hostPort: 5432,
+      containerPort: 15432,
+    });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/api/network/bind");
+    expect(url).toBe("/api/network/port-forwards");
     expect(init.method).toBe("POST");
     expect(parseBody(init)).toEqual({
       sessionId: "sess-1",
-      containerPort: 3000,
-      hostPort: null,
+      direction: "remote",
+      hostPort: 5432,
+      containerPort: 15432,
     });
-    expect(result).toEqual({ hostPort: 49152, probe: "ok" });
+    expect(result).toEqual(response);
   });
 
-  test("unbindPort identifies the binding by session and container port", async () => {
-    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+  test("addPortForward keeps a missing local host port as null", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        entry: {
+          direction: "local",
+          hostPort: 49152,
+          containerPort: 3000,
+          owners: ["dynamic"],
+          createdAt: "2026-09-08T00:00:00Z",
+          state: "active",
+        },
+        probe: "ok",
+      }),
+    );
 
-    await unbindPort("sess-1", 3000);
+    await addPortForward("sess-1", {
+      direction: "local",
+      hostPort: null,
+      containerPort: 3000,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(parseBody(init)).toEqual({
+      sessionId: "sess-1",
+      direction: "local",
+      hostPort: null,
+      containerPort: 3000,
+    });
+  });
+
+  test("removePortForward posts the common selector and returns teardown facts", async () => {
+    const response = {
+      removed: true,
+      retainedInternal: true,
+      listenerClosed: false,
+    };
+    const fetchMock = installFetch(async () => jsonResponse(response));
+
+    const result = await removePortForward("sess-1", {
+      direction: "remote",
+      containerPort: 15432,
+    });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/api/network/unbind");
+    expect(url).toBe("/api/network/port-forwards/remove");
     expect(init.method).toBe("POST");
     expect(parseBody(init)).toEqual({
       sessionId: "sess-1",
-      containerPort: 3000,
+      direction: "remote",
+      containerPort: 15432,
     });
+    expect(result).toEqual(response);
+  });
+
+  test("common endpoint errors remain HttpError values", async () => {
+    installFetch(
+      async () =>
+        new Response(JSON.stringify({ error: "relay unavailable" }), {
+          status: 409,
+          statusText: "Conflict",
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    const error = await addPortForward("sess-1", {
+      direction: "remote",
+      hostPort: 5432,
+      containerPort: 15432,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).status).toBe(409);
+    expect((error as HttpError).message).toBe("relay unavailable");
   });
 });
 
