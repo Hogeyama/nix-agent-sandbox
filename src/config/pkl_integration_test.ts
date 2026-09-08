@@ -531,3 +531,30 @@ profiles {
     }
   },
 );
+
+for (const enabled of [false, true]) {
+  test.skipIf(!hasPkl)(
+    `pkl: direnv defaults off and can enable without Nix (${enabled})`,
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "nas-pkl-direnv-"));
+      try {
+        await setupNasDir(
+          root,
+          `amends "Schema.pkl"
+profiles {
+  ["dev"] {
+    agent = "claude"
+    nix { enable = false }
+    ${enabled ? "direnv { enable = true }" : ""}
+  }
+}`,
+        );
+        const config = await loadConfig({ startDir: root });
+        expect(config.profiles.dev.direnv).toEqual({ enable: enabled });
+        expect(config.profiles.dev.nix.enable).toBe(false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+}

@@ -4,7 +4,7 @@ set -euo pipefail
 # --shell モード: docker exec 経由で対話シェルを起動する際に使う。
 # PID 1 で実行される通常モードと異なり、初回のみ必要な初期化
 # (ユーザー作成、ローカルプロキシ起動、/etc/nix/nix.conf への追記) を
-# スキップしつつ、agent と同じ env/PATH/Nix 環境・非 root ユーザーで
+# スキップしつつ、agent と同じ env/PATH/direnv 環境・非 root ユーザーで
 # bash を起動する。
 NAS_SHELL_MODE=false
 if [ "${1:-}" = "--shell" ]; then
@@ -128,8 +128,8 @@ fi
 nas_measure_done "ca-cert" "$CA_CERT_START"
 
 # --- 環境変数 prefix/suffix 適用 ---
-# Nix devShell が同名の変数を上書きするため、ここでは eval せず
-# ファイルに保存し、各 exec パスで nix 環境 source 後に適用する。
+# direnv が同名の変数を上書きするため、ここでは eval せず
+# ファイルに保存し、共通ランチャーで direnv 適用後に一度だけ実行する。
 nas_measure_start ENV_OPS_START
 NAS_ENV_OPS_FILE=""
 if [ -n "${NAS_ENV_OPS:-}" ]; then
@@ -168,6 +168,8 @@ NAS_UID="${NAS_UID:-0}"
 NAS_GID="${NAS_GID:-0}"
 NAS_USER="${NAS_USER:-${USER:-nas}}"
 NAS_HOME="/home/${NAS_USER}"
+export HOME="$NAS_HOME"
+mkdir -p "$NAS_HOME"
 WORKSPACE="${WORKSPACE:?WORKSPACE must be set}"
 
 nas_measure_start USER_SETUP_START
@@ -186,7 +188,6 @@ if [ "$NAS_UID" != "0" ]; then
   sed -i "/^${NAS_USER}:/d" /etc/group
 
   # ホストユーザーに合わせた非 root ユーザーを作成
-  mkdir -p "$NAS_HOME"
   echo "${NAS_USER}:x:${NAS_UID}:${NAS_GID}:${NAS_USER}:${NAS_HOME}:/bin/bash" >>/etc/passwd
   echo "${NAS_USER}:x:${NAS_GID}:" >>/etc/group
   chown "${NAS_UID}:${NAS_GID}" "$NAS_HOME"
@@ -203,7 +204,6 @@ if [ "$NAS_UID" != "0" ]; then
     echo "trusted-users = root ${NAS_USER}" >>/etc/nix/nix.conf 2>/dev/null || true
   fi
 
-  export HOME="$NAS_HOME"
   export USER="$NAS_USER"
 
   # Nix 用に実際の HOME ディレクトリの所有権を設定
@@ -371,7 +371,7 @@ MASK_WRAPPER_BODY
   mv -f "$BASH_SYSTEM_WRAPPER_TMP" "$BASH_SYSTEM_PATH"
   rm -f "$BASH_WRAPPER_TMP"
 
-  # Nix devshell source may reset SHELL; apply this after sourcing it.
+  # The workspace RC may reset SHELL; apply this after direnv.
   if [ -z "$NAS_ENV_OPS_FILE" ]; then
     NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
     chmod 644 "$NAS_ENV_OPS_FILE"
@@ -386,159 +386,20 @@ fi
 export NAS_BASH_OVERRIDE NAS_REAL_BASH
 export PATH="${NAS_BASH_OVERRIDE}:${PATH}"
 
-# --shell モード: flake 再評価や nix develop/print-dev-env 経由の複雑な
-# 起動は避け、初回起動時に作られたキャッシュ env を source するだけにする。
-# エージェント用の経路は入出力を expr/exec で回しているため、そのまま bash -i
-# を流すと source 結果や set オプションとの相互作用で無言即死しうる。
-# シェルは会話的に使えればよいので最短経路にする。
-nas_measure_start SHELL_BOOTSTRAP_START
-if [ "$NAS_SHELL_MODE" = "true" ]; then
-  SHELL_PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE}:"
-  SHELL_CACHE_FILE=""
-  if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
-    SHELL_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
-    if [ -f "$WORKSPACE/flake.lock" ]; then
-      SHELL_FLAKE_HASH=$(cat "$WORKSPACE/flake.nix" "$WORKSPACE/flake.lock" | sha256sum | cut -d' ' -f1)
-    else
-      SHELL_FLAKE_HASH=$(sha256sum "$WORKSPACE/flake.nix" | cut -d' ' -f1)
-    fi
-    CANDIDATE="${SHELL_NIX_CACHE}/${SHELL_FLAKE_HASH}.env"
-    if [ -f "$CANDIDATE" ]; then
-      SHELL_CACHE_FILE="$CANDIDATE"
-    fi
-  fi
-  if [ -n "$SHELL_CACHE_FILE" ]; then
-    nas_debug "[nas] entrypoint shell bootstrap (cache=hit)"
-  else
-    nas_debug "[nas] entrypoint shell bootstrap (cache=miss)"
-  fi
-  if [ -n "$SHELL_CACHE_FILE" ]; then
-    SHELL_RC_FILE="$(mktemp "/tmp/nas-shell-rc-${NAS_UID}.XXXXXX")"
-    {
-      echo "source '$SHELL_CACHE_FILE' 2>/dev/null || true"
-      if [ -n "$NAS_ENV_OPS_FILE" ]; then
-        echo "[ -f '$NAS_ENV_OPS_FILE' ] && source '$NAS_ENV_OPS_FILE' || true"
-      fi
-      echo "export PATH=\"${SHELL_PATH_PREFIX}\$PATH\""
-      echo "[ -f ~/.bashrc ] && source ~/.bashrc"
-    } >"$SHELL_RC_FILE"
-    chown "${NAS_UID}:${NAS_GID}" "$SHELL_RC_FILE" 2>/dev/null || true
-    nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
-    exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" --noprofile --rcfile "$SHELL_RC_FILE" -i
-  else
-    [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
-    export PATH="${SHELL_PATH_PREFIX}$PATH"
-    nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
-    exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" -i
-  fi
+# Both launches load the approved workspace environment as the agent user.
+# Interactive startup may rewrite PATH in .bashrc, so restore wrapper priority
+# afterwards without applying the environment operations a second time.
+nas_measure_start LAUNCH_SETUP_START
+PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}"
+if [ "$NAS_SHELL_MODE" = true ]; then
+  SHELL_RC_FILE="$(mktemp /tmp/nas-shell-rc.XXXXXX)"
+  {
+    printf 'if [ -f %q ]; then source %q; fi\n' "$HOME/.bashrc" "$HOME/.bashrc"
+    printf 'export PATH=%q"$PATH"\n' "$PATH_PREFIX"
+  } > "$SHELL_RC_FILE"
+  chmod 644 "$SHELL_RC_FILE"
+  AGENT_COMMAND=("$NAS_REAL_BASH" --noprofile --rcfile "$SHELL_RC_FILE" -i)
 fi
-nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
-
-exec_agent_command() {
-  [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
-  if [ -n "$HOSTEXEC_PATH_PREFIX" ] || [ -n "${NAS_BASH_OVERRIDE:-}" ]; then
-    export PATH="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}$PATH"
-  fi
-  local first_cmd="${AGENT_COMMAND[0]:-}"
-  local arg_count=0
-  if [ ${#AGENT_COMMAND[@]} -gt 0 ]; then
-    arg_count=$((${#AGENT_COMMAND[@]} - 1))
-  fi
-  nas_debug "[nas] entrypoint exec-agent (cmd=${first_cmd:-none}, extra_args=${arg_count})"
-  exec_nas "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
-}
-
-# --- nix 統合 ---
-nas_measure_start NIX_INTEGRATION_START
-if [ "${NIX_ENABLED:-false}" = "true" ]; then
-  NIX_EXTRA_PACKAGES_LIST=()
-  if [ -n "${NIX_EXTRA_PACKAGES:-}" ]; then
-    while IFS= read -r pkg; do
-      [ -n "$pkg" ] && NIX_EXTRA_PACKAGES_LIST+=("$pkg")
-    done <<<"${NIX_EXTRA_PACKAGES}"
-  fi
-
-  # workaround for https://github.com/github/copilot-cli/issues/1161#issuecomment-3938706868:
-  # 配列をスペース区切りの文字列に変換
-  CMD_STR=$(printf '%q ' "${AGENT_COMMAND[@]}")
-  # --- devShell キャッシュ検索 (probe 前にキャッシュを確認) ---
-  # キャッシュヒット時は nix eval による devShell probe (~1s) をスキップする。
-  CACHE_FILE=""
-  NAS_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
-
-  if [ -f "$WORKSPACE/flake.nix" ]; then
-    if [ -f "$WORKSPACE/flake.lock" ]; then
-      FLAKE_HASH=$(cat "$WORKSPACE/flake.nix" "$WORKSPACE/flake.lock" | sha256sum | cut -d' ' -f1)
-    else
-      FLAKE_HASH=$(sha256sum "$WORKSPACE/flake.nix" | cut -d' ' -f1)
-    fi
-
-    CANDIDATE="${NAS_NIX_CACHE}/${FLAKE_HASH}.env"
-    PROFILE_LINK="${NAS_NIX_CACHE}/profile-${FLAKE_HASH}"
-
-    if [ -f "$CANDIDATE" ]; then
-      CACHE_FILE="$CANDIDATE"
-      nas_debug "[nas] nix-devshell-probe skipped (cache hit)"
-      nas_info "[nas] Using cached nix dev environment."
-    else
-      nas_measure_start DEV_SHELL_PROBE_START
-      SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
-      if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
-        nix eval --raw "${WORKSPACE}#devShells.${SYSTEM}.default.type" 2>/dev/null | grep -qx derivation; then
-        nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
-
-        mkdir -p "$NAS_NIX_CACHE"
-        nas_measure_start NIX_PRINT_DEV_ENV_START
-        nas_info "[nas] Caching nix dev environment via print-dev-env..."
-        if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
-          nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CANDIDATE}.tmp"; then
-          mv "${CANDIDATE}.tmp" "$CANDIDATE"
-          chmod 644 "$CANDIDATE"
-          CACHE_FILE="$CANDIDATE"
-          nas_info "[nas] Nix dev environment cached."
-          nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
-        else
-          nas_info "[nas] nix print-dev-env failed, falling back to nix develop..."
-          rm -f "${CANDIDATE}.tmp"
-          nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
-          if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-            nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-            exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-              nix develop "$WORKSPACE" --command \
-              "$NAS_REAL_BASH" -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-          else
-            nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-            exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-              "$NAS_REAL_BASH" -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-          fi
-        fi
-      else
-        nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
-        nas_info "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
-      fi
-    fi
-  fi
-
-  if [ -n "$CACHE_FILE" ]; then
-    if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-      nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-      exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-        "$NAS_REAL_BASH" -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-    else
-      nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-      exec_nas "${EXEC_PREFIX[@]}" \
-        "$NAS_REAL_BASH" -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-    fi
-  elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-    nas_info "[nas] flake.nix not found, entering nix shell (via host daemon)..."
-    nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-    exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-      "$NAS_REAL_BASH" -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-  else
-    nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-    exec_agent_command
-  fi
-else
-  nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-  exec_agent_command
-fi
+nas_measure_done "launch-setup" "$LAUNCH_SETUP_START"
+exec_nas "${EXEC_PREFIX[@]}" /usr/local/bin/nas-direnv-exec \
+  "$WORKSPACE" "$NAS_ENV_OPS_FILE" "$PATH_PREFIX" "${AGENT_COMMAND[@]}"

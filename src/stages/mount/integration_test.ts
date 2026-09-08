@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  mkdir,
   mkdtemp,
   realpath,
   rm,
@@ -30,7 +31,8 @@ import { planMount, resolveMountProbes } from "../mount.ts";
 const baseProfile: Profile = {
   agent: "claude",
   agentArgs: [],
-  nix: { enable: false, mountSocket: false, extraPackages: [] },
+  direnv: { enable: false },
+  nix: { enable: false, mountSocket: false },
   docker: { enable: false, shared: false },
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
@@ -322,3 +324,47 @@ test("MountStage: unknown agent type throws in resolveMountProbes", async () => 
     resolveMountProbes(hostEnv, profile, process.cwd(), null),
   ).rejects.toThrow("Unknown agent");
 });
+
+for (const custom of [false, true]) {
+  test(`mount probes discover existing native direnv data (custom XDG=${custom})`, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "nas-direnv-probe-"));
+    try {
+      const host = {
+        ...buildHostEnv(),
+        home: root,
+        env: new Map<string, string>(),
+      };
+      const dataHome = custom
+        ? path.join(root, "custom data")
+        : path.join(root, ".local/share");
+      if (custom) host.env.set("XDG_DATA_HOME", dataHome);
+      const dataDir = path.join(dataHome, "direnv");
+      const enabled = { ...baseProfile, direnv: { enable: true } };
+      expect(
+        (await resolveMountProbes(host, enabled, root, null)).direnvDataDir,
+      ).toBeNull();
+      expect(await Bun.file(dataDir).exists()).toBe(false);
+      await mkdir(dataDir, { recursive: true });
+      expect(
+        (await resolveMountProbes(host, enabled, root, null)).direnvDataDir,
+      ).toBe(dataDir);
+      expect(
+        (await resolveMountProbes(host, baseProfile, root, null)).direnvDataDir,
+      ).toBeNull();
+      await rm(dataDir, { recursive: true });
+      await writeFile(dataDir, "not a directory");
+      expect(
+        (await resolveMountProbes(host, enabled, root, null)).direnvDataDir,
+      ).toBeNull();
+      host.env.set("XDG_DATA_HOME", dataDir);
+      await expect(
+        resolveMountProbes(host, enabled, root, null),
+      ).rejects.toMatchObject({ code: "ENOTDIR" });
+      expect(
+        (await resolveMountProbes(host, baseProfile, root, null)).direnvDataDir,
+      ).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}

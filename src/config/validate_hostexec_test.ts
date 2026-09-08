@@ -34,6 +34,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agent: "claude",
     agentArgs: [],
     session: DEFAULT_SESSION_CONFIG,
+    direnv: { enable: false },
     nix: DEFAULT_NIX_CONFIG,
     docker: DEFAULT_DOCKER_CONFIG,
     gcloud: DEFAULT_GCLOUD_CONFIG,

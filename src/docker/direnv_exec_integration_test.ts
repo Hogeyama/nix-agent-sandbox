@@ -1,8 +1,19 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { shellEscape } from "../dtach/client.ts";
+import { computeEmbedHash } from "./client.ts";
 
 const launcherPath = fileURLToPath(
   new URL("./embed/direnv-exec.sh", import.meta.url),
@@ -19,7 +30,9 @@ interface Fixture {
 }
 
 async function withFixture(run: (fixture: Fixture) => Promise<void>) {
-  const root = await mkdtemp(path.join(tmpdir(), "nas-direnv-exec-"));
+  const root = await mkdtemp(
+    path.join(process.env.NAS_DIND_SHARED_TMP || tmpdir(), "nas-direnv-exec-"),
+  );
   try {
     const workspace = path.join(root, "workspace");
     const home = path.join(root, "home");
@@ -53,10 +66,12 @@ async function runProcess(
   argv: string[],
   cwd: string,
   env: Record<string, string | undefined>,
+  stdin?: string,
 ) {
   const proc = Bun.spawn(argv, {
     cwd,
     env,
+    stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -251,3 +266,279 @@ export NAS_DIRENV_TEST_VALUE=loaded
     });
   },
 );
+
+// Exercise the actual final dispatch without root setup. Docker cases below
+// cover that setup and the setpriv boundary with the complete current image.
+async function dispatch(
+  fixture: Fixture,
+  shell: boolean,
+  command: string[],
+  stdin?: string,
+) {
+  const entrypoint = await readFile(
+    new URL("./embed/entrypoint.sh", import.meta.url),
+    "utf8",
+  );
+  const marker = "# Both launches load the approved workspace environment";
+  const start = entrypoint.indexOf(marker);
+  expect(start).toBeGreaterThan(0);
+  const script = `set -euo pipefail
+nas_measure_start() { printf -v "$1" %s ""; }
+nas_measure_done() { :; }
+mktemp() { command mktemp "$TEST_ROOT/shell-rc.XXXXXX"; }
+exec_nas() { shift; exec /bin/bash "$TEST_LAUNCHER" "$@"; }
+EXEC_PREFIX=()
+AGENT_COMMAND=("$@")
+${entrypoint.slice(start)}`;
+  return runProcess(
+    ["/bin/bash", "-c", script, "dispatch", ...command],
+    fixture.workspace,
+    {
+      ...fixture.env,
+      TEST_LAUNCHER: launcherPath,
+      TEST_ROOT: fixture.root,
+      WORKSPACE: fixture.workspace,
+      NAS_ENV_OPS_FILE: fixture.opsFile,
+      NAS_SHELL_MODE: String(shell),
+      HOSTEXEC_PATH_PREFIX: "/host wrapper's/bin",
+      NAS_BASH_OVERRIDE: "/mask-wrapper/bin",
+    },
+    stdin,
+  );
+}
+
+for (const shell of [false, true]) {
+  test.skipIf(!integrationAvailable)(
+    `entrypoint dispatch checks approval for ${shell ? "interactive shell" : "agent"}, preserves argv and env order`,
+    async () => {
+      await withFixture(async (fixture) => {
+        const home = path.join(fixture.root, "home with ' quote");
+        await mkdir(home);
+        fixture.env.HOME = home;
+        await writeFile(
+          path.join(home, ".bashrc"),
+          'export PATH=/bashrc/bin\nexport NAS_BASHRC_VALUE="$NAS_DIRENV_TEST_VALUE"\n',
+        );
+        await writeFile(
+          path.join(fixture.workspace, ".envrc"),
+          "export NAS_DIRENV_TEST_VALUE=loaded\nexport PATH=/direnv/bin:/usr/bin:/bin\n",
+        );
+        await writeFile(
+          fixture.opsFile,
+          `export NAS_DIRENV_TEST_VALUE="before-\${NAS_DIRENV_TEST_VALUE}-after"\n`,
+        );
+        const payload = `printf "RESULT:%s|%s|%s|%s\\n" "$NAS_DIRENV_TEST_VALUE" "$PATH" "\${NAS_BASHRC_VALUE:-agent}" "\${1:-shell}"; exit 37`;
+        const command = [
+          "/bin/bash",
+          "-c",
+          payload,
+          "payload",
+          "literal ' $() arg",
+        ];
+        const unapproved = await dispatch(
+          fixture,
+          shell,
+          command,
+          shell ? `${payload}\n` : undefined,
+        );
+        expect(unapproved.exitCode).not.toBe(0);
+        expect(unapproved.stdout).not.toContain("RESULT:");
+        expect(unapproved.stderr).toContain("direnv allow");
+        await approve(fixture);
+        const result = await dispatch(
+          fixture,
+          shell,
+          command,
+          shell ? `${payload}\n` : undefined,
+        );
+        expect(result.exitCode).toBe(37);
+        expect(result.stdout).toContain(
+          `RESULT:before-loaded-after|/host wrapper's/bin:/mask-wrapper/bin:${shell ? "/bashrc/bin|before-loaded-after|shell" : "/direnv/bin:/usr/bin:/bin|agent|literal ' $() arg"}`,
+        );
+      });
+    },
+  );
+}
+
+async function currentNasImageAvailable(): Promise<boolean> {
+  if (!Bun.which("docker")) return false;
+  const result = await runProcess(
+    [
+      "docker",
+      "image",
+      "inspect",
+      "nas-sandbox",
+      "--format",
+      '{{index .Config.Labels "nas.embed-hash"}}',
+    ],
+    process.cwd(),
+    process.env,
+  );
+  if (result.exitCode !== 0) return false;
+  return result.stdout.trim() === (await computeEmbedHash());
+}
+const currentNasImage = await currentNasImageAvailable();
+async function terminalAvailable(): Promise<boolean> {
+  const script = Bun.which("script");
+  if (!script) return false;
+  const probe = await runProcess(
+    [script, "-qefc", "test -t 0 && test -t 1", "/dev/null"],
+    process.cwd(),
+    { ...process.env, SHELL: "/bin/sh" },
+  );
+  return probe.exitCode === 0;
+}
+const hasTerminal = await terminalAvailable();
+
+async function makeApprovalReadable(directory: string): Promise<void> {
+  await chmod(directory, 0o755);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const child = path.join(directory, entry.name);
+    if (entry.isDirectory()) await makeApprovalReadable(child);
+    else await chmod(child, 0o644);
+  }
+}
+
+for (const uid of [0, process.getuid?.() || 1000]) {
+  for (const shell of [false, true]) {
+    test.skipIf(!integrationAvailable || !currentNasImage || !hasTerminal)(
+      `current nas image: uid=${uid} shell=${shell} enforces approval, read-only data and terminal ownership`,
+      async () => {
+        await withFixture(async (fixture) => {
+          await chmod(fixture.root, 0o755);
+          await chmod(fixture.workspace, 0o777);
+          await writeFile(
+            path.join(fixture.workspace, ".envrc"),
+            'export NAS_RC_UID=$(id -u)\nprintf rc > "$PWD/rc-ran"\n',
+          );
+          // A legacy cache exists under the location previously used by nas.
+          const flake = "{}\n";
+          await writeFile(path.join(fixture.workspace, "flake.nix"), flake);
+          const hash = new Bun.CryptoHasher("sha256")
+            .update(flake)
+            .digest("hex");
+          const cache = path.join(
+            fixture.root,
+            "old-cache",
+            "nas",
+            "nix-dev-env",
+          );
+          await mkdir(cache, { recursive: true });
+          await writeFile(
+            path.join(cache, `${hash}.env`),
+            "export NAS_POISON=sourced\n",
+          );
+          const dataDir = path.join(fixture.env.XDG_DATA_HOME!, "direnv");
+          await mkdir(dataDir, { recursive: true });
+          const payload = `test -t 0 && test -t 1 || exit 91; if touch "$HOME/.local/share/direnv/write-test" 2>/dev/null; then exit 92; fi; printf 'RESULT:%s:%s:%s:%s\\n' "$NAS_RC_UID" "$(id -u)" "$HOME" "\${NAS_POISON:-clean}"; printf payload > "$PWD/payload-ran"; exit 37`;
+          for (const approved of [false, true]) {
+            if (approved) await approve(fixture);
+            await makeApprovalReadable(fixture.env.XDG_DATA_HOME!);
+            const name = `nas-direnv-${crypto.randomUUID()}`;
+            try {
+              const argv = [
+                "docker",
+                "create",
+                "--name",
+                name,
+                "--interactive",
+                "--tty",
+                "--network",
+                "none",
+                "-e",
+                `NAS_UID=${uid}`,
+                "-e",
+                `NAS_GID=${uid}`,
+                "-e",
+                "NAS_USER=direnv-test",
+                "-e",
+                "NAS_DIRENV_ENABLED=true",
+                "-e",
+                "NAS_LOG_LEVEL=quiet",
+                "-e",
+                "NIX_ENABLED=true",
+                "-e",
+                `WORKSPACE=${fixture.workspace}`,
+                "-w",
+                fixture.workspace,
+                "-v",
+                `${fixture.workspace}:${fixture.workspace}`,
+                "-v",
+                `${dataDir}:/home/direnv-test/.local/share/direnv:ro`,
+                "-v",
+                `${path.join(fixture.root, "old-cache")}:/home/direnv-test/.cache:ro`,
+                "nas-sandbox",
+                ...(shell ? ["--shell"] : ["/bin/bash", "-c", payload]),
+              ];
+              const created = await runProcess(
+                argv,
+                fixture.workspace,
+                process.env,
+              );
+              expect(created.exitCode).toBe(0);
+              const inspected = await runProcess(
+                ["docker", "inspect", name, "--format", "{{json .Mounts}}"],
+                fixture.workspace,
+                process.env,
+              );
+              expect(inspected.exitCode).toBe(0);
+              const mounts = JSON.parse(inspected.stdout) as Array<{
+                Source: string;
+                RW: boolean;
+              }>;
+              expect(mounts.find((m) => m.Source === dataDir)?.RW).toBe(false);
+              const result = await runProcess(
+                [
+                  "script",
+                  "-qefc",
+                  shellEscape([
+                    "docker",
+                    "start",
+                    "--attach",
+                    "--interactive",
+                    name,
+                  ]),
+                  "/dev/null",
+                ],
+                fixture.workspace,
+                { ...process.env, SHELL: "/bin/sh" },
+                shell ? `${payload}\n` : undefined,
+              );
+              if (approved) {
+                expect(result.exitCode).toBe(37);
+                expect(result.stdout).toContain(
+                  `RESULT:${uid}:${uid}:/home/direnv-test:clean`,
+                );
+                expect(
+                  await readFile(
+                    path.join(fixture.workspace, "payload-ran"),
+                    "utf8",
+                  ),
+                ).toBe("payload");
+              } else {
+                expect(result.exitCode).not.toBe(0);
+                expect(result.stdout + result.stderr).toContain("direnv allow");
+                expect(
+                  await Bun.file(
+                    path.join(fixture.workspace, "payload-ran"),
+                  ).exists(),
+                ).toBe(false);
+                expect(
+                  await Bun.file(
+                    path.join(fixture.workspace, "rc-ran"),
+                  ).exists(),
+                ).toBe(false);
+              }
+            } finally {
+              await runProcess(
+                ["docker", "rm", "--force", name],
+                fixture.workspace,
+                process.env,
+              );
+            }
+          }
+        });
+      },
+    );
+  }
+}

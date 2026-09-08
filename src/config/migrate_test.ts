@@ -102,11 +102,11 @@ describe("objectToPklSource", () => {
     const result = objectToPklSource({
       profiles: {
         dev: {
-          "extra-packages": ["git", "curl"],
+          "agent-args": ["git", "curl"],
         },
       },
     });
-    expect(result).toContain("extraPackages {");
+    expect(result).toContain("agentArgs {");
     expect(result).not.toContain("new Listing");
     expect(result).toContain('"git"');
     expect(result).toContain('"curl"');
@@ -116,11 +116,11 @@ describe("objectToPklSource", () => {
     const result = objectToPklSource({
       profiles: {
         dev: {
-          "extra-packages": [],
+          "agent-args": [],
         },
       },
     });
-    expect(result).toContain("extraPackages {}");
+    expect(result).toContain("agentArgs {}");
     expect(result).not.toContain("new Listing");
   });
 
@@ -181,7 +181,7 @@ describe("objectToPklSource", () => {
     const result = objectToPklSource({
       profiles: {
         dev: {
-          "extra-packages": ["git", null, "curl"],
+          "agent-args": ["git", null, "curl"],
         },
       },
     });
@@ -735,10 +735,10 @@ describe("migrateYml2Pkl", () => {
       process.chdir(tmpDir);
       await migrateYml2Pkl({ global: true });
 
-      // Schema.pkl should be overwritten (bundled 0.14.1 > 0.0.1)
+      // Schema.pkl should be overwritten (bundled 0.15.3 > 0.0.1)
       const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
       expect(content).not.toEqual(oldSchema);
-      expect(content).toContain("@version 0.14.1");
+      expect(content).toContain("@version 0.15.3");
     });
 
     test("does not overwrite existing Schema.pkl when existing version is newer", async () => {
@@ -758,7 +758,7 @@ describe("migrateYml2Pkl", () => {
       process.chdir(tmpDir);
       await migrateYml2Pkl({ global: true });
 
-      // Schema.pkl should NOT be overwritten (999.0.0 > 0.14.1)
+      // Schema.pkl should NOT be overwritten (999.0.0 > 0.15.3)
       const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
       expect(content).toEqual(newerSchema);
     });
@@ -1099,4 +1099,47 @@ describe("migrateNix2Pkl", () => {
       );
     });
   });
+});
+
+for (const key of ["extraPackages", "extra-packages"]) {
+  test(`migration removes empty legacy nix.${key} without mutating input`, () => {
+    const input = {
+      profiles: { dev: { agent: "claude", nix: { enable: true, [key]: [] } } },
+    };
+    const before = structuredClone(input);
+    const result = objectToPklSource(input);
+    expect(result).not.toContain("extraPackages");
+    expect(result).toContain("enable = true");
+    expect(result).toContain('agent = "claude"');
+    expect(input).toEqual(before);
+  });
+  test(`migration rejects nonempty legacy nix.${key}`, () => {
+    expect(() =>
+      objectToPklSource({ profiles: { dev: { nix: { [key]: ["jq"] } } } }),
+    ).toThrow('profile "dev": nix.extraPackages is no longer supported');
+  });
+}
+
+test("YAML retired nix failure leaves no partially written config", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "nas-retired-yaml-"));
+  const previousCwd = process.cwd();
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    process.chdir(root);
+    process.env.XDG_CONFIG_HOME = path.join(root, "xdg");
+    const inputPath = path.join(root, ".agent-sandbox.yml");
+    writeFileSync(
+      inputPath,
+      "profiles:\n  dev:\n    nix:\n      extra-packages: [jq]\n",
+    );
+    await expect(migrateYml2Pkl({ inputPath })).rejects.toThrow(
+      'profile "dev": nix.extraPackages is no longer supported',
+    );
+    expect(existsSync(path.join(root, ".nas"))).toBe(false);
+  } finally {
+    process.chdir(previousCwd);
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

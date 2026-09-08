@@ -16,7 +16,11 @@ export interface WorktreeConfig {
 export interface NixConfig {
   enable: boolean | "auto";
   mountSocket: boolean;
-  extraPackages: string[];
+}
+
+/** Project environment loading */
+export interface DirenvConfig {
+  enable: boolean;
 }
 
 /** Docker 設定 */
@@ -224,6 +228,7 @@ export interface Profile {
   worktree?: WorktreeConfig;
   session: SessionConfig;
   nix: NixConfig;
+  direnv: DirenvConfig;
   docker: DockerConfig;
   gcloud: GcloudConfig;
   aws: AwsConfig;
@@ -280,10 +285,11 @@ export const DEFAULT_OBSERVABILITY_CONFIG: ObservabilityConfig = {
   retention: 31 * 24 * 60 * 60,
 };
 
+export const DEFAULT_DIRENV_CONFIG: DirenvConfig = { enable: false };
+
 export const DEFAULT_NIX_CONFIG: NixConfig = {
   enable: "auto",
   mountSocket: true,
-  extraPackages: [],
 };
 
 export const DEFAULT_DOCKER_CONFIG: DockerConfig = {

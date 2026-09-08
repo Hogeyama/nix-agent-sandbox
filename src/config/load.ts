@@ -15,10 +15,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
-import {
-  type Diagnostic,
-  detectLegacyIdentifiers,
-} from "../network/authz/validate.ts";
+import { detectLegacyIdentifiers } from "../network/authz/validate.ts";
 import { initConfig, resolveSchemaAsset } from "./init.ts";
 import {
   findNixConfig,
@@ -27,6 +24,7 @@ import {
   migrateYml2Pkl,
 } from "./migrate.ts";
 import { getGlobalConfigDir } from "./paths.ts";
+import { retiredNixSourceErrors } from "./retired_nix.ts";
 import { ensureConfigTrusted, recordConfigTrust } from "./trust.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
@@ -90,12 +88,13 @@ async function reportLegacyIdentifiers(configPath: string): Promise<void> {
   const source = await readFile(configPath, "utf8");
   const diagnostics = [
     ...(await legacyIdentifiersInGlobal(source)),
-    ...detectLegacyIdentifiers(source, path.basename(configPath)),
+    ...detectLegacyIdentifiers(source, path.basename(configPath)).map(
+      (d) => d.message,
+    ),
+    ...retiredNixSourceErrors(source, path.basename(configPath)),
   ];
   if (diagnostics.length === 0) return;
-  throw new Error(
-    diagnostics.map((diagnostic) => diagnostic.message).join("\n\n"),
-  );
+  throw new Error(diagnostics.join("\n\n"));
 }
 
 const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
@@ -109,7 +108,7 @@ const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
  */
 async function legacyIdentifiersInGlobal(
   configSource: string,
-): Promise<readonly Diagnostic[]> {
+): Promise<readonly string[]> {
   if (!GLOBAL_MODULE_REFERENCE.test(configSource)) return [];
 
   const globalPath = path.join(getGlobalConfigDir(), "global.pkl");
@@ -123,7 +122,10 @@ async function legacyIdentifiersInGlobal(
 
   // ここだけ絶対パスで示す。global.pkl はプロジェクトの外にあり、名前だけでは
   // どこを直せばいいのか分からない。
-  return detectLegacyIdentifiers(source, globalPath);
+  return [
+    ...detectLegacyIdentifiers(source, globalPath).map((d) => d.message),
+    ...retiredNixSourceErrors(source, globalPath),
+  ];
 }
 
 /**

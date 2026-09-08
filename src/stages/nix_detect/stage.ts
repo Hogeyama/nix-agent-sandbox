@@ -1,5 +1,5 @@
 /**
- * ホスト Nix 検出 + nix develop 統合 (EffectStage)
+ * ホスト Nix 共有の検出 (EffectStage)
  */
 
 import { Effect } from "effect";

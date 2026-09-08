@@ -894,7 +894,8 @@ test("resolveProfile: resolves by explicit name", () => {
       "default-profile": {
         agent: "claude",
         agentArgs: [],
-        nix: { enable: "auto", mountSocket: true, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -912,7 +913,8 @@ test("resolveProfile: resolves by explicit name", () => {
       "other-profile": {
         agent: "copilot",
         agentArgs: ["--yolo"],
-        nix: { enable: false, mountSocket: false, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: false, mountSocket: false },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -945,7 +947,8 @@ test("resolveProfile: falls back to default profile", () => {
       "my-default": {
         agent: "claude",
         agentArgs: [],
-        nix: { enable: "auto", mountSocket: true, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -976,7 +979,8 @@ test("resolveProfile: auto-selects when only one profile and no default", () => 
       "only-one": {
         agent: "copilot",
         agentArgs: [],
-        nix: { enable: false, mountSocket: false, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: false, mountSocket: false },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -1007,7 +1011,8 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       a: {
         agent: "claude",
         agentArgs: [],
-        nix: { enable: "auto", mountSocket: true, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -1025,7 +1030,8 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       b: {
         agent: "copilot",
         agentArgs: [],
-        nix: { enable: false, mountSocket: false, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: false, mountSocket: false },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -1056,7 +1062,8 @@ test("resolveProfile: throws for nonexistent profile name", () => {
       exists: {
         agent: "claude",
         agentArgs: [],
-        nix: { enable: "auto", mountSocket: true, extraPackages: [] },
+        direnv: { enable: false },
+        nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
@@ -1127,3 +1134,61 @@ test.skipIf(!hasPkl)(
     });
   },
 );
+
+test.skipIf(!hasPkl)(
+  "loadConfig: retired nix source diagnostic names local file and line",
+  async () => {
+    await withNasConfig(
+      'amends "Schema.pkl"\nprofiles { ["dev"] { nix { extraPackages {} } } }',
+      async (dir) => {
+        await expect(loadConfig(dir)).rejects.toThrow(
+          "config.pkl:2: nix.extraPackages is no longer supported",
+        );
+      },
+    );
+  },
+);
+for (const referenced of [false, true]) {
+  test.skipIf(!hasPkl)(
+    `loadConfig: retired nix in global is inspected only when referenced (${referenced})`,
+    async () => {
+      const root = await mkdtemp(
+        path.join(tmpdir(), "nas-retired-nix-global-"),
+      );
+      const previous = process.env.XDG_CONFIG_HOME;
+      try {
+        process.env.XDG_CONFIG_HOME = root;
+        const globalDir = path.join(root, "nas");
+        await mkdir(globalDir);
+        await writeFile(
+          path.join(globalDir, "Schema.pkl"),
+          await readBundledSchema(),
+        );
+        const globalFile = path.join(globalDir, "global.pkl");
+        await writeFile(
+          globalFile,
+          'amends "Schema.pkl"\nprofiles { ["dev"] { nix { extraPackages {} } } }',
+        );
+        await withNasConfig(
+          referenced
+            ? 'amends "modulepath:/global.pkl"'
+            : 'amends "Schema.pkl"\nprofiles { ["dev"] { agent = "claude" } }',
+          async (dir) => {
+            if (referenced)
+              await expect(loadConfig(dir)).rejects.toThrow(
+                `${globalFile}:2: nix.extraPackages is no longer supported`,
+              );
+            else
+              expect((await loadConfig(dir)).profiles.dev.direnv.enable).toBe(
+                false,
+              );
+          },
+        );
+      } finally {
+        if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previous;
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+}

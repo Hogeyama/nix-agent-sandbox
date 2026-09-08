@@ -1039,7 +1039,7 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
 );
 
 test.skipIf(!canBindMount || !ptyScriptPath)(
-  "Integration: cached Nix launch preserves agent TTY outside filter pipes",
+  "Integration: launch ignores old Nix cache and preserves agent TTY outside filter pipes",
   async () => {
     const fixtureDir = await makeTempDir("nas-e2e-nix-launch-");
     const workDir = await makeTempDir("nas-e2e-nix-launch-ws-");
@@ -1069,7 +1069,7 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
         "if [ -t 1 ]; then tty1=1; fi; " +
         "if [ -t 2 ]; then tty2=1; fi; " +
         `printf 'cache=%s secret=${secret} tty=%s%s\\n' ` +
-        '"$NAS_NIX_CACHE_MARKER" ' +
+        `"\${NAS_NIX_CACHE_MARKER:-unused}" ` +
         '"$tty1" "$tty2"';
       const result = await dockerRun(["/bin/sh", "-c", command], {
         workDir,
@@ -1089,7 +1089,7 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
       });
 
       expect(result.code).toEqual(0);
-      expect(result.stdout).toContain(`cache=hit secret=${secret} tty=11`);
+      expect(result.stdout).toContain(`cache=unused secret=${secret} tty=11`);
       expect(result.stdout).not.toContain("secret=*****************");
     } finally {
       await broker?.stop();

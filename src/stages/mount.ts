@@ -18,5 +18,4 @@ export {
   type ResolvedEnvEntry,
   type ResolvedExtraMount,
   resolveMountProbes,
-  serializeNixExtraPackages,
 } from "./mount/stage.ts";
