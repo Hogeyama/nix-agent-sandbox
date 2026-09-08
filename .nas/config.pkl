@@ -208,15 +208,6 @@ local commonNetwork: NetworkConfig = new {
       fallback = "allow"
     }
   }
-
-  proxy {
-    forwardPorts = new Listing {
-      8080
-      5432
-      // あんまりよくないけどuiのデバッグに
-      3939
-    }
-  }
 }
 
 // commonMask は proxy = false なので、秘密の扱いを既定の "mask" のままにすると
@@ -325,6 +316,9 @@ local baseProfile: Profile = new {
   mask = commonMask
 
   guide {
+    enable = true
+  }
+  direnv {
     enable = true
   }
 }
