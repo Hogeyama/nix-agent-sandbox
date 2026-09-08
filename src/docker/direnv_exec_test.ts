@@ -9,13 +9,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const launcherPath = fileURLToPath(
-  new URL("./embed/direnv-exec.sh", import.meta.url),
-);
+import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 
 interface Fixture {
+  launcher: string;
   root: string;
   workspace: string;
   opsFile: string;
@@ -80,7 +78,13 @@ esac
       FAKE_STATUS_JSON: JSON.stringify({ state: { foundRC: null } }),
     } as Record<string, string>;
 
+    const launcher = await createDirenvLauncherFixture(
+      root,
+      fakeDirenv,
+      Bun.which("jq")!,
+    );
     await run({
+      launcher,
       root,
       workspace,
       opsFile,
@@ -100,7 +104,14 @@ async function launch(
   envOverrides: Record<string, string> = {},
 ) {
   const proc = Bun.spawn(
-    ["bash", launcherPath, fixture.workspace, fixture.opsFile, "", ...command],
+    [
+      "bash",
+      fixture.launcher,
+      fixture.workspace,
+      fixture.opsFile,
+      "",
+      ...command,
+    ],
     {
       env: { ...fixture.env, ...envOverrides },
       stdout: "pipe",
@@ -203,7 +214,7 @@ test("payload exit status is preserved", async () => {
     const proc = Bun.spawn(
       [
         "bash",
-        launcherPath,
+        fixture.launcher,
         fixture.workspace,
         fixture.opsFile,
         "",
@@ -215,5 +226,29 @@ test("payload exit status is preserved", async () => {
     );
 
     expect(await proc.exited).toBe(37);
+  });
+});
+
+test("approval dependencies ignore workspace commands in PATH", async () => {
+  await withFixture(async (fixture) => {
+    const hostileBin = path.join(fixture.workspace, "bin");
+    const hostileMarker = path.join(fixture.workspace, "spoof-ran");
+    await mkdir(hostileBin);
+    for (const command of ["direnv", "jq"]) {
+      await writeFile(
+        path.join(hostileBin, command),
+        '#!/bin/bash\nprintf spoofed > "$SPOOF_MARKER"\nexit 0\n',
+        { mode: 0o755 },
+      );
+    }
+    const result = await launch(fixture, ["/bin/true"], {
+      PATH: `${hostileBin}:${fixture.env.PATH}`,
+      FAKE_STATUS_FAIL: "true",
+      SPOOF_MARKER: hostileMarker,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("direnv status failed");
+    expect(await readFile(fixture.callsFile, "utf8")).toBe("status\n");
+    expect(await Bun.file(hostileMarker).exists()).toBe(false);
   });
 });

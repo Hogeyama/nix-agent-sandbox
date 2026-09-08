@@ -11,19 +11,17 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { shellEscape } from "../dtach/client.ts";
 import { computeEmbedHash } from "./client.ts";
+import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 
-const launcherPath = fileURLToPath(
-  new URL("./embed/direnv-exec.sh", import.meta.url),
-);
 const direnvAvailable = Bun.which("direnv") !== null;
 const jqAvailable = Bun.which("jq") !== null;
 const integrationAvailable = direnvAvailable && jqAvailable;
 
 interface Fixture {
+  launcher: string;
   root: string;
   workspace: string;
   opsFile: string;
@@ -59,7 +57,12 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>) {
       HOSTEXEC_PATH_PREFIX: "/host wrapper's/bin",
       DIRENV_LOG_FORMAT: "",
     };
-    await run({ root, workspace, opsFile, env });
+    const launcher = await createDirenvLauncherFixture(
+      root,
+      Bun.which("direnv") ?? "/usr/bin/direnv",
+      Bun.which("jq") ?? "/usr/bin/jq",
+    );
+    await run({ root, workspace, opsFile, env, launcher });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -121,7 +124,7 @@ function launch(
   return runProcess(
     [
       "bash",
-      launcherPath,
+      fixture.launcher,
       workspace,
       options.opsFile ?? fixture.opsFile,
       options.pathPrefix ?? "",
@@ -332,7 +335,7 @@ ${entrypoint.slice(start).replaceAll("/usr/local/bin/nas-direnv-exec", '"$TEST_L
     fixture.workspace,
     {
       ...fixture.env,
-      TEST_LAUNCHER: launcherPath,
+      TEST_LAUNCHER: fixture.launcher,
       TEST_ROOT: fixture.root,
       WORKSPACE: fixture.workspace,
       NAS_ENV_OPS_FILE: fixture.opsFile,
@@ -525,7 +528,7 @@ async function makeApprovalReadable(directory: string): Promise<void> {
 for (const uid of [0, process.getuid?.() || 1000]) {
   for (const shell of [false, true]) {
     test.skipIf(!integrationAvailable || !currentNasImage || !hasTerminal)(
-      `current nas image: uid=${uid} shell=${shell} enforces approval, read-only data and terminal ownership`,
+      `current nas image: uid=${uid} shell=${shell} enforces approval under hostile PATH, read-only data and terminal ownership`,
       async () => {
         await withFixture(async (fixture) => {
           await chmod(fixture.root, 0o755);
@@ -533,6 +536,27 @@ for (const uid of [0, process.getuid?.() || 1000]) {
           await writeFile(
             path.join(fixture.workspace, ".envrc"),
             'export NAS_RC_UID=$(id -u)\nprintf rc > "$PWD/rc-ran"\n',
+          );
+          // A trusted profile may prepend a workspace-owned bin directory.
+          // Both fakes would bypass approval if the shipped helper used PATH.
+          const hostileBin = path.join(fixture.workspace, "bin");
+          await mkdir(hostileBin);
+          await writeFile(
+            path.join(hostileBin, "direnv"),
+            `#!/bin/bash
+printf spoofed > "$PWD/fake-direnv-ran"
+case "$1" in
+  status) printf '%s\\n' '{"state":{"foundRC":null}}' ;;
+  exec) source "$2/.envrc"; shift 2; exec "$@" ;;
+  *) exit 99 ;;
+esac
+`,
+            { mode: 0o755 },
+          );
+          await writeFile(
+            path.join(hostileBin, "jq"),
+            '#!/bin/bash\nprintf spoofed > "$PWD/fake-jq-ran"\nexit 0\n',
+            { mode: 0o755 },
           );
           // A legacy cache exists under the location previously used by nas.
           const flake = "{}\n";
@@ -554,8 +578,12 @@ for (const uid of [0, process.getuid?.() || 1000]) {
           const dataDir = path.join(fixture.env.XDG_DATA_HOME!, "direnv");
           await mkdir(dataDir, { recursive: true });
           const payload = `test -t 0 && test -t 1 || exit 91; if touch "$HOME/.local/share/direnv/write-test" 2>/dev/null; then exit 92; fi; printf 'RESULT:%s:%s:%s:%s\\n' "$NAS_RC_UID" "$(id -u)" "$HOME" "\${NAS_POISON:-clean}"; printf payload > "$PWD/payload-ran"; exit 37`;
-          for (const approved of [false, true]) {
-            if (approved) await approve(fixture);
+          for (const approval of ["unapproved", "allowed", "denied"]) {
+            if (approval === "allowed") await approve(fixture);
+            if (approval === "denied") await deny(fixture);
+            for (const marker of ["rc-ran", "payload-ran"]) {
+              await rm(path.join(fixture.workspace, marker), { force: true });
+            }
             await makeApprovalReadable(fixture.env.XDG_DATA_HOME!);
             const name = `nas-direnv-${crypto.randomUUID()}`;
             try {
@@ -578,6 +606,8 @@ for (const uid of [0, process.getuid?.() || 1000]) {
                 "NAS_DIRENV_ENABLED=true",
                 "-e",
                 "NAS_LOG_LEVEL=quiet",
+                "-e",
+                `PATH=${hostileBin}:/usr/local/bin:/usr/bin:/bin`,
                 "-e",
                 "NIX_ENABLED=true",
                 "-e",
@@ -627,7 +657,12 @@ for (const uid of [0, process.getuid?.() || 1000]) {
                 { ...process.env, SHELL: "/bin/sh" },
                 shell ? `${payload}\n` : undefined,
               );
-              if (approved) {
+              for (const marker of ["fake-direnv-ran", "fake-jq-ran"]) {
+                expect(
+                  await Bun.file(path.join(fixture.workspace, marker)).exists(),
+                ).toBe(false);
+              }
+              if (approval === "allowed") {
                 expect(result.exitCode).toBe(37);
                 expect(result.stdout).toContain(
                   `RESULT:${uid}:${uid}:/home/direnv-test:clean`,

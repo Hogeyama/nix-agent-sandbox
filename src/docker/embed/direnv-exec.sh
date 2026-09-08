@@ -27,12 +27,13 @@ fi
 unset DIRENV_DIFF DIRENV_DIR DIRENV_FILE DIRENV_WATCHES DIRENV_LAYOUT_DIR
 cd -- "$workspace"
 
-if ! status=$(direnv status --json); then
+# These approval dependencies must come from the image, never workspace PATH.
+if ! status=$(/usr/bin/direnv status --json); then
   echo '[nas] direnv status failed; refusing to start.' >&2
   exit 1
 fi
 
-if ! jq -e '
+if ! /usr/bin/jq -e '
   (.state | type == "object") and
   (.state | has("foundRC")) and
   (.state.foundRC == null or
@@ -43,14 +44,14 @@ if ! jq -e '
   exit 1
 fi
 
-if ! jq -e '.state.foundRC == null or .state.foundRC.allowed == 0' \
+if ! /usr/bin/jq -e '.state.foundRC == null or .state.foundRC.allowed == 0' \
     >/dev/null <<<"$status"; then
-  rc_path=$(jq -r '.state.foundRC.path' <<<"$status")
+  rc_path=$(/usr/bin/jq -r '.state.foundRC.path' <<<"$status")
   printf '[nas] direnv has not allowed %q. On the host, run: direnv allow %q\n' \
     "$rc_path" "$rc_path" >&2
   echo '[nas] If this is a new nas worktree, keep it at cleanup and reuse it after allowing.' >&2
   exit 1
 fi
 
-exec direnv exec "$workspace" "$real_bash" -c "$finish" \
+exec /usr/bin/direnv exec "$workspace" "$real_bash" -c "$finish" \
   nas-direnv "$ops_file" "$path_prefix" "$@"
