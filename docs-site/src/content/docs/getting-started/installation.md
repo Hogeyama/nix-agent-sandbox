@@ -39,7 +39,7 @@ nix profile install github:Hogeyama/nix-agent-sandbox
 
 ## 導入の確認
 
-`nas --version` でバージョンが表示されれば導入完了です。[クイックスタート](../quick-start/)で最初のセッションを起動します。
+`nas --version` でバージョンが表示されれば導入完了です。[最初の作業](../quick-start/)で使うエージェントを選び、最初のセッションを起動します。Codex の場合は [Codex での最初の作業](../quick-start/#codex-での最初の作業)から進めます。
 
 ## 起動時間の短縮
 

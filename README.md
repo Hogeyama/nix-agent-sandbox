@@ -10,7 +10,7 @@ Nix の自動検出は `/nix`、daemon socket、Nix cache を読み書き可能�
 不要な profile では `nix.enable = false` を明示してください。
 
 ネットワーク、`extraMounts`、HostExec は policy-controlled な capability です。許可を広げる前に
-[信頼境界](https://hogeyama.github.io/nix-agent-sandbox/security/model/)を確認してください。
+[信頼境界](https://hogeyama.github.io/nix-agent-sandbox/security/isolation/)を確認してください。
 
 | 操作 | 広がる境界 |
 | --- | --- |
@@ -18,14 +18,14 @@ Nix の自動検出は `/nix`、daemon socket、Nix cache を読み書き可能�
 
 ## ユーザーガイド
 
-詳細な設定、機能、レシピ、運用とセキュリティの情報は
+起動、UI での承認、開発サーバーの確認、作業環境の設定は
 [nas ユーザーガイド](https://hogeyama.github.io/nix-agent-sandbox/)を参照してください。
 
 最初に使う場合は、次の順で進めます。
 
 1. [インストール](https://hogeyama.github.io/nix-agent-sandbox/getting-started/installation/)
-2. [設定を作る](https://hogeyama.github.io/nix-agent-sandbox/getting-started/configuration/)
-3. [サンドボックスを起動する](https://hogeyama.github.io/nix-agent-sandbox/getting-started/quick-start/)
+2. [最初の作業](https://hogeyama.github.io/nix-agent-sandbox/getting-started/quick-start/)
+3. [作業の開始・再開](https://hogeyama.github.io/nix-agent-sandbox/work/sessions/)
 
 ## 前提条件
 
@@ -77,52 +77,59 @@ cd /path/to/your-project
 nas config init
 ```
 
-`nas config init` は `.nas/` とユーザー共通設定を作成します。最小の独立した
-profile にする場合は、`.nas/config.pkl` を次の内容にします。
+`nas config init` は `.nas/` とユーザー共通設定を作成します。
+初回生成した `.nas/config.pkl` を次の内容にし、Claude Code の API 接続を許可します。
 
 ```pkl
-amends "Schema.pkl"
-
-default = "claude"
+amends "modulepath:/global.pkl"
 
 profiles {
-  ["claude"] { agent = "claude" }
+  ["claude"] = (super["claude"]) {
+    network {
+      scopes {
+        ["anthropic"] = (module.presets.anthropic.v1) {
+          fallback = "deny"
+        }
+      }
+    }
+  }
+  ["codex"] = super["codex"]
 }
 ```
 
-設定を確認してから、プロジェクトのルートで起動します。
+設定を確認して信頼し、プロジェクトのルートで起動します。
 
 ```sh
-nas
-```
-
-別の profile を使うときは名前を指定します。
-
-```sh
+nas config trust
 nas claude
 ```
 
-追加のネットワーク、マウント、HostExec は隔離境界を変えます。追加前に
-[設定の基本](https://hogeyama.github.io/nix-agent-sandbox/getting-started/configuration/)と
-[信頼境界](https://hogeyama.github.io/nix-agent-sandbox/security/model/)を確認してください。
+エージェントに依頼した後、ホストのブラウザで http://localhost:3939 を開きます。
+UI はエージェントとともに自動起動します。
+Sessions で作業を選び、Pending の承認要求や Ports · in の公開ポートを確認できます。
 
-## 主な機能
+この例では API 以外への通信を拒否します。作業に必要な接続先は
+[外部への通信許可](https://hogeyama.github.io/nix-agent-sandbox/configuration/network/)で追加します。
+設定変更の反映は[設定の変更と反映](https://hogeyama.github.io/nix-agent-sandbox/configuration/profiles/)を参照してください。
 
-- [ファイル隔離・マウント](https://hogeyama.github.io/nix-agent-sandbox/features/filesystem/)
-- [ネットワーク制御](https://hogeyama.github.io/nix-agent-sandbox/features/network/)
-- [localhost ポート転送](https://hogeyama.github.io/nix-agent-sandbox/features/port-forwarding/)
-- [HostExec](https://hogeyama.github.io/nix-agent-sandbox/features/hostexec/)
-- [シークレット・認証情報](https://hogeyama.github.io/nix-agent-sandbox/features/secrets/)
-- [Nix 統合](https://hogeyama.github.io/nix-agent-sandbox/features/nix/)
-- [Docker in Docker](https://hogeyama.github.io/nix-agent-sandbox/features/docker/)
-- [Worktree](https://hogeyama.github.io/nix-agent-sandbox/features/worktree/)
-- [セッション・通知](https://hogeyama.github.io/nix-agent-sandbox/features/sessions/)
-- [X11 / xpra](https://hogeyama.github.io/nix-agent-sandbox/features/display/)
-- [UI daemon](https://hogeyama.github.io/nix-agent-sandbox/features/ui/)
-- [Observability](https://hogeyama.github.io/nix-agent-sandbox/features/observability/)
+## 作業中の操作
 
-日常の操作は[運用ガイド](https://hogeyama.github.io/nix-agent-sandbox/operations/maintenance/)を、
-よく使う構成は[レシピ](https://hogeyama.github.io/nix-agent-sandbox/recipes/mask-env/)を参照してください。
+- [通信・ホスト実行の承認](https://hogeyama.github.io/nix-agent-sandbox/work/approvals/)
+- [開発サーバーの確認](https://hogeyama.github.io/nix-agent-sandbox/work/preview/)
+- [作業中の問題と調査](https://hogeyama.github.io/nix-agent-sandbox/work/troubleshooting/)
+- [過去の作業と利用量](https://hogeyama.github.io/nix-agent-sandbox/work/history/)
+- [作業の終了と片付け](https://hogeyama.github.io/nix-agent-sandbox/work/finish/)
+
+## 作業環境の設定
+
+- [ファイルの共有と非公開](https://hogeyama.github.io/nix-agent-sandbox/configuration/files/)
+- [ホストコマンドの実行許可](https://hogeyama.github.io/nix-agent-sandbox/configuration/host-commands/)
+- [ホストの DB・API への接続](https://hogeyama.github.io/nix-agent-sandbox/configuration/host-services/)
+- [ホストの認証情報の利用](https://hogeyama.github.io/nix-agent-sandbox/configuration/authentication/)
+- [開発ツールと Docker](https://hogeyama.github.io/nix-agent-sandbox/configuration/development/)
+- [GUI アプリの表示](https://hogeyama.github.io/nix-agent-sandbox/configuration/gui/)
+- [入力待ちの通知](https://hogeyama.github.io/nix-agent-sandbox/configuration/notifications/)
+- [記録と保存期間](https://hogeyama.github.io/nix-agent-sandbox/configuration/recording/)
 
 ## ライセンスと着想
 

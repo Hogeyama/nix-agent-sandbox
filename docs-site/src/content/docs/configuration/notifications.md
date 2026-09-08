@@ -1,45 +1,23 @@
 ---
-title: セッション・通知
-description: ターミナルの切り離し・再接続と入力待ち通知
+title: 入力待ちの通知
+description: エージェントの入力待ちを UI の状態とデスクトップ通知で確認するための設定
 ---
 
-ターミナルを切り離した後もエージェントを動かし続け、後から再接続できます。`session.multiplex = true` と、ホストの `dtach` が必要です。
+別の作業をしている間にエージェントが入力待ちになったことを知るには、使用するエージェントの hook に `nas hook` を登録します。これにより作業状態を記録し、入力待ちを通知できます。通信・ホスト実行の承認は別の要求として [Pending](/nix-agent-sandbox/work/approvals/) に届きます。
 
-入力待ちの通知は、エージェントの hook に `nas hook` を設定します。
+## 通知方法
 
-## 設定例
-
-[対象プロファイル](/nix-agent-sandbox/getting-started/configuration/#プロファイルの編集)に追加します。
+[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に設定します。
 
 ```pkl
-session = new SessionConfig {
-  multiplex = true
-  detachKey = "^\\"
-}
-
 hook = new HookConfig {
   notify = "auto"
 }
 ```
 
-起動後は設定したキーでターミナルを切り離せます。既定の `^\` は Ctrl+\ です。再接続には一覧のセッション ID を指定します。
+`auto` は既定の通知方法、`desktop` はデスクトップ通知、`off` は通知なしです。`off` でも hook の作業状態は記録します。通知本文には入力データの `message` または既定文を使うため、秘密値を `message` に含めないでください。
 
-```sh
-nas session list
-nas session attach sess_abc123
-```
-
-複数のターミナルから同じセッションに接続できます。入力も共有されるため、同時操作に注意してください。`nas session attach` で再接続した場合の切り離しキーは、プロファイルの指定にかかわらず dtach の既定値です。
-
-## 設定項目
-
-| 設定 | 既定 | 用途 |
-| --- | --- | --- |
-| `session.multiplex` | `false` | dtach でセッションを起動し、切り離しと再接続を可能にする。 |
-| `session.detachKey` | `"^\\"` | 初回接続時の切り離しキー。 |
-| `hook.notify` | `"auto"` | 入力待ち時の通知を `"auto"`、`"desktop"`、`"off"` から選ぶ。 |
-
-## 通知の設定
+## エージェントごとの登録
 
 使用するエージェントの例を選んで設定します。`nas hook` は作業開始・入力待ち・終了を記録し、入力待ちの `attention` だけを通知します。既存の hook がある場合は、その設定を残して追加してください。
 
@@ -109,11 +87,6 @@ type = "command"
 command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind stop || true'"
 ```
 
-## 注意点
+## Hook の実行環境
 
 エージェント hook は `NAS_SESSION_ID` があるコンテナ内から実行されます。通知本文には hook 入力データの `message`、または既定文が表示されるため、秘密を `message` に含めないでください。`hook.notify = "off"` なら attention を記録してもデスクトップ通知は送りません。
-
-## 関連ページ
-
-- [Worktree](/nix-agent-sandbox/features/worktree/) — セッションごとの作業フォルダーの分離
-- [Schema.pkl](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/src/config/Schema.pkl) — `SessionConfig` と `HookConfig` の全定義
