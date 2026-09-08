@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, Layer, Scope } from "effect";
 import { computeEmbedHash } from "../../docker/client.ts";
 import type { WorkspaceState } from "../../pipeline/state.ts";
+import { makeDockerServiceFake } from "../../services/docker.ts";
+import { FsServiceLive } from "../../services/fs.ts";
 import {
   type DockerBuildImagePlan,
+  DockerBuildServiceLive,
   makeDockerBuildServiceFake,
 } from "./docker_build_service.ts";
 import {
@@ -166,6 +169,43 @@ test("DockerBuildStage.run: calls DockerBuildService.buildImage when image does 
   expect(buildImageCalls[0].imageName).toEqual("nas-sandbox");
   expect(buildImageCalls[0].labels[EMBED_HASH_LABEL]).toEqual("abc123");
   expect(buildImageCalls[0].assetGroups.length).toBeGreaterThan(0);
+});
+
+test("DockerBuildStage.run: materializes the direnv launcher in the build context", async () => {
+  const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
+    imageExists: false,
+    currentEmbedHash: "abc123",
+    imageEmbedHash: null,
+  };
+  let materializedLauncher: string | undefined;
+
+  const docker = makeDockerServiceFake({
+    build: (contextDir) =>
+      Effect.promise(async () => {
+        materializedLauncher = await readFile(
+          path.join(contextDir, "direnv-exec.sh"),
+          "utf8",
+        );
+      }),
+  });
+  const dockerBuild = DockerBuildServiceLive.pipe(
+    Layer.provide(Layer.merge(FsServiceLive, docker)),
+  );
+
+  await Effect.runPromise(
+    Effect.scoped(
+      createDockerBuildStage(buildProbes)
+        .run(createTestInput())
+        .pipe(Effect.provide(dockerBuild)),
+    ),
+  );
+
+  const sourceLauncher = await readFile(
+    path.join(EMBEDDED_BUILD_ASSET_GROUPS[0].baseDir, "direnv-exec.sh"),
+    "utf8",
+  );
+  expect(materializedLauncher).toEqual(sourceLauncher);
 });
 
 test("DockerBuildStage.run: rebuilds when image exists with stale embed hash", async () => {
