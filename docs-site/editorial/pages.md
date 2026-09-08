@@ -37,7 +37,7 @@
 | `configuration/host-commands` | ホストコマンドの実行許可 | ホストのツールや認証が必要 → 範囲を絞って実行・承認を確認 | ホスト権限と入力の保護 → 固定コマンドの許可 → 明示委譲 → 秘密値付きのビルド → 相対パスの条件と一回承認 |
 | `configuration/host-services` | ホストの DB・API への接続 | ホストのサービスが必要 → コンテナから指定サービスへ接続 | 方向とサービス側認証 → ポート設定 → 接続先 → 解除と適用範囲 |
 | `configuration/authentication` | ホストの認証情報の利用 | 保存済み認証が必要 → 値の注入か認証設定共有を選んで設定 | 値を読ませるか → HTTP / ホスト実行への注入 → クラウド設定・GPG → Codex キーリングと取得可能範囲 |
-| `configuration/development` | 開発ツールと Docker | テストに必要なツールがない → Nix 環境・パッケージ・Docker を利用 | 利用する環境の選択 → Nix と確認 → Docker と取得許可 → 寿命とキャッシュ → イメージ再構築 |
+| `configuration/development` | 開発ツールと Docker | テストに必要なツールがない → プロジェクトの環境を読み込み、必要なら Docker を利用 | プロジェクト環境の選択 → direnv の有効化 → ホストで実際の RC を承認 → ツールの確認 → 必要な場合の Docker 設定と取得許可 → 寿命とキャッシュ → イメージ再構築 |
 | `configuration/gui` | GUI アプリの表示 | エージェント側アプリの画面が必要 → xpra で表示・操作 | ホスト/コンテナの前提 → 設定 → 起動と自動接続 → 入力共有 → 表示失敗と終了 |
 | `configuration/notifications` | 入力待ちの通知 | 複数作業中に待ちを見逃す → エージェントの入力待ち通知を設定 | nas の承認との違い → notify → 使用エージェントの hook → 状態と通知の確認 |
 | `configuration/recording` | 記録と保存期間 | 記録の内容と寿命を決めたい → 会話・利用量・通信本文を設定し削除を管理 | 既定で残るもの → 追加記録の内容と設定 → 二つの保存先 → 保持と削除の違い |
@@ -72,7 +72,7 @@ GUI は Nix / Docker と分ける。必要なホストの画面環境、xpra へ
 | recipes/mask-env | host-commands の秘密値付きのビルド手順に統合 | 読む入力を変更させない、マスク用と注入用の二重登録、完成例と確認 |
 | features/port-forwarding | configuration/host-services に再執筆 | 逆方向との区別、転送先認証、HTTP認可なし、同番号と予約ポート |
 | recipes/codex-keyring | authentication のキーリング手順に統合 | 保存済み認証、DBus条件、3メソッド、Codex以外の秘密も取得可能 |
-| features/nix | configuration/development に統合 | /nix自動有効、daemon共有、devShellと追加パッケージ、無効化 |
+| features/nix | configuration/development に統合 | direnv の明示的な有効化とホスト承認、Nix store・daemon の共有、無効化 |
 | features/docker | configuration/development に統合 | 専用daemon、privileged補助、取得許可、データとキャッシュの寿命 |
 | features/display / recipes/x11-apps | configuration/gui に統合 | ツール前提、専用画面、自動attach、WSL条件、入力共有、終了 |
 | security/model / security/risks | security/isolation に統合 | 共有範囲、設定信頼、全追加権限、承認ソケットの分離、残る限界 |

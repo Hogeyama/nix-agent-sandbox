@@ -1,29 +1,65 @@
 ---
 title: 開発ツールと Docker
-description: Nix の開発環境・追加パッケージ、テスト用 Docker、イメージの再構築
+description: direnv によるプロジェクト環境、Nix の共有、テスト用 Docker、イメージの再構築
 ---
 
-エージェントに必要なツールがない場合は、プロジェクトの Nix 開発環境や追加パッケージを利用できます。テスト用コンテナや Compose が必要な場合は、セッション専用の Docker を有効にします。
+エージェントに必要なツールは、プロジェクトの devShell や `.envrc` に定義し、direnv でセッションの起動時に読み込みます。テスト用コンテナや Compose も必要な場合は、セッション専用の Docker を有効にします。
 
-[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に必要な設定を追加し、再信頼して新しいセッションで確認します。GUI の画面が必要な場合は[GUI アプリの表示](/nix-agent-sandbox/configuration/gui/)を参照してください。
+## プロジェクトの開発環境
 
-## Nix の開発環境
+### 環境の定義
 
-ホストに `/nix` があると Nix は自動で有効になり、プロジェクトの flake.nix にある既定の devShell を使えます。既定では Nix store、Nix daemon、関連キャッシュも共有します。ホストの Nix の状態にも操作が及ぶため、不要なプロファイルでは `nix.enable = false` を指定します。
+プロジェクトで使うツールを devShell や `.envrc` に定義します。flake の既定の devShell を使う場合は、プロジェクトの `.envrc` を次の内容にします。
 
-flake の環境に加えて gh と jq を使う例です。
+```sh
+# .envrc, when the project uses a flake devShell
+use flake
+```
+
+必要なコマンドはプロジェクトの devShell に追加します。Nix を使わないプロジェクトでは、`.envrc` で PATH や環境変数を設定できます。
+
+### direnv の有効化
+
+[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に次の設定を追加します。`direnv.enable` の既定は false なので、プロファイルごとに有効にします。
 
 ```pkl
-nix = new NixConfig {
+direnv = new DirenvConfig {
   enable = true
-  mountSocket = true
-  extraPackages = new Listing { "nixpkgs#gh"; "nixpkgs#jq" }
 }
 ```
 
-起動後、エージェントから追加したコマンドが使えることを確認します。既定の devShell がなければ、追加パッケージがある場合だけ nix shell を使い、両方なければ通常どおり起動します。
+設定の差分を確認し、[変更の反映と確認](/nix-agent-sandbox/configuration/profiles/#変更の反映と確認)の手順で `nas config trust` を実行します。これは nas の設定に対する信頼であり、次の `.envrc` の承認とは別です。
 
-`nix.enable` の既定は auto です。true にしてもホストに /nix がなければ共有されず、nas が Nix を導入するわけではありません。`mountSocket = false` では Nix 用のマウントと実行環境設定を作りません。
+### ホストでの承認
+
+ホストに direnv を導入し、実際に読み込む `.envrc` の絶対パスを承認します。
+
+```sh
+direnv allow /absolute/path/to/project/.envrc
+nas
+```
+
+nas は `direnv allow` を実行しません。未承認、変更後、または拒否済みの `.envrc` が見つかった場合や、`.envrc` の評価に失敗した場合は、エージェントを起動せずにエラーを返します。`.envrc` が見つからない場合は、追加の環境を読み込まずに起動します。
+
+ホストの direnv の承認データはコンテナへ読み取り専用で共有します。ホストの HOME や `direnvrc` は自動では共有しないため、独自の `direnvrc` 関数に依存する `.envrc` ではコンテナ内からもその定義を読めるように構成します。
+
+nas が新しい worktree を作る場合、その worktree にある `.envrc` は元の作業フォルダーとは別のパスです。最初の起動が未承認エラーで止まったら、終了時に **2（Keep）** を選び、表示された `Worktree kept: <パス>` を残します。そのパスの `.envrc` をホストで `direnv allow` してからもう一度 nas を起動し、既存の worktree を再利用します。
+
+### ツールの確認
+
+新しいセッションで、devShell や `.envrc` に追加したコマンドを実行して確認します。起動中のセッションへの再接続では環境を読み直さないため、`.envrc` を変更して再承認した後も新しいセッションを起動します。
+
+## Nix の共有
+
+`.envrc` で `use flake` を使うには、コンテナから Nix を使える必要があります。`nix.enable` の既定は auto で、ホストに `/nix` があると Nix store、Nix daemon、関連キャッシュを共有します。ホストの Nix の状態にも操作が及ぶため、不要なプロファイルでは `nix.enable = false` を指定します。
+
+`nix.enable = true` にしてもホストに `/nix` がなければ共有されず、nas が Nix を導入するわけではありません。`mountSocket = false` では Nix 用のマウントと実行環境設定を作りません。direnv の有効化と Nix の共有は別の設定です。
+
+### 以前の Nix 設定からの移行
+
+`nix.enable` だけでは、flake の devShell を自動で読み込まなくなりました。以前 `nix.extraPackages` に指定していたツールを削除して、プロジェクトの devShell または `.envrc` に定義します。
+
+nas を更新した後、プロジェクトのルートで `nas config init` を実行して Schema.pkl を再生成します。対象プロファイルに `direnv.enable = true` を追加し、編集した設定を `nas config trust` で信頼し直してから、実際の `.envrc` をホストの `direnv allow` で承認します。
 
 ## テスト用 Docker
 
