@@ -76,14 +76,23 @@ Network options:
   deny            拒否する
   review          fzf で対話的に承認/拒否する
   gc              stale runtime state を掃除する
+  bind <session-id> -L <host-port>:<container-port>
+                  ホストで待ち受け、コンテナへ転送する
+  bind <session-id> -R <container-port>:<host-port>
+                  コンテナで待ち受け、ホストへ転送する
+                  L/R は左が待受ポート、右が転送先ポート（引数なしで両方向を一覧表示）
+  unbind <session-id> -L <host-port>
+  unbind <session-id> -R <container-port>
+                  指定方向の待受ポートを削除する（引数なしで両方向から fzf 選択）
   bind <session-id>:<container-port> [<host-port>]
-                  コンテナのポートを localhost で開く（引数なしで一覧表示）
   unbind [<session-id>:<container-port> | <host-port>]
-                  開いたポートを閉じる（引数なしで fzf 選択）
+                  Local 転送の互換構文
   forward <session-id>:<container-port> [<host-port>]
-                  ホストの 127.0.0.1 のポートをコンテナ内 localhost に転送する（引数なしで一覧表示）
+                  Remote 転送の互換構文（引数なしで Remote のみ一覧表示）
   unforward [<session-id>:<container-port>]
-                  ホストへの転送を閉じる（引数なしで fzf 選択）
+                  Remote 転送を削除する互換構文（引数なしで fzf 選択）
+  --local-forward  -L の長い形式
+  --remote-forward -R の長い形式
   --runtime-dir DIR
                   bind/unbind/forward/unforward では ports runtime root、それ以外では network runtime root
   --format json   bind/forward の一覧を JSON 形式で表示
@@ -115,12 +124,16 @@ Examples:
   nas container clean                    # Remove unused nas sidecars
   nas network pending                    # Show pending approvals
   nas network approve <session> <request> --scope host-port
-  nas network bind <session>:3000        # Open a container port on localhost
+  nas network bind <session> -L 8080:3000 # Listen on host port 8080 and forward to container port 3000
+  nas network bind <session> -R 15432:5432 # Listen on container port 15432 and forward to host port 5432
+  nas network unbind <session> -L 8080   # Remove the Local forward by its host listen port
+  nas network unbind <session> -R 15432  # Remove the Remote forward by its container listen port
+  nas network bind <session>:3000        # Legacy Local syntax
   nas network bind <session>             # Pick from the ports the container is listening on
-  nas network unbind <session>:3000      # Close an open port binding
-  nas network forward <session>:5432     # Reach the host's 127.0.0.1:5432 at localhost:5432 in the container
+  nas network unbind <session>:3000      # Legacy Local removal syntax
+  nas network forward <session>:5432     # Legacy Remote syntax
   nas network forward <session>          # Pick from the ports the host is listening on
-  nas network unforward <session>:5432   # Close a forward
+  nas network unforward <session>:5432   # Legacy Remote removal syntax
   nas hostexec pending                   # Show pending hostexec approvals
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
