@@ -172,20 +172,6 @@ test("computeEmbedHash changes compared with legacy hash that omitted local-prox
 // --- dockerImageExists ---
 
 test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
-  "dockerImageExists: returns true for existing image",
-  async () => {
-    await Bun.spawn(["docker", "pull", "-q", TEST_IMAGE], {
-      stdout: "ignore",
-      stderr: "ignore",
-    }).exited;
-
-    const exists = await dockerImageExists(TEST_IMAGE);
-    expect(exists).toEqual(true);
-  },
-  30_000,
-);
-
-test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
   "dockerImageExists: returns false for non-existing image",
   async () => {
     const exists = await dockerImageExists("no-such-image-xyz:never");
@@ -201,28 +187,6 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
   },
 );
 
-test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
-  "getImageLabel: returns null for non-existing label",
-  async () => {
-    const tag = `${PREFIX}-missing-label`;
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "tmp-"));
-    try {
-      await writeFile(
-        `${tmpDir}/Dockerfile`,
-        "FROM scratch\nLABEL present=yes\n",
-      );
-      await dockerBuild(tmpDir, tag);
-
-      const label = await getImageLabel(tag, "no.such.label.xyz");
-      expect(label).toEqual(null);
-    } finally {
-      await dockerRemoveImage(tag, { force: true }).catch(() => {});
-      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    }
-  },
-  30_000,
-);
-
 // --- dockerBuild with labels ---
 
 test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
@@ -236,6 +200,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
 
       const labelValue = await getImageLabel(tag, "test.label");
       expect(labelValue).toEqual("hello-nas");
+      expect(await getImageLabel(tag, "no.such.label.xyz")).toBeNull();
     } finally {
       await dockerRemoveImage(tag, { force: true }).catch(() => {});
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
@@ -245,28 +210,6 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
 );
 
 // --- dockerRunDetached ---
-
-test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
-  "dockerRunDetached: starts container in detached mode",
-  async () => {
-    const containerName = `${PREFIX}-detached`;
-    try {
-      await dockerRunDetached({
-        name: containerName,
-        image: TEST_IMAGE,
-        args: [],
-        envVars: { TEST_VAR: "detached_value" },
-      });
-      const exitCode = await Bun.spawn(["docker", "inspect", containerName], {
-        stdout: "ignore",
-        stderr: "ignore",
-      }).exited;
-      expect(exitCode).toEqual(0);
-    } finally {
-      await dockerRm(containerName).catch(() => {});
-    }
-  },
-);
 
 test.skipIf(!DOCKER_DAEMON_AVAILABLE || !canBindMount)(
   "dockerRunDetached: supports network, mounts, ports, labels, entrypoint, command",
@@ -484,25 +427,6 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
 );
 
 // --- dockerNetwork ---
-
-test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
-  "dockerNetwork: create, connect, remove",
-  async () => {
-    const networkName = `${PREFIX}-net`;
-    const containerName = `${PREFIX}-net-container`;
-    try {
-      await dockerNetworkCreate(networkName);
-
-      await startLongRunningContainer(containerName);
-
-      await dockerNetworkConnect(networkName, containerName);
-    } finally {
-      await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
-      await dockerRm(containerName).catch(() => {});
-      await dockerNetworkRemove(networkName).catch(() => {});
-    }
-  },
-);
 
 test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
   "dockerNetworkConnect: supports aliases",

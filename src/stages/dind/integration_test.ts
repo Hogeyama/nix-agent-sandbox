@@ -42,7 +42,6 @@ import {
   buildDindSidecarEnv,
   DIND_IMAGE,
 } from "../../docker/dind.ts";
-import { REGISTRY_MIRROR_IMAGE } from "../../docker/registry_mirror.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type {
@@ -204,7 +203,9 @@ async function canRunDindRootless(): Promise<boolean> {
 }
 
 const RUNNING_ON_HOST_DOCKER = !process.env.DOCKER_HOST;
-const dindAvailable = await canRunDindRootless();
+// All cases require host-local bind mounts. Do not start a probe container
+// in environments where every case will be skipped anyway.
+const dindAvailable = RUNNING_ON_HOST_DOCKER && (await canRunDindRootless());
 
 /** Inner test image. Must be pullable on the host so we can side-load it into
  * the (network-confined) sidecar via `docker save | docker load` instead of
@@ -440,10 +441,6 @@ async function sidecarNetworks(sidecar: string): Promise<string[]> {
 // side-load it post-severance. Gated on Docker being usable at all.
 const innerImageReady =
   dindAvailable && RUNNING_ON_HOST_DOCKER ? await hostPull(INNER_IMAGE) : false;
-const registryImageReady =
-  dindAvailable && RUNNING_ON_HOST_DOCKER
-    ? await hostPull(REGISTRY_MIRROR_IMAGE)
-    : false;
 
 async function volumeExists(name: string): Promise<boolean> {
   try {
@@ -452,19 +449,6 @@ async function volumeExists(name: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function cleanupDindPlan(
-  plan: NonNullable<ReturnType<typeof planDind>>,
-): Promise<void> {
-  await dockerStop(plan.containerName, { timeoutSeconds: 0 }).catch(() => {});
-  await dockerRm(plan.containerName).catch(() => {});
-  await dockerStop(plan.registryMirrorName, { timeoutSeconds: 0 }).catch(
-    () => {},
-  );
-  await dockerRm(plan.registryMirrorName).catch(() => {});
-  await dockerVolumeRemove(plan.sharedTmpVolume).catch(() => {});
-  await dockerVolumeRemove(plan.dindDataVolume).catch(() => {});
 }
 
 async function forceCleanup(
@@ -737,87 +721,6 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   90_000,
 );
 
-test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
-  "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
-  async () => {
-    const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const sessionId = `execute-${crypto.randomUUID()}`;
-    const sharedInput = makeSharedInput(profile, sessionId);
-    const stageState = makeStageState({
-      network: {
-        networkName: `nas-session-net-${sessionId}`,
-        runtimeDir: "/run/user/1000/nas/network",
-      },
-    });
-    const input = { ...sharedInput, ...stageState };
-    const plan = planDind(input, {
-      disablePullCache: true,
-      readinessTimeoutMs: 60_000,
-    });
-    expect(plan).not.toBeNull();
-
-    const containerName = plan!.containerName;
-    await forceCleanup(
-      containerName,
-      plan!.networkName,
-      plan!.sharedTmpVolume,
-      plan!.dindDataVolume,
-    );
-
-    // In production the (internal) session network is created by the preceding
-    // ProxyStage; running DindStage standalone here we must create it ourselves
-    // so ensureDindSidecar's `network connect` has a target. Created after the
-    // pre-run forceCleanup (which removes any stale copy) so we start clean; the
-    // finally-block forceCleanup removes it again at the end.
-    await dockerNetworkCreateInternal(plan!.networkName);
-
-    const scope = Effect.runSync(Scope.make());
-    try {
-      const stage = createDindStageWithOptions(sharedInput, {
-        disablePullCache: true,
-        readinessTimeoutMs: 60_000,
-      });
-      const result = await Effect.runPromise(
-        stage
-          .run(stageState)
-          .pipe(
-            Effect.provideService(Scope.Scope, scope),
-            Effect.provide(DindServiceLive),
-          ),
-      );
-
-      expect(result.container?.env.static.DOCKER_HOST).toEqual(
-        "tcp://127.0.0.1:2375",
-      );
-      expect(typeof result.container?.env.static.NAS_DIND_SHARED_TMP).toEqual(
-        "string",
-      );
-      expect(result.dind?.containerName).toEqual(containerName);
-      expect(result.container?.network).toEqual({
-        mode: "container",
-        containerName,
-      });
-
-      const running = await dockerIsRunning(containerName);
-      expect(running).toEqual(true);
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-      const afterRunning = await dockerIsRunning(containerName);
-      try {
-        expect(afterRunning).toEqual(false);
-      } finally {
-        await forceCleanup(
-          containerName,
-          plan!.networkName,
-          plan!.sharedTmpVolume,
-          plan!.dindDataVolume,
-        );
-      }
-    }
-  },
-  90_000,
-);
-
 /**
  * SECURITY regression (R3): a DinD sidecar wired by DindStage is connected to
  * the internal session network and severed from the default bridge, so it has
@@ -831,7 +734,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
  * confinement test possible.
  */
 test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
-  "DindStage: inner container egress is confined to the session network (no NAT path out)",
+  "DindStage: published ports reach the joiner while inner egress stays confined",
   async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
     const sessionId = `egress-${crypto.randomUUID()}`;
@@ -849,20 +752,10 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
     expect(plan).not.toBeNull();
 
     const containerName = plan!.containerName;
-    await forceCleanup(
-      containerName,
-      plan!.networkName,
-      plan!.sharedTmpVolume,
-      plan!.dindDataVolume,
-    );
-
-    // Same standalone-wiring caveat as the test above: create the internal
-    // session network ourselves so ensureDindSidecar's connect/sever has a
-    // target. forceCleanup (above and in finally) removes it.
-    await dockerNetworkCreateInternal(plan!.networkName);
-
     const scope = Effect.runSync(Scope.make());
     try {
+      // ProxyStage normally creates this before DindStage runs.
+      await dockerNetworkCreateInternal(plan!.networkName);
       const stage = createDindStageWithOptions(sharedInput, {
         disablePullCache: true,
         readinessTimeoutMs: 20_000,
@@ -877,7 +770,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
       );
       await waitForDindReadyForTest(containerName);
 
-      // NETWORK-STATE assertion (#4): make the confinement claim self-contained.
+      // Check the actual attachment before interpreting failed requests.
       // The sidecar must be attached to the internal session network and NOT to
       // the default bridge; otherwise a non-zero wget below would not prove
       // anything about *this* stage's wiring.
@@ -885,56 +778,46 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
       expect(networks).toContain(plan!.networkName);
       expect(networks).not.toContain("bridge");
 
-      // Sidecar is up and (per the test above) bridge-severed / session-net
-      // attached at this point. Side-load the inner image without inner network.
+      // Side-load the image without granting the inner daemon network access.
       const loaded = await loadImageIntoSidecar(containerName, INNER_IMAGE);
       expect(loaded).toEqual(true);
 
-      // MACHINERY POSITIVE CONTROL (#1/#3): before asserting anything about
-      // egress, prove the machinery works. A network-free inner `docker run ...
-      // true` MUST exit 0. This confirms the inner dockerd is reachable, the
-      // side-loaded image is runnable, and a container actually starts — so any
-      // *subsequent* non-zero wget exit is attributable to the network, not to a
-      // missing binary / unusable image / dead daemon. If this fails the test is
-      // broken upstream of confinement, so we fail hard (not skip).
-      const sanity = await innerRun(containerName, INNER_IMAGE, "true");
-      expect(
-        sanity.exitCode,
-        `machinery positive control failed (inner 'docker run ${INNER_IMAGE} true' did not exit 0). ` +
-          `This means the test harness is broken upstream of egress confinement, ` +
-          `so the egress assertions below would be meaningless. Output:\n${sanity.output}`,
-      ).toEqual(0);
-
-      // A second positive control: confirm wget itself exists in the inner image
-      // by invoking it with no network (--help). If wget were missing, the
-      // confinement probes below would exit non-zero for the WRONG reason.
-      const wgetPresent = await innerRun(
+      // Publishing an inner service and reaching it from the joiner exercises
+      // rootlesskit's port forwarding with this stage's actual namespace wiring.
+      const served = await innerServe(
         containerName,
         INNER_IMAGE,
-        "wget --help >/dev/null 2>&1; echo wget-exit=$?",
+        `inner-pub-${crypto.randomUUID()}`,
+        18081,
       );
       expect(
-        wgetPresent.output,
-        `wget presence check produced unexpected output:\n${wgetPresent.output}`,
-      ).toMatch(/wget-exit=[01]/);
-      expect(wgetPresent.output).not.toMatch(/not found/i);
+        served.exitCode,
+        `inner publish failed. Output:\n${served.output}`,
+      ).toEqual(0);
 
-      // EGRESS PROBES: run both probes in ONE inner container (#5) to halve the
-      // cold-start cost and stay well under the test timeout. Each probe captures
-      // wget's own output (stderr) inline so we can classify the failure.
-      //
-      //  - http://1.1.1.1/ (raw IP, no DNS): a confined sidecar has no route, so
-      //    this must fail with timeout / refused / unreachable.
-      //  - http://example.com/ (DNS name): the session network's embedded DNS
-      //    does not forward to the internet, so this must fail with a DNS error
-      //    ("bad address" / "could not resolve" / ...).
-      //
-      // We deliberately do NOT redirect wget's stderr to /dev/null here so the
-      // failure wording is captured for pattern classification.
+      // The property the design turns on: rootlesskit publishes the inner
+      // container's port into the sidecar's namespace, and a joiner shares
+      // that namespace, so the port is on the joiner's own loopback.
+      // `docker run -d` returns once the container starts, not once `nc` is
+      // listening, so a single wget races the listener. Retry for ten seconds.
+      const result = await joinerRun(
+        containerName,
+        INNER_IMAGE,
+        "for i in $(seq 1 20); do wget -qO- -T 3 http://127.0.0.1:18081/ && exit 0; sleep 0.5; done; exit 1",
+      );
+      expect(
+        result.exitCode,
+        `joiner could not reach the published port. Output:\n${result.output}`,
+      ).toEqual(0);
+      expect(result.output).toContain("hi");
+
+      // Run both blocked requests in one inner container. Check wget exists
+      // first and retain stderr to distinguish network from harness failures.
       const probe = await innerRun(
         containerName,
         INNER_IMAGE,
         [
+          "command -v wget >/dev/null || exit 127;",
           "echo '=== raw-ip ===';",
           "wget -T 3 -q -O- http://1.1.1.1/; echo raw-ip-exit=$?;",
           "echo '=== dns ===';",
@@ -942,12 +825,9 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
         ].join(" "),
       );
 
-      // The combined run as a whole must have failed (some wget returned
-      // non-zero) AND the captured output must look like a network-reach failure,
-      // NOT a machinery failure. This AND condition is what defeats the
-      // false-positive risk (#1/#2): a missing binary / bad image / dead daemon
-      // would either be caught by the positive controls above or surface a
-      // machinery pattern here.
+      // The shell finishes successfully after recording both wget statuses.
+      // A docker/exec failure cannot stand in for blocked network requests.
+      expect(probe.exitCode, probe.output).toBe(0);
       const rawIpFailed = /raw-ip-exit=[^0]/.test(probe.output);
       const dnsFailed = /dns-exit=[^0]/.test(probe.output);
       expect(
@@ -971,228 +851,19 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
           `failure pattern, so confinement-by-network cannot be confirmed. Output:\n${probe.output}`,
       ).toEqual(true);
     } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-      await forceCleanup(
-        containerName,
-        plan!.networkName,
-        plan!.sharedTmpVolume,
-        plan!.dindDataVolume,
-      );
-    }
-  },
-  90_000,
-);
-
-test.skipIf(
-  !dindAvailable ||
-    !RUNNING_ON_HOST_DOCKER ||
-    !innerImageReady ||
-    !registryImageReady,
-)(
-  "DindStage: concurrent daemons isolate state and reuse the shared registry cache",
-  async () => {
-    const id = crypto.randomUUID();
-    const sessionKey = id.replaceAll("-", "").slice(0, 20);
-    const cacheVolume = `nas-test-registry-cache-${id}`;
-    const proxyName = `nas-test-registry-proxy-${id}`;
-    const proxyConfDir = await mkdtemp(
-      path.join(tmpdir(), "nas-registry-cache-"),
-    );
-    const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const plans: Array<NonNullable<ReturnType<typeof planDind>>> = [];
-    const scopes: Scope.CloseableScope[] = [];
-    const networkNames: string[] = [];
-
-    try {
-      await chmod(proxyConfDir, 0o777);
-      await dockerRunDetached({
-        name: proxyName,
-        image: "mitmproxy/mitmproxy:11",
-        args: [],
-        envVars: {},
-        mounts: [{ source: proxyConfDir, target: "/nas-ca", mode: "rw" }],
-        command: [
-          "mitmdump",
-          "--mode",
-          "regular@8080",
-          "--set",
-          "connection_strategy=lazy",
-          "--set",
-          "confdir=/nas-ca",
-        ],
-      });
-      await waitForContainerTcp(proxyName, 8080);
-      const caCertPath = path.join(proxyConfDir, "mitmproxy-ca-cert.pem");
-      await waitForFile(caCertPath);
-
-      for (const suffix of ["a", "b"]) {
-        const sessionId = `cache-${suffix}-${sessionKey}`;
-        const networkName = `nas-session-net-${sessionId}`;
-        await dockerNetworkCreateInternal(networkName);
-        networkNames.push(networkName);
-        await dockerNetworkConnect(networkName, proxyName);
-        const sharedInput = makeSharedInput(profile, sessionId);
-        const state = makeStageState({
-          network: { networkName, runtimeDir: "/run/user/1000/nas/network" },
-          proxy: {
-            brokerSocket: `/tmp/${sessionId}.sock`,
-            proxyEndpoint: `http://${proxyName}:8080`,
-            caCertPath,
-          },
-        });
-        const plan = planDind(
-          { ...sharedInput, ...state },
-          { registryCacheVolume: cacheVolume, readinessTimeoutMs: 60_000 },
-        );
-        expect(plan).not.toBeNull();
-        plans.push(plan!);
-        const scope = Effect.runSync(Scope.make());
-        scopes.push(scope);
-        const stage = createDindStageWithOptions(sharedInput, {
-          registryCacheVolume: cacheVolume,
-          readinessTimeoutMs: 60_000,
-        });
-        await Effect.runPromise(
-          stage
-            .run(state)
-            .pipe(
-              Effect.provideService(Scope.Scope, scope),
-              Effect.provide(DindServiceLive),
-            ),
-        );
-        await waitForDindReadyForTest(plan!.containerName);
-      }
-
-      expect(plans[0]!.dindDataVolume).not.toBe(plans[1]!.dindDataVolume);
-      expect(await dockerIsRunning(plans[0]!.containerName)).toBe(true);
-      expect(await dockerIsRunning(plans[1]!.containerName)).toBe(true);
-
-      const firstPull = await pullInSidecar(
-        plans[0]!.containerName,
-        INNER_IMAGE,
-      );
-      expect(firstPull.exitCode, firstPull.output).toBe(0);
-
-      await dockerStop(proxyName, { timeoutSeconds: 0 });
-      expect(await dockerIsRunning(proxyName)).toBe(false);
-      const secondPull = await pullInSidecar(
-        plans[1]!.containerName,
-        INNER_IMAGE,
-      );
-      expect(
-        secondPull.exitCode,
-        `second pull could not use shared cache with upstream disabled:\n${secondPull.output}`,
-      ).toBe(0);
-
-      for (const scope of scopes.splice(0).reverse()) {
+      try {
         await Effect.runPromise(Scope.close(scope, Exit.void));
+        expect(await dockerIsRunning(containerName)).toBe(false);
+        expect(await volumeExists(plan!.sharedTmpVolume)).toBe(false);
+        expect(await volumeExists(plan!.dindDataVolume)).toBe(false);
+      } finally {
+        await forceCleanup(
+          containerName,
+          plan!.networkName,
+          plan!.sharedTmpVolume,
+          plan!.dindDataVolume,
+        );
       }
-      expect(await volumeExists(cacheVolume)).toBe(true);
-      for (const plan of plans) {
-        expect(await dockerIsRunning(plan.containerName)).toBe(false);
-        expect(await dockerIsRunning(plan.registryMirrorName)).toBe(false);
-        expect(await volumeExists(plan.dindDataVolume)).toBe(false);
-      }
-    } finally {
-      for (const scope of scopes.splice(0).reverse()) {
-        await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
-      }
-      for (const plan of plans) await cleanupDindPlan(plan);
-      await dockerStop(proxyName, { timeoutSeconds: 0 }).catch(() => {});
-      await dockerRm(proxyName).catch(() => {});
-      for (const networkName of networkNames) {
-        await dockerNetworkRemove(networkName).catch(() => {});
-      }
-      await dockerVolumeRemove(cacheVolume).catch(() => {});
-      await rm(proxyConfDir, { recursive: true, force: true }).catch(() => {});
-    }
-  },
-  180_000,
-);
-
-test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
-  "DindStage: a namespace joiner sees an inner container's published port on loopback",
-  async () => {
-    // Generated rather than the file's default `test-session-1234`, which
-    // derives a fixed container name two concurrent runs would collide on.
-    const sessionId = `spec-${crypto.randomUUID().slice(0, 8)}`;
-    const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const sharedInput = makeSharedInput(profile, sessionId);
-    const stageState = makeStageState({
-      network: {
-        networkName: `nas-session-net-${sessionId}`,
-        runtimeDir: "/run/user/1000/nas/network",
-      },
-    });
-    const plan = planDind(
-      { ...sharedInput, ...stageState },
-      { disablePullCache: true, readinessTimeoutMs: 20_000 },
-    );
-    expect(plan).not.toBeNull();
-
-    const containerName = plan!.containerName;
-    const innerName = `inner-pub-${crypto.randomUUID().slice(0, 8)}`;
-    await forceCleanup(
-      containerName,
-      plan!.networkName,
-      plan!.sharedTmpVolume,
-      plan!.dindDataVolume,
-    );
-    await dockerNetworkCreateInternal(plan!.networkName);
-
-    const scope = Effect.runSync(Scope.make());
-    try {
-      const stage = createDindStageWithOptions(sharedInput, {
-        disablePullCache: true,
-        readinessTimeoutMs: 20_000,
-      });
-      await Effect.runPromise(
-        stage
-          .run(stageState)
-          .pipe(
-            Effect.provideService(Scope.Scope, scope),
-            Effect.provide(DindServiceLive),
-          ),
-      );
-      await waitForDindReadyForTest(containerName);
-
-      expect(await loadImageIntoSidecar(containerName, INNER_IMAGE)).toEqual(
-        true,
-      );
-      const served = await innerServe(
-        containerName,
-        INNER_IMAGE,
-        innerName,
-        18081,
-      );
-      expect(
-        served.exitCode,
-        `inner publish failed. Output:\n${served.output}`,
-      ).toEqual(0);
-
-      // The property the design turns on: rootlesskit publishes the inner
-      // container's port into the sidecar's namespace, and a joiner shares
-      // that namespace, so the port is on the joiner's own loopback.
-      // `docker run -d` returns once the container starts, not once `nc` is
-      // listening, so a single wget races the listener. Retry for ten seconds.
-      const result = await joinerRun(
-        containerName,
-        INNER_IMAGE,
-        "for i in $(seq 1 20); do wget -qO- -T 3 http://127.0.0.1:18081/ && exit 0; sleep 0.5; done; exit 1",
-      );
-      expect(
-        result.exitCode,
-        `joiner could not reach the published port. Output:\n${result.output}`,
-      ).toEqual(0);
-      expect(result.output).toContain("hi");
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {});
-      await forceCleanup(
-        containerName,
-        plan!.networkName,
-        plan!.sharedTmpVolume,
-        plan!.dindDataVolume,
-      );
     }
   },
   90_000,

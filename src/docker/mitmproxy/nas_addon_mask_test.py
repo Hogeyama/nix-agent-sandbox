@@ -4817,11 +4817,23 @@ class WebSocketLifecycleTest(unittest.TestCase):
         self.assertTrue(flow.killed)
         self.assertNotIn(flow.id, addon._websocket_states)
 
-    def test_stale_session_message_is_dropped_and_closed(self):
+    def test_deleted_session_bypasses_warm_registry_cache_and_closes(self):
         flow, message = self._flow()
         addon = self._authorized_addon(flow)
 
-        with patch.object(nas_addon, "_load_registry", return_value=None):
+        with tempfile.TemporaryDirectory() as sessions_dir, patch.object(
+            nas_addon, "SESSIONS_DIR", sessions_dir
+        ), patch.object(nas_addon, "_registry_cache", {}), patch.object(
+            nas_addon.time, "monotonic", return_value=100.0
+        ):
+            registry = Path(sessions_dir) / "sess-test.json"
+            registry.write_text("{}")
+            self.assertEqual(nas_addon._load_registry("sess-test"), {})
+            registry.unlink()
+            # The ordinary read still hits the unexpired cache. WebSocket
+            # messages must detect deletion immediately, without waiting for TTL.
+            self.assertEqual(nas_addon._load_registry("sess-test"), {})
+
             addon.websocket_message(flow)
 
         self.assertTrue(message.dropped)

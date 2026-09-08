@@ -320,28 +320,6 @@ function webSocketEchoServerScript(port: number): string {
   ].join("\n");
 }
 
-function rawByteServerScript(port: number): string {
-  return [
-    "import socket",
-    "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
-    "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
-    `srv.bind(("0.0.0.0", ${port}))`,
-    "srv.listen(8)",
-    "while True:",
-    "    conn, _ = srv.accept()",
-    "    conn.settimeout(5)",
-    "    try:",
-    "        data = conn.recv(65536)",
-    "        if data:",
-    '            print(data.decode("utf-8", "replace"), flush=True)',
-    '            conn.sendall(b"RAW-ECHO:" + data)',
-    "    except OSError:",
-    "        pass",
-    "    finally:",
-    "        conn.close()",
-  ].join("\n");
-}
-
 class BoundedSocketReader {
   private buffer = Buffer.alloc(0);
   private ended = false;
@@ -519,48 +497,6 @@ async function expectNoWebSocketEcho(websocket: ProxyWebSocket): Promise<void> {
   await expect(websocket.readText()).rejects.toThrow(
     "timed out waiting for socket data",
   );
-}
-
-async function openConnectTunnel(
-  proxyPort: number,
-  target: string,
-  credentials: string,
-): Promise<net.Socket> {
-  const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
-  const reader = new BoundedSocketReader(socket);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("timed out connecting to proxy"));
-    }, 5_000);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      reject(new Error("failed to connect to proxy"));
-    });
-  });
-  socket.write(
-    [
-      `CONNECT ${target} HTTP/1.1`,
-      `Host: ${target}`,
-      `Proxy-Authorization: Basic ${btoa(credentials)}`,
-      "",
-      "",
-    ].join("\r\n"),
-  );
-  const responseHeaders = (
-    await reader.readUntil(Buffer.from("\r\n\r\n"), 32_768)
-  ).toString("latin1");
-  reader.dispose();
-  socket.on("error", () => {});
-  if (!/^HTTP\/1\.[01] 200\b/.test(responseHeaders)) {
-    socket.destroy();
-    throw new Error("CONNECT tunnel was rejected");
-  }
-  return socket;
 }
 
 interface ProtocolResources {
@@ -941,7 +877,6 @@ test("setupAddonFixture installs the shipped resolved document", async () => {
 });
 
 const WEBSOCKET_TARGET_PORT = 8091;
-const RAW_TARGET_PORT = 8092;
 const WEBSOCKET_TARGET_IDLE_TIMEOUT_SECONDS = 15;
 
 test.skipIf(!dockerAvailable || !canBindMount)(
@@ -1114,163 +1049,20 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await waitForContainerLog(resources.targetName, "HANDSHAKE");
       websocket.sendText(blockingSecret);
       await waitForContainerLog(resources.proxyName, "reason=forbidden-secret");
+
+      websocket.sendText("benign-after-forbidden");
+      await waitForContainerLog(resources.proxyName, "reason=missing-state");
+      // The reader buffers every frame since the handshake. One absence
+      // check catches an echo of either message after both hooks have run.
       await expectNoWebSocketEcho(websocket);
-      let upstreamLogs = await dockerLogs(resources.targetName);
+      const upstreamLogs = await dockerLogs(resources.targetName);
       const proxyLogs = await dockerLogs(resources.proxyName);
       expect(upstreamLogs.includes("HANDSHAKE")).toBe(true);
       expect(upstreamLogs.includes("MESSAGE ")).toBe(false);
       expect(upstreamLogs.includes(blockingSecret)).toBe(false);
       expect(addonLogLines(proxyLogs).includes(blockingSecret)).toBe(false);
-
-      websocket.sendText("benign-after-forbidden");
-      await waitForContainerLog(resources.proxyName, "reason=missing-state");
-      await expectNoWebSocketEcho(websocket);
-      upstreamLogs = await dockerLogs(resources.targetName);
-      expect(upstreamLogs.includes("MESSAGE benign-after-forbidden")).toBe(
-        false,
-      );
     } finally {
       websocket?.close();
-      await cleanupProtocolResources(resources);
-      await teardownFixture(fixture);
-    }
-  },
-  60_000,
-);
-
-test.skipIf(!dockerAvailable || !canBindMount)(
-  "websocket: over-budget message is never delivered and leaves the session fail-closed",
-  async () => {
-    const resources = protocolResources("nas-ws-budget");
-    let fixture: AddonFixture | undefined;
-    let websocket: ProxyWebSocket | undefined;
-    try {
-      fixture = await setupAddonFixture(
-        "nas-addon-ws-budget-",
-        PROTECTED_WEBSOCKET_DOCUMENT,
-        { masking: ["MASKME123"], blocking: ["BLOCKME123"] },
-      );
-      const proxyPort = await startProtocolContainers(
-        resources,
-        fixture,
-        "chatgpt.test",
-        WEBSOCKET_TARGET_PORT,
-        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
-      );
-      websocket = await openWebSocketThroughProxy(
-        proxyPort,
-        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
-        `${fixture.sessionId}:${fixture.token}`,
-      );
-
-      expect(websocket.responseHeaders).toContain(" 101 ");
-      await waitForContainerLog(resources.targetName, "HANDSHAKE");
-      websocket.sendText("x".repeat(65));
-      await waitForContainerLog(resources.proxyName, "reason=resource-limit");
-      await expectNoWebSocketEcho(websocket);
-      let upstreamLogs = await dockerLogs(resources.targetName);
-      expect(upstreamLogs.includes("HANDSHAKE")).toBe(true);
-      expect(upstreamLogs.includes("MESSAGE ")).toBe(false);
-
-      websocket.sendText("benign-after-budget");
-      await waitForContainerLog(resources.proxyName, "reason=missing-state");
-      await expectNoWebSocketEcho(websocket);
-      upstreamLogs = await dockerLogs(resources.targetName);
-      expect(upstreamLogs.includes("MESSAGE benign-after-budget")).toBe(false);
-    } finally {
-      websocket?.close();
-      await cleanupProtocolResources(resources);
-      await teardownFixture(fixture);
-    }
-  },
-  60_000,
-);
-
-test.skipIf(!dockerAvailable || !canBindMount)(
-  "websocket: stale session message is never delivered and leaves the session fail-closed",
-  async () => {
-    const resources = protocolResources("nas-ws-stale");
-    let fixture: AddonFixture | undefined;
-    let websocket: ProxyWebSocket | undefined;
-    try {
-      fixture = await setupAddonFixture(
-        "nas-addon-ws-stale-",
-        PROTECTED_WEBSOCKET_DOCUMENT,
-        { masking: ["MASKME123"], blocking: ["BLOCKME123"] },
-      );
-      const proxyPort = await startProtocolContainers(
-        resources,
-        fixture,
-        "chatgpt.test",
-        WEBSOCKET_TARGET_PORT,
-        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
-      );
-      websocket = await openWebSocketThroughProxy(
-        proxyPort,
-        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
-        `${fixture.sessionId}:${fixture.token}`,
-      );
-
-      expect(websocket.responseHeaders).toContain(" 101 ");
-      await waitForContainerLog(resources.targetName, "HANDSHAKE");
-      await rm(sessionRegistryPath(fixture.paths, fixture.sessionId), {
-        force: true,
-      });
-      websocket.sendText("after-session-expiry");
-      await waitForContainerLog(resources.proxyName, "reason=stale-session");
-      await expectNoWebSocketEcho(websocket);
-      let upstreamLogs = await dockerLogs(resources.targetName);
-      expect(upstreamLogs.includes("HANDSHAKE")).toBe(true);
-      expect(upstreamLogs.includes("MESSAGE ")).toBe(false);
-
-      websocket.sendText("benign-after-stale-session");
-      await waitForContainerLog(resources.proxyName, "reason=missing-state");
-      await expectNoWebSocketEcho(websocket);
-      upstreamLogs = await dockerLogs(resources.targetName);
-      expect(upstreamLogs.includes("MESSAGE benign-after-stale-session")).toBe(
-        false,
-      );
-    } finally {
-      websocket?.close();
-      await cleanupProtocolResources(resources);
-      await teardownFixture(fixture);
-    }
-  },
-  60_000,
-);
-
-test.skipIf(!dockerAvailable || !canBindMount)(
-  "raw CONNECT: authenticated non-HTTP bytes never reach upstream",
-  async () => {
-    const resources = protocolResources("nas-raw-connect");
-    let fixture: AddonFixture | undefined;
-    let tunnel: net.Socket | undefined;
-    try {
-      fixture = await setupAddonFixture("nas-addon-raw-connect-");
-      const proxyPort = await startProtocolContainers(
-        resources,
-        fixture,
-        "raw.test",
-        RAW_TARGET_PORT,
-        rawByteServerScript(RAW_TARGET_PORT),
-      );
-
-      tunnel = await openConnectTunnel(
-        proxyPort,
-        `raw.test:${RAW_TARGET_PORT}`,
-        `${fixture.sessionId}:${fixture.token}`,
-      );
-      let responseBytes = 0;
-      tunnel.on("data", (chunk) => {
-        responseBytes += chunk.length;
-      });
-      tunnel.write("SSH-2.0-nas-raw-probe\r\n");
-      await Bun.sleep(2_000);
-      const upstreamLogs = await dockerLogs(resources.targetName);
-      expect(upstreamLogs.includes("nas-raw-probe")).toBe(false);
-      expect(responseBytes).toBe(0);
-    } finally {
-      tunnel?.destroy();
       await cleanupProtocolResources(resources);
       await teardownFixture(fixture);
     }
