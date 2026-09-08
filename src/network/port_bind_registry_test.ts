@@ -3,7 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { writeSessionRegistry } from "../lib/runtime_registry.ts";
-import type { PortBindSessionEntry } from "./port_bind_protocol.ts";
+import {
+  type PortBindSessionEntry,
+  sessionForwards,
+  sessionPortForwards,
+} from "./port_bind_protocol.ts";
 import {
   findSessionsByHostPort,
   listPortBindSessions,
@@ -88,4 +92,88 @@ test("findSessionsByHostPort matches on host port and returns every claimant", a
     const matches = await findSessionsByHostPort(paths, 8080);
     expect(matches.map((m) => m.sessionId).sort()).toEqual(["s1", "s2"]);
   });
+});
+
+test("canonical portForwards override stale compatibility arrays", async () => {
+  await withPaths(async (root) => {
+    const paths = await resolvePortsRuntimePaths(root);
+    await writeSessionRegistry(paths, {
+      ...entry("s1", [
+        { containerPort: 3000, hostPort: 8080, createdAt: "old" },
+      ]),
+      forwards: [{ containerPort: 5432, hostPort: 5432, createdAt: "old" }],
+      portForwards: [
+        {
+          direction: "remote",
+          containerPort: 15432,
+          hostPort: 5432,
+          createdAt: "t",
+          owners: ["config"],
+          state: "unavailable",
+        },
+      ],
+    } satisfies PortBindSessionEntry);
+    const [session] = await listPortBindSessions(paths);
+    expect(session?.bindings).toEqual([]);
+    expect(session?.forwards).toEqual([
+      { containerPort: 15432, hostPort: 5432, createdAt: "t" },
+    ]);
+    expect(await findSessionsByHostPort(paths, 8080)).toEqual([]);
+  });
+});
+
+test("legacy registries gain direction and dynamic ownership on read", async () => {
+  await withPaths(async (root) => {
+    const paths = await resolvePortsRuntimePaths(root);
+    await writeSessionRegistry(paths, {
+      ...entry("s1", [{ containerPort: 3000, hostPort: 8080, createdAt: "t" }]),
+      forwards: [{ containerPort: 5432, hostPort: 5432, createdAt: "r" }],
+    });
+    const [session] = await listPortBindSessions(paths);
+    expect(session?.portForwards).toEqual([
+      {
+        direction: "local",
+        containerPort: 3000,
+        hostPort: 8080,
+        createdAt: "t",
+        owners: ["dynamic"],
+        state: "active",
+      },
+      {
+        direction: "remote",
+        containerPort: 5432,
+        hostPort: 5432,
+        createdAt: "r",
+        owners: ["dynamic"],
+        state: "active",
+      },
+    ]);
+  });
+});
+
+test("empty canonical state suppresses legacy entries and only public fields are returned", () => {
+  const legacy = entry("s", [
+    { containerPort: 3000, hostPort: 8080, createdAt: "t" },
+  ]);
+  expect(sessionPortForwards({ ...legacy, portForwards: [] })).toEqual([]);
+  const session = {
+    ...legacy,
+    portForwards: [
+      {
+        direction: "remote" as const,
+        containerPort: 5432,
+        hostPort: 5432,
+        createdAt: "t",
+        owners: ["internal" as const],
+        state: "active" as const,
+        token: "private-capability",
+      },
+    ],
+  };
+  expect(JSON.stringify(sessionPortForwards(session))).not.toContain(
+    "private-capability",
+  );
+  expect(sessionForwards(session)).toEqual([
+    { containerPort: 5432, hostPort: 5432, createdAt: "t" },
+  ]);
 });

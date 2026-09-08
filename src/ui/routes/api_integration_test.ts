@@ -20,7 +20,20 @@ import {
 } from "../../domain/port_bind/types.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import { resolveAsset } from "../../lib/asset.ts";
-import type { PortsRuntimePaths } from "../../network/port_bind_registry.ts";
+import {
+  createUnixServer,
+  readJsonLine,
+  writeJsonLine,
+} from "../../lib/unix_socket.ts";
+import {
+  PORT_BIND_PROTOCOL_VERSION,
+  type PortBindSessionEntry,
+} from "../../network/port_bind_protocol.ts";
+import {
+  brokerSocketPath,
+  type PortsRuntimePaths,
+  writeSessionRegistry,
+} from "../../network/port_bind_registry.ts";
 import { APPROVAL_SCOPES } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
@@ -99,6 +112,46 @@ function createTestContext(dir: string): UiDataContext {
       }),
     },
   };
+}
+
+async function withPortControlApi<T>(
+  reply: (request: unknown) => unknown,
+  fn: (app: Router, requests: unknown[]) => Promise<T>,
+): Promise<T> {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-port-forward-"));
+  const ctx = createTestContext(tmpDir);
+  const socketPath = brokerSocketPath(ctx.portsPaths, "s1");
+  await mkdir(path.dirname(socketPath), { recursive: true });
+  await mkdir(ctx.portsPaths.sessionsDir, { recursive: true });
+  await mkdir(ctx.portsPaths.relayDir, { recursive: true });
+  const requests: unknown[] = [];
+  const server = await createUnixServer(socketPath, (socket) => {
+    void (async () => {
+      const line = await readJsonLine(socket);
+      const request = line === null ? null : JSON.parse(line);
+      requests.push(request);
+      await writeJsonLine(socket, reply(request));
+      socket.end();
+    })();
+  });
+  try {
+    await writeSessionRegistry(ctx.portsPaths, {
+      protocolVersion: PORT_BIND_PROTOCOL_VERSION,
+      sessionId: "s1",
+      pid: process.pid,
+      brokerSocket: socketPath,
+      bindings: [],
+      forwards: [],
+      portForwards: [],
+    } satisfies PortBindSessionEntry);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+    return await fn(app, requests);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 }
 
 test("GET /network/pending returns items array", async () => {
@@ -441,6 +494,140 @@ test("POST /network/unbind validates its session id and container port", async (
 
   expect(unsafeId.status).toEqual(400);
   expect(invalidPort.status).toEqual(400);
+});
+
+test("common port-forward routes preserve public state and removal details", async () => {
+  await withPortControlApi(
+    (request) => {
+      if ((request as { type?: string }).type === "add-forward") {
+        return {
+          ok: true,
+          entry: {
+            direction: "remote",
+            containerPort: 15_432,
+            hostPort: 5432,
+            owners: ["dynamic"],
+            createdAt: "2026-09-08T00:00:00.000Z",
+            state: "active",
+          },
+          probe: "no-answer",
+        };
+      }
+      return {
+        ok: true,
+        removed: true,
+        retainedInternal: true,
+        listenerClosed: false,
+      };
+    },
+    async (app, requests) => {
+      const added = await app.request("/api/network/port-forwards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "s1",
+          direction: "remote",
+          containerPort: 15_432,
+          hostPort: 5432,
+        }),
+      });
+      expect(added.status).toBe(200);
+      expect(await added.json()).toMatchObject({
+        entry: {
+          direction: "remote",
+          owners: ["dynamic"],
+          state: "active",
+        },
+        probe: "no-answer",
+      });
+
+      const removed = await app.request("/api/network/port-forwards/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "s1",
+          direction: "remote",
+          containerPort: 15_432,
+        }),
+      });
+      expect(removed.status).toBe(200);
+      expect(await removed.json()).toEqual({
+        removed: true,
+        retainedInternal: true,
+        listenerClosed: false,
+      });
+      expect(requests).toEqual([
+        {
+          type: "add-forward",
+          direction: "remote",
+          containerPort: 15_432,
+          hostPort: 5432,
+        },
+        {
+          type: "remove-forward",
+          direction: "remote",
+          containerPort: 15_432,
+        },
+      ]);
+    },
+  );
+});
+
+test("common port-forward routes reject owner input and ambiguous selectors", async () => {
+  const ctx = createTestContext("/tmp/nas-ui-port-bind-test-unused");
+  const api = createApiRoutes(ctx);
+  const app = new Router();
+  app.route("/api", api);
+
+  const owner = await app.request("/api/network/port-forwards", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "s1",
+      direction: "remote",
+      containerPort: 15_432,
+      hostPort: 5432,
+      owner: "internal",
+    }),
+  });
+  const ambiguous = await app.request("/api/network/port-forwards/remove", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "s1",
+      direction: "local",
+      containerPort: 3000,
+      hostPort: 8080,
+    }),
+  });
+  expect(owner.status).toBe(400);
+  expect(ambiguous.status).toBe(400);
+});
+
+test("a remote forwarding conflict maps to 409", async () => {
+  await withPortControlApi(
+    () => ({
+      ok: false,
+      error: "binding-conflict",
+      message: "container port 15432 already maps to host port 5432",
+    }),
+    async (app) => {
+      const response = await app.request("/api/network/port-forwards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "s1",
+          direction: "remote",
+          containerPort: 15_432,
+          hostPort: 6432,
+        }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: "container port 15432 already maps to host port 5432",
+      });
+    },
+  );
 });
 
 test("port-bind errors surface with their specified statuses", () => {

@@ -411,9 +411,9 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
     { name: "ProxyStage", needs: ["container", "observability"] },
     {
       name: "DindStage",
-      needs: ["container", "network", "proxy", "workspace"],
+      needs: ["container", "network", "observability", "proxy", "workspace"],
     },
-    { name: "PortBindStage", needs: ["container"] },
+    { name: "PortBindStage", needs: ["container", "observability"] },
     { name: "LaunchStage", needs: ["container"] },
   ]);
 });

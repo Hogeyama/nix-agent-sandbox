@@ -21,7 +21,6 @@ import {
   type ResolvedDocument,
   resolveAuthzConfig,
 } from "../../network/authz/resolve.ts";
-import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
 import {
   generateSessionToken as defaultGenerateToken,
@@ -44,10 +43,6 @@ import type {
 } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
 import { CaService } from "./ca_service.ts";
-import {
-  type ForwardPortRelayHandle,
-  ForwardPortRelayService,
-} from "./forward_port_relay_service.ts";
 import { NetworkRuntimeService } from "./network_runtime_service.ts";
 import { ProxyService } from "./proxy_service.ts";
 import {
@@ -62,15 +57,6 @@ const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
 
 export { LOCAL_PROXY_PORT };
-
-/**
- * Mount target directory inside the agent container where per-port forward-port
- * UDS sockets are bind-mounted. The local-proxy resolves connect attempts to
- * `<FORWARD_PORT_SOCKET_DIR_IN_CONTAINER>/<port>.sock`. The value is exposed
- * to the container via `NAS_FORWARD_PORT_SOCKET_DIR` and MUST match the mount
- * targets we generate for each port — drift would cause socket lookup failure.
- */
-const FORWARD_PORT_SOCKET_DIR_IN_CONTAINER = "/run/nas-fp";
 
 // ---------------------------------------------------------------------------
 // ProxyPlan
@@ -103,7 +89,6 @@ export interface ProxyPlan {
   >;
   readonly envVars: Record<string, string>;
   readonly container: ContainerPlan;
-  readonly forwardPorts: ReadonlyArray<number>;
   /** 秘密のレジストリ。注入に要るので `mask.proxy` に関わらず解決する。 */
   readonly secretRegistry: Record<string, SecretConfig>;
   /** プロキシでの秘密の置換と拒否を行うか。 */
@@ -153,20 +138,6 @@ export function planProxy(
   const token = generateSessionToken();
   const sessionNetworkName = `nas-session-net-${input.sessionId}`;
 
-  // The observability slice contributes its receiver port (when enabled) to
-  // the forward-ports set, alongside whatever the profile declares. We dedup
-  // before downstream so the relay layer never sees a duplicate entry — its
-  // duplicate-port contract throws, which would otherwise break sessions
-  // whose profile explicitly listed the same port.
-  const baseForwardPorts = input.profile.network.proxy.forwardPorts;
-  const observabilityPort = input.observability.enabled
-    ? input.observability.receiverPort
-    : null;
-  const forwardPorts =
-    observabilityPort !== null
-      ? Array.from(new Set([...baseForwardPorts, observabilityPort]))
-      : baseForwardPorts;
-
   const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
   // The agent reaches the DinD sidecar's daemon over its joined network
@@ -183,30 +154,6 @@ export function planProxy(
     NO_PROXY: noProxyEntries.join(","),
   };
 
-  // forward-port mounts/env are gated on `forwardPorts.length > 0` so the
-  // fast path (no forward-ports declared) adds neither the dir env nor any
-  // bind-mounts. The socket source paths are computed via the canonical pure
-  // helper exported by forward_port_relay.ts; that same helper drives the
-  // actual relay listener path inside ForwardPortRelayService, so plan-time
-  // and runtime paths cannot drift.
-  const forwardPortMounts: MountSpec[] = [];
-  if (forwardPorts.length > 0) {
-    envVars.NAS_FORWARD_PORTS = forwardPorts.join(",");
-    envVars.NAS_FORWARD_PORT_SOCKET_DIR = FORWARD_PORT_SOCKET_DIR_IN_CONTAINER;
-    for (const port of forwardPorts) {
-      forwardPortMounts.push({
-        source: forwardPortSocketPath(
-          runtimePaths.runtimeDir,
-          input.sessionId,
-          port,
-        ),
-        target: `${FORWARD_PORT_SOCKET_DIR_IN_CONTAINER}/${port}.sock`,
-        // UDS connect requires write permission on the socket file.
-        readOnly: false,
-      });
-    }
-  }
-
   // CA cert mount for update-ca-certificates inside the agent container
   const caCertMount: MountSpec = {
     source: caCertFilePath(runtimePaths),
@@ -217,7 +164,7 @@ export function planProxy(
   const container = buildContainerState(input, {
     sessionNetworkName,
     envVars,
-    extraMounts: [...forwardPortMounts, caCertMount],
+    extraMounts: [caCertMount],
   });
 
   // 秘密の扱いはスコープとルールが決めるので、レジストリは丸ごと渡す。注入は
@@ -262,7 +209,6 @@ export function planProxy(
     auditDir: input.probes.auditDir,
     envVars: container.env.static,
     container,
-    forwardPorts,
     secretRegistry: { ...input.profile.secrets },
     proxyMasking,
     hostEnv,
@@ -284,11 +230,7 @@ export function createProxyStage(
 ): Stage<
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
-  | CaService
-  | NetworkRuntimeService
-  | ProxyService
-  | SessionBrokerService
-  | ForwardPortRelayService,
+  CaService | NetworkRuntimeService | ProxyService | SessionBrokerService,
   unknown
 > {
   return createProxyStageWithOptions(shared);
@@ -300,11 +242,7 @@ export function createProxyStageWithOptions(
 ): Stage<
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
-  | CaService
-  | NetworkRuntimeService
-  | ProxyService
-  | SessionBrokerService
-  | ForwardPortRelayService,
+  CaService | NetworkRuntimeService | ProxyService | SessionBrokerService,
   unknown
 > {
   return {
@@ -321,7 +259,6 @@ export function createProxyStageWithOptions(
       | NetworkRuntimeService
       | ProxyService
       | SessionBrokerService
-      | ForwardPortRelayService
     > {
       const stageInput = {
         ...shared,
@@ -347,13 +284,11 @@ function runProxy(
   | NetworkRuntimeService
   | ProxyService
   | SessionBrokerService
-  | ForwardPortRelayService
 > {
   return Effect.gen(function* () {
     const networkRuntime = yield* NetworkRuntimeService;
     const proxy = yield* ProxyService;
     const sessionBrokerService = yield* SessionBrokerService;
-    const forwardPortRelayService = yield* ForwardPortRelayService;
     const caService = yield* CaService;
 
     // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers,
@@ -454,23 +389,7 @@ function runProxy(
       `[nas]   ↳ ProxyStage:start-session-broker done (${formatElapsed(phaseStart)})`,
     );
 
-    // 7. Forward-port relays (acquireRelease).
-    // Always called regardless of plan.forwardPorts.length: the live impl
-    // fast-paths empty ports to a no-op.
-    phaseStart = performance.now();
-    yield* Effect.acquireRelease(
-      forwardPortRelayService.ensureRelays({
-        runtimeDir: plan.runtimePaths.runtimeDir,
-        sessionId: plan.sessionId,
-        ports: plan.forwardPorts,
-      }),
-      (handle: ForwardPortRelayHandle) => handle.close(),
-    );
-    logDebug(
-      `[nas]   ↳ ProxyStage:ensure-relays done (${formatElapsed(phaseStart)})`,
-    );
-
-    // 8. Compute addon hash and ensure shared proxy container
+    // 7. Compute addon hash and ensure shared proxy container
     phaseStart = performance.now();
     const addonHash = yield* networkRuntime.computeAddonHash();
     logDebug(

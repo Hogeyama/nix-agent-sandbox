@@ -4,10 +4,12 @@
 
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
+  type AddForwardResult,
+  type ForwardSelector,
   makePortBindClient,
   type PortBindCandidates,
-  type PortBindKey,
   type PortForwardKey,
+  type RemoveForwardResult,
   SessionUnreachableError,
 } from "../domain/port_bind.ts";
 import { runFzfSelect } from "../fzf_review.ts";
@@ -19,6 +21,7 @@ import {
   type PortBindCandidate,
   type PortBindSessionEntry,
   sessionForwards,
+  sessionPortForwards,
 } from "../network/port_bind_protocol.ts";
 import {
   type PortsRuntimePaths,
@@ -43,6 +46,7 @@ import {
   parseBindSessionOnly,
   parseForwardArgs,
   parseForwardSessionOnly,
+  parseSshForwardArgs,
   parseUnbindArgs,
   parseUnforwardArgs,
 } from "./port_bind_args.ts";
@@ -90,19 +94,30 @@ function formatAge(createdAt: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-function bindingRows(sessions: PortBindSessionEntry[]) {
+function portForwardRows(sessions: PortBindSessionEntry[]) {
   return sessions.flatMap((session) =>
-    session.bindings.map((binding) => ({
+    sessionPortForwards(session).map((forward) => ({
       sessionId: session.sessionId,
-      containerPort: binding.containerPort,
-      hostPort: binding.hostPort,
-      age: formatAge(binding.createdAt),
-      key: {
-        sessionId: session.sessionId,
-        containerPort: binding.containerPort,
-      } satisfies PortBindKey,
+      direction: forward.direction,
+      containerPort: forward.containerPort,
+      hostPort: forward.hostPort,
+      owners: forward.owners,
+      state: forward.state,
+      age: formatAge(forward.createdAt),
+      selector: (forward.direction === "local"
+        ? { direction: "local", hostPort: forward.hostPort }
+        : {
+            direction: "remote",
+            containerPort: forward.containerPort,
+          }) satisfies ForwardSelector,
     })),
   );
+}
+
+function portForwardLine(
+  row: ReturnType<typeof portForwardRows>[number],
+): string {
+  return `${row.sessionId} ${row.direction} host:${row.hostPort} container:${row.containerPort} ${row.owners.join(",")} ${row.state} ${row.age}`;
 }
 
 function forwardRows(sessions: PortBindSessionEntry[]) {
@@ -139,6 +154,35 @@ function printForwardResult(result: {
   }
 }
 
+function printAddForwardResult(result: AddForwardResult): void {
+  if (result.entry.direction === "remote") {
+    printForwardResult({
+      containerPort: result.entry.containerPort,
+      hostPort: result.entry.hostPort,
+      hostProbe: result.probe === "ok" ? "ok" : "no-answer",
+    });
+    return;
+  }
+
+  console.log(`http://localhost:${result.entry.hostPort} で開きました`);
+  if (result.probe === "no-answer") {
+    console.log("[nas] コンテナのポートは応答しませんでした。");
+  } else if (result.probe === "container-not-running") {
+    console.log("[nas] コンテナは起動していません。");
+  } else if (result.probe === "relay-unreachable") {
+    console.log("[nas] リレーを起動できませんでした。");
+  }
+}
+
+function printRemoveForwardResult(result: RemoveForwardResult): void {
+  const outcome = result.removed
+    ? "ポート転送のユーザー設定を削除しました。"
+    : "削除できるポート転送のユーザー設定はありませんでした。";
+  console.log(
+    `[nas] ${outcome} retainedInternal=${result.retainedInternal} listenerClosed=${result.listenerClosed}`,
+  );
+}
+
 async function collectCandidates(
   client: ReturnType<typeof makePortBindClient>,
   paths: PortsRuntimePaths,
@@ -165,10 +209,19 @@ function candidateLine(candidate: PortBindCandidate): string {
     : `${candidate.containerPort} (${candidate.scope} — 127.0.0.1 からは届きません)`;
 }
 
-export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
+interface NetworkCommandDependencies {
+  portBindClient?: ReturnType<typeof makePortBindClient>;
+  select?: typeof runFzfSelect;
+}
+
+export async function runNetworkCommand(
+  nasArgs: string[],
+  dependencies: NetworkCommandDependencies = {},
+): Promise<void> {
   const sub = findFirstNonFlagArg(nasArgs);
   const runtimeDir = getFlagValue(nasArgs, "--runtime-dir");
-  const portBindClient = makePortBindClient();
+  const portBindClient = dependencies.portBindClient ?? makePortBindClient();
+  const select = dependencies.select ?? runFzfSelect;
   let unreachableSessionId: string | undefined;
 
   try {
@@ -176,27 +229,49 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
       const paths = await resolvePortsRuntimePaths(runtimeDir ?? undefined);
       const args = removeFirstOccurrence(nasArgs, sub);
       if (!hasPortBindArgument(args)) {
-        const rows = bindingRows(await portBindClient.list(paths));
+        const rows = portForwardRows(await portBindClient.list(paths));
         if (hasFormatJson(nasArgs)) {
           console.log(
             JSON.stringify(
-              rows.map(({ sessionId, containerPort, hostPort, age }) => ({
-                sessionId,
-                containerPort,
-                hostPort,
-                age,
-              })),
+              rows.map(
+                ({
+                  sessionId,
+                  direction,
+                  containerPort,
+                  hostPort,
+                  owners,
+                  state,
+                  age,
+                }) => ({
+                  sessionId,
+                  direction,
+                  containerPort,
+                  hostPort,
+                  owners,
+                  state,
+                  age,
+                }),
+              ),
             ),
           );
         } else if (rows.length === 0) {
-          console.log("[nas] No open port bindings.");
+          console.log("[nas] No open port forwards.");
         } else {
-          for (const row of rows) {
-            console.log(
-              `${row.sessionId} ${row.containerPort} ${row.hostPort} ${row.age}`,
-            );
-          }
+          for (const row of rows) console.log(portForwardLine(row));
         }
+        return;
+      }
+
+      const sshRequest = parseSshForwardArgs(args, "bind");
+      if (sshRequest !== null && sshRequest.operation === "bind") {
+        unreachableSessionId = sshRequest.sessionId;
+        printAddForwardResult(
+          await portBindClient.add(
+            paths,
+            sshRequest.sessionId,
+            sshRequest.request,
+          ),
+        );
         return;
       }
 
@@ -223,7 +298,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
           return;
         }
         const lines = found.candidates.map(candidateLine);
-        const selected = await runFzfSelect(lines, {
+        const selected = await select(lines, {
           prompt: "bind> ",
           missingMessage:
             "[nas] fzf is not installed. Pass <session-id>:<container-port> to 'nas network bind'.",
@@ -262,28 +337,43 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
     if (sub === "unbind") {
       const paths = await resolvePortsRuntimePaths(runtimeDir ?? undefined);
       const args = removeFirstOccurrence(nasArgs, sub);
-      let key = parseUnbindArgs(args);
+      const sshRequest = parseSshForwardArgs(args, "unbind");
+      if (sshRequest !== null && sshRequest.operation === "unbind") {
+        unreachableSessionId = sshRequest.sessionId;
+        printRemoveForwardResult(
+          await portBindClient.remove(
+            paths,
+            sshRequest.sessionId,
+            sshRequest.selector,
+          ),
+        );
+        return;
+      }
+
+      const key = parseUnbindArgs(args);
       if (key === null) {
-        const rows = bindingRows(await portBindClient.list(paths));
+        const rows = portForwardRows(await portBindClient.list(paths));
         if (rows.length === 0) {
-          console.log("[nas] No open port bindings.");
+          console.log("[nas] No open port forwards.");
           return;
         }
-        const lines = rows.map(
-          (row) =>
-            `${row.sessionId} ${row.containerPort} ${row.hostPort} ${row.age}`,
-        );
-        const selected = await runFzfSelect(lines, {
+        const lines = rows.map(portForwardLine);
+        const selected = await select(lines, {
           prompt: "unbind> ",
           missingMessage:
-            "[nas] fzf is not installed. Pass <session-id>:<container-port> or <host-port> to 'nas network unbind'.",
+            "[nas] fzf is not installed. Pass <session-id> -L <host-port> or <session-id> -R <container-port> to 'nas network unbind'.",
         });
         if (selected === null) return;
-        key = rows[lines.indexOf(selected)].key;
+        const row = rows[lines.indexOf(selected)];
+        unreachableSessionId = row.sessionId;
+        printRemoveForwardResult(
+          await portBindClient.remove(paths, row.sessionId, row.selector),
+        );
+        return;
       }
       if ("sessionId" in key) unreachableSessionId = key.sessionId;
       await portBindClient.unbindByKey(paths, key);
-      console.log("[nas] ポート転送を閉じました。");
+      console.log("[nas] ポート転送の削除を処理しました。");
       return;
     }
 
@@ -343,7 +433,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
           return;
         }
         const lines = listeners.map((listener) => `${listener.containerPort}`);
-        const selected = await runFzfSelect(lines, {
+        const selected = await select(lines, {
           prompt: "forward> ",
           header: "ホストの待ち受けポート（同じ番号でコンテナ内に転送）",
           missingMessage:
@@ -381,7 +471,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
           return;
         }
         const lines = rows.map(forwardLine);
-        const selected = await runFzfSelect(lines, {
+        const selected = await select(lines, {
           prompt: "unforward> ",
           missingMessage:
             "[nas] fzf is not installed. Pass <session-id>:<container-port> to 'nas network unforward'.",
@@ -391,7 +481,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
       }
       unreachableSessionId = key.sessionId;
       await portBindClient.unforward(paths, key);
-      console.log("[nas] ホストへの転送を閉じました。");
+      console.log("[nas] ホストへの転送の削除を処理しました。");
       return;
     }
 

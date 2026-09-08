@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { getLogLevel, setLogLevel } from "../log.ts";
 
 /**
  * teardownDindSidecar unit tests (Docker 不要).
@@ -263,25 +264,31 @@ test("teardownDindSidecar: removes dind, mirror, and session volumes but not reg
 
 test("startDindSidecar: starts the container without probing readiness", async () => {
   const calls: string[] = [];
-  await startDindSidecar(
-    {
-      containerName: "nas-dind-session-a",
-      dindDataVolume: "nas-dind-data-session-a",
-      sharedTmpVolume: "nas-dind-tmp-session-a",
-      proxy: {
-        proxyEndpoint: "http://session-a:token@nas-proxy:8080",
-        caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+  const previousLogLevel = getLogLevel();
+  setLogLevel("warn");
+  try {
+    await startDindSidecar(
+      {
+        containerName: "nas-dind-session-a",
+        dindDataVolume: "nas-dind-data-session-a",
+        sharedTmpVolume: "nas-dind-tmp-session-a",
+        proxy: {
+          proxyEndpoint: "http://session-a:token@nas-proxy:8080",
+          caCertPath: "/run/nas/mitmproxy-ca/mitmproxy-ca-cert.pem",
+        },
+        extraHosts: [],
+        registryMirrorName: null,
+        readinessTimeoutMs: 1,
       },
-      extraHosts: [],
-      registryMirrorName: null,
-      readinessTimeoutMs: 1,
-    },
-    {
-      runSidecar: async () => {
-        calls.push("run");
+      {
+        runSidecar: async () => {
+          calls.push("run");
+        },
       },
-    },
-  );
+    );
+  } finally {
+    setLogLevel(previousLogLevel);
+  }
 
   expect(calls).toEqual(["run"]);
 });

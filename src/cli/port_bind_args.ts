@@ -1,4 +1,9 @@
-import type { PortBindKey, PortForwardKey } from "../domain/port_bind.ts";
+import type {
+  AddForwardRequest,
+  ForwardSelector,
+  PortBindKey,
+  PortForwardKey,
+} from "../domain/port_bind.ts";
 
 const BIND_USAGE =
   "bind expects <session-id:container-port> [host-port] with ports from 1-65535";
@@ -36,6 +41,129 @@ function parsePort(value: string, usage: string): number {
     throw new Error(usage);
   }
   return port;
+}
+
+export type ParsedSshForward =
+  | { operation: "bind"; sessionId: string; request: AddForwardRequest }
+  | { operation: "unbind"; sessionId: string; selector: ForwardSelector };
+
+const SSH_BIND_USAGE =
+  "bind expects <session-id> (-L|--local-forward|-R|--remote-forward) <listen-port:target-port> with ports from 1-65535";
+const SSH_UNBIND_USAGE =
+  "unbind expects <session-id> (-L|--local-forward|-R|--remote-forward) <listen-port> with ports from 1-65535";
+
+const SSH_FORWARD_FLAGS = new Map<string, "local" | "remote">([
+  ["-L", "local"],
+  ["--local-forward", "local"],
+  ["-R", "remote"],
+  ["--remote-forward", "remote"],
+]);
+
+function resemblesMalformedSshForwardFlag(arg: string): boolean {
+  return (
+    /^-[LR].+/.test(arg) ||
+    arg.startsWith("--local-forward=") ||
+    arg.startsWith("--remote-forward=")
+  );
+}
+
+/** Parse SSH-style `-L`/`-R` syntax while leaving legacy positionals alone. */
+export function parseSshForwardArgs(
+  args: string[],
+  operation: "bind" | "unbind",
+): ParsedSshForward | null {
+  const usage = operation === "bind" ? SSH_BIND_USAGE : SSH_UNBIND_USAGE;
+  const hasForwardFlag = args.some((arg) => SSH_FORWARD_FLAGS.has(arg));
+  if (!hasForwardFlag) {
+    if (args.some(resemblesMalformedSshForwardFlag)) throw new Error(usage);
+    return null;
+  }
+
+  const positional: string[] = [];
+  let direction: "local" | "remote" | null = null;
+  let value: string | null = null;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--runtime-dir" || arg === "--format") {
+      if (index + 1 >= args.length) throw new Error(usage);
+      index++;
+      continue;
+    }
+    if (arg === "--format=json") continue;
+    if (
+      arg === "-q" ||
+      arg === "--quiet" ||
+      arg === "-v" ||
+      arg === "--verbose"
+    ) {
+      continue;
+    }
+
+    const parsedDirection = SSH_FORWARD_FLAGS.get(arg);
+    if (parsedDirection !== undefined) {
+      if (direction !== null || index + 1 >= args.length) {
+        throw new Error(usage);
+      }
+      direction = parsedDirection;
+      value = args[++index];
+      continue;
+    }
+    if (arg.startsWith("-")) throw new Error(usage);
+    positional.push(arg);
+  }
+
+  if (
+    direction === null ||
+    value === null ||
+    value.length === 0 ||
+    positional.length !== 1 ||
+    positional[0].length === 0 ||
+    positional[0].includes(":")
+  ) {
+    throw new Error(usage);
+  }
+  const sessionId = positional[0];
+
+  if (operation === "unbind") {
+    const listenPort = parsePort(value, usage);
+    return direction === "local"
+      ? {
+          operation,
+          sessionId,
+          selector: { direction, hostPort: listenPort },
+        }
+      : {
+          operation,
+          sessionId,
+          selector: { direction, containerPort: listenPort },
+        };
+  }
+
+  const pair = value.split(":");
+  if (pair.length !== 2 || pair[0].length === 0 || pair[1].length === 0) {
+    throw new Error(usage);
+  }
+  const listenPort = parsePort(pair[0], usage);
+  const targetPort = parsePort(pair[1], usage);
+  return direction === "local"
+    ? {
+        operation,
+        sessionId,
+        request: {
+          direction,
+          hostPort: listenPort,
+          containerPort: targetPort,
+        },
+      }
+    : {
+        operation,
+        sessionId,
+        request: {
+          direction,
+          containerPort: listenPort,
+          hostPort: targetPort,
+        },
+      };
 }
 
 function parseSessionKey(

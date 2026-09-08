@@ -4,9 +4,97 @@ import {
   parseBindSessionOnly,
   parseForwardArgs,
   parseForwardSessionOnly,
+  parseSshForwardArgs,
   parseUnbindArgs,
   parseUnforwardArgs,
 } from "./port_bind_args.ts";
+
+test("L and R map listen:target to opposite endpoint fields", () => {
+  expect(parseSshForwardArgs(["session", "-L", "8080:3000"], "bind")).toEqual({
+    operation: "bind",
+    sessionId: "session",
+    request: { direction: "local", hostPort: 8080, containerPort: 3000 },
+  });
+  expect(parseSshForwardArgs(["session", "-R", "15432:5432"], "bind")).toEqual({
+    operation: "bind",
+    sessionId: "session",
+    request: { direction: "remote", hostPort: 5432, containerPort: 15432 },
+  });
+  expect(parseSshForwardArgs(["session", "-L", "8080"], "unbind")).toEqual({
+    operation: "unbind",
+    sessionId: "session",
+    selector: { direction: "local", hostPort: 8080 },
+  });
+  expect(parseSshForwardArgs(["session", "-R", "15432"], "unbind")).toEqual({
+    operation: "unbind",
+    sessionId: "session",
+    selector: { direction: "remote", containerPort: 15432 },
+  });
+});
+
+test("SSH forward parsing accepts long names and surrounding CLI flags", () => {
+  expect(
+    parseSshForwardArgs(
+      [
+        "--runtime-dir",
+        "/tmp/ports",
+        "--local-forward",
+        "8080:3000",
+        "session",
+        "--format=json",
+        "-v",
+      ],
+      "bind",
+    ),
+  ).toEqual({
+    operation: "bind",
+    sessionId: "session",
+    request: { direction: "local", hostPort: 8080, containerPort: 3000 },
+  });
+  expect(
+    parseSshForwardArgs(
+      ["--quiet", "session", "--format", "json", "--remote-forward", "15432"],
+      "unbind",
+    ),
+  ).toEqual({
+    operation: "unbind",
+    sessionId: "session",
+    selector: { direction: "remote", containerPort: 15432 },
+  });
+});
+
+test("SSH forward parsing returns null when L and R are absent", () => {
+  expect(parseSshForwardArgs(["session:3000", "8080"], "bind")).toBeNull();
+  expect(parseSshForwardArgs([], "unbind")).toBeNull();
+});
+
+test("SSH forward parsing rejects ambiguous and malformed new syntax", () => {
+  const invalidBindArgs = [
+    ["session", "-L", "8080:3000", "-L", "8081:3001"],
+    ["session", "-L", "8080:3000", "-R", "15432:5432"],
+    ["session", "-L", ""],
+    ["session", "-R", "15432:"],
+    ["session", "-L", "0:3000"],
+    ["session", "-L", "8080:65536"],
+    ["", "-L", "8080:3000"],
+    ["session", "extra", "-L", "8080:3000"],
+    ["session:3000", "-L", "8080:3000"],
+  ];
+  for (const args of invalidBindArgs) {
+    expect(() => parseSshForwardArgs(args, "bind")).toThrow(
+      "listen-port:target-port",
+    );
+  }
+
+  for (const args of [
+    ["session", "-R", "0"],
+    ["session", "-R", "65536"],
+    ["session", "-L", "8080:3000"],
+    ["session", "--local-forward="],
+  ]) {
+    expect(() => parseSshForwardArgs(args, "unbind")).toThrow("listen-port");
+  }
+});
 
 test("bind parses session, container port and optional host port", () => {
   expect(parseBindArgs(["abc123:3000"])).toEqual({

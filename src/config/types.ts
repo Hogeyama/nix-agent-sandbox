@@ -3,6 +3,7 @@ import type {
   NetworkConfig as AuthzNetworkConfig,
   SecretConfig,
 } from "../network/authz/config.ts";
+import type { PortPair } from "../network/port_forward_model.ts";
 
 export type { AgentType } from "../agents/types.ts";
 
@@ -139,6 +140,8 @@ export interface HostExecConfig {
 export type NetworkPromptNotify = "auto" | "desktop" | "off";
 
 export interface NetworkConfig extends AuthzNetworkConfig {
+  localForwards: PortPair[];
+  remoteForwards: PortPair[];
   proxy: ProxyConfig;
   requestBodyAudit: RequestBodyAuditConfig;
   pendingTimeoutSeconds: number;
@@ -324,6 +327,8 @@ export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   scopes: {},
   fallback: "deny",
   defaults: {},
+  localForwards: [],
+  remoteForwards: [],
   proxy: DEFAULT_PROXY_CONFIG,
   requestBodyAudit: DEFAULT_REQUEST_BODY_AUDIT_CONFIG,
   pendingTimeoutSeconds: 300,

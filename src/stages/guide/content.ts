@@ -21,7 +21,7 @@ function buildDescription(facts: GuideFacts): string {
   if (facts.dind !== null) {
     symptoms.push("a docker build fails to reach the network");
   }
-  if (facts.network.forwardPorts.length > 0) {
+  if (facts.network.remoteForwards.length > 0) {
     symptoms.push("a connection to a host port is refused");
   }
   return (
@@ -58,14 +58,17 @@ function networkSection(facts: GuideFacts): string {
 }
 
 function forwardedPortsSection(facts: GuideFacts): string {
-  const ports = facts.network.forwardPorts.join(", ");
   return [
     "## Forwarded ports",
     "",
-    `These host ports are reachable from inside the container, at ` +
-      `\`localhost:<port>\` — the same port number, on \`localhost\`, not on ` +
-      `a gateway address or \`host.docker.internal\`: ${ports}.`,
-    "Any other host port is not.",
+    "Connect to these container loopback addresses to reach the corresponding host services:",
+    "",
+    ...facts.network.remoteForwards.map(
+      (pair) =>
+        `- Container \`localhost:${pair.containerPort}\` → host \`127.0.0.1:${pair.hostPort}\`.`,
+    ),
+    "",
+    "Use the container port shown above; it can differ from the host port.",
   ].join("\n");
 }
 
@@ -192,7 +195,7 @@ export function renderGuide(facts: GuideFacts): string {
     networkSection(facts),
   ];
 
-  if (facts.network.forwardPorts.length > 0) {
+  if (facts.network.remoteForwards.length > 0) {
     sections.push(forwardedPortsSection(facts));
   }
   if (facts.hostexec !== null) {

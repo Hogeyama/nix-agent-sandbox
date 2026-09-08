@@ -9,7 +9,11 @@ import {
   listSessionRegistries,
   sessionBrokerDir,
 } from "../lib/runtime_registry.ts";
-import type { PortBindSessionEntry } from "./port_bind_protocol.ts";
+import {
+  type PortBindSessionEntry,
+  projectPortForwards,
+  sessionPortForwards,
+} from "./port_bind_protocol.ts";
 
 export {
   brokerSocketPath,
@@ -126,10 +130,14 @@ export async function gcPortsRuntime(
   return result;
 }
 
-export function listPortBindSessions(
+export async function listPortBindSessions(
   paths: BaseRuntimePaths,
 ): Promise<PortBindSessionEntry[]> {
-  return listSessionRegistries<PortBindSessionEntry>(paths);
+  const entries = await listSessionRegistries<PortBindSessionEntry>(paths);
+  return entries.map((entry) => {
+    const portForwards = sessionPortForwards(entry);
+    return { ...entry, portForwards, ...projectPortForwards(portForwards) };
+  });
 }
 
 /**

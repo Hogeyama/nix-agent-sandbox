@@ -511,21 +511,23 @@ test("validate: forwardPorts rejects reserved port 18080", () => {
   ).toThrow(/18080.*reserved/);
 });
 
-test("validate: forwardPorts rejects duplicate ports", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              proxy: { forwardPorts: [8080, 3000, 8080] },
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow(/duplicate.*8080/);
+test("validate: forwardPorts absorbs duplicate legacy mappings", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            proxy: { forwardPorts: [8080, 3000, 8080] },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.network.remoteForwards).toEqual([
+    { hostPort: 8080, containerPort: 8080 },
+    { hostPort: 3000, containerPort: 3000 },
+  ]);
 });
 
 test("validate: forwardPorts accepts valid ports", () => {
@@ -542,6 +544,35 @@ test("validate: forwardPorts accepts valid ports", () => {
     }),
   );
   expect(config.profiles.test.network.proxy.forwardPorts).toEqual([8080, 5432]);
+  expect(config.profiles.test.network.remoteForwards).toEqual([
+    { hostPort: 8080, containerPort: 8080 },
+    { hostPort: 5432, containerPort: 5432 },
+  ]);
+});
+
+test("validate: combines new and legacy forwards into normalized arrays", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...structuredClone(DEFAULT_NETWORK_CONFIG),
+            localForwards: [{ hostPort: 8080, containerPort: 3000 }],
+            remoteForwards: [{ hostPort: 5432, containerPort: 5432 }],
+            proxy: { forwardPorts: [5432, 6379] },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.network.localForwards).toEqual([
+    { hostPort: 8080, containerPort: 3000 },
+  ]);
+  expect(config.profiles.test.network.remoteForwards).toEqual([
+    { hostPort: 5432, containerPort: 5432 },
+    { hostPort: 6379, containerPort: 6379 },
+  ]);
+  expect(config.profiles.test.network.proxy.forwardPorts).toEqual([5432, 6379]);
 });
 
 test("validate: forwardPorts rejects 2375 when docker.enable is true", () => {

@@ -1,4 +1,14 @@
 import type { BaseSessionEntry } from "../lib/runtime_registry.ts";
+import {
+  type AddForwardRequest,
+  type AddForwardResult,
+  copyManagedForward,
+  type ForwardSelector,
+  type ManagedForward,
+  type RemoveForwardResult,
+} from "./port_forward_model.ts";
+
+export const PORT_BIND_PROTOCOL_VERSION = 2 as const;
 
 /** One open host-port-to-container-port mapping. */
 export interface PortBinding {
@@ -44,12 +54,60 @@ export type HostProbeResult = "ok" | "no-answer";
  * existed lack it. Use {@link sessionForwards} rather than the field.
  */
 export interface PortBindSessionEntry extends BaseSessionEntry {
+  /** Missing on sessions started before the common forwarding control wire. */
+  protocolVersion?: typeof PORT_BIND_PROTOCOL_VERSION;
   bindings: PortBinding[];
   forwards?: PortForward[];
+  /** Canonical state. Missing only in registries written by older sessions. */
+  portForwards?: ManagedForward[];
 }
 
 export function sessionForwards(entry: PortBindSessionEntry): PortForward[] {
-  return entry.forwards ?? [];
+  return projectPortForwards(sessionPortForwards(entry)).forwards;
+}
+
+export function sessionPortForwards(
+  entry: PortBindSessionEntry,
+): ManagedForward[] {
+  if (entry.portForwards !== undefined)
+    return entry.portForwards.map(copyManagedForward);
+  return [
+    ...entry.bindings.map(
+      (binding): ManagedForward => ({
+        ...binding,
+        direction: "local",
+        owners: ["dynamic"],
+        state: "active",
+      }),
+    ),
+    ...(entry.forwards ?? []).map(
+      (forward): ManagedForward => ({
+        ...forward,
+        direction: "remote",
+        owners: ["dynamic"],
+        state: "active",
+      }),
+    ),
+  ].map(copyManagedForward);
+}
+
+export function projectPortForwards(entries: readonly ManagedForward[]): {
+  bindings: PortBinding[];
+  forwards: PortForward[];
+} {
+  const project = ({ containerPort, hostPort, createdAt }: ManagedForward) => ({
+    containerPort,
+    hostPort,
+    createdAt,
+  });
+  return {
+    bindings: entries
+      .filter((entry) => entry.direction === "local")
+      .map(project),
+    forwards: entries
+      .filter((entry) => entry.direction === "remote")
+      .map(project),
+  };
 }
 
 /**
@@ -89,7 +147,9 @@ export type ControlRequest =
   | { type: "unbind"; hostPort: number }
   | { type: "candidates" }
   | { type: "forward"; containerPort: number; hostPort: number }
-  | { type: "unforward"; containerPort: number };
+  | { type: "unforward"; containerPort: number }
+  | ({ type: "add-forward" } & AddForwardRequest)
+  | ({ type: "remove-forward" } & ForwardSelector);
 
 export type ControlErrorKind =
   | "host-port-taken"
@@ -115,6 +175,8 @@ export type ControlResponse =
       hostPort: number;
       hostProbe: HostProbeResult;
     }
+  | ({ ok: true } & AddForwardResult)
+  | ({ ok: true } & RemoveForwardResult)
   | { ok: true }
   | { ok: false; error: ControlErrorKind; message: string };
 

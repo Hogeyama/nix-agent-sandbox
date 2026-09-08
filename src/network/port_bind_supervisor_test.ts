@@ -140,3 +140,32 @@ test("concurrent callers share one exec", async () => {
   await both;
   expect(h.calls).toHaveLength(1);
 });
+
+test("initial relay startup waits for control without concurrent exec", async () => {
+  let finish!: (ready: boolean) => void;
+  const waiting = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  const h = harness({
+    isInitialRelayStarting: () => true,
+    waitForControl: () => waiting,
+  });
+  const result = h.supervisor.ensure();
+  expect(h.calls).toHaveLength(0);
+  finish(true);
+  expect(await result).toBe("ready");
+});
+
+test("initial startup timeout never execs until its lifecycle flag clears", async () => {
+  let starting = true;
+  const h = harness({
+    isInitialRelayStarting: () => starting,
+    waitForControl: async () => false,
+  });
+  expect(await h.supervisor.ensure()).toBe("unreachable");
+  expect(await h.supervisor.ensure()).toBe("unreachable");
+  expect(h.calls).toHaveLength(0);
+  starting = false;
+  expect(await h.supervisor.ensure()).toBe("ready");
+  expect(h.calls).toHaveLength(1);
+});

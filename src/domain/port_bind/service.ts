@@ -11,9 +11,11 @@ import {
   type HostProbeResult,
   type ListenerWatchState,
   MAX_CONTROL_BYTES,
+  PORT_BIND_PROTOCOL_VERSION,
   type PortBindCandidate,
   type PortBindSessionEntry,
   type ProbeResult,
+  sessionPortForwards,
 } from "../../network/port_bind_protocol.ts";
 import {
   brokerSocketPath,
@@ -21,7 +23,15 @@ import {
   gcPortsRuntime,
   listPortBindSessions,
   type PortsRuntimePaths,
+  readSessionRegistry,
 } from "../../network/port_bind_registry.ts";
+import type {
+  AddForwardRequest,
+  AddForwardResult,
+  ForwardSelector,
+  ManagedForward,
+  RemoveForwardResult,
+} from "../../network/port_forward_model.ts";
 import {
   AmbiguousHostPortError,
   BindingConflictError,
@@ -33,6 +43,7 @@ import {
   type PortBindKey,
   type PortForwardKey,
   RelayUnavailableError,
+  SessionRestartRequiredError,
   SessionUnreachableError,
 } from "./types.ts";
 
@@ -55,6 +66,16 @@ export class PortBindService extends Context.Tag("nas/PortBindService")<
     readonly list: (
       paths: PortsRuntimePaths,
     ) => Effect.Effect<PortBindSessionEntry[], Error>;
+    readonly add: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+      request: AddForwardRequest,
+    ) => Effect.Effect<AddForwardResult, Error>;
+    readonly remove: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+      selector: ForwardSelector,
+    ) => Effect.Effect<RemoveForwardResult, Error>;
     readonly bind: (
       paths: PortsRuntimePaths,
       sessionId: string,
@@ -130,6 +151,18 @@ function isPortNumber(value: unknown): value is number {
   );
 }
 
+function parseBindResult(response: ControlResponse): {
+  hostPort: number;
+  probe: ProbeResult;
+} {
+  const hostPort = "hostPort" in response ? response.hostPort : undefined;
+  const probe = "probe" in response ? response.probe : undefined;
+  if (!isPortNumber(hostPort) || !isProbeResult(probe)) {
+    throw new InternalBrokerError("broker returned an invalid bind response");
+  }
+  return { hostPort, probe };
+}
+
 function parseForwardResult(response: ControlResponse): PortForwardResult {
   const containerPort =
     "containerPort" in response ? response.containerPort : undefined;
@@ -154,6 +187,70 @@ function isProbeResult(value: unknown): value is ProbeResult {
     value === "container-not-running" ||
     value === "relay-unreachable"
   );
+}
+
+function isManagedForward(value: unknown): value is ManagedForward {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const expectedKeys = [
+    "containerPort",
+    "createdAt",
+    "direction",
+    ...(entry.error === undefined ? [] : ["error"]),
+    "hostPort",
+    "owners",
+    "state",
+  ].sort();
+  const keys = Object.keys(entry).sort();
+  return (
+    keys.length === expectedKeys.length &&
+    keys.every((key, index) => key === expectedKeys[index]) &&
+    (entry.direction === "local" || entry.direction === "remote") &&
+    isPortNumber(entry.containerPort) &&
+    isPortNumber(entry.hostPort) &&
+    Array.isArray(entry.owners) &&
+    entry.owners.every(
+      (owner) =>
+        owner === "config" || owner === "dynamic" || owner === "internal",
+    ) &&
+    typeof entry.createdAt === "string" &&
+    (entry.state === "pending" ||
+      entry.state === "active" ||
+      entry.state === "unavailable" ||
+      entry.state === "failed") &&
+    (entry.error === undefined || typeof entry.error === "string")
+  );
+}
+
+function parseAddForwardResult(response: ControlResponse): AddForwardResult {
+  const entry = "entry" in response ? response.entry : undefined;
+  const probe = "probe" in response ? response.probe : undefined;
+  if (!isManagedForward(entry) || !isProbeResult(probe)) {
+    throw new InternalBrokerError(
+      "broker returned an invalid add-forward response",
+    );
+  }
+  return { entry, probe };
+}
+
+function parseRemoveForwardResult(
+  response: ControlResponse,
+): RemoveForwardResult {
+  const removed = "removed" in response ? response.removed : undefined;
+  const retainedInternal =
+    "retainedInternal" in response ? response.retainedInternal : undefined;
+  const listenerClosed =
+    "listenerClosed" in response ? response.listenerClosed : undefined;
+  if (
+    typeof removed !== "boolean" ||
+    typeof retainedInternal !== "boolean" ||
+    typeof listenerClosed !== "boolean"
+  ) {
+    throw new InternalBrokerError(
+      "broker returned an invalid remove-forward response",
+    );
+  }
+  return { removed, retainedInternal, listenerClosed };
 }
 
 function isCandidate(value: unknown): value is PortBindCandidate {
@@ -254,12 +351,19 @@ async function sendRequest(
 async function requireSession(
   paths: PortsRuntimePaths,
   sessionId: string,
-): Promise<void> {
+): Promise<PortBindSessionEntry> {
   await gcPortsRuntime(paths);
-  const sessions = await listReadySessions(paths);
-  if (!sessions.some((session) => session.sessionId === sessionId)) {
+  const session = await readSessionRegistry<PortBindSessionEntry>(
+    paths,
+    sessionId,
+  );
+  if (
+    !session ||
+    session.brokerSocket !== brokerSocketPath(paths, session.sessionId)
+  ) {
     throw unreachable(sessionId);
   }
+  return session;
 }
 
 async function listReadySessions(
@@ -270,6 +374,134 @@ async function listReadySessions(
     (session) =>
       session.brokerSocket === brokerSocketPath(paths, session.sessionId),
   );
+}
+
+function usesCurrentProtocol(entry: PortBindSessionEntry): boolean {
+  const version = (entry as { protocolVersion?: unknown }).protocolVersion;
+  if (version === PORT_BIND_PROTOCOL_VERSION) return true;
+  if (version === undefined) return false;
+  throw new SessionRestartRequiredError(
+    entry.sessionId,
+    `port forwarding protocol version ${String(version)}`,
+  );
+}
+
+function requireLegacyRemoteSupport(entry: PortBindSessionEntry): void {
+  if (entry.forwards === undefined) {
+    throw new SessionRestartRequiredError(entry.sessionId, "remote forwarding");
+  }
+}
+
+async function readLegacyAddedEntry(
+  paths: PortsRuntimePaths,
+  sessionId: string,
+  direction: AddForwardRequest["direction"],
+  containerPort: number,
+): Promise<ManagedForward> {
+  const persisted = await readSessionRegistry<PortBindSessionEntry>(
+    paths,
+    sessionId,
+  );
+  const entry = persisted
+    ? sessionPortForwards(persisted).find(
+        (candidate) =>
+          candidate.direction === direction &&
+          candidate.containerPort === containerPort,
+      )
+    : undefined;
+  if (!entry) {
+    throw new InternalBrokerError(
+      "legacy broker did not persist the added forwarding",
+    );
+  }
+  return entry;
+}
+
+async function addForward(
+  paths: PortsRuntimePaths,
+  sessionId: string,
+  request: AddForwardRequest,
+): Promise<AddForwardResult> {
+  const session = await requireSession(paths, sessionId);
+  if (usesCurrentProtocol(session)) {
+    return parseAddForwardResult(
+      await sendRequest(paths, sessionId, { type: "add-forward", ...request }),
+    );
+  }
+
+  if (request.direction === "local") {
+    const result = parseBindResult(
+      await sendRequest(paths, sessionId, {
+        type: "bind",
+        containerPort: request.containerPort,
+        hostPort: request.hostPort,
+      }),
+    );
+    return {
+      entry: await readLegacyAddedEntry(
+        paths,
+        sessionId,
+        request.direction,
+        request.containerPort,
+      ),
+      probe: result.probe,
+    };
+  }
+
+  requireLegacyRemoteSupport(session);
+  const result = parseForwardResult(
+    await sendRequest(paths, sessionId, {
+      type: "forward",
+      containerPort: request.containerPort,
+      hostPort: request.hostPort,
+    }),
+  );
+  return {
+    entry: await readLegacyAddedEntry(
+      paths,
+      sessionId,
+      request.direction,
+      request.containerPort,
+    ),
+    probe: result.hostProbe,
+  };
+}
+
+async function removeForward(
+  paths: PortsRuntimePaths,
+  sessionId: string,
+  selector: ForwardSelector,
+): Promise<RemoveForwardResult> {
+  const session = await requireSession(paths, sessionId);
+  if (usesCurrentProtocol(session)) {
+    return parseRemoveForwardResult(
+      await sendRequest(paths, sessionId, {
+        type: "remove-forward",
+        ...selector,
+      }),
+    );
+  }
+
+  if (selector.direction === "remote") {
+    requireLegacyRemoteSupport(session);
+    await sendRequest(paths, sessionId, {
+      type: "unforward",
+      containerPort: selector.containerPort,
+    });
+  } else {
+    await sendRequest(
+      paths,
+      sessionId,
+      "hostPort" in selector
+        ? { type: "unbind", hostPort: selector.hostPort }
+        : { type: "unbind", containerPort: selector.containerPort },
+    );
+  }
+  return {
+    removed: true,
+    retainedInternal: false,
+    listenerClosed: selector.direction === "local",
+  };
 }
 
 export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
@@ -284,39 +516,37 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
         catch: toError,
       }),
 
-    bind: (paths, sessionId, containerPort, hostPort) =>
+    add: (paths, sessionId, request) =>
       Effect.tryPromise({
-        try: async () => {
-          await requireSession(paths, sessionId);
-          const response = await sendRequest(paths, sessionId, {
-            type: "bind",
-            containerPort,
-            hostPort,
-          });
-          const hostPortResult =
-            "hostPort" in response ? response.hostPort : undefined;
-          const probe = "probe" in response ? response.probe : undefined;
-          if (
-            !Number.isInteger(hostPortResult) ||
-            hostPortResult === undefined ||
-            hostPortResult < 1 ||
-            hostPortResult > 65_535 ||
-            !isProbeResult(probe)
-          ) {
-            throw new InternalBrokerError(
-              "broker returned an invalid bind response",
-            );
-          }
-          return { hostPort: hostPortResult, probe };
-        },
+        try: () => addForward(paths, sessionId, request),
         catch: toError,
       }),
+
+    remove: (paths, sessionId, selector) =>
+      Effect.tryPromise({
+        try: () => removeForward(paths, sessionId, selector),
+        catch: toError,
+      }),
+
+    bind: (paths, sessionId, containerPort, hostPort) =>
+      Effect.map(
+        Effect.tryPromise({
+          try: () =>
+            addForward(paths, sessionId, {
+              direction: "local",
+              containerPort,
+              hostPort: hostPort === 0 ? null : hostPort,
+            }),
+          catch: toError,
+        }),
+        ({ entry, probe }) => ({ hostPort: entry.hostPort, probe }),
+      ),
 
     unbindByKey: (paths, key) =>
       Effect.tryPromise({
         try: async () => {
           let sessionId: string;
-          let request: ControlRequest;
+          let selector: ForwardSelector;
           if ("hostPort" in key) {
             await gcPortsRuntime(paths);
             const matches = await findSessionsByHostPort(paths, key.hostPort);
@@ -332,13 +562,15 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
               );
             }
             sessionId = matches[0].sessionId;
-            request = { type: "unbind", hostPort: key.hostPort };
+            selector = { direction: "local", hostPort: key.hostPort };
           } else {
             sessionId = key.sessionId;
-            await requireSession(paths, sessionId);
-            request = { type: "unbind", containerPort: key.containerPort };
+            selector = {
+              direction: "local",
+              containerPort: key.containerPort,
+            };
           }
-          await sendRequest(paths, sessionId, request);
+          await removeForward(paths, sessionId, selector);
         },
         catch: toError,
       }),
@@ -355,31 +587,34 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
       }),
 
     forward: (paths, sessionId, containerPort, hostPort) =>
-      Effect.tryPromise({
-        try: async () => {
-          await requireSession(paths, sessionId);
-          return parseForwardResult(
-            await sendRequest(paths, sessionId, {
-              type: "forward",
+      Effect.map(
+        Effect.tryPromise({
+          try: () =>
+            addForward(paths, sessionId, {
+              direction: "remote",
               containerPort,
               hostPort,
             }),
-          );
-        },
-        catch: toError,
-      }),
+          catch: toError,
+        }),
+        ({ entry, probe }) => ({
+          containerPort: entry.containerPort,
+          hostPort: entry.hostPort,
+          hostProbe: probe === "ok" ? "ok" : "no-answer",
+        }),
+      ),
 
     unforward: (paths, key) =>
-      Effect.tryPromise({
-        try: async () => {
-          await requireSession(paths, key.sessionId);
-          await sendRequest(paths, key.sessionId, {
-            type: "unforward",
-            containerPort: key.containerPort,
-          });
-        },
-        catch: toError,
-      }),
+      Effect.asVoid(
+        Effect.tryPromise({
+          try: () =>
+            removeForward(paths, key.sessionId, {
+              direction: "remote",
+              containerPort: key.containerPort,
+            }),
+          catch: toError,
+        }),
+      ),
   }),
 );
 
@@ -387,6 +622,16 @@ export interface PortBindServiceFakeConfig {
   readonly list?: (
     paths: PortsRuntimePaths,
   ) => Effect.Effect<PortBindSessionEntry[], Error>;
+  readonly add?: (
+    paths: PortsRuntimePaths,
+    sessionId: string,
+    request: AddForwardRequest,
+  ) => Effect.Effect<AddForwardResult, Error>;
+  readonly remove?: (
+    paths: PortsRuntimePaths,
+    sessionId: string,
+    selector: ForwardSelector,
+  ) => Effect.Effect<RemoveForwardResult, Error>;
   readonly bind?: (
     paths: PortsRuntimePaths,
     sessionId: string,
@@ -416,27 +661,73 @@ export interface PortBindServiceFakeConfig {
 export function makePortBindServiceFake(
   overrides: PortBindServiceFakeConfig = {},
 ): Layer.Layer<PortBindService> {
+  const add =
+    overrides.add ??
+    ((_paths, _sessionId, request) =>
+      Effect.succeed({
+        entry: {
+          direction: request.direction,
+          containerPort: request.containerPort,
+          hostPort: request.hostPort ?? request.containerPort,
+          owners: ["dynamic"],
+          createdAt: "1970-01-01T00:00:00.000Z",
+          state: "active",
+        },
+        probe: "ok",
+      }));
+  const remove =
+    overrides.remove ??
+    (() =>
+      Effect.succeed({
+        removed: true,
+        retainedInternal: false,
+        listenerClosed: true,
+      }));
   return Layer.succeed(
     PortBindService,
     PortBindService.of({
       list: overrides.list ?? (() => Effect.succeed([])),
+      add,
+      remove,
       bind:
         overrides.bind ??
-        ((_paths, _sessionId, containerPort, hostPort) =>
-          Effect.succeed({
-            hostPort:
-              hostPort === null || hostPort === 0 ? containerPort : hostPort,
-            probe: "ok",
-          })),
+        ((paths, sessionId, containerPort, hostPort) =>
+          Effect.map(
+            add(paths, sessionId, {
+              direction: "local",
+              containerPort,
+              hostPort: hostPort === 0 ? null : hostPort,
+            }),
+            ({ entry, probe }) => ({ hostPort: entry.hostPort, probe }),
+          )),
       unbindByKey: overrides.unbindByKey ?? (() => Effect.void),
       candidates:
         overrides.candidates ??
         (() => Effect.succeed({ candidates: [], watch: "watching" })),
       forward:
         overrides.forward ??
-        ((_paths, _sessionId, containerPort, hostPort) =>
-          Effect.succeed({ containerPort, hostPort, hostProbe: "ok" })),
-      unforward: overrides.unforward ?? (() => Effect.void),
+        ((paths, sessionId, containerPort, hostPort) =>
+          Effect.map(
+            add(paths, sessionId, {
+              direction: "remote",
+              containerPort,
+              hostPort,
+            }),
+            ({ entry, probe }) => ({
+              containerPort: entry.containerPort,
+              hostPort: entry.hostPort,
+              hostProbe: probe === "ok" ? "ok" : "no-answer",
+            }),
+          )),
+      unforward:
+        overrides.unforward ??
+        ((paths, key) =>
+          Effect.asVoid(
+            remove(paths, key.sessionId, {
+              direction: "remote",
+              containerPort: key.containerPort,
+            }),
+          )),
     }),
   );
 }
@@ -461,6 +752,18 @@ export function makePortBindClient(
   return {
     list: (paths: PortsRuntimePaths): Promise<PortBindSessionEntry[]> =>
       run((service) => service.list(paths)),
+    add: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+      request: AddForwardRequest,
+    ): Promise<AddForwardResult> =>
+      run((service) => service.add(paths, sessionId, request)),
+    remove: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+      selector: ForwardSelector,
+    ): Promise<RemoveForwardResult> =>
+      run((service) => service.remove(paths, sessionId, selector)),
     bind: (
       paths: PortsRuntimePaths,
       sessionId: string,

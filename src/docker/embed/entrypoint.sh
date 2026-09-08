@@ -286,6 +286,22 @@ if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
 fi
 nas_measure_done "local-proxy" "$LOCAL_PROXY_SETUP_START"
 
+# Initial forwarding must be usable before the agent starts. The dedicated
+# coprocess stdout pipe stays open after readiness while the relay serves TCP.
+if [ "${NAS_PORT_RELAY_STARTUP:-}" = "1" ] && [ "$NAS_SHELL_MODE" != "true" ]; then
+  coproc NAS_INITIAL_RELAY { exec "${EXEC_PREFIX[@]}" /usr/local/bin/bun /usr/local/lib/nas/port-relay.mjs --wait-initial; }
+  NAS_INITIAL_RELAY_PROCESS=$NAS_INITIAL_RELAY_PID
+  exec {NAS_INITIAL_RELAY_READY_FD}<&"${NAS_INITIAL_RELAY[0]}"
+  if ! IFS= read -r -t 10 NAS_INITIAL_RELAY_READY <&"$NAS_INITIAL_RELAY_READY_FD" ||
+     [ "$NAS_INITIAL_RELAY_READY" != "ready" ] ||
+     ! kill -0 "$NAS_INITIAL_RELAY_PROCESS" 2>/dev/null; then
+    echo "[nas] Initial port forwarding failed or timed out" >&2
+    kill "$NAS_INITIAL_RELAY_PROCESS" 2>/dev/null || true
+    wait "$NAS_INITIAL_RELAY_PROCESS" 2>/dev/null || true
+    exit 1
+  fi
+fi
+
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
 if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then

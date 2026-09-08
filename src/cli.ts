@@ -100,7 +100,6 @@ import {
 import {
   CaServiceLive,
   createProxyStage,
-  ForwardPortRelayServiceLive,
   NetworkRuntimeServiceLive,
   ProxyServiceLive,
   SessionBrokerServiceLive,
@@ -352,7 +351,6 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
       ),
       ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
-      ForwardPortRelayServiceLive,
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       GuideServiceLive.pipe(Layer.provide(FsServiceLive)),
@@ -461,8 +459,8 @@ export function createCliPipelineBuilder({
       .add(createGuideStage(input))
       // ObservabilityStage materializes the observability slice and, when
       // enabled, acquires the per-session OTLP receiver and injects the OTLP
-      // envs into the container slice. ProxyStage downstream picks up the
-      // receiverPort and merges it into forwardPorts.
+      // envs into the container slice. PortBindStage prepares the receiver
+      // forwarding after ProxyStage and DindStage.
       .add(
         createObservabilityStage({
           config: input.config,

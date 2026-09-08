@@ -164,6 +164,44 @@ profiles {
 });
 
 test.skipIf(!hasPkl)(
+  "pkl: accepts legacy, typed, and inferred port forward entries",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      proxy = new ProxyConfig { forwardPorts { 7000 } }
+      localForwards {
+        new PortForwardConfig { hostPort = 8080; containerPort = 3000 }
+      }
+      remoteForwards {
+        new { hostPort = 9000; containerPort = 4000 }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-forwards-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      expect(config.profiles.dev.network.localForwards).toEqual([
+        { hostPort: 8080, containerPort: 3000 },
+      ]);
+      expect(config.profiles.dev.network.remoteForwards).toEqual([
+        { hostPort: 9000, containerPort: 4000 },
+        { hostPort: 7000, containerPort: 7000 },
+      ]);
+      expect(config.profiles.dev.network.proxy.forwardPorts).toEqual([7000]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
   "pkl: amends global.pkl via modulePath inherits global config",
   async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-global-"));
@@ -184,6 +222,9 @@ profiles {
   ["dev"] {
     agent = "claude"
     network {
+      remoteForwards {
+        new { hostPort = 15432; containerPort = 5432 }
+      }
       scopes {
         ["github"] {
           targets { "api.github.com" }
@@ -220,6 +261,9 @@ profiles {
           rules: {},
         },
       });
+      expect(config.profiles.dev.network.remoteForwards).toEqual([
+        { hostPort: 15432, containerPort: 5432 },
+      ]);
     } finally {
       if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = origXdg;

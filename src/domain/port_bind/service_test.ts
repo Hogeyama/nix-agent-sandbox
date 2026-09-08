@@ -9,6 +9,7 @@ import {
   writeJsonLine,
 } from "../../lib/unix_socket.ts";
 import type { PortBindSessionEntry } from "../../network/port_bind_protocol.ts";
+import { PORT_BIND_PROTOCOL_VERSION } from "../../network/port_bind_protocol.ts";
 import {
   brokerSocketPath,
   relayScriptPath,
@@ -27,6 +28,7 @@ import {
   InternalBrokerError,
   NoSuchBindingError,
   RelayUnavailableError,
+  SessionRestartRequiredError,
   SessionUnreachableError,
 } from "./types.ts";
 
@@ -205,10 +207,18 @@ test("binding rejects malformed success responses from the broker", async () => 
 });
 
 async function withFakeBroker<T>(
-  reply: (request: unknown) => unknown,
+  reply: (
+    request: unknown,
+    paths: Awaited<ReturnType<typeof resolvePortsRuntimePaths>>,
+    socketPath: string,
+  ) => unknown | Promise<unknown>,
   fn: (
     paths: Awaited<ReturnType<typeof resolvePortsRuntimePaths>>,
   ) => Promise<T>,
+  registry: Pick<PortBindSessionEntry, "protocolVersion" | "forwards"> = {
+    protocolVersion: undefined,
+    forwards: [],
+  },
 ): Promise<T> {
   return await withPaths(async (paths) => {
     const socketPath = brokerSocketPath(paths, "s1");
@@ -218,13 +228,20 @@ async function withFakeBroker<T>(
         const line = await readJsonLine(socket);
         await writeJsonLine(
           socket,
-          reply(line === null ? null : JSON.parse(line)),
+          await reply(
+            line === null ? null : JSON.parse(line),
+            paths,
+            socketPath,
+          ),
         );
         socket.end();
       })();
     });
     try {
-      await writeSessionRegistry(paths, entry("s1", socketPath, []));
+      await writeSessionRegistry(paths, {
+        ...entry("s1", socketPath, []),
+        ...registry,
+      });
       return await fn(paths);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -284,8 +301,22 @@ test("the fake reports a watching scan with nothing found", async () => {
 test("the live service forwards through its session and validates the answer", async () => {
   let received: unknown;
   await withFakeBroker(
-    (request) => {
+    async (request, paths, socketPath) => {
       received = request;
+      const isForward = (request as { type?: string }).type === "forward";
+      await writeSessionRegistry(paths, {
+        ...entry("s1", socketPath, []),
+        forwards: isForward
+          ? [
+              {
+                containerPort: 5432,
+                hostPort: 5432,
+                createdAt: "2026-09-08T00:00:00.000Z",
+              },
+            ]
+          : [],
+      });
+      if (!isForward) return { ok: true };
       return { ok: true, containerPort: 5432, hostPort: 5432, hostProbe: "ok" };
     },
     async (paths) => {
@@ -357,4 +388,192 @@ test("the fake forwards to the same port and answers ok", async () => {
       hostProbe: "ok",
     });
   });
+});
+
+test("the fake remove result preserves retained and listener state", async () => {
+  await withPaths(async (paths) => {
+    const expected = {
+      removed: true,
+      retainedInternal: true,
+      listenerClosed: false,
+    };
+    const client = makePortBindClient(
+      makePortBindServiceFake({
+        remove: () => Effect.succeed(expected),
+      }),
+    );
+    expect(
+      await client.remove(paths, "s1", {
+        direction: "remote",
+        containerPort: 5432,
+      }),
+    ).toEqual(expected);
+  });
+});
+
+test("current sessions use the common owner-free control wire", async () => {
+  const received: unknown[] = [];
+  await withFakeBroker(
+    (request) => {
+      received.push(request);
+      if ((request as { type?: string }).type === "add-forward") {
+        return {
+          ok: true,
+          entry: {
+            direction: "remote",
+            containerPort: 15_432,
+            hostPort: 5432,
+            owners: ["dynamic"],
+            createdAt: "2026-09-08T00:00:00.000Z",
+            state: "active",
+          },
+          probe: "no-answer",
+        };
+      }
+      return {
+        ok: true,
+        removed: true,
+        retainedInternal: true,
+        listenerClosed: false,
+      };
+    },
+    async (paths) => {
+      const client = makePortBindClient();
+      expect(
+        await client.add(paths, "s1", {
+          direction: "remote",
+          containerPort: 15_432,
+          hostPort: 5432,
+        }),
+      ).toMatchObject({
+        entry: {
+          direction: "remote",
+          owners: ["dynamic"],
+          state: "active",
+        },
+        probe: "no-answer",
+      });
+      expect(
+        await client.remove(paths, "s1", {
+          direction: "local",
+          hostPort: 8080,
+        }),
+      ).toEqual({
+        removed: true,
+        retainedInternal: true,
+        listenerClosed: false,
+      });
+      expect(received).toEqual([
+        {
+          type: "add-forward",
+          direction: "remote",
+          containerPort: 15_432,
+          hostPort: 5432,
+        },
+        {
+          type: "remove-forward",
+          direction: "local",
+          hostPort: 8080,
+        },
+      ]);
+    },
+    { protocolVersion: PORT_BIND_PROTOCOL_VERSION, forwards: [] },
+  );
+});
+
+test("an unversioned session falls back to the legacy local wire", async () => {
+  let received: unknown;
+  await withFakeBroker(
+    async (request, paths, socketPath) => {
+      received = request;
+      await writeSessionRegistry(paths, {
+        ...entry("s1", socketPath, [
+          {
+            containerPort: 3000,
+            hostPort: 8080,
+            createdAt: "2026-09-08T00:00:00.000Z",
+          },
+        ]),
+        forwards: [],
+      });
+      return { ok: true, hostPort: 8080, probe: "ok" };
+    },
+    async (paths) => {
+      expect(
+        await makePortBindClient().add(paths, "s1", {
+          direction: "local",
+          containerPort: 3000,
+          hostPort: 8080,
+        }),
+      ).toEqual({
+        entry: {
+          direction: "local",
+          containerPort: 3000,
+          hostPort: 8080,
+          owners: ["dynamic"],
+          createdAt: "2026-09-08T00:00:00.000Z",
+          state: "active",
+        },
+        probe: "ok",
+      });
+      expect(received).toEqual({
+        type: "bind",
+        containerPort: 3000,
+        hostPort: 8080,
+      });
+    },
+  );
+});
+
+test("legacy remote removal is conservative while local removal confirms closure", async () => {
+  const received: unknown[] = [];
+  await withFakeBroker(
+    (request) => {
+      received.push(request);
+      return { ok: true };
+    },
+    async (paths) => {
+      const client = makePortBindClient();
+      expect(
+        await client.remove(paths, "s1", {
+          direction: "remote",
+          containerPort: 15_432,
+        }),
+      ).toEqual({
+        removed: true,
+        retainedInternal: false,
+        listenerClosed: false,
+      });
+      expect(
+        await client.remove(paths, "s1", {
+          direction: "local",
+          hostPort: 8080,
+        }),
+      ).toEqual({
+        removed: true,
+        retainedInternal: false,
+        listenerClosed: true,
+      });
+      expect(received).toEqual([
+        { type: "unforward", containerPort: 15_432 },
+        { type: "unbind", hostPort: 8080 },
+      ]);
+    },
+  );
+});
+
+test("legacy sessions without remote support require restart", async () => {
+  await withFakeBroker(
+    () => ({ ok: true }),
+    async (paths) => {
+      await expect(
+        makePortBindClient().add(paths, "s1", {
+          direction: "remote",
+          containerPort: 15_432,
+          hostPort: 5432,
+        }),
+      ).rejects.toBeInstanceOf(SessionRestartRequiredError);
+    },
+    { protocolVersion: undefined, forwards: undefined },
+  );
 });

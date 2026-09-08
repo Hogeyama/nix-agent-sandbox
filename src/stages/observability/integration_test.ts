@@ -2,15 +2,15 @@
  * End-to-end wiring test for the observability slice.
  *
  * Boots the Live OTLP receiver service (real Bun.serve listener), runs
- * ObservabilityStage to acquire it, and then planProxy to confirm:
+ * ObservabilityStage to acquire it, and then planPortBind to confirm:
  *   - the receiverPort recorded in the slice is the same port that
  *     OTEL_EXPORTER_OTLP_ENDPOINT advertises to the agent;
- *   - the same port flows into the proxy plan's forwardPorts list
- *     (so the per-port UDS relay in the agent container will route to it).
+ *   - the same port flows into the port plan with internal ownership
+ *     (so the shared relay routes the agent's telemetry to it).
  *
- * No agents, no Docker — only ObservabilityStage + planProxy on
+ * No agents, no Docker — only ObservabilityStage + planPortBind on
  * top of the live receiver. This is the smallest harness that catches
- * drift between env / forwardPorts / listener.
+ * drift between env / initialForwards / listener.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -39,7 +39,7 @@ import type {
   StageInput,
 } from "../../pipeline/types.ts";
 import { planLaunch } from "../launch/stage.ts";
-import { planProxy } from "../proxy/stage.ts";
+import { planPortBind } from "../port_bind/stage.ts";
 import {
   makeOtlpReceiverServiceFake,
   OtlpReceiverServiceLive,
@@ -122,7 +122,7 @@ function makeContainer(
   };
 }
 
-test("observability + proxy: claude => env endpoint port matches receiver port and is in forwardPorts", async () => {
+test("observability + ports: claude => env endpoint port matches receiver port and has an internal forward", async () => {
   const profile = makeProfile("claude");
   const config = makeConfig(profile, true);
   const sessionId = "sess_int_claude";
@@ -162,12 +162,33 @@ test("observability + proxy: claude => env endpoint port matches receiver port a
       `http://127.0.0.1:${receiverPort}`,
     );
 
-    const proxyPlan = planProxy({
+    const portPlan = planPortBind({
       ...stageInput,
       container: containerOut,
       observability,
     });
-    expect([...proxyPlan.forwardPorts]).toContain(receiverPort);
+    expect(portPlan.initialForwards).toContainEqual({
+      direction: "remote",
+      hostPort: receiverPort,
+      containerPort: receiverPort,
+      owners: ["internal"],
+    });
+
+    profile.network.remoteForwards = [
+      { hostPort: receiverPort, containerPort: receiverPort },
+    ];
+    expect(
+      planPortBind({
+        ...stageInput,
+        container: containerOut,
+        observability,
+      }).initialForwards,
+    ).toContainEqual({
+      direction: "remote",
+      hostPort: receiverPort,
+      containerPort: receiverPort,
+      owners: ["config", "internal"],
+    });
 
     return receiverPort;
   });
@@ -191,7 +212,7 @@ test("observability + proxy: claude => env endpoint port matches receiver port a
   }
 });
 
-test("observability + proxy + launch: codex => receiver port is forwarded and argv override precedes user args", async () => {
+test("observability + ports + launch: codex => receiver port is forwarded and argv override precedes user args", async () => {
   const profile = makeProfile("codex");
   profile.agentArgs = ["--profile"];
   const config = makeConfig(profile, true);
@@ -239,12 +260,17 @@ test("observability + proxy + launch: codex => receiver port is forwarded and ar
     });
     expect(containerOut.env.static).toEqual({});
 
-    const proxyPlan = planProxy({
+    const portPlan = planPortBind({
       ...stageInput,
       container: containerOut,
       observability,
     });
-    expect([...proxyPlan.forwardPorts]).toContain(4318);
+    expect(portPlan.initialForwards).toContainEqual({
+      direction: "remote",
+      hostPort: 4318,
+      containerPort: 4318,
+      owners: ["internal"],
+    });
 
     const launchPlan = planLaunch(
       {

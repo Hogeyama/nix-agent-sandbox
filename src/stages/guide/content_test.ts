@@ -6,7 +6,11 @@ function makeFacts(overrides: Partial<GuideFacts> = {}): GuideFacts {
   return {
     agent: "claude",
     workDir: "/work/repo",
-    network: { fallback: "deny", pendingTimeoutSeconds: 300, forwardPorts: [] },
+    network: {
+      fallback: "deny",
+      pendingTimeoutSeconds: 300,
+      remoteForwards: [],
+    },
     hostexec: null,
     dind: null,
     maskEnabled: false,
@@ -101,7 +105,7 @@ describe("renderGuide", () => {
         network: {
           fallback: "deny",
           pendingTimeoutSeconds: 300,
-          forwardPorts: [],
+          remoteForwards: [],
         },
       }),
     );
@@ -116,7 +120,7 @@ describe("renderGuide", () => {
         network: {
           fallback: "review",
           pendingTimeoutSeconds: 120,
-          forwardPorts: [],
+          remoteForwards: [],
         },
       }),
     );
@@ -133,7 +137,10 @@ describe("renderGuide", () => {
         network: {
           fallback: "deny",
           pendingTimeoutSeconds: 300,
-          forwardPorts: [8080, 5432],
+          remoteForwards: [
+            { hostPort: 8080, containerPort: 18081 },
+            { hostPort: 5432, containerPort: 15432 },
+          ],
         },
       }),
     );
@@ -148,14 +155,18 @@ describe("renderGuide", () => {
         network: {
           fallback: "deny",
           pendingTimeoutSeconds: 300,
-          forwardPorts: [8080, 5432],
+          remoteForwards: [
+            { hostPort: 8080, containerPort: 18081 },
+            { hostPort: 5432, containerPort: 15432 },
+          ],
         },
       }),
     );
-    expect(out).toContain("localhost:<port>");
+    expect(out).toContain("localhost:15432");
+    expect(out).toContain("127.0.0.1:5432");
   });
 
-  test("description carries a ports symptom only when forwardPorts is non-empty", () => {
+  test("description carries a ports symptom only when remoteForwards is non-empty", () => {
     const bare = renderGuide(makeFacts());
     const bareDescription =
       bare.split("\n").find((l) => l.startsWith("description:")) ?? "";
@@ -166,7 +177,7 @@ describe("renderGuide", () => {
         network: {
           fallback: "deny",
           pendingTimeoutSeconds: 300,
-          forwardPorts: [8080],
+          remoteForwards: [{ hostPort: 8080, containerPort: 18081 }],
         },
       }),
     );
@@ -254,7 +265,7 @@ describe("renderGuide", () => {
         network: {
           fallback: "review",
           pendingTimeoutSeconds: 120,
-          forwardPorts: [],
+          remoteForwards: [],
         },
       }),
     );
@@ -268,7 +279,7 @@ describe("renderGuide", () => {
         network: {
           fallback: "review",
           pendingTimeoutSeconds: 120,
-          forwardPorts: [],
+          remoteForwards: [],
         },
         hostexec: {
           installScript: false,

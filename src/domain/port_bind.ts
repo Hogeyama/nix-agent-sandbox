@@ -1,3 +1,10 @@
+export type {
+  AddForwardRequest,
+  AddForwardResult,
+  ForwardSelector,
+  ManagedForward,
+  RemoveForwardResult,
+} from "../network/port_forward_model.ts";
 export {
   makePortBindClient,
   makePortBindServiceFake,
@@ -18,5 +25,6 @@ export {
   type PortBindKey,
   type PortForwardKey,
   RelayUnavailableError,
+  SessionRestartRequiredError,
   SessionUnreachableError,
 } from "./port_bind/types.ts";

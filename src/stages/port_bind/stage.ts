@@ -6,17 +6,20 @@ import {
   relayScriptPath,
   relaySocketPath,
 } from "../../network/port_bind_registry.ts";
+import type { InitialForward } from "../../network/port_forward_model.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { MountSpec, PipelineState } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { reservedNamespacePorts } from "../dind.ts";
+import { buildInitialForwards } from "./initial_forwards.ts";
 import { PortBindService } from "./port_bind_service.ts";
 
 export const CONTAINER_RELAY_SOCKET = "/run/nas-ports/relay.sock";
 export const CONTAINER_RELAY_SCRIPT = "/usr/local/lib/nas/port-relay.mjs";
 
-export type PortBindStageInput = StageInput & Pick<PipelineState, "container">;
+export type PortBindStageInput = StageInput &
+  Pick<PipelineState, "container" | "observability">;
 
 export interface PortBindPlan {
   readonly sessionId: string;
@@ -26,7 +29,8 @@ export interface PortBindPlan {
   readonly relayScriptSource: string;
   readonly controlSocket: string;
   readonly relayUser: string | undefined;
-  /** Ports nas already binds in the namespace; never suggested as candidates. */
+  readonly initialForwards: InitialForward[];
+  /** Actual nas process listeners, separate from the initial forward mappings. */
   readonly reservedPorts: readonly number[];
   readonly mounts: readonly MountSpec[];
 }
@@ -54,8 +58,19 @@ export function planPortBind(input: PortBindStageInput): PortBindPlan {
     relayScriptSource,
     controlSocket: brokerSocketPath(paths, input.sessionId),
     relayUser: input.host.uid === null ? undefined : String(input.host.uid),
-    reservedPorts: reservedNamespacePorts(
-      input.container.env.static.NAS_FORWARD_PORTS,
+    reservedPorts: reservedNamespacePorts([], input.profile.docker.enable),
+    initialForwards: buildInitialForwards(
+      [
+        ...input.profile.network.localForwards.map((pair) => ({
+          ...pair,
+          direction: "local" as const,
+        })),
+        ...input.profile.network.remoteForwards.map((pair) => ({
+          ...pair,
+          direction: "remote" as const,
+        })),
+      ],
+      input.observability.enabled ? input.observability.receiverPort : null,
     ),
     mounts: [
       {
@@ -75,17 +90,21 @@ export function planPortBind(input: PortBindStageInput): PortBindPlan {
 export function createPortBindStage(
   shared: StageInput,
 ): Stage<
-  "container",
+  "container" | "observability",
   Pick<StageResult, "container">,
   PortBindService,
   unknown
 > {
   return {
     name: "PortBindStage",
-    needs: ["container"],
+    needs: ["container", "observability"],
     run(input) {
       return Effect.gen(function* () {
-        const plan = planPortBind({ ...shared, ...input });
+        const plan = yield* Effect.try({
+          try: () => planPortBind({ ...shared, ...input }),
+          catch: (error) =>
+            error instanceof Error ? error : new Error(String(error)),
+        });
         const service = yield* PortBindService;
         yield* Effect.acquireRelease(service.start(plan), (handle) =>
           handle.close(),
@@ -93,6 +112,16 @@ export function createPortBindStage(
         return {
           container: mergeContainerPlan(input.container, {
             mounts: plan.mounts,
+            ...(plan.initialForwards.length > 0
+              ? {
+                  env: {
+                    static: {
+                      NAS_PORT_RELAY_STARTUP: "1",
+                      NAS_PORT_RELAY_SOCKET: CONTAINER_RELAY_SOCKET,
+                    },
+                  },
+                }
+              : {}),
           }),
         };
       });

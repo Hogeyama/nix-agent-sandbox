@@ -4,11 +4,16 @@
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 import type { HostExecPromptScope } from "../../config/types.ts";
+import type {
+  AddForwardRequest,
+  ForwardSelector,
+} from "../../domain/port_bind.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import { APPROVAL_SCOPES, type ApprovalScope } from "../../network/protocol.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   acknowledgeSessionTurn,
+  addPortForward,
   approveHostExec,
   approveNetwork,
   bindPort,
@@ -24,6 +29,7 @@ import {
   getPortCandidates,
   getSessions,
   getTerminalSessions,
+  removePortForward,
   renameSession,
   startShellSession,
   stopContainer,
@@ -82,6 +88,18 @@ function isPort(value: unknown): value is number {
     Number.isInteger(value) &&
     value >= 1 &&
     value <= 65_535
+  );
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
   );
 }
 
@@ -246,6 +264,95 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       await denyNetwork(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
+    }),
+  );
+
+  api.post("/network/port-forwards", ({ req }) =>
+    withErrorHandling(async () => {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        return json({ error: "JSON body must be an object" }, 400);
+      }
+      const value = body as Record<string, unknown>;
+      if (
+        !hasExactKeys(value, [
+          "sessionId",
+          "direction",
+          "containerPort",
+          "hostPort",
+        ])
+      ) {
+        return json({ error: "Invalid port-forward request shape" }, 400);
+      }
+      if (!isSafeId(value.sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (value.direction !== "local" && value.direction !== "remote") {
+        return json({ error: "direction must be local or remote" }, 400);
+      }
+      if (!isPort(value.containerPort)) {
+        return json(
+          { error: "containerPort must be between 1 and 65535" },
+          400,
+        );
+      }
+      if (
+        (value.direction === "local" &&
+          value.hostPort !== null &&
+          !isPort(value.hostPort)) ||
+        (value.direction === "remote" && !isPort(value.hostPort))
+      ) {
+        return json({ error: "hostPort must be between 1 and 65535" }, 400);
+      }
+      const request = {
+        direction: value.direction,
+        containerPort: value.containerPort,
+        hostPort: value.hostPort,
+      } as AddForwardRequest;
+      return json(await addPortForward(ctx, value.sessionId, request));
+    }),
+  );
+
+  api.post("/network/port-forwards/remove", ({ req }) =>
+    withErrorHandling(async () => {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        return json({ error: "JSON body must be an object" }, 400);
+      }
+      const value = body as Record<string, unknown>;
+      if (!isSafeId(value.sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      let selector: ForwardSelector;
+      if (
+        value.direction === "local" &&
+        hasExactKeys(value, ["sessionId", "direction", "hostPort"]) &&
+        isPort(value.hostPort)
+      ) {
+        selector = { direction: "local", hostPort: value.hostPort };
+      } else if (
+        (value.direction === "local" || value.direction === "remote") &&
+        hasExactKeys(value, ["sessionId", "direction", "containerPort"]) &&
+        isPort(value.containerPort)
+      ) {
+        selector = {
+          direction: value.direction,
+          containerPort: value.containerPort,
+        } as ForwardSelector;
+      } else {
+        return json({ error: "Invalid port-forward selector shape" }, 400);
+      }
+      return json(await removePortForward(ctx, value.sessionId, selector));
     }),
   );
 

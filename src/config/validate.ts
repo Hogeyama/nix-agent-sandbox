@@ -10,6 +10,7 @@ import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
 import { validateAuthzConfig } from "../network/authz/validate.ts";
 import { LOCAL_PROXY_PORT } from "../network/ports.ts";
+import { normalizePortForwards } from "./port_forwards.ts";
 import { NIX_EXTRA_PACKAGES_MIGRATION } from "./retired_nix.ts";
 import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
 
@@ -64,14 +65,18 @@ function validateProfile(name: string, profile: Profile): string[] {
     );
   }
 
-  // --- forwardPorts の予約ポート(18080)・重複検出 ---
-  errors.push(
-    ...validateForwardPorts(
-      name,
-      profile.network.proxy.forwardPorts,
-      profile.docker.enable,
-    ),
-  );
+  const reservedPorts = [
+    LOCAL_PROXY_PORT,
+    ...(profile.docker.enable ? [DIND_INTERNAL_PORT] : []),
+  ];
+  const forwards = normalizePortForwards(name, profile.network, reservedPorts);
+  errors.push(...forwards.errors);
+  profile.network.localForwards = forwards.entries
+    .filter((entry) => entry.direction === "local")
+    .map(({ hostPort, containerPort }) => ({ hostPort, containerPort }));
+  profile.network.remoteForwards = forwards.entries
+    .filter((entry) => entry.direction === "remote")
+    .map(({ hostPort, containerPort }) => ({ hostPort, containerPort }));
 
   errors.push(
     ...validateRequestBodyAudit(name, profile.network.requestBodyAudit),
@@ -211,38 +216,6 @@ function validateAuthz(profileName: string, profile: Profile): string[] {
     }
   }
 
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// Forward ports validation
-// ---------------------------------------------------------------------------
-
-function validateForwardPorts(
-  profileName: string,
-  ports: number[],
-  dockerEnable: boolean,
-): string[] {
-  const errors: string[] = [];
-  const seen = new Set<number>();
-  for (const [i, port] of ports.entries()) {
-    if (port === LOCAL_PROXY_PORT) {
-      errors.push(
-        `profile "${profileName}": proxy.forwardPorts[${i}] port ${LOCAL_PROXY_PORT} is reserved for the internal authentication proxy`,
-      );
-    }
-    if (dockerEnable && port === DIND_INTERNAL_PORT) {
-      errors.push(
-        `profile "${profileName}": proxy.forwardPorts[${i}] port ${DIND_INTERNAL_PORT} is reserved for the Docker daemon when docker.enable is true`,
-      );
-    }
-    if (seen.has(port)) {
-      errors.push(
-        `profile "${profileName}": proxy.forwardPorts[${i}] duplicate port ${port}`,
-      );
-    }
-    seen.add(port);
-  }
   return errors;
 }
 

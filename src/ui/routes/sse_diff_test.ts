@@ -384,9 +384,12 @@ test("adding and removing a binding each emit one port-bindings event", () => {
 
   const added = makeInputs({ portBindings: makePortBindings(3000) });
   const addition = diffSnapshots(emptyState, added);
-  expect(addition.events).toEqual([
-    { event: "port-bindings", data: { items: makePortBindings(3000) } },
+  expect(addition.events.map((event) => event.event)).toEqual([
+    "port-bindings",
   ]);
+  expect(addition.events[0]?.data).toMatchObject({
+    items: makePortBindings(3000),
+  });
 
   const removal = diffSnapshots(addition.nextState, empty);
   expect(removal.events).toEqual([
@@ -399,9 +402,11 @@ test("rebinding one host port to another container port emits", () => {
   const { nextState } = diffSnapshots(initialSnapshotState(), initial);
   const rebound = makeInputs({ portBindings: makePortBindings(3000, 5173) });
 
-  expect(diffSnapshots(nextState, rebound).events).toEqual([
-    { event: "port-bindings", data: { items: makePortBindings(3000, 5173) } },
-  ]);
+  const { events } = diffSnapshots(nextState, rebound);
+  expect(events.map((event) => event.event)).toEqual(["port-bindings"]);
+  expect(events[0]?.data).toMatchObject({
+    items: makePortBindings(3000, 5173),
+  });
 });
 
 test("adding a forward to a session with unchanged bindings emits", () => {
@@ -416,10 +421,71 @@ test("adding a forward to a session with unchanged bindings emits", () => {
     nextState,
     makeInputs({ portBindings: forwarded }),
   );
-  expect(events).toEqual([
-    { event: "port-bindings", data: { items: forwarded } },
-  ]);
+  expect(events.map((event) => event.event)).toEqual(["port-bindings"]);
+  expect(events[0]?.data).toMatchObject({ items: forwarded });
   expect(
     diffSnapshots(after, makeInputs({ portBindings: forwarded })).events,
   ).toEqual([]);
+});
+
+test("forward state and owner changes each emit a port-bindings event", () => {
+  const portBindings = makePortBindings(8080);
+  portBindings[0].portForwards = [
+    {
+      direction: "local",
+      hostPort: 8080,
+      containerPort: 3000,
+      owners: ["config"],
+      createdAt: "2025-01-01T00:00:00Z",
+      state: "active",
+    },
+  ];
+  const initial = makeInputs({ portBindings });
+  const { nextState } = diffSnapshots(initialSnapshotState(), initial);
+
+  const unavailable = structuredClone(portBindings);
+  unavailable[0].portForwards![0].state = "unavailable";
+  const stateChange = diffSnapshots(
+    nextState,
+    makeInputs({ portBindings: unavailable }),
+  );
+  expect(stateChange.events.map((event) => event.event)).toEqual([
+    "port-bindings",
+  ]);
+
+  const shared = structuredClone(unavailable);
+  shared[0].portForwards![0].owners = ["config", "internal"];
+  expect(
+    diffSnapshots(
+      stateChange.nextState,
+      makeInputs({ portBindings: shared }),
+    ).events.map((event) => event.event),
+  ).toEqual(["port-bindings"]);
+});
+
+test("legacy port snapshots emit a canonical fallback for display", () => {
+  const legacy = makePortBindings(8080);
+
+  const event = diffSnapshots(
+    initialSnapshotState(),
+    makeInputs({ portBindings: legacy }),
+  ).events.find((candidate) => candidate.event === "port-bindings");
+
+  expect(event?.data).toEqual({
+    items: [
+      {
+        ...legacy[0],
+        portForwards: [
+          {
+            direction: "local",
+            hostPort: 8080,
+            containerPort: 3000,
+            owners: ["dynamic"],
+            createdAt: "2025-01-01T00:00:00Z",
+            state: "active",
+          },
+        ],
+      },
+    ],
+  });
 });

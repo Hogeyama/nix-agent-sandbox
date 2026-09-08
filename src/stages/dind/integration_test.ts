@@ -130,7 +130,7 @@ function makeSharedInput(
 
 type DindSliceState = Pick<
   PipelineState,
-  "workspace" | "container" | "network" | "proxy"
+  "workspace" | "container" | "network" | "proxy" | "observability"
 >;
 
 function makeStageState(
@@ -155,7 +155,13 @@ function makeStageState(
     // requires a guaranteed-existing regular file on the Docker host.
     caCertPath: import.meta.path,
   };
-  return { workspace, container, network, proxy };
+  return {
+    workspace,
+    container,
+    network,
+    proxy,
+    observability: overrides.observability ?? { enabled: false },
+  };
 }
 
 /**

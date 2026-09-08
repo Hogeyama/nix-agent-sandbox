@@ -9,10 +9,7 @@
 // Forwards HTTP requests and CONNECT tunnels to the upstream proxy with auth.
 
 import { createServer, request as httpRequest } from "node:http";
-import {
-  createServer as createTcpServer,
-  connect as netConnect,
-} from "node:net";
+import { connect as netConnect } from "node:net";
 
 const LISTEN_HOST = "127.0.0.1";
 const LISTEN_PORT = Number(process.env.NAS_LOCAL_PROXY_PORT) || 18080;
@@ -126,81 +123,3 @@ server.on("connect", (clientReq, clientSocket, head) => {
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {});
-
-// ---------------------------------------------------------------------------
-// TCP port forwarding — forward localhost:<port> to host via per-port UDS
-// ---------------------------------------------------------------------------
-//
-// The host-side `nas` process listens on a UDS at
-// `${NAS_FORWARD_PORT_SOCKET_DIR}/<port>.sock` and bridges to host TCP via
-// the proxy. Inside the agent container we just connect that UDS directly: there
-// is no in-band CONNECT tunnel and no proxy auth — the host's bind-mount of
-// the UDS into the container is itself the access boundary.
-
-const forwardPorts = (process.env.NAS_FORWARD_PORTS || "")
-  .split(",")
-  .map(Number)
-  .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
-
-const forwardPortSocketDir = process.env.NAS_FORWARD_PORT_SOCKET_DIR;
-
-if (forwardPorts.length > 0 && !forwardPortSocketDir) {
-  console.error(
-    "[local-proxy] NAS_FORWARD_PORT_SOCKET_DIR not set; skipping forward-port loop",
-  );
-} else {
-  for (const port of forwardPorts) {
-    const socketPath = `${forwardPortSocketDir}/${port}.sock`;
-
-    const tcpServer = createTcpServer((clientSocket) => {
-      // Defensive early-bytes buffering: although Node's net.Socket internally
-      // queues writes issued before the connection is established, we keep
-      // the explicit buffer-and-unshift pattern so that the same code path
-      // handles client bytes that arrive between accept() and the UDS being
-      // ready, and so that any future change to the upstream wiring (e.g.
-      // adding a handshake) does not silently drop those bytes.
-      const bufferedClientChunks = [];
-      const onClientData = (chunk) => {
-        bufferedClientChunks.push(chunk);
-      };
-      const cleanupBufferedClientData = () => {
-        clientSocket.removeListener("data", onClientData);
-        bufferedClientChunks.length = 0;
-      };
-      clientSocket.on("data", onClientData);
-
-      const udsSocket = netConnect({ path: socketPath }, () => {
-        clientSocket.removeListener("data", onClientData);
-        clientSocket.pause();
-        for (let i = bufferedClientChunks.length - 1; i >= 0; i -= 1) {
-          clientSocket.unshift(bufferedClientChunks[i]);
-        }
-        bufferedClientChunks.length = 0;
-        udsSocket.pipe(clientSocket);
-        clientSocket.pipe(udsSocket);
-        clientSocket.resume();
-      });
-
-      udsSocket.on("error", (err) => {
-        cleanupBufferedClientData();
-        console.error(
-          `[local-proxy] TCP forward port ${port}: UDS connect failed: ${err.message}`,
-        );
-        clientSocket.destroy();
-      });
-
-      clientSocket.on("error", () => {
-        cleanupBufferedClientData();
-        udsSocket.destroy();
-      });
-    });
-
-    tcpServer.on("error", (err) => {
-      console.error(
-        `[local-proxy] TCP forward port ${port}: listen error: ${err.message}`,
-      );
-    });
-
-    tcpServer.listen(port, LISTEN_HOST, () => {});
-  }
-}

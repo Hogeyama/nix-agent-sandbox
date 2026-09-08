@@ -35,6 +35,12 @@
  *     the intended endpoint.
  */
 
+import type {
+  AddForwardRequest,
+  AddForwardResult,
+  ForwardSelector,
+  RemoveForwardResult,
+} from "../../../../network/port_forward_model";
 import type { AuditLogEntryLike, SessionRecordLike } from "../stores/types";
 
 /**
@@ -363,14 +369,23 @@ export function denyNetwork(
   });
 }
 
-export function bindPort(
+export function addPortForward(
   sessionId: string,
-  containerPort: number,
-): Promise<{ hostPort: number; probe: string }> {
-  return request("POST", "/api/network/bind", {
+  forward: AddForwardRequest,
+): Promise<AddForwardResult> {
+  return request("POST", "/api/network/port-forwards", {
     sessionId,
-    containerPort,
-    hostPort: null,
+    ...forward,
+  });
+}
+
+export function removePortForward(
+  sessionId: string,
+  selector: ForwardSelector,
+): Promise<RemoveForwardResult> {
+  return request("POST", "/api/network/port-forwards/remove", {
+    sessionId,
+    ...selector,
   });
 }
 
@@ -398,45 +413,6 @@ export function getPortCandidates(sessionId: string): Promise<{
     "GET",
     `/api/network/candidates?sessionId=${encodeURIComponent(sessionId)}`,
   );
-}
-
-export function unbindPort(
-  sessionId: string,
-  containerPort: number,
-): Promise<{ ok: boolean }> {
-  return request("POST", "/api/network/unbind", {
-    sessionId,
-    containerPort,
-  });
-}
-
-/**
- * Make a host loopback port reachable inside the container at the same port
- * number. `hostProbe` says whether anything answered on the host just now.
- */
-export function forwardPort(
-  sessionId: string,
-  hostPort: number,
-): Promise<{
-  containerPort: number;
-  hostPort: number;
-  hostProbe: "ok" | "no-answer";
-}> {
-  return request("POST", "/api/network/forward", {
-    sessionId,
-    hostPort,
-    containerPort: hostPort,
-  });
-}
-
-export function unforwardPort(
-  sessionId: string,
-  containerPort: number,
-): Promise<{ ok: boolean }> {
-  return request("POST", "/api/network/unforward", {
-    sessionId,
-    containerPort,
-  });
 }
 
 /**
