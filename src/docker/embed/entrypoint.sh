@@ -314,6 +314,14 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
     cp --preserve=mode "$BASH_SYSTEM_PATH" "$NAS_REAL_BASH"
   fi
 
+  # Preserve an unusable existing backup, but do not make non-Bash payloads
+  # depend on it through the launcher. The mask wrapper still uses bash.real
+  # and fails closed without falling back to this separate copy.
+  if [ ! -f "$NAS_REAL_BASH" ] || [ ! -x "$NAS_REAL_BASH" ]; then
+    NAS_REAL_BASH="$(mktemp /tmp/nas-launch-bash.XXXXXX)"
+    cp --preserve=mode "$BASH_SYSTEM_PATH" "$NAS_REAL_BASH"
+  fi
+
   # マスクは nas-mask-filter の supervise モードに任せる。
   #
   # 以前はここで `exec > >("$NAS_MASK_FILTER")` とプロセス置換を使っていたが、
