@@ -86,6 +86,27 @@ async function runProcess(
   return { exitCode, stdout, stderr };
 }
 
+async function terminalAvailable(): Promise<boolean> {
+  const script = Bun.which("script");
+  if (!script) return false;
+  const probe = await runProcess(
+    [
+      script,
+      "-qef",
+      "-E",
+      "never",
+      "-c",
+      "test -t 0 && test -t 1",
+      "/dev/null",
+    ],
+    process.cwd(),
+    { ...process.env, SHELL: "/bin/sh" },
+  );
+  return probe.exitCode === 0;
+}
+
+const hasTerminal = await terminalAvailable();
+
 function launch(
   fixture: Fixture,
   command: string[],
@@ -302,7 +323,12 @@ ${entrypoint.slice(start).replaceAll("/usr/local/bin/nas-direnv-exec", '"$TEST_L
     ...command,
   ];
   return runProcess(
-    terminal ? ["script", "-qefc", shellEscape(argv), "/dev/null"] : argv,
+    // Give interactive bash its own PTY so its job control cannot stop a host
+    // test runner that happens to share an inherited controlling terminal.
+    // Input echo stays off so typed commands are not mistaken for output.
+    terminal
+      ? ["script", "-qef", "-E", "never", "-c", shellEscape(argv), "/dev/null"]
+      : argv,
     fixture.workspace,
     {
       ...fixture.env,
@@ -318,7 +344,7 @@ ${entrypoint.slice(start).replaceAll("/usr/local/bin/nas-direnv-exec", '"$TEST_L
 }
 
 for (const shell of [false, true]) {
-  test.skipIf(!integrationAvailable)(
+  test.skipIf(!integrationAvailable || (shell && !hasTerminal))(
     `entrypoint dispatch checks approval for ${shell ? "interactive shell" : "agent"}, preserves argv and env order`,
     async () => {
       await withFixture(async (fixture) => {
@@ -350,16 +376,20 @@ for (const shell of [false, true]) {
           shell,
           command,
           shell ? `${payload}\n` : undefined,
+          shell,
         );
         expect(unapproved.exitCode).not.toBe(0);
         expect(unapproved.stdout).not.toContain("RESULT:");
-        expect(unapproved.stderr).toContain("direnv allow");
+        expect(shell ? unapproved.stdout : unapproved.stderr).toContain(
+          "direnv allow",
+        );
         await approve(fixture);
         const result = await dispatch(
           fixture,
           shell,
           command,
           shell ? `${payload}\n` : undefined,
+          shell,
         );
         expect(result.exitCode).toBe(37);
         expect(result.stdout).toContain(
@@ -388,17 +418,6 @@ async function currentNasImageAvailable(): Promise<boolean> {
   return result.stdout.trim() === (await computeEmbedHash());
 }
 const currentNasImage = await currentNasImageAvailable();
-async function terminalAvailable(): Promise<boolean> {
-  const script = Bun.which("script");
-  if (!script) return false;
-  const probe = await runProcess(
-    [script, "-qefc", "test -t 0 && test -t 1", "/dev/null"],
-    process.cwd(),
-    { ...process.env, SHELL: "/bin/sh" },
-  );
-  return probe.exitCode === 0;
-}
-const hasTerminal = await terminalAvailable();
 
 // Use the shipped wrapper, relocating only its installed interpreter path.
 // The test supervisor puts its child under pipes like nas-mask-filter does.
