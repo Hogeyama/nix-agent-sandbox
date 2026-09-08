@@ -78,7 +78,7 @@ async function withRelay<T>(
     gateway = startedGateway;
     await new Promise<void>((resolve) => proxy.listen(relayPath, resolve));
     await mkdir(procDir, { recursive: true });
-    const startedProc = Bun.spawn(["bun", SCRIPT], {
+    const startedProc = Bun.spawn(["bun", SCRIPT, "--wait-initial"], {
       env: {
         ...process.env,
         NAS_PORT_RELAY_SOCKET: relayPath,
@@ -201,7 +201,7 @@ test("the relay closes control for a request with extra fields", async () => {
       });
     });
     listening = true;
-    proc = Bun.spawn(["bun", SCRIPT], {
+    proc = Bun.spawn(["bun", SCRIPT, "--wait-initial"], {
       env: { ...process.env, NAS_PORT_RELAY_SOCKET: socketPath },
       stdout: "pipe",
       stderr: "pipe",
@@ -467,7 +467,7 @@ test("a removed real-relay token cannot reach the host after the port is re-adde
 test("initial-ready is reported without stopping the real relay", async () => {
   await withRelay(async ({ gateway, echoPort, readOutput }) => {
     gateway.completeInitialForwards();
-    expect(await readOutput("stdout")).toBe("initial-ready\n");
+    expect(await readOutput("stdout")).toBe("ready\n");
     expect(await gateway.probe(echoPort)).toBe("ok");
   });
 });

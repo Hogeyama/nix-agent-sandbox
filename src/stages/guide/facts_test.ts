@@ -79,7 +79,10 @@ describe("profileToGuideFacts", () => {
           ...DEFAULT_NETWORK_CONFIG,
           fallback: "review",
           pendingTimeoutSeconds: 120,
-          proxy: { forwardPorts: [8080, 5432] },
+          remoteForwards: [
+            { hostPort: 8080, containerPort: 18081 },
+            { hostPort: 5432, containerPort: 15432 },
+          ],
         },
       }),
       "/work/repo",
@@ -87,7 +90,10 @@ describe("profileToGuideFacts", () => {
 
     expect(facts.network.fallback).toBe("review");
     expect(facts.network.pendingTimeoutSeconds).toBe(120);
-    expect(facts.network.forwardPorts).toEqual([8080, 5432]);
+    expect(facts.network.remoteForwards).toEqual([
+      { hostPort: 8080, containerPort: 18081 },
+      { hostPort: 5432, containerPort: 15432 },
+    ]);
     expect(facts.workDir).toBe("/work/repo");
   });
 

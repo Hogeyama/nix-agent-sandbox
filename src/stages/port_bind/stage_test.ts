@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Either, Exit, Layer } from "effect";
 import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -95,9 +95,10 @@ function makeSharedInput(sessionId: string): StageInput {
   };
 }
 
-function makeStageState(): Pick<PipelineState, "container"> {
+function makeStageState(): Pick<PipelineState, "container" | "observability"> {
   return {
     container: emptyContainerPlan("nas-test", "/workspace"),
+    observability: { enabled: false },
   };
 }
 
@@ -130,23 +131,13 @@ function liveLayer() {
 test("planPortBind keeps nas's own namespace ports out of the suggestions", () => {
   const input = inputFor("s1");
   expect(planPortBind(input).reservedPorts).toEqual(
-    reservedNamespacePorts(undefined),
+    reservedNamespacePorts([], false),
   );
 
-  const forwarded = {
-    ...input,
-    container: {
-      ...input.container,
-      env: {
-        ...input.container.env,
-        static: {
-          ...input.container.env.static,
-          NAS_FORWARD_PORTS: "18080,9222",
-        },
-      },
-    },
-  };
-  expect(planPortBind(forwarded).reservedPorts).toContain(9222);
+  input.profile.network.remoteForwards = [
+    { hostPort: 9222, containerPort: 19222 },
+  ];
+  expect(planPortBind(input).reservedPorts).not.toContain(19222);
 });
 
 test("planPortBind mounts the socket and the script read-only", () => {
@@ -417,4 +408,98 @@ test("PortBindServiceLive persists relay loss and reconnect failure through the 
     await new Promise<void>((resolve) => echo.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("initial configured mappings are prepared by the port stage", () => {
+  const input = inputFor("s1");
+  input.profile.network.remoteForwards = [
+    { hostPort: 5432, containerPort: 15432 },
+  ];
+  expect(planPortBind(input)).toMatchObject({
+    initialForwards: [
+      {
+        direction: "remote",
+        hostPort: 5432,
+        containerPort: 15432,
+        owners: ["config"],
+      },
+    ],
+  });
+});
+
+test("port stage combines configured and internal mappings and gates startup only when needed", async () => {
+  const input = inputFor("s1");
+  input.profile.network.remoteForwards = [
+    { hostPort: 4318, containerPort: 4318 },
+  ];
+  input.profile.network.localForwards = [
+    { hostPort: 9000, containerPort: 3000 },
+  ];
+  input.observability = { enabled: true, receiverPort: 4318 };
+  const run = () =>
+    Effect.runPromise(
+      createPortBindStage(input)
+        .run(input)
+        .pipe(Effect.scoped, Effect.provide(makePortBindServiceFake())),
+    );
+  const result = await run();
+  expect(planPortBind(input).initialForwards).toEqual([
+    {
+      direction: "local",
+      hostPort: 9000,
+      containerPort: 3000,
+      owners: ["config"],
+    },
+    {
+      direction: "remote",
+      hostPort: 4318,
+      containerPort: 4318,
+      owners: ["config", "internal"],
+    },
+  ]);
+  expect(result.container?.env.static).toMatchObject({
+    NAS_PORT_RELAY_STARTUP: "1",
+    NAS_PORT_RELAY_SOCKET: CONTAINER_RELAY_SOCKET,
+  });
+  input.profile.network.remoteForwards = [];
+  input.profile.network.localForwards = [];
+  input.observability = { enabled: false };
+  const empty = await run();
+  expect(empty.container?.env.static.NAS_PORT_RELAY_STARTUP).toBeUndefined();
+  expect(empty.container?.env.static.NAS_PORT_RELAY_SOCKET).toBeUndefined();
+});
+
+test("failed receiver startup contributes no internal initial forwarding", () => {
+  const input = inputFor("s1");
+  input.observability = { enabled: false };
+  expect(planPortBind(input).initialForwards).toEqual([]);
+});
+
+test("config/internal conflicts fail in the stage Error channel before resource acquisition", async () => {
+  const input = inputFor("s1");
+  input.profile.network.remoteForwards = [
+    { hostPort: 9999, containerPort: 4318 },
+  ];
+  input.observability = { enabled: true, receiverPort: 4318 };
+  let started = false;
+  const result = await Effect.runPromise(
+    createPortBindStage(input)
+      .run(input)
+      .pipe(
+        Effect.either,
+        Effect.scoped,
+        Effect.provide(
+          makePortBindServiceFake({
+            start: () => {
+              started = true;
+              return Effect.succeed({ close: () => Effect.void });
+            },
+          }),
+        ),
+      ),
+  );
+  expect(Either.isLeft(result)).toBe(true);
+  if (Either.isLeft(result))
+    expect(String(result.left)).toContain("conflicting initial forwarding");
+  expect(started).toBe(false);
 });

@@ -27,12 +27,15 @@ if (!socketPath) {
   process.exit(1);
 }
 
+const waitInitial = process.argv.includes("--wait-initial");
+let initialReady = false;
+
 const control = connect({ path: socketPath });
 control.on("error", (err) => {
   console.error(`[port-relay] control: ${err.message}`);
   process.exit(1);
 });
-control.on("close", () => process.exit(0));
+control.on("close", () => process.exit(waitInitial && !initialReady ? 1 : 0));
 control.on("connect", () => control.write("control-v2\n"));
 
 let buffered = "";
@@ -60,7 +63,8 @@ control.on("data", (chunk) => {
 
 function handle(line) {
   if (line === "initial-ready") {
-    process.stdout.write("initial-ready\n");
+    if (waitInitial && !initialReady) process.stdout.write("ready\n");
+    initialReady = true;
     return true;
   }
   const initialFailure = /^initial-failed (.+)$/.exec(line);

@@ -34,6 +34,7 @@ import {
   type ForwardSpec,
   type ForwardState,
   forwardKey,
+  type InitialForward,
   type ManagedForward,
   type RemoveForwardResult,
   removeUserOwners,
@@ -84,6 +85,8 @@ export interface PersistedPorts {
 export interface PortBindBroker {
   readonly controlSocketPath: string;
   listPortForwards(): ManagedForward[];
+  prepareInitial(entries: readonly InitialForward[]): Promise<void>;
+  onRelayConnected(): void;
   onForwardState(
     containerPort: number,
     state: ForwardState,
@@ -226,11 +229,12 @@ export async function startPortBindBroker(opts: {
   now?: () => Date;
   /**
    * Ports nas itself binds inside the container's network namespace (the DinD
-   * daemon, the local proxy, forwarded ports). They are always listening and
+   * daemon and the local proxy). They are always listening and
    * are never something the user wants exposed, so they never get suggested.
    */
   reservedPorts?: readonly number[];
   watchLeaseMs?: number;
+  onInitialComplete?: (error?: string) => void;
 }): Promise<PortBindBroker> {
   const now = opts.now ?? (() => new Date());
   const reserved = new Set(opts.reservedPorts ?? []);
@@ -241,6 +245,7 @@ export async function startPortBindBroker(opts: {
   let watchLease: ReturnType<typeof setTimeout> | undefined;
   let mutationTail = Promise.resolve();
   let closing = false;
+  let initial: "idle" | "pending" | "ready" | "failed" = "idle";
 
   const listPortForwards = (): ManagedForward[] =>
     [...managed.values()].map(copyManagedForward);
@@ -272,6 +277,63 @@ export async function startPortBindBroker(opts: {
     return result;
   };
 
+  const mutateUser = <T>(action: () => Promise<T>): Promise<T> => {
+    if (initial === "pending" || initial === "failed") {
+      return Promise.reject(
+        new ControlError(
+          "relay-unavailable",
+          "initial forwarding is not ready",
+        ),
+      );
+    }
+    return mutate(action);
+  };
+
+  // Runs on the mutation queue, never inside gateway ACK processing.
+  const failInitial = async (error: unknown) => {
+    if (initial !== "pending") return;
+    initial = "failed";
+    const entries = [...managed.values()];
+    managed.clear();
+    generations.clear();
+    const locals = [...open.values()];
+    open.clear();
+    await Promise.allSettled([
+      ...locals.map(closeBinding),
+      ...entries
+        .filter((entry) => entry.direction === "remote")
+        .map((entry) => opts.gateway.unforward(entry.containerPort)),
+    ]);
+    await persist().catch((persistError) =>
+      logDebug(`[nas] initial forwarding rollback: ${persistError}`),
+    );
+    const reason = error instanceof Error ? error.message : String(error);
+    if (opts.gateway.isRelayConnected()) {
+      try {
+        opts.gateway.completeInitialForwards(reason);
+      } catch (notifyError) {
+        // The relay can disconnect between the readiness check and write.
+        logDebug(`[nas] initial failure notification: ${notifyError}`);
+      }
+    }
+    opts.onInitialComplete?.(reason);
+  };
+
+  const completeInitial = () => {
+    if (initial !== "pending" || !opts.gateway.isRelayConnected()) return;
+    if ([...managed.values()].some((entry) => entry.state !== "active")) return;
+    initial = "ready";
+    opts.gateway.completeInitialForwards();
+    opts.onInitialComplete?.();
+  };
+
+  const onRelayConnected = () => {
+    if (initial !== "pending") return;
+    void mutate(async () => completeInitial()).catch((error) =>
+      logDebug(`[nas] initial connection: ${error}`),
+    );
+  };
+
   const onForwardState: PortBindBroker["onForwardState"] = (
     containerPort,
     state,
@@ -287,7 +349,20 @@ export async function startPortBindBroker(opts: {
       entry.state = state;
       if (error === undefined) delete entry.error;
       else entry.error = error;
-      await persistRevocation();
+      if (initial === "pending") {
+        if (state === "failed" || state === "unavailable") {
+          await failInitial(
+            new Error(error ?? `initial forwarding ${containerPort} ${state}`),
+          );
+          return;
+        }
+        try {
+          await persist();
+          completeInitial();
+        } catch (error) {
+          await failInitial(error);
+        }
+      } else await persistRevocation();
     }).catch((error) => logDebug(`[nas] port-forward state: ${error}`));
   };
 
@@ -499,9 +574,79 @@ export async function startPortBindBroker(opts: {
     }
   };
 
+  const prepareInitial: PortBindBroker["prepareInitial"] = (entries) => {
+    if (initial !== "idle" || managed.size > 0)
+      return Promise.reject(new Error("initial forwarding already prepared"));
+    const requested = entries.map((entry) => ({
+      ...entry,
+      owners: [...entry.owners],
+    }));
+    initial = "pending";
+    return mutate(async () => {
+      try {
+        for (const spec of requested) {
+          validateSpec(spec);
+          if (
+            spec.owners.length === 0 ||
+            spec.owners.some(
+              (owner) => owner !== "config" && owner !== "internal",
+            )
+          )
+            throw new Error("invalid initial owners");
+          const key = forwardKey(spec);
+          if (
+            managed.has(key) ||
+            createsForwardCycle([...managed.values()], spec)
+          )
+            throw new Error("conflicting initial forwarding");
+          if (spec.direction === "remote" && reserved.has(spec.containerPort))
+            throw new Error(
+              `container port ${spec.containerPort} is used by nas itself`,
+            );
+          if (
+            spec.direction === "local" &&
+            [...managed.values()].some(
+              (entry) =>
+                entry.direction === "local" && entry.hostPort === spec.hostPort,
+            )
+          )
+            throw new Error(
+              `host port ${spec.hostPort} already has a local forward`,
+            );
+          const entry: ManagedForward = {
+            ...spec,
+            createdAt: now().toISOString(),
+            state: "pending",
+          };
+          if (entry.direction === "local") {
+            const connections = new Set<Socket>();
+            const server = await listenOn(
+              entry.hostPort,
+              entry.containerPort,
+              connections,
+            );
+            open.set(entry.containerPort, {
+              binding: entry,
+              server,
+              connections,
+            });
+            entry.state = "active";
+          }
+          managed.set(key, entry);
+          generations.set(key, Symbol(key));
+        }
+        await persist();
+        if (requested.length === 0) initial = "ready";
+      } catch (error) {
+        await failInitial(error);
+        throw error;
+      }
+    });
+  };
+
   const addPortForward: PortBindBroker["addPortForward"] = (spec, owner) => {
     const requested = { ...spec };
-    return mutate(() => add(requested, owner));
+    return mutateUser(() => add(requested, owner));
   };
 
   const remove = async (
@@ -544,12 +689,12 @@ export async function startPortBindBroker(opts: {
 
   const removePortForward: PortBindBroker["removePortForward"] = (key) => {
     const requested = { ...key };
-    return mutate(() => remove(requested));
+    return mutateUser(() => remove(requested));
   };
 
   const bind: PortBindBroker["bind"] = (req) => {
     const requested = { ...req };
-    return mutate(async () => {
+    return mutateUser(async () => {
       const existing = managed.get(
         forwardKey({
           direction: "local",
@@ -620,7 +765,7 @@ export async function startPortBindBroker(opts: {
 
   const unbind: PortBindBroker["unbind"] = (key) => {
     const requested = { ...key };
-    return mutate(async () => {
+    return mutateUser(async () => {
       const entry = [...managed.values()].find(
         (entry) =>
           entry.direction === "local" &&
@@ -750,6 +895,8 @@ export async function startPortBindBroker(opts: {
   return {
     controlSocketPath: opts.controlSocketPath,
     listPortForwards,
+    prepareInitial,
+    onRelayConnected,
     onForwardState,
     addPortForward,
     removePortForward,

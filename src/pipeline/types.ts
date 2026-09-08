@@ -22,7 +22,6 @@ import type { OtlpReceiverService } from "../stages/observability.ts";
 import type { PortBindService } from "../stages/port_bind.ts";
 import type {
   CaService,
-  ForwardPortRelayService,
   NetworkRuntimeService,
   ProxyService,
   SessionBrokerService,
@@ -93,7 +92,6 @@ export type StageServices =
   | DindService
   | DisplayService
   | DockerBuildService
-  | ForwardPortRelayService
   | FsService
   | GitWorktreeService
   | GuideService

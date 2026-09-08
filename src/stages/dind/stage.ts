@@ -83,26 +83,23 @@ export interface DindPlan {
   readonly outputOverrides: Pick<StageResult, "container" | "dind">;
 }
 
-/**
- * Ports already bound inside the shared network namespace.
- *
- * Reads the forwarded set from the env ProxyStage seeded rather than from the
- * profile: ProxyStage unions the profile's ports with the observability
- * receiver port before binding them, so the profile alone under-reports.
- */
+/** Actual process ports plus the desired remote listeners in this namespace. */
 export function reservedNamespacePorts(
-  forwardPortsEnv: string | undefined,
+  remotePorts: readonly number[],
+  dindEnabled = true,
 ): number[] {
-  const forwarded = (forwardPortsEnv ?? "")
-    .split(",")
-    .map((part) => Number.parseInt(part, 10))
-    .filter((port) => Number.isInteger(port));
-  return [DIND_INTERNAL_PORT, LOCAL_PROXY_PORT, ...forwarded];
+  return [
+    ...new Set([
+      ...(dindEnabled ? [DIND_INTERNAL_PORT] : []),
+      LOCAL_PROXY_PORT,
+      ...remotePorts,
+    ]),
+  ];
 }
 
 type DindStageState = Pick<
   PipelineState,
-  "workspace" | "container" | "network" | "proxy"
+  "workspace" | "container" | "network" | "proxy" | "observability"
 >;
 type DindStageInput = StageInput & DindStageState;
 export interface DindStagePlanOptions {
@@ -160,9 +157,13 @@ export function planDind(
     extraHosts: input.container.extraHosts,
     readinessTimeoutMs,
     joinerContainerName: containerNameForSession(input.sessionId),
-    reservedPorts: reservedNamespacePorts(
-      input.container.env.static.NAS_FORWARD_PORTS,
-    ),
+    reservedPorts: reservedNamespacePorts([
+      ...input.profile.network.remoteForwards.map((pair) => pair.containerPort),
+      ...(input.observability.enabled &&
+      input.observability.receiverPort !== null
+        ? [input.observability.receiverPort]
+        : []),
+    ]),
     outputOverrides: {
       dind: {
         containerName,
@@ -182,7 +183,7 @@ export function planDind(
 export function createDindStage(
   shared: StageInput,
 ): Stage<
-  "workspace" | "container" | "network" | "proxy",
+  "workspace" | "container" | "network" | "proxy" | "observability",
   Partial<Pick<StageResult, "container" | "dind">>,
   DindService,
   unknown
@@ -194,14 +195,14 @@ export function createDindStageWithOptions(
   shared: StageInput,
   options: DindStagePlanOptions = {},
 ): Stage<
-  "workspace" | "container" | "network" | "proxy",
+  "workspace" | "container" | "network" | "proxy" | "observability",
   Partial<Pick<StageResult, "container" | "dind">>,
   DindService,
   unknown
 > {
   return {
     name: "DindStage",
-    needs: ["workspace", "container", "network", "proxy"],
+    needs: ["workspace", "container", "network", "proxy", "observability"],
 
     run(
       input,

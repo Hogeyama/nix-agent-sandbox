@@ -11,12 +11,13 @@
 import type { AgentType } from "../../agents/types.ts";
 import type { Profile } from "../../config/types.ts";
 import type { NetworkFallback } from "../../network/authz/config.ts";
+import type { PortPair } from "../../network/port_forward_model.ts";
 
 export interface GuideNetworkFacts {
   /** 未設定時の既定は "deny"。"allow" は存在しない。 */
   readonly fallback: NetworkFallback;
   readonly pendingTimeoutSeconds: number;
-  readonly forwardPorts: readonly number[];
+  readonly remoteForwards: readonly PortPair[];
 }
 
 export interface GuideHostExecFacts {
@@ -50,7 +51,9 @@ export function profileToGuideFacts(
     network: {
       fallback: profile.network.fallback ?? "deny",
       pendingTimeoutSeconds: profile.network.pendingTimeoutSeconds,
-      forwardPorts: [...profile.network.proxy.forwardPorts],
+      remoteForwards: profile.network.remoteForwards.map((pair) => ({
+        ...pair,
+      })),
     },
     hostexec:
       profile.hostexec === undefined || profile.hostexec === null

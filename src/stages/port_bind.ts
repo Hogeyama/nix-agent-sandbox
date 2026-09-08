@@ -1,3 +1,4 @@
+export { buildInitialForwards } from "./port_bind/initial_forwards.ts";
 export {
   makePortBindServiceFake,
   type PortBindHandle,

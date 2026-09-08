@@ -1250,3 +1250,265 @@ test("persistence rollback closes both token streams and rejects the saved token
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+async function withInitialBroker(
+  fn: (ctx: {
+    broker: Awaited<ReturnType<typeof startPortBindBroker>>;
+    events: string[];
+    complete: Promise<string | undefined>;
+    connect: () => void;
+    persistWith: (persist: (ports: PersistedPorts) => Promise<void>) => void;
+  }) => Promise<void>,
+) {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-initial-"));
+  const events: string[] = [];
+  let connected = false;
+  let persistHook = async (_ports: PersistedPorts) => {};
+  let finish!: (error?: string) => void;
+  const complete = new Promise<string | undefined>((resolve) => {
+    finish = resolve;
+  });
+  const broker = await startPortBindBroker({
+    controlSocketPath: path.join(dir, "sock"),
+    gateway: {
+      socketPath: path.join(dir, "relay.sock"),
+      isRelayConnected: () => connected,
+      relayCapability: () => "v2",
+      completeInitialForwards: (error) => {
+        if (!connected) throw new RelayNotReadyError("unreachable");
+        events.push(error ? "failed" : "ready");
+      },
+      openStream: async () => {
+        throw new Error("not launched");
+      },
+      probe: async () => "no-answer",
+      watchListeners: async () => "ready",
+      listeners: () => [],
+      forwards: () => [],
+      forward: async () => {
+        events.push("forward");
+      },
+      unforward: async (port) => {
+        events.push(`unforward:${port}`);
+        return { listenerClosed: true };
+      },
+      close: async () => {},
+    },
+    persist: async (ports) => {
+      events.push(
+        `persist:${ports.portForwards.map((entry) => entry.state).join(",")}`,
+      );
+      await persistHook(ports);
+    },
+    reservedPorts: [18080],
+    onInitialComplete: finish,
+  });
+  try {
+    await fn({
+      broker,
+      events,
+      complete,
+      connect: () => {
+        connected = true;
+        broker.onRelayConnected();
+      },
+      persistWith: (hook) => {
+        persistHook = hook;
+      },
+    });
+  } finally {
+    await broker.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const initialRemote = {
+  direction: "remote" as const,
+  hostPort: 5432,
+  containerPort: 15432,
+  owners: ["config" as const],
+};
+
+test("initial remote preparation never starts the relay and rejects concurrent mutations", async () => {
+  await withInitialBroker(async ({ broker, events }) => {
+    await broker.prepareInitial([initialRemote]);
+    expect(events).toEqual(["persist:pending"]);
+    expect(broker.listPortForwards()[0].state).toBe("pending");
+    await expect(
+      broker.addPortForward(
+        { direction: "remote", hostPort: 8080, containerPort: 18081 },
+        "dynamic",
+      ),
+    ).rejects.toThrow("initial forwarding is not ready");
+    await expect(broker.removePortForward(initialRemote)).rejects.toThrow(
+      "initial forwarding is not ready",
+    );
+    await expect(
+      broker.bind({ containerPort: 3000, hostPort: 9000 }),
+    ).rejects.toThrow("initial forwarding is not ready");
+  });
+});
+
+test("disconnected initial failure preserves its cause and completes startup", async () => {
+  await withInitialBroker(async ({ broker, events, complete, persistWith }) => {
+    const failure = new Error("disk full before launch");
+    persistWith(async () => {
+      throw failure;
+    });
+
+    const caught = await broker
+      .prepareInitial([initialRemote])
+      .catch((error: unknown) => error);
+
+    expect(caught).toBe(failure);
+    expect(await complete).toBe(failure.message);
+    expect(events).not.toContain("failed");
+  });
+});
+
+test("initial-ready waits for every remote ACK and the last persistence", async () => {
+  await withInitialBroker(
+    async ({ broker, events, complete, connect, persistWith }) => {
+      await broker.prepareInitial([
+        initialRemote,
+        { ...initialRemote, containerPort: 25432 },
+      ]);
+      connect();
+      broker.onForwardState(15432, "active");
+      let release!: () => void;
+      let entered!: () => void;
+      const enteredPersist = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const persisted = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      persistWith(async (ports) => {
+        if (ports.portForwards.every((entry) => entry.state === "active")) {
+          entered();
+          await persisted;
+        }
+      });
+      broker.onForwardState(25432, "active");
+      await enteredPersist;
+      expect(events).not.toContain("ready");
+      release();
+      expect(await complete).toBeUndefined();
+      expect(events.at(-1)).toBe("ready");
+    },
+  );
+});
+
+test("initial listen failure revokes the entire initial remote set", async () => {
+  await withInitialBroker(async ({ broker, events, complete, connect }) => {
+    await broker.prepareInitial([
+      initialRemote,
+      { ...initialRemote, containerPort: 25432 },
+    ]);
+    connect();
+    broker.onForwardState(15432, "active");
+    broker.onForwardState(25432, "failed", "EADDRINUSE");
+    expect(await complete).toContain("EADDRINUSE");
+    expect(broker.listPortForwards()).toEqual([]);
+    expect(events).toContain("unforward:15432");
+    expect(events).toContain("unforward:25432");
+    expect(events).not.toContain("ready");
+    expect(events.at(-2)).toBe("persist:");
+  });
+});
+
+test("initial persistence failure rolls back ACKed resources and fails startup", async () => {
+  await withInitialBroker(
+    async ({ broker, events, complete, connect, persistWith }) => {
+      await broker.prepareInitial([initialRemote]);
+      persistWith(async (ports) => {
+        if (ports.portForwards.some((entry) => entry.state === "active"))
+          throw new Error("disk full");
+      });
+      connect();
+      broker.onForwardState(15432, "active");
+      expect(await complete).toContain("disk full");
+      expect(broker.listPortForwards()).toEqual([]);
+      expect(events).toContain("unforward:15432");
+      expect(events).not.toContain("ready");
+    },
+  );
+});
+
+test("local-only initial listeners are acquired before launch and ready on connection", async () => {
+  const reservation = createServer();
+  const hostPort = await listen(reservation);
+  await new Promise<void>((resolve) => reservation.close(() => resolve()));
+  await withInitialBroker(async ({ broker, events, complete, connect }) => {
+    await broker.prepareInitial([
+      { direction: "local", hostPort, containerPort: 3000, owners: ["config"] },
+    ]);
+    const contender = createServer();
+    try {
+      const error = await new Promise<NodeJS.ErrnoException>((resolve) => {
+        contender.once("error", resolve);
+        contender.listen(hostPort, "127.0.0.1");
+      });
+      expect(error.code).toBe("EADDRINUSE");
+      expect(events).not.toContain("ready");
+      connect();
+      expect(await complete).toBeUndefined();
+    } finally {
+      contender.close();
+    }
+  });
+});
+
+test("configured receiver keeps its listener when user ownership is removed", async () => {
+  await withInitialBroker(async ({ broker, events, complete, connect }) => {
+    await broker.prepareInitial([
+      { ...initialRemote, owners: ["config", "internal"] },
+    ]);
+    connect();
+    broker.onForwardState(15432, "active");
+    await complete;
+    expect(await broker.removePortForward(initialRemote)).toEqual({
+      removed: true,
+      retainedInternal: true,
+      listenerClosed: false,
+    });
+    expect(broker.listPortForwards()[0].owners).toEqual(["internal"]);
+    expect(events).not.toContain("unforward:15432");
+  });
+});
+
+test("prelaunch local conflict releases earlier initial listeners", async () => {
+  const first = createServer();
+  const occupied = createServer();
+  const hostPort = await listen(first);
+  const occupiedPort = await listen(occupied);
+  await new Promise<void>((resolve) => first.close(() => resolve()));
+  try {
+    await withInitialBroker(async ({ broker }) => {
+      await expect(
+        broker.prepareInitial([
+          {
+            direction: "local",
+            hostPort,
+            containerPort: 3000,
+            owners: ["config"],
+          },
+          {
+            direction: "local",
+            hostPort: occupiedPort,
+            containerPort: 3001,
+            owners: ["config"],
+          },
+        ]),
+      ).rejects.toThrow();
+      expect(broker.listPortForwards()).toEqual([]);
+      await new Promise<void>((resolve, reject) => {
+        first.once("error", reject);
+        first.listen(hostPort, "127.0.0.1", resolve);
+      });
+    });
+  } finally {
+    await new Promise<void>((resolve) => first.close(() => resolve()));
+    await new Promise<void>((resolve) => occupied.close(() => resolve()));
+  }
+});
