@@ -403,3 +403,23 @@ test("rebinding one host port to another container port emits", () => {
     { event: "port-bindings", data: { items: makePortBindings(3000, 5173) } },
   ]);
 });
+
+test("adding a forward to a session with unchanged bindings emits", () => {
+  const initial = makeInputs({ portBindings: makePortBindings(3000) });
+  const { nextState } = diffSnapshots(initialSnapshotState(), initial);
+  const forwarded = makePortBindings(3000);
+  forwarded[0].forwards = [
+    { containerPort: 5432, hostPort: 5432, createdAt: "2025-01-01T00:00:00Z" },
+  ];
+
+  const { events, nextState: after } = diffSnapshots(
+    nextState,
+    makeInputs({ portBindings: forwarded }),
+  );
+  expect(events).toEqual([
+    { event: "port-bindings", data: { items: forwarded } },
+  ]);
+  expect(
+    diffSnapshots(after, makeInputs({ portBindings: forwarded })).events,
+  ).toEqual([]);
+});

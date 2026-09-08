@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer, type Socket } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { startRelayGateway } from "../network/port_bind_relay.ts";
@@ -289,5 +289,85 @@ test("the relay only scans while the host is watching", async () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(gateway.listeners()).toEqual([]);
+  });
+});
+
+/** A port nothing listens on right now, for the relay to take. */
+async function freePort(): Promise<number> {
+  return await new Promise<number>((resolve) => {
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const port = (probe.address() as { port: number }).port;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+function dial(port: number): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ port, host: "127.0.0.1" });
+    socket.once("connect", () => resolve(socket));
+    socket.once("error", reject);
+  });
+}
+
+test("a forward listens in the relay and reaches the host port, client-first bytes intact", async () => {
+  await withRelay(async ({ gateway, echoPort }) => {
+    const containerPort = await freePort();
+    await gateway.forward(containerPort, echoPort);
+    expect(gateway.forwards().map((f) => f.containerPort)).toEqual([
+      containerPort,
+    ]);
+
+    const client = await dial(containerPort);
+    // Written before the relay can have reached the host: the relay must hold
+    // it until the host side is piped.
+    client.write("ping");
+    let received = "";
+    await new Promise<void>((resolve) => {
+      client.on("data", (chunk: Buffer) => {
+        received += chunk.toString();
+        if (received.includes("ping")) resolve();
+      });
+    });
+    expect(received).toEqual("HELLO\nping");
+    client.destroy();
+    await gateway.unforward(containerPort);
+  });
+});
+
+test("unforward closes the container listener and cuts open connections", async () => {
+  await withRelay(async ({ gateway, echoPort }) => {
+    const containerPort = await freePort();
+    await gateway.forward(containerPort, echoPort);
+    const client = await dial(containerPort);
+    const closed = new Promise<void>((resolve) =>
+      client.once("close", resolve),
+    );
+    await gateway.unforward(containerPort);
+    await closed;
+    expect(gateway.forwards()).toEqual([]);
+    await expect(dial(containerPort)).rejects.toThrow();
+  });
+});
+
+test("a forward whose container port is taken reports the relay's reason", async () => {
+  await withRelay(async ({ gateway, echoPort }) => {
+    // The echo server already holds echoPort in this (shared) namespace.
+    await expect(gateway.forward(echoPort, echoPort)).rejects.toThrow(
+      "EADDRINUSE",
+    );
+    expect(gateway.forwards()).toEqual([]);
+  });
+});
+
+test("a connection to a forward whose host port is closed is dropped", async () => {
+  await withRelay(async ({ gateway }) => {
+    const containerPort = await freePort();
+    const closedHostPort = await freePort();
+    await gateway.forward(containerPort, closedHostPort);
+    const client = await dial(containerPort);
+    await new Promise<void>((resolve) => client.once("close", resolve));
+    await gateway.unforward(containerPort);
   });
 });

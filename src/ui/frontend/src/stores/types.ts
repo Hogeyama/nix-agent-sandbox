@@ -161,9 +161,18 @@ export type PortBindingLike = {
   createdAt: string;
 };
 
+// The opposite direction: a host loopback port reachable inside the container.
+export type PortForwardLike = {
+  containerPort: number;
+  hostPort: number;
+  createdAt: string;
+};
+
 export type PortBindSessionLike = {
   sessionId: string;
   bindings: PortBindingLike[];
+  // Absent from entries written before forwards existed.
+  forwards?: PortForwardLike[];
 };
 
 // SSE-received payload subset describing one audit log entry, mirroring

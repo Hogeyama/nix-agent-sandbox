@@ -8,9 +8,20 @@ import {
   readJsonLine,
   writeJsonLine,
 } from "../lib/unix_socket.ts";
-import { hostPortCandidates, startPortBindBroker } from "./port_bind_broker.ts";
-import type { ObservedListener, PortBinding } from "./port_bind_protocol.ts";
-import type { EnsureRelayResult } from "./port_bind_relay.ts";
+import {
+  hostPortCandidates,
+  type PersistedPorts,
+  startPortBindBroker,
+} from "./port_bind_broker.ts";
+import type {
+  ObservedListener,
+  PortBinding,
+  PortForward,
+} from "./port_bind_protocol.ts";
+import {
+  type EnsureRelayResult,
+  RelayNotReadyError,
+} from "./port_bind_relay.ts";
 
 test("hostPortCandidates prefers the container port, then climbs above 1024", () => {
   expect(hostPortCandidates(3000, null).slice(0, 3)).toEqual([
@@ -62,10 +73,13 @@ async function withBroker<T>(
         probe: async () => "ok",
         watchListeners: async () => "ready" as const,
         listeners: () => [],
+        forward: async () => {},
+        unforward: async () => {},
+        forwards: () => [],
         close: async () => {},
       },
-      persist: async (bindings) => {
-        written.push(bindings.map((binding) => ({ ...binding })));
+      persist: async (ports) => {
+        written.push(ports.bindings.map((binding) => ({ ...binding })));
       },
     });
     return await fn({ broker, written, echoPort });
@@ -155,6 +169,9 @@ test("a failed bind persistence closes and forgets the listener", async () => {
       probe: async () => "ok",
       watchListeners: async () => "ready" as const,
       listeners: () => [],
+      forward: async () => {},
+      unforward: async () => {},
+      forwards: () => [],
       close: async () => {},
     },
     persist: async () => {
@@ -190,6 +207,9 @@ test("unbind keeps a live binding when persistence fails", async () => {
       probe: async () => "ok",
       watchListeners: async () => "ready" as const,
       listeners: () => [],
+      forward: async () => {},
+      unforward: async () => {},
+      forwards: () => [],
       close: async () => {},
     },
     persist: async () => {
@@ -229,6 +249,9 @@ test("close drains an accepted bind and rejects later mutations", async () => {
       probe: async () => "ok",
       watchListeners: async () => "ready" as const,
       listeners: () => [],
+      forward: async () => {},
+      unforward: async () => {},
+      forwards: () => [],
       close: async () => {},
     },
     persist: async () => persistGate,
@@ -263,6 +286,9 @@ test("close destroys a control client waiting on an incomplete line", async () =
       probe: async () => "ok",
       watchListeners: async () => "ready" as const,
       listeners: () => [],
+      forward: async () => {},
+      unforward: async () => {},
+      forwards: () => [],
       close: async () => {},
     },
     persist: async () => {},
@@ -320,6 +346,9 @@ test("a browser that disconnects while waiting cancels the stream request", asyn
       probe: async () => "ok",
       watchListeners: async () => "ready" as const,
       listeners: () => [],
+      forward: async () => {},
+      unforward: async () => {},
+      forwards: () => [],
       close: async () => {},
     },
     persist: async () => {},
@@ -421,6 +450,9 @@ async function withCandidateBroker<T>(
           return opts.ensure?.() ?? "ready";
         },
         listeners: () => opts.listeners,
+        forward: async () => {},
+        unforward: async () => {},
+        forwards: () => [],
         close: async () => {},
       },
       persist: async () => {},
@@ -504,6 +536,249 @@ test("the control socket answers a candidates request", async () => {
       } finally {
         socket.destroy();
       }
+    },
+  );
+});
+
+/** A gateway whose forwards are plain bookkeeping, plus what it was asked. */
+function forwardingGateway(opts: {
+  ensure?: () => EnsureRelayResult;
+  listenError?: string;
+}) {
+  const table = new Map<number, PortForward>();
+  const requests: string[] = [];
+  const gateway = {
+    socketPath: "unused",
+    isRelayConnected: () => true,
+    openStream: async () => {
+      throw new Error("unused");
+    },
+    probe: async () => "ok" as const,
+    watchListeners: async () => "ready" as const,
+    listeners: () => [],
+    forward: async (containerPort: number, hostPort: number) => {
+      requests.push(`forward ${containerPort} ${hostPort}`);
+      const ensured = opts.ensure?.() ?? "ready";
+      if (ensured !== "ready") throw new RelayNotReadyError(ensured);
+      if (opts.listenError) throw new Error(opts.listenError);
+      table.set(containerPort, {
+        containerPort,
+        hostPort,
+        createdAt: "2026-09-08T00:00:00.000Z",
+      });
+    },
+    unforward: async (containerPort: number) => {
+      requests.push(`unforward ${containerPort}`);
+      table.delete(containerPort);
+    },
+    forwards: () => [...table.values()],
+    close: async () => {},
+  };
+  return { gateway, requests };
+}
+
+async function withForwardBroker<T>(
+  opts: {
+    ensure?: () => EnsureRelayResult;
+    listenError?: string;
+    persist?: (ports: PersistedPorts) => Promise<void>;
+    reservedPorts?: number[];
+  },
+  fn: (ctx: {
+    broker: Awaited<ReturnType<typeof startPortBindBroker>>;
+    requests: string[];
+    written: PersistedPorts[];
+    controlSocketPath: string;
+    echoPort: number;
+  }) => Promise<T>,
+): Promise<T> {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-broker-forward-"));
+  const controlSocketPath = path.join(dir, "sock");
+  const echo = createServer((socket: Socket) => socket.end());
+  const written: PersistedPorts[] = [];
+  const { gateway, requests } = forwardingGateway(opts);
+  let broker: Awaited<ReturnType<typeof startPortBindBroker>> | undefined;
+  try {
+    const echoPort = await listen(echo);
+    broker = await startPortBindBroker({
+      controlSocketPath,
+      gateway,
+      persist:
+        opts.persist ??
+        (async (ports) => {
+          written.push(structuredClone(ports));
+        }),
+      reservedPorts: opts.reservedPorts,
+    });
+    return await fn({ broker, requests, written, controlSocketPath, echoPort });
+  } finally {
+    await broker?.close();
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("forward asks the relay to listen, persists, and probes the host port", async () => {
+  await withForwardBroker(
+    {},
+    async ({ broker, requests, written, echoPort }) => {
+      const result = await broker.forward({
+        containerPort: 5432,
+        hostPort: echoPort,
+      });
+      expect(result).toEqual({
+        containerPort: 5432,
+        hostPort: echoPort,
+        hostProbe: "ok",
+      });
+      expect(requests).toEqual([`forward 5432 ${echoPort}`]);
+      expect(written.at(-1)).toEqual({
+        bindings: [],
+        forwards: [
+          {
+            containerPort: 5432,
+            hostPort: echoPort,
+            createdAt: "2026-09-08T00:00:00.000Z",
+          },
+        ],
+      });
+      expect(broker.listForwards()).toHaveLength(1);
+    },
+  );
+});
+
+test("a forward to a host port nothing listens on is kept and reported", async () => {
+  await withForwardBroker({}, async ({ broker }) => {
+    const closedPort = await new Promise<number>((resolve) => {
+      const probe = createServer();
+      probe.listen(0, "127.0.0.1", () => {
+        const port = (probe.address() as { port: number }).port;
+        probe.close(() => resolve(port));
+      });
+    });
+    const result = await broker.forward({
+      containerPort: 5432,
+      hostPort: closedPort,
+    });
+    expect(result.hostProbe).toEqual("no-answer");
+    expect(broker.listForwards()).toHaveLength(1);
+  });
+});
+
+test("repeating a forward returns the open mapping without asking the relay again", async () => {
+  await withForwardBroker({}, async ({ broker, requests, echoPort }) => {
+    await broker.forward({ containerPort: 5432, hostPort: echoPort });
+    const again = await broker.forward({
+      containerPort: 5432,
+      hostPort: echoPort,
+    });
+    expect(again.hostPort).toEqual(echoPort);
+    expect(requests).toHaveLength(1);
+  });
+});
+
+test("forwarding a container port to a different host port is a conflict", async () => {
+  await withForwardBroker({}, async ({ broker, echoPort }) => {
+    await broker.forward({ containerPort: 5432, hostPort: echoPort });
+    await expect(
+      broker.forward({ containerPort: 5432, hostPort: echoPort + 1 }),
+    ).rejects.toThrow("binding-conflict");
+  });
+});
+
+test("a container port nas itself binds cannot be forwarded", async () => {
+  await withForwardBroker(
+    { reservedPorts: [18_080] },
+    async ({ broker, requests }) => {
+      await expect(
+        broker.forward({ containerPort: 18_080, hostPort: 8080 }),
+      ).rejects.toThrow("container-port-taken");
+      expect(requests).toEqual([]);
+    },
+  );
+});
+
+test("a relay that cannot start makes the forward fail as unavailable", async () => {
+  await withForwardBroker(
+    { ensure: () => "container-not-running" },
+    async ({ broker, written }) => {
+      await expect(
+        broker.forward({ containerPort: 5432, hostPort: 5432 }),
+      ).rejects.toThrow("relay-unavailable");
+      expect(written).toEqual([]);
+    },
+  );
+});
+
+test("a relay that cannot listen reports the container port as taken", async () => {
+  await withForwardBroker({ listenError: "EADDRINUSE" }, async ({ broker }) => {
+    await expect(
+      broker.forward({ containerPort: 5432, hostPort: 5432 }),
+    ).rejects.toThrow("EADDRINUSE");
+    expect(broker.listForwards()).toEqual([]);
+  });
+});
+
+test("a failed forward persistence takes the listener back down", async () => {
+  await withForwardBroker(
+    {
+      persist: async () => {
+        throw new Error("disk full");
+      },
+    },
+    async ({ broker, requests }) => {
+      await expect(
+        broker.forward({ containerPort: 5432, hostPort: 5432 }),
+      ).rejects.toThrow("disk full");
+      expect(requests).toEqual(["forward 5432 5432", "unforward 5432"]);
+    },
+  );
+});
+
+test("unforward persists the remaining forwards and closes the listener", async () => {
+  await withForwardBroker(
+    {},
+    async ({ broker, requests, written, echoPort }) => {
+      await broker.forward({ containerPort: 5432, hostPort: echoPort });
+      await broker.forward({ containerPort: 6379, hostPort: echoPort });
+      await broker.unforward(5432);
+      expect(written.at(-1)?.forwards.map((f) => f.containerPort)).toEqual([
+        6379,
+      ]);
+      expect(requests.at(-1)).toEqual("unforward 5432");
+      await expect(broker.unforward(5432)).rejects.toThrow("no-such-binding");
+    },
+  );
+});
+
+test("the control socket answers forward and unforward requests", async () => {
+  await withForwardBroker(
+    {},
+    async ({ broker, controlSocketPath, echoPort }) => {
+      const ask = async (request: unknown) => {
+        const socket = await connectUnix(controlSocketPath);
+        await writeJsonLine(socket, request);
+        const line = await readJsonLine(socket);
+        socket.destroy();
+        return line === null ? null : JSON.parse(line);
+      };
+      expect(
+        await ask({ type: "forward", containerPort: 5432, hostPort: echoPort }),
+      ).toEqual({
+        ok: true,
+        containerPort: 5432,
+        hostPort: echoPort,
+        hostProbe: "ok",
+      });
+      expect(await ask({ type: "forward", containerPort: 5432 })).toEqual({
+        ok: false,
+        error: "invalid-request",
+        message: expect.any(String),
+      });
+      expect(await ask({ type: "unforward", containerPort: 5432 })).toEqual({
+        ok: true,
+      });
+      expect(broker.listForwards()).toEqual([]);
     },
   );
 });

@@ -1,4 +1,4 @@
-import type { PortBindKey } from "../domain/port_bind.ts";
+import type { PortBindKey, PortForwardKey } from "../domain/port_bind.ts";
 
 const BIND_USAGE =
   "bind expects <session-id:container-port> [host-port] with ports from 1-65535";
@@ -93,4 +93,54 @@ export function parseUnbindArgs(args: string[]): PortBindKey | null {
     return parseSessionKey(positional[0], UNBIND_USAGE);
   }
   return { hostPort: parsePort(positional[0], UNBIND_USAGE) };
+}
+
+const FORWARD_USAGE =
+  "forward expects <session-id:container-port> [host-port] with ports from 1-65535";
+const UNFORWARD_USAGE =
+  "unforward expects [<session-id:container-port>] with ports from 1-65535";
+
+/**
+ * `forward <sid>:<cport> [hport]`. The key names the port inside the
+ * container, as for bind; the host port defaults to the same number.
+ */
+export function parseForwardArgs(args: string[]): {
+  sessionId: string;
+  containerPort: number;
+  hostPort: number;
+} {
+  const positional = positionalArgs(args, FORWARD_USAGE);
+  if (positional.length < 1 || positional.length > 2) {
+    throw new Error(FORWARD_USAGE);
+  }
+  const key = parseSessionKey(positional[0], FORWARD_USAGE);
+  return {
+    ...key,
+    hostPort:
+      positional.length === 2
+        ? parsePort(positional[1], FORWARD_USAGE)
+        : key.containerPort,
+  };
+}
+
+/** `forward <session>` with no port: offer what the host is listening on. */
+export function parseForwardSessionOnly(args: string[]): string | null {
+  const positional = positionalArgs(args, FORWARD_USAGE);
+  if (positional.length !== 1) return null;
+  const value = positional[0];
+  if (value.includes(":") || /^\d+$/.test(value)) return null;
+  return value;
+}
+
+/**
+ * A bare host port is not a key here: several sessions may forward the same
+ * host port, so the number alone names nothing.
+ */
+export function parseUnforwardArgs(args: string[]): PortForwardKey | null {
+  const positional = positionalArgs(args, UNFORWARD_USAGE);
+  if (positional.length === 0) return null;
+  if (positional.length > 1 || !positional[0].includes(":")) {
+    throw new Error(UNFORWARD_USAGE);
+  }
+  return parseSessionKey(positional[0], UNFORWARD_USAGE);
 }

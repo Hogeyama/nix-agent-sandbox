@@ -10,10 +10,12 @@ import {
 import {
   AmbiguousHostPortError,
   BindingConflictError,
+  ContainerPortTakenError,
   HostPortTakenError,
   InternalBrokerError,
   InvalidRequestError,
   NoSuchBindingError,
+  RelayUnavailableError,
   SessionUnreachableError,
 } from "../../domain/port_bind/types.ts";
 import { LaunchValidationError } from "../launch.ts";
@@ -26,11 +28,12 @@ import { json } from "../router.ts";
  * - LaunchValidationError → 400
  * - InvalidRequestError → 400
  * - ContainerNotRunningError → 409
- * - HostPortTakenError / BindingConflictError / AmbiguousHostPortError → 409
+ * - HostPortTakenError / BindingConflictError / AmbiguousHostPortError /
+ *   ContainerPortTakenError → 409
  * - NotNasManagedContainerError → 403
  * - NoSuchBindingError → 404
  * - Error message starts with "Session not found:" → 404
- * - SessionUnreachableError → 503
+ * - SessionUnreachableError / RelayUnavailableError → 503
  * - InternalBrokerError → 500
  * - default → 500
  *
@@ -60,14 +63,18 @@ export function mapErrorToResponse(e: unknown): Response {
   if (
     e instanceof HostPortTakenError ||
     e instanceof BindingConflictError ||
-    e instanceof AmbiguousHostPortError
+    e instanceof AmbiguousHostPortError ||
+    e instanceof ContainerPortTakenError
   ) {
     return json({ error: e.message }, 409);
   }
   if (e instanceof NoSuchBindingError) {
     return json({ error: e.message }, 404);
   }
-  if (e instanceof SessionUnreachableError) {
+  if (
+    e instanceof SessionUnreachableError ||
+    e instanceof RelayUnavailableError
+  ) {
     return json({ error: e.message }, 503);
   }
   if (e instanceof InternalBrokerError) {

@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
-// port-relay.mjs — Container side of nas port bind.
+// port-relay.mjs — Container side of nas port bind and port forward.
 //
 // Connects outward to the host socket bind-mounted at NAS_PORT_RELAY_SOCKET,
-// holds one control connection, and on request dials a port on the container's
-// own loopback and pipes it back over a fresh connection.
+// holds one control connection, and on request either dials a port on the
+// container's own loopback and pipes it back over a fresh connection (bind),
+// or listens on the container's loopback and hands each accepted client to the
+// host over a fresh connection (forward).
 
 import { readFile } from "node:fs/promises";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 
 const MAX_LINE_BYTES = 128;
 // Overridable so tests can point the scan at fixture files; the host only ever
@@ -62,7 +64,8 @@ function handle(line) {
     setWatching(watch[1] === "1");
     return true;
   }
-  const request = /^(probe|open) ([0-9a-f]{16}) ([0-9]+)$/.exec(line);
+  const request =
+    /^(probe|open|forward|unforward) ([0-9a-f]{16}) ([0-9]+)$/.exec(line);
   if (!request) return false;
   const [, verb, id, rawPort] = request;
   const port = Number(rawPort);
@@ -74,8 +77,85 @@ function handle(line) {
     probe(id, port);
     return true;
   }
+  if (verb === "forward") {
+    forward(id, port);
+    return true;
+  }
+  if (verb === "unforward") {
+    unforward(id, port);
+    return true;
+  }
   open(id, port);
   return true;
+}
+
+// --- Forwards: container listener, host dials the real service ---
+//
+// The host is the record of which ports are forwarded; this map is only what
+// is currently listening. A restarted relay starts empty and the host re-sends
+// every forward it still wants.
+
+/** containerPort -> { server, connections } */
+const forwards = new Map();
+
+function forward(id, port) {
+  if (forwards.has(port)) {
+    control.write(`ok ${id}\n`);
+    return;
+  }
+  const connections = new Set();
+  const server = createServer({ allowHalfOpen: true }, (client) => {
+    connections.add(client);
+    client.once("close", () => connections.delete(client));
+    // Most protocols speak client-first, so bytes arrive before the host has
+    // anywhere to put them. They are held here and written ahead of the pipe;
+    // pausing an accepted socket is not reliable under Bun.
+    const held = [];
+    const hold = (chunk) => held.push(chunk);
+    client.on("data", hold);
+    const stream = connect({ path: socketPath, allowHalfOpen: true });
+    const abandon = () => {
+      client.destroy();
+      stream.destroy();
+    };
+    client.once("error", abandon);
+    stream.once("error", abandon);
+    stream.once("connect", () => {
+      if (client.destroyed) {
+        stream.destroy();
+        return;
+      }
+      client.off("error", abandon);
+      stream.off("error", abandon);
+      client.off("data", hold);
+      stream.write(`client ${port}\n`);
+      for (const chunk of held) stream.write(chunk);
+      pipePair(stream, client);
+    });
+  });
+  const onListenError = (err) => {
+    control.write(`fail ${id} ${err.code ?? "listen-failed"}\n`);
+  };
+  server.once("error", onListenError);
+  server.listen(port, "127.0.0.1", () => {
+    server.off("error", onListenError);
+    server.on("error", (err) =>
+      control.write(`log forward ${port}: ${err.code ?? err.message}\n`),
+    );
+    forwards.set(port, { server, connections });
+    control.write(`ok ${id}\n`);
+  });
+}
+
+function unforward(id, port) {
+  const entry = forwards.get(port);
+  forwards.delete(port);
+  if (entry) {
+    for (const client of entry.connections) client.destroy();
+    entry.connections.clear();
+    entry.server.close();
+  }
+  control.write(`ok ${id}\n`);
 }
 
 // --- Listener detection ---

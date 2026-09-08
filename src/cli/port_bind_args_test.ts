@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import {
   parseBindArgs,
   parseBindSessionOnly,
+  parseForwardArgs,
+  parseForwardSessionOnly,
   parseUnbindArgs,
+  parseUnforwardArgs,
 } from "./port_bind_args.ts";
 
 test("bind parses session, container port and optional host port", () => {
@@ -81,4 +84,37 @@ test("bind keeps a named target or a mistyped port out of suggestion mode", () =
   expect(parseBindSessionOnly(["3000"])).toEqual(null);
   expect(parseBindSessionOnly(["abc123", "9000"])).toEqual(null);
   expect(parseBindSessionOnly([])).toEqual(null);
+});
+
+test("forward parses the key and defaults the host port to the container port", () => {
+  expect(parseForwardArgs(["abc123:5432"])).toEqual({
+    sessionId: "abc123",
+    containerPort: 5432,
+    hostPort: 5432,
+  });
+  expect(parseForwardArgs(["abc123:5432", "15432", "--format=json"])).toEqual({
+    sessionId: "abc123",
+    containerPort: 5432,
+    hostPort: 15432,
+  });
+  expect(() => parseForwardArgs(["abc123"])).toThrow("forward expects");
+  expect(() => parseForwardArgs(["abc123:5432", "0"])).toThrow();
+  expect(() => parseForwardArgs(["a:1", "2", "3"])).toThrow();
+});
+
+test("forward with only a session id asks for host suggestions", () => {
+  expect(parseForwardSessionOnly(["abc123"])).toEqual("abc123");
+  expect(parseForwardSessionOnly(["abc123:5432"])).toBeNull();
+  expect(parseForwardSessionOnly(["5432"])).toBeNull();
+  expect(parseForwardSessionOnly([])).toBeNull();
+});
+
+test("unforward takes a session key or nothing, never a bare port", () => {
+  expect(parseUnforwardArgs(["abc123:5432"])).toEqual({
+    sessionId: "abc123",
+    containerPort: 5432,
+  });
+  expect(parseUnforwardArgs([])).toBeNull();
+  expect(() => parseUnforwardArgs(["5432"])).toThrow("unforward expects");
+  expect(() => parseUnforwardArgs(["a:1", "b:2"])).toThrow();
 });

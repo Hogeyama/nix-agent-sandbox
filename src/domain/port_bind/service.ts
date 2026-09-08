@@ -8,6 +8,7 @@ import {
 import {
   type ControlRequest,
   type ControlResponse,
+  type HostProbeResult,
   type ListenerWatchState,
   MAX_CONTROL_BYTES,
   type PortBindCandidate,
@@ -24,11 +25,14 @@ import {
 import {
   AmbiguousHostPortError,
   BindingConflictError,
+  ContainerPortTakenError,
   HostPortTakenError,
   InternalBrokerError,
   InvalidRequestError,
   NoSuchBindingError,
   type PortBindKey,
+  type PortForwardKey,
+  RelayUnavailableError,
   SessionUnreachableError,
 } from "./types.ts";
 
@@ -36,6 +40,13 @@ import {
 export interface PortBindCandidates {
   candidates: PortBindCandidate[];
   watch: ListenerWatchState;
+}
+
+/** What a forward request opened, and whether the host side answered a dial. */
+export interface PortForwardResult {
+  containerPort: number;
+  hostPort: number;
+  hostProbe: HostProbeResult;
 }
 
 export class PortBindService extends Context.Tag("nas/PortBindService")<
@@ -62,6 +73,21 @@ export class PortBindService extends Context.Tag("nas/PortBindService")<
       paths: PortsRuntimePaths,
       sessionId: string,
     ) => Effect.Effect<PortBindCandidates, Error>;
+    /**
+     * Make the host's `127.0.0.1:hostPort` reachable at
+     * `localhost:containerPort` inside the session's container. Fails when
+     * the container is not running: the listener lives there.
+     */
+    readonly forward: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+      containerPort: number,
+      hostPort: number,
+    ) => Effect.Effect<PortForwardResult, Error>;
+    readonly unforward: (
+      paths: PortsRuntimePaths,
+      key: PortForwardKey,
+    ) => Effect.Effect<void, Error>;
   }
 >() {}
 
@@ -85,11 +111,40 @@ function brokerError(kind: string, message: string): Error {
       return new NoSuchBindingError(message);
     case "invalid-request":
       return new InvalidRequestError(message);
+    case "container-port-taken":
+      return new ContainerPortTakenError(message);
+    case "relay-unavailable":
+      return new RelayUnavailableError(message);
     case "internal":
       return new InternalBrokerError(message);
     default:
       return new InternalBrokerError(message);
   }
+}
+
+function isPortNumber(value: unknown): value is number {
+  return (
+    Number.isInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= 65_535
+  );
+}
+
+function parseForwardResult(response: ControlResponse): PortForwardResult {
+  const containerPort =
+    "containerPort" in response ? response.containerPort : undefined;
+  const hostPort = "hostPort" in response ? response.hostPort : undefined;
+  const hostProbe = "hostProbe" in response ? response.hostProbe : undefined;
+  if (
+    !isPortNumber(containerPort) ||
+    !isPortNumber(hostPort) ||
+    (hostProbe !== "ok" && hostProbe !== "no-answer")
+  ) {
+    throw new InternalBrokerError(
+      "broker returned an invalid forward response",
+    );
+  }
+  return { containerPort, hostPort, hostProbe };
 }
 
 function isProbeResult(value: unknown): value is ProbeResult {
@@ -183,6 +238,8 @@ async function sendRequest(
       error instanceof BindingConflictError ||
       error instanceof NoSuchBindingError ||
       error instanceof InvalidRequestError ||
+      error instanceof ContainerPortTakenError ||
+      error instanceof RelayUnavailableError ||
       error instanceof InternalBrokerError ||
       error instanceof SessionUnreachableError
     ) {
@@ -296,6 +353,33 @@ export const PortBindServiceLive: Layer.Layer<PortBindService> = Layer.succeed(
         },
         catch: toError,
       }),
+
+    forward: (paths, sessionId, containerPort, hostPort) =>
+      Effect.tryPromise({
+        try: async () => {
+          await requireSession(paths, sessionId);
+          return parseForwardResult(
+            await sendRequest(paths, sessionId, {
+              type: "forward",
+              containerPort,
+              hostPort,
+            }),
+          );
+        },
+        catch: toError,
+      }),
+
+    unforward: (paths, key) =>
+      Effect.tryPromise({
+        try: async () => {
+          await requireSession(paths, key.sessionId);
+          await sendRequest(paths, key.sessionId, {
+            type: "unforward",
+            containerPort: key.containerPort,
+          });
+        },
+        catch: toError,
+      }),
   }),
 );
 
@@ -317,6 +401,16 @@ export interface PortBindServiceFakeConfig {
     paths: PortsRuntimePaths,
     sessionId: string,
   ) => Effect.Effect<PortBindCandidates, Error>;
+  readonly forward?: (
+    paths: PortsRuntimePaths,
+    sessionId: string,
+    containerPort: number,
+    hostPort: number,
+  ) => Effect.Effect<PortForwardResult, Error>;
+  readonly unforward?: (
+    paths: PortsRuntimePaths,
+    key: PortForwardKey,
+  ) => Effect.Effect<void, Error>;
 }
 
 export function makePortBindServiceFake(
@@ -338,6 +432,11 @@ export function makePortBindServiceFake(
       candidates:
         overrides.candidates ??
         (() => Effect.succeed({ candidates: [], watch: "watching" })),
+      forward:
+        overrides.forward ??
+        ((_paths, _sessionId, containerPort, hostPort) =>
+          Effect.succeed({ containerPort, hostPort, hostProbe: "ok" })),
+      unforward: overrides.unforward ?? (() => Effect.void),
     }),
   );
 }
@@ -376,5 +475,16 @@ export function makePortBindClient(
       sessionId: string,
     ): Promise<PortBindCandidates> =>
       run((service) => service.candidates(paths, sessionId)),
+    forward: (
+      paths: PortsRuntimePaths,
+      sessionId: string,
+      containerPort: number,
+      hostPort: number,
+    ): Promise<PortForwardResult> =>
+      run((service) =>
+        service.forward(paths, sessionId, containerPort, hostPort),
+      ),
+    unforward: (paths: PortsRuntimePaths, key: PortForwardKey): Promise<void> =>
+      run((service) => service.unforward(paths, key)),
   };
 }

@@ -18,8 +18,9 @@ import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
   makePortBindClient,
   type PortBindCandidates,
+  type PortForwardResult,
 } from "../domain/port_bind/service.ts";
-import type { PortBindKey } from "../domain/port_bind/types.ts";
+import type { PortBindKey, PortForwardKey } from "../domain/port_bind/types.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
 import { getSocketDir } from "../dtach/client.ts";
@@ -250,6 +251,27 @@ export async function unbindPort(
   key: PortBindKey,
 ): Promise<void> {
   await portBindClient.unbindByKey(ctx.portsPaths, key);
+}
+
+export async function forwardPort(
+  ctx: UiDataContext,
+  sessionId: string,
+  containerPort: number,
+  hostPort: number,
+): Promise<PortForwardResult> {
+  return await portBindClient.forward(
+    ctx.portsPaths,
+    sessionId,
+    containerPort,
+    hostPort,
+  );
+}
+
+export async function unforwardPort(
+  ctx: UiDataContext,
+  key: PortForwardKey,
+): Promise<void> {
+  await portBindClient.unforward(ctx.portsPaths, key);
 }
 
 export async function getPortBindings(

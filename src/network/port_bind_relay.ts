@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { chmod } from "node:fs/promises";
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import * as path from "node:path";
 import { ensureDir, safeRemove } from "../lib/fs_utils.ts";
 import { logDebug } from "../log.ts";
@@ -8,11 +8,19 @@ import {
   type ListenerScope,
   MAX_LINE_BYTES,
   type ObservedListener,
+  type PortForward,
   type ProbeResult,
 } from "./port_bind_protocol.ts";
 
 const PAIRING_TIMEOUT_MS = 10_000;
 const HALF_OPEN_GRACE_MS = 30_000;
+/**
+ * Forwards live in the relay process, so losing the relay loses their
+ * listeners. Waiting a moment before asking for a new one lets an ordinary
+ * container stop finish first instead of exec'ing into it.
+ */
+const RE_ENSURE_DELAY_MS = 1_000;
+const HOST = "127.0.0.1";
 
 /** What the supervisor reports after it tries to make the relay available. */
 export type EnsureRelayResult =
@@ -140,11 +148,24 @@ export interface RelayGateway {
   watchListeners(enabled: boolean): Promise<EnsureRelayResult>;
   /** Ports last reported as listening; empty while nothing is watching. */
   listeners(): ObservedListener[];
+  /**
+   * Make the host's `127.0.0.1:hostPort` reachable at
+   * `127.0.0.1:containerPort` inside the container. Resolves once the relay
+   * is listening; a relay that cannot be started rejects with
+   * {@link RelayNotReadyError}, a listen failure with the relay's reason.
+   *
+   * The forward survives a relay restart: it is re-sent on the next control
+   * connection, and losing the relay while forwards exist asks for a new one.
+   */
+  forward(containerPort: number, hostPort: number): Promise<void>;
+  /** Drop the forward; the relay's listener is closed if the relay is up. */
+  unforward(containerPort: number): Promise<void>;
+  forwards(): PortForward[];
   close(): Promise<void>;
 }
 
 type Pending = {
-  kind: "open" | "probe";
+  kind: "open" | "probe" | "forward" | "unforward";
   resolve: (socket?: Socket) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -155,17 +176,22 @@ export async function startRelayGateway(opts: {
   socketPath: string;
   ensureRelay: () => Promise<EnsureRelayResult>;
   pairingTimeoutMs?: number;
+  reEnsureDelayMs?: number;
   onRelayLost?: () => void;
   onRelayConnected?: () => void;
 }): Promise<RelayGateway> {
   const pairingTimeoutMs = opts.pairingTimeoutMs ?? PAIRING_TIMEOUT_MS;
+  const reEnsureDelayMs = opts.reEnsureDelayMs ?? RE_ENSURE_DELAY_MS;
   const pending = new Map<string, Pending>();
   const connections = new Set<Socket>();
   const observed = new Map<number, ListenerScope>();
+  /** containerPort -> forward. The record; the relay's listeners follow it. */
+  const forwardTable = new Map<number, PortForward>();
   let control: Socket | null = null;
   let watching = false;
   let closed = false;
   let closePromise: Promise<void> | null = null;
+  let reEnsureTimer: ReturnType<typeof setTimeout> | undefined;
 
   const settle = (id: string, apply: (entry: Pending) => void) => {
     const entry = pending.get(id);
@@ -223,8 +249,9 @@ export async function startRelayGateway(opts: {
     const ok = /^ok ([0-9a-f]{16})$/.exec(line);
     if (ok) {
       settle(ok[1], (entry) => {
-        if (entry.kind === "probe") entry.resolve();
-        else entry.reject(new Error("relay answered a stream request with ok"));
+        if (entry.kind === "open")
+          entry.reject(new Error("relay answered a stream request with ok"));
+        else entry.resolve();
       });
       return true;
     }
@@ -250,7 +277,17 @@ export async function startRelayGateway(opts: {
       observed.clear();
       rejectPending(new Error("relay disconnected"));
       for (const connection of connections) connection.destroy();
-      if (!closed) opts.onRelayLost?.();
+      if (closed) return;
+      opts.onRelayLost?.();
+      // Forwards have no listener until a relay is back, and nothing else
+      // would ask for one while the agent simply waits on a dead port.
+      if (forwardTable.size > 0 && reEnsureTimer === undefined) {
+        reEnsureTimer = setTimeout(() => {
+          reEnsureTimer = undefined;
+          if (closed || forwardTable.size === 0) return;
+          void opts.ensureRelay().catch(() => {});
+        }, reEnsureDelayMs);
+      }
     };
     socket.resume();
     socket.on("data", (chunk: Buffer) => {
@@ -276,7 +313,48 @@ export async function startRelayGateway(opts: {
     socket.once("error", drop);
     socket.once("close", drop);
     if (watching) sendWatch(true);
+    for (const forward of forwardTable.values()) {
+      send("forward", forward.containerPort).catch((error) => {
+        logDebug(
+          `[nas] port-relay: forward ${forward.containerPort} not restored: ${error}`,
+        );
+      });
+    }
     opts.onRelayConnected?.();
+  };
+
+  /** Host-side half of a forward: dial the host port and pipe. */
+  const acceptForwardClient = (socket: Socket, containerPort: number) => {
+    const forward = forwardTable.get(containerPort);
+    if (!forward || closed) {
+      socket.destroy();
+      return;
+    }
+    const target = connect({
+      host: HOST,
+      port: forward.hostPort,
+      allowHalfOpen: true,
+    });
+    const onDialError = (error: Error) => {
+      logDebug(
+        `[nas] port-forward: host ${forward.hostPort} unreachable: ${error}`,
+      );
+      target.destroy();
+      socket.destroy();
+    };
+    target.once("error", onDialError);
+    socket.once("close", () => {
+      if (!target.destroyed && target.connecting) target.destroy();
+    });
+    target.once("connect", () => {
+      target.off("error", onDialError);
+      if (socket.destroyed) {
+        target.destroy();
+        return;
+      }
+      pipeSockets(socket, target);
+      socket.resume();
+    });
   };
 
   await ensureDir(path.dirname(opts.socketPath));
@@ -291,6 +369,12 @@ export async function startRelayGateway(opts: {
         if (line === "control") {
           if (control || closed) socket.destroy();
           else adoptControl(socket);
+          return;
+        }
+
+        const client = /^client ([0-9]{1,5})$/.exec(line);
+        if (client) {
+          acceptForwardClient(socket, Number(client[1]));
           return;
         }
 
@@ -334,17 +418,16 @@ export async function startRelayGateway(opts: {
     throw startError;
   }
 
-  const request = async (
+  /** Write one request to the connected relay and await its answer. */
+  const send = (
     kind: Pending["kind"],
     port: number,
     signal?: AbortSignal,
   ): Promise<Socket | undefined> => {
-    const ensured = await opts.ensureRelay();
-    if (ensured !== "ready") throw new RelayNotReadyError(ensured);
     const active = control;
     if (!active || active.destroyed)
-      throw new RelayNotReadyError("unreachable");
-    if (signal?.aborted) throw new Error("request aborted");
+      return Promise.reject(new RelayNotReadyError("unreachable"));
+    if (signal?.aborted) return Promise.reject(new Error("request aborted"));
 
     return new Promise<Socket | undefined>((resolve, reject) => {
       const id = nextId();
@@ -373,9 +456,24 @@ export async function startRelayGateway(opts: {
     });
   };
 
+  /** Start the relay if needed, then {@link send}. */
+  const request = async (
+    kind: Pending["kind"],
+    port: number,
+    signal?: AbortSignal,
+  ): Promise<Socket | undefined> => {
+    const ensured = await opts.ensureRelay();
+    if (ensured !== "ready") throw new RelayNotReadyError(ensured);
+    return send(kind, port, signal);
+  };
+
   const close = (): Promise<void> => {
     if (closePromise) return closePromise;
     closed = true;
+    if (reEnsureTimer !== undefined) {
+      clearTimeout(reEnsureTimer);
+      reEnsureTimer = undefined;
+    }
     closePromise = (async () => {
       rejectPending(new Error("gateway closed"));
       for (const socket of connections) socket.destroy();
@@ -436,6 +534,38 @@ export async function startRelayGateway(opts: {
         return "no-answer";
       }
     },
+    forward: async (containerPort, hostPort) => {
+      if (closed) throw new RelayNotReadyError("unreachable");
+      // Recorded before the relay answers so a `client` line that races the
+      // `ok` is served rather than refused; a failure takes it back out.
+      const existing = forwardTable.get(containerPort);
+      forwardTable.set(containerPort, {
+        containerPort,
+        hostPort,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+      });
+      try {
+        await request("forward", containerPort);
+      } catch (error) {
+        if (existing) forwardTable.set(containerPort, existing);
+        else forwardTable.delete(containerPort);
+        throw error;
+      }
+    },
+    unforward: async (containerPort) => {
+      if (!forwardTable.delete(containerPort)) return;
+      if (!control || control.destroyed) return;
+      try {
+        await send("unforward", containerPort);
+      } catch (error) {
+        // A relay that vanished mid-request has no listener left to close.
+        logDebug(`[nas] port-relay: unforward ${containerPort}: ${error}`);
+      }
+    },
+    forwards: () =>
+      [...forwardTable.values()].sort(
+        (a, b) => a.containerPort - b.containerPort,
+      ),
     close,
   };
 }

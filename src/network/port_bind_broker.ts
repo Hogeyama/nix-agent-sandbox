@@ -1,4 +1,4 @@
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { safeRemove } from "../lib/fs_utils.ts";
 import {
   createUnixServer,
@@ -10,18 +10,25 @@ import {
   type ControlErrorKind,
   type ControlRequest,
   type ControlResponse,
+  type HostProbeResult,
   isReachableScope,
   type ListenerWatchState,
   MAX_CONTROL_BYTES,
   type PortBindCandidate,
   type PortBinding,
+  type PortForward,
   type ProbeResult,
 } from "./port_bind_protocol.ts";
-import { pipeSockets, type RelayGateway } from "./port_bind_relay.ts";
+import {
+  pipeSockets,
+  type RelayGateway,
+  RelayNotReadyError,
+} from "./port_bind_relay.ts";
 
 const HOST = "127.0.0.1";
 const MAX_CANDIDATES = 65;
 const MAX_PORT = 65_535;
+const HOST_PROBE_TIMEOUT_MS = 1_000;
 /**
  * How long one `candidates` request keeps the container-side scan running.
  * Interest is expressed by asking, not by an explicit subscription, so a
@@ -53,6 +60,12 @@ export function hostPortCandidates(
   return candidates;
 }
 
+/** Everything the session registry records about open ports. */
+export interface PersistedPorts {
+  bindings: PortBinding[];
+  forwards: PortForward[];
+}
+
 export interface PortBindBroker {
   readonly controlSocketPath: string;
   bind(req: {
@@ -61,6 +74,18 @@ export interface PortBindBroker {
   }): Promise<{ hostPort: number; probe: ProbeResult }>;
   unbind(key: { containerPort?: number; hostPort?: number }): Promise<void>;
   listBindings(): PortBinding[];
+  /**
+   * Make a host loopback port reachable inside the container. Unlike `bind`,
+   * this needs the relay: the listener lives in the container, so a session
+   * whose container is not running cannot forward yet.
+   */
+  forward(req: { containerPort: number; hostPort: number }): Promise<{
+    containerPort: number;
+    hostPort: number;
+    hostProbe: HostProbeResult;
+  }>;
+  unforward(containerPort: number): Promise<void>;
+  listForwards(): PortForward[];
   /**
    * Container ports seen listening that no binding covers yet. Asking also
    * starts (and renews the lease on) the container-side scan.
@@ -133,13 +158,43 @@ function parseControlRequest(line: string): ControlRequest {
   if (request.type === "candidates" && hasKeys(request, ["type"])) {
     return request as ControlRequest;
   }
+  if (
+    request.type === "forward" &&
+    hasKeys(request, ["containerPort", "hostPort", "type"]) &&
+    validPort(request.containerPort) &&
+    validPort(request.hostPort)
+  ) {
+    return request as ControlRequest;
+  }
+  if (
+    request.type === "unforward" &&
+    hasKeys(request, ["containerPort", "type"]) &&
+    validPort(request.containerPort)
+  ) {
+    return request as ControlRequest;
+  }
   throw new ControlError("invalid-request", "request shape is invalid");
+}
+
+/** One dial of the host port, so the user learns now if nothing is there. */
+function probeHostPort(hostPort: number): Promise<HostProbeResult> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: HOST, port: hostPort });
+    const finish = (result: HostProbeResult) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish("no-answer"), HOST_PROBE_TIMEOUT_MS);
+    socket.once("connect", () => finish("ok"));
+    socket.once("error", () => finish("no-answer"));
+  });
 }
 
 export async function startPortBindBroker(opts: {
   controlSocketPath: string;
   gateway: RelayGateway;
-  persist: (bindings: PortBinding[]) => Promise<void>;
+  persist: (ports: PersistedPorts) => Promise<void>;
   now?: () => Date;
   /**
    * Ports nas itself binds inside the container's network namespace (the DinD
@@ -159,6 +214,11 @@ export async function startPortBindBroker(opts: {
 
   const snapshot = (): PortBinding[] =>
     [...open.values()].map((entry) => entry.binding);
+  const persist = (ports: Partial<PersistedPorts>) =>
+    opts.persist({
+      bindings: ports.bindings ?? snapshot(),
+      forwards: ports.forwards ?? opts.gateway.forwards(),
+    });
 
   const mutate = <T>(action: () => Promise<T>): Promise<T> => {
     if (closing) return Promise.reject(new Error("broker is closed"));
@@ -277,7 +337,7 @@ export async function startPortBindBroker(opts: {
       };
       const entry = { binding, server, connections };
       try {
-        await opts.persist([...snapshot(), binding]);
+        await persist({ bindings: [...snapshot(), binding] });
       } catch (error) {
         await closeBinding(entry);
         throw error;
@@ -307,9 +367,82 @@ export async function startPortBindBroker(opts: {
       const remaining = snapshot().filter(
         (binding) => binding.containerPort !== entry.binding.containerPort,
       );
-      await opts.persist(remaining);
+      await persist({ bindings: remaining });
       await closeBinding(entry);
       open.delete(entry.binding.containerPort);
+    });
+
+  const forward: PortBindBroker["forward"] = (req) =>
+    mutate(async () => {
+      if (reserved.has(req.containerPort)) {
+        throw new ControlError(
+          "container-port-taken",
+          `container port ${req.containerPort} is used by nas itself`,
+        );
+      }
+      const existing = opts.gateway
+        .forwards()
+        .find((entry) => entry.containerPort === req.containerPort);
+      if (existing) {
+        if (existing.hostPort !== req.hostPort) {
+          throw new ControlError(
+            "binding-conflict",
+            `container port ${req.containerPort} already forwards to host port ${existing.hostPort}`,
+          );
+        }
+        return {
+          containerPort: existing.containerPort,
+          hostPort: existing.hostPort,
+          hostProbe: await probeHostPort(existing.hostPort),
+        };
+      }
+
+      try {
+        await opts.gateway.forward(req.containerPort, req.hostPort);
+      } catch (error) {
+        if (error instanceof RelayNotReadyError) {
+          throw new ControlError(
+            "relay-unavailable",
+            error.reason === "container-not-running"
+              ? "the container is not running"
+              : "the relay could not be started",
+          );
+        }
+        throw new ControlError(
+          "container-port-taken",
+          `container port ${req.containerPort} could not be opened: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      try {
+        await persist({});
+      } catch (error) {
+        await opts.gateway.unforward(req.containerPort);
+        throw error;
+      }
+      return {
+        containerPort: req.containerPort,
+        hostPort: req.hostPort,
+        hostProbe: await probeHostPort(req.hostPort),
+      };
+    });
+
+  const unforward: PortBindBroker["unforward"] = (containerPort) =>
+    mutate(async () => {
+      const forwards = opts.gateway.forwards();
+      if (!forwards.some((entry) => entry.containerPort === containerPort)) {
+        throw new ControlError(
+          "no-such-binding",
+          `container port ${containerPort} is not forwarded`,
+        );
+      }
+      await persist({
+        forwards: forwards.filter(
+          (entry) => entry.containerPort !== containerPort,
+        ),
+      });
+      await opts.gateway.unforward(containerPort);
     });
 
   const watchState = (
@@ -363,6 +496,11 @@ export async function startPortBindBroker(opts: {
         response = { ok: true, ...(await bind(request)) };
       } else if (request.type === "candidates") {
         response = { ok: true, ...(await candidates()) };
+      } else if (request.type === "forward") {
+        response = { ok: true, ...(await forward(request)) };
+      } else if (request.type === "unforward") {
+        await unforward(request.containerPort);
+        response = { ok: true };
       } else {
         await unbind(
           "containerPort" in request
@@ -397,6 +535,9 @@ export async function startPortBindBroker(opts: {
     bind,
     unbind,
     listBindings: snapshot,
+    forward,
+    unforward,
+    listForwards: () => opts.gateway.forwards(),
     candidates,
     close: async () => {
       closing = true;

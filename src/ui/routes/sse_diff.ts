@@ -26,7 +26,10 @@
 import type { AuditLogEntry } from "../../audit/types.ts";
 import type { NasContainerInfo } from "../../domain/container.ts";
 import type { HostExecPendingEntry } from "../../hostexec/types.ts";
-import type { PortBindSessionEntry } from "../../network/port_bind_protocol.ts";
+import {
+  type PortBindSessionEntry,
+  sessionForwards,
+} from "../../network/port_bind_protocol.ts";
 import type { PendingEntry } from "../../network/protocol.ts";
 import type { SessionsData, TerminalSessionInfo } from "../data.ts";
 
@@ -155,13 +158,20 @@ export function diffSnapshots(
   }
 
   const portBindingsJson = JSON.stringify(
-    next.portBindings.flatMap((session) =>
-      session.bindings.map((binding) => [
+    next.portBindings.flatMap((session) => [
+      ...session.bindings.map((binding) => [
         session.sessionId,
+        "in",
         binding.containerPort,
         binding.hostPort,
       ]),
-    ),
+      ...sessionForwards(session).map((forward) => [
+        session.sessionId,
+        "out",
+        forward.containerPort,
+        forward.hostPort,
+      ]),
+    ]),
   );
   const portBindingsChanged = portBindingsJson !== prev.portBindings;
   if (portBindingsChanged) {

@@ -11,7 +11,7 @@ Usage:
   nas worktree [list|clean] [options]
   nas container [list|clean]
   nas session [list|attach <session-id>]
-  nas network [pending|approve|deny|review|gc|bind|unbind]
+  nas network [pending|approve|deny|review|gc|bind|unbind|forward|unforward]
   nas hostexec [pending|approve|deny|review|test] [options]
   nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
@@ -80,9 +80,13 @@ Network options:
                   コンテナのポートを localhost で開く（引数なしで一覧表示）
   unbind [<session-id>:<container-port> | <host-port>]
                   開いたポートを閉じる（引数なしで fzf 選択）
+  forward <session-id>:<container-port> [<host-port>]
+                  ホストの 127.0.0.1 のポートをコンテナ内 localhost に転送する（引数なしで一覧表示）
+  unforward [<session-id>:<container-port>]
+                  ホストへの転送を閉じる（引数なしで fzf 選択）
   --runtime-dir DIR
-                  bind/unbind では ports runtime root、それ以外では network runtime root
-  --format json   bind の一覧を JSON 形式で表示
+                  bind/unbind/forward/unforward では ports runtime root、それ以外では network runtime root
+  --format json   bind/forward の一覧を JSON 形式で表示
 
 HostExec options:
   pending         保留中の hostexec 承認要求を表示
@@ -114,6 +118,9 @@ Examples:
   nas network bind <session>:3000        # Open a container port on localhost
   nas network bind <session>             # Pick from the ports the container is listening on
   nas network unbind <session>:3000      # Close an open port binding
+  nas network forward <session>:5432     # Reach the host's 127.0.0.1:5432 at localhost:5432 in the container
+  nas network forward <session>          # Pick from the ports the host is listening on
+  nas network unforward <session>:5432   # Close a forward
   nas hostexec pending                   # Show pending hostexec approvals
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches

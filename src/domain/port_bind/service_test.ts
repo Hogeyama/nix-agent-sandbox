@@ -23,8 +23,10 @@ import {
 } from "./service.ts";
 import {
   AmbiguousHostPortError,
+  ContainerPortTakenError,
   InternalBrokerError,
   NoSuchBindingError,
+  RelayUnavailableError,
   SessionUnreachableError,
 } from "./types.ts";
 
@@ -276,5 +278,83 @@ test("the fake reports a watching scan with nothing found", async () => {
       }).pipe(Effect.provide(makePortBindServiceFake())),
     );
     expect(result).toEqual({ candidates: [], watch: "watching" });
+  });
+});
+
+test("the live service forwards through its session and validates the answer", async () => {
+  let received: unknown;
+  await withFakeBroker(
+    (request) => {
+      received = request;
+      return { ok: true, containerPort: 5432, hostPort: 5432, hostProbe: "ok" };
+    },
+    async (paths) => {
+      const client = makePortBindClient();
+      expect(await client.forward(paths, "s1", 5432, 5432)).toEqual({
+        containerPort: 5432,
+        hostPort: 5432,
+        hostProbe: "ok",
+      });
+      expect(received).toEqual({
+        type: "forward",
+        containerPort: 5432,
+        hostPort: 5432,
+      });
+      await client.unforward(paths, { sessionId: "s1", containerPort: 5432 });
+      expect(received).toEqual({ type: "unforward", containerPort: 5432 });
+    },
+  );
+});
+
+test("forward errors keep their kind across the socket", async () => {
+  await withFakeBroker(
+    () => ({
+      ok: false,
+      error: "relay-unavailable",
+      message: "the container is not running",
+    }),
+    async (paths) => {
+      const error = await makePortBindClient()
+        .forward(paths, "s1", 5432, 5432)
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(RelayUnavailableError);
+    },
+  );
+  await withFakeBroker(
+    () => ({ ok: false, error: "container-port-taken", message: "in use" }),
+    async (paths) => {
+      const error = await makePortBindClient()
+        .forward(paths, "s1", 5432, 5432)
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(ContainerPortTakenError);
+    },
+  );
+});
+
+test("a malformed forward response is a broker error, not data", async () => {
+  await withFakeBroker(
+    () => ({ ok: true, containerPort: 5432, hostPort: 0, hostProbe: "ok" }),
+    async (paths) => {
+      const error = await makePortBindClient()
+        .forward(paths, "s1", 5432, 5432)
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(InternalBrokerError);
+    },
+  );
+});
+
+test("the fake forwards to the same port and answers ok", async () => {
+  await withPaths(async (paths) => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* PortBindService;
+        return yield* svc.forward(paths, "s1", 5432, 15_432);
+      }).pipe(Effect.provide(makePortBindServiceFake())),
+    );
+    expect(result).toEqual({
+      containerPort: 5432,
+      hostPort: 15_432,
+      hostProbe: "ok",
+    });
   });
 });

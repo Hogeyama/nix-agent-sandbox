@@ -39,4 +39,4 @@ UI の **Sessions** でその作業を選び、右の **Pending** 内にある *
 
 古い nas で開始したセッションや、通信の仲介プロセスが終了したセッションには公開設定を追加できません。エージェントの作業を確認してからセッションを起動し直します。異常終了後の登録情報が残っている場合は、ホストの `nas network gc` で回収できます。
 
-ホストの DB や API をエージェントから使いたい場合は、転送方向が逆です。[localhost ポート転送](/nix-agent-sandbox/configuration/host-services/)を設定してください。
+ホストの DB や API をエージェントから使いたい場合は、転送方向が逆です。同じペインの **Ports · out** から追加できます。[ホストの DB・API への接続](/nix-agent-sandbox/configuration/host-services/)を参照してください。

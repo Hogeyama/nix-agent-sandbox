@@ -23,6 +23,7 @@ import {
 } from "./pendingCardView";
 import { filterPendingForSession } from "./pendingNotificationView";
 import { PortBindingsPanel } from "./ports/PortBindingsPanel";
+import { PortForwardsPanel } from "./ports/PortForwardsPanel";
 import { RequestBodyPanel } from "./RequestBodyPanel";
 
 // Network scope chips. The label is what the user reads; the hint is the
@@ -204,6 +205,10 @@ export function PendingPane(props: Props) {
             </span>
           </fieldset>
           <PortBindingsPanel
+            sessionId={props.activeSessionId}
+            portBindings={props.portBindings}
+          />
+          <PortForwardsPanel
             sessionId={props.activeSessionId}
             portBindings={props.portBindings}
           />

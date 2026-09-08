@@ -3,6 +3,10 @@ import {
   ContainerNotRunningError,
   NotNasManagedContainerError,
 } from "../../domain/container.ts";
+import {
+  ContainerPortTakenError,
+  RelayUnavailableError,
+} from "../../domain/port_bind/types.ts";
 import { LaunchValidationError } from "../launch.ts";
 import {
   mapErrorToResponse,
@@ -80,4 +84,14 @@ test("withErrorHandling: thrown error is routed through mapper", async () => {
   });
   expect(res.status).toBe(400);
   expect(await res.json()).toEqual({ error: "bad input" });
+});
+
+test("mapErrorToResponse: ContainerPortTakenError → 409, RelayUnavailableError → 503", async () => {
+  const taken = mapErrorToResponse(new ContainerPortTakenError("in use"));
+  expect(taken.status).toBe(409);
+  expect(await taken.json()).toEqual({ error: "in use" });
+  const unavailable = mapErrorToResponse(
+    new RelayUnavailableError("the container is not running"),
+  );
+  expect(unavailable.status).toBe(503);
 });

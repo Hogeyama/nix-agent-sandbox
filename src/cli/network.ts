@@ -7,12 +7,18 @@ import {
   makePortBindClient,
   type PortBindCandidates,
   type PortBindKey,
+  type PortForwardKey,
   SessionUnreachableError,
 } from "../domain/port_bind.ts";
 import { runFzfSelect } from "../fzf_review.ts";
-import type {
-  PortBindCandidate,
-  PortBindSessionEntry,
+import {
+  isForwardableScope,
+  readHostListeners,
+} from "../network/host_listeners.ts";
+import {
+  type PortBindCandidate,
+  type PortBindSessionEntry,
+  sessionForwards,
 } from "../network/port_bind_protocol.ts";
 import {
   type PortsRuntimePaths,
@@ -35,7 +41,10 @@ import {
 import {
   parseBindArgs,
   parseBindSessionOnly,
+  parseForwardArgs,
+  parseForwardSessionOnly,
   parseUnbindArgs,
+  parseUnforwardArgs,
 } from "./port_bind_args.ts";
 
 /**
@@ -94,6 +103,40 @@ function bindingRows(sessions: PortBindSessionEntry[]) {
       } satisfies PortBindKey,
     })),
   );
+}
+
+function forwardRows(sessions: PortBindSessionEntry[]) {
+  return sessions.flatMap((session) =>
+    sessionForwards(session).map((forward) => ({
+      sessionId: session.sessionId,
+      containerPort: forward.containerPort,
+      hostPort: forward.hostPort,
+      age: formatAge(forward.createdAt),
+      key: {
+        sessionId: session.sessionId,
+        containerPort: forward.containerPort,
+      } satisfies PortForwardKey,
+    })),
+  );
+}
+
+function forwardLine(row: ReturnType<typeof forwardRows>[number]): string {
+  return `${row.sessionId} ${row.containerPort} ${row.hostPort} ${row.age}`;
+}
+
+function printForwardResult(result: {
+  containerPort: number;
+  hostPort: number;
+  hostProbe: "ok" | "no-answer";
+}): void {
+  console.log(
+    `コンテナ内の localhost:${result.containerPort} からホストの 127.0.0.1:${result.hostPort} へ転送します`,
+  );
+  if (result.hostProbe === "no-answer") {
+    console.log(
+      `[nas] ホストの 127.0.0.1:${result.hostPort} はまだ応答していません。`,
+    );
+  }
 }
 
 async function collectCandidates(
@@ -244,6 +287,114 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
       return;
     }
 
+    if (sub === "forward") {
+      const paths = await resolvePortsRuntimePaths(runtimeDir ?? undefined);
+      const args = removeFirstOccurrence(nasArgs, sub);
+      if (!hasPortBindArgument(args)) {
+        const rows = forwardRows(await portBindClient.list(paths));
+        if (hasFormatJson(nasArgs)) {
+          console.log(
+            JSON.stringify(
+              rows.map(({ sessionId, containerPort, hostPort, age }) => ({
+                sessionId,
+                containerPort,
+                hostPort,
+                age,
+              })),
+            ),
+          );
+        } else if (rows.length === 0) {
+          console.log("[nas] No open port forwards.");
+        } else {
+          for (const row of rows) console.log(forwardLine(row));
+        }
+        return;
+      }
+
+      const suggestFor = parseForwardSessionOnly(args);
+      if (suggestFor !== null) {
+        unreachableSessionId = suggestFor;
+        const sessions = await portBindClient.list(paths);
+        const taken = new Set(
+          forwardRows(sessions)
+            .filter((row) => row.sessionId === suggestFor)
+            .map((row) => row.containerPort),
+        );
+        const listeners = (await readHostListeners()).filter(
+          (listener) =>
+            isForwardableScope(listener.scope) &&
+            !taken.has(listener.containerPort),
+        );
+        if (hasFormatJson(nasArgs)) {
+          console.log(
+            JSON.stringify(
+              listeners.map((listener) => ({
+                hostPort: listener.containerPort,
+                scope: listener.scope,
+              })),
+            ),
+          );
+          return;
+        }
+        if (listeners.length === 0) {
+          console.log(
+            "[nas] ホストの 127.0.0.1 で待ち受けている未転送のポートは見つかりませんでした。",
+          );
+          return;
+        }
+        const lines = listeners.map((listener) => `${listener.containerPort}`);
+        const selected = await runFzfSelect(lines, {
+          prompt: "forward> ",
+          header: "ホストの待ち受けポート（同じ番号でコンテナ内に転送）",
+          missingMessage:
+            "[nas] fzf is not installed. Pass <session-id>:<port> to 'nas network forward'.",
+        });
+        if (selected === null) return;
+        const port = Number(selected);
+        printForwardResult(
+          await portBindClient.forward(paths, suggestFor, port, port),
+        );
+        return;
+      }
+
+      const request = parseForwardArgs(args);
+      unreachableSessionId = request.sessionId;
+      printForwardResult(
+        await portBindClient.forward(
+          paths,
+          request.sessionId,
+          request.containerPort,
+          request.hostPort,
+        ),
+      );
+      return;
+    }
+
+    if (sub === "unforward") {
+      const paths = await resolvePortsRuntimePaths(runtimeDir ?? undefined);
+      const args = removeFirstOccurrence(nasArgs, sub);
+      let key = parseUnforwardArgs(args);
+      if (key === null) {
+        const rows = forwardRows(await portBindClient.list(paths));
+        if (rows.length === 0) {
+          console.log("[nas] No open port forwards.");
+          return;
+        }
+        const lines = rows.map(forwardLine);
+        const selected = await runFzfSelect(lines, {
+          prompt: "unforward> ",
+          missingMessage:
+            "[nas] fzf is not installed. Pass <session-id>:<container-port> to 'nas network unforward'.",
+        });
+        if (selected === null) return;
+        key = rows[lines.indexOf(selected)].key;
+      }
+      unreachableSessionId = key.sessionId;
+      await portBindClient.unforward(paths, key);
+      console.log("[nas] ホストへの転送を閉じました。");
+      return;
+    }
+
     const paths = await resolveNetworkRuntimePaths(runtimeDir ?? undefined);
 
     if (sub === "gc") {
@@ -319,7 +470,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
 
     console.error(`[nas] Unknown network subcommand: ${sub}`);
     console.error(
-      "  Usage: nas network [pending|approve|deny|review|gc|bind|unbind] [--scope ...]",
+      "  Usage: nas network [pending|approve|deny|review|gc|bind|unbind|forward|unforward] [--scope ...]",
     );
     process.exit(1);
   } catch (err) {

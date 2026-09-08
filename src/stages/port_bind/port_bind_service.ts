@@ -3,8 +3,10 @@ import * as path from "node:path";
 import { Context, Effect, Layer } from "effect";
 import { resolveAsset } from "../../lib/asset.ts";
 import { ensureDir, safeRemove } from "../../lib/fs_utils.ts";
-import { startPortBindBroker } from "../../network/port_bind_broker.ts";
-import type { PortBinding } from "../../network/port_bind_protocol.ts";
+import {
+  type PersistedPorts,
+  startPortBindBroker,
+} from "../../network/port_bind_broker.ts";
 import {
   relayScriptPath,
   removeSessionRegistry,
@@ -122,12 +124,13 @@ export const PortBindServiceLive: Layer.Layer<
                 waitForControl,
               });
 
-              const persist = (bindings: PortBinding[]) =>
+              const persist = (ports: PersistedPorts) =>
                 writeSessionRegistry(paths, {
                   sessionId: plan.sessionId,
                   pid: process.pid,
                   brokerSocket: plan.controlSocket,
-                  bindings,
+                  bindings: ports.bindings,
+                  forwards: ports.forwards,
                 });
               const broker = await startPortBindBroker({
                 controlSocketPath: plan.controlSocket,
@@ -136,7 +139,7 @@ export const PortBindServiceLive: Layer.Layer<
                 reservedPorts: plan.reservedPorts,
               });
               try {
-                await persist([]);
+                await persist({ bindings: [], forwards: [] });
               } catch (error) {
                 await broker.close();
                 throw error;

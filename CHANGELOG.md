@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- **Network — dynamic host port forward**: `nas network forward <session>:<port> [<host-port>]` / `unforward` and the UI's **Ports · out** panel make a host loopback port reachable at `localhost:<port>` inside a running container, without editing `forwardPorts` or restarting the session. Rides the existing port-bind relay: the relay opens the container listener, the host dials `127.0.0.1` only for ports the user registered, and forwards are re-established when the relay restarts.
+
 ## [0.15.2] - 2026-07-03
 
 ### Fixed

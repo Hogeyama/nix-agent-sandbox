@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   pipeSockets,
+  RelayNotReadyError,
   readFirstLine,
   startRelayGateway,
 } from "./port_bind_relay.ts";
@@ -501,6 +502,173 @@ test("an out-of-range listen line drops the relay connection", async () => {
     } finally {
       relay.socket.destroy();
       await gateway.close();
+    }
+  });
+});
+
+/** A relay stand-in that acknowledges forward requests and records them. */
+function ackingControl(socketPath: string): {
+  socket: Socket;
+  lines: string[];
+} {
+  const control = rawControl(socketPath);
+  control.socket.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n").filter(Boolean)) {
+      const [verb, id] = line.split(" ");
+      if (verb === "forward" || verb === "unforward") {
+        control.socket.write(`ok ${id}\n`);
+      }
+    }
+  });
+  return control;
+}
+
+test("a forward is recorded on ok and re-sent to a reconnecting relay", async () => {
+  await withSocketPath(async (socketPath) => {
+    const ensures: number[] = [];
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => {
+        ensures.push(Date.now());
+        return "ready";
+      },
+      reEnsureDelayMs: 5,
+    });
+    const first = ackingControl(socketPath);
+    let second: { socket: Socket; lines: string[] } | undefined;
+    try {
+      await waitForRelay(gateway);
+      await gateway.forward(5432, 15_432);
+      expect(
+        first.lines.some((line) => /^forward [0-9a-f]{16} 5432$/.test(line)),
+      ).toBe(true);
+      expect(gateway.forwards()).toEqual([
+        {
+          containerPort: 5432,
+          hostPort: 15_432,
+          createdAt: expect.any(String),
+        },
+      ]);
+
+      const ensuresBeforeLoss = ensures.length;
+      first.socket.destroy();
+      await waitFor(() => !gateway.isRelayConnected());
+      // Losing the relay while a forward exists asks for a new relay.
+      await waitFor(() => ensures.length > ensuresBeforeLoss);
+      expect(gateway.forwards()).toHaveLength(1);
+
+      second = ackingControl(socketPath);
+      await waitForRelay(gateway);
+      await waitFor(
+        () =>
+          second?.lines.some((line) =>
+            /^forward [0-9a-f]{16} 5432$/.test(line),
+          ) === true,
+      );
+
+      await gateway.unforward(5432);
+      expect(gateway.forwards()).toEqual([]);
+      await waitFor(
+        () =>
+          second?.lines.some((line) =>
+            /^unforward [0-9a-f]{16} 5432$/.test(line),
+          ) === true,
+      );
+    } finally {
+      first.socket.destroy();
+      second?.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("a failed forward is not recorded", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = rawControl(socketPath);
+    relay.socket.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n").filter(Boolean)) {
+        const [verb, id] = line.split(" ");
+        if (verb === "forward") relay.socket.write(`fail ${id} EADDRINUSE\n`);
+      }
+    });
+    try {
+      await waitForRelay(gateway);
+      await expect(gateway.forward(80, 8080)).rejects.toThrow("EADDRINUSE");
+      expect(gateway.forwards()).toEqual([]);
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("a forward cannot be created while the relay is unavailable", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "container-not-running",
+    });
+    try {
+      await expect(gateway.forward(5432, 5432)).rejects.toBeInstanceOf(
+        RelayNotReadyError,
+      );
+      expect(gateway.forwards()).toEqual([]);
+    } finally {
+      await gateway.close();
+    }
+  });
+});
+
+test("a client line for a port that is not forwarded is closed", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = ackingControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      const stray = connect({ path: socketPath });
+      stray.write("client 5432\n");
+      await waitForClose(stray);
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("a client line for a forwarded port is piped to the host port", async () => {
+  await withSocketPath(async (socketPath) => {
+    const echo = createServer({ allowHalfOpen: true }, (socket: Socket) => {
+      socket.on("data", (chunk: Buffer) => socket.write(chunk));
+    });
+    await new Promise<void>((resolve) =>
+      echo.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const hostPort = (echo.address() as { port: number }).port;
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = ackingControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      await gateway.forward(5432, hostPort);
+      const client = connect({ path: socketPath });
+      // The line and the first payload bytes arrive in one write, as a
+      // client-first protocol delivers them.
+      client.write("client 5432\nping");
+      expect((await firstChunk(client)).toString()).toEqual("ping");
+      client.destroy();
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+      await new Promise<void>((resolve) => echo.close(() => resolve()));
     }
   });
 });
