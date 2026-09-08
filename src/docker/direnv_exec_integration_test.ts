@@ -8,6 +8,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +55,8 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>) {
       XDG_CACHE_HOME: cache,
       NAS_DIRENV_ENABLED: "true",
       NAS_REAL_BASH: "/bin/bash",
+      NAS_BASH_OVERRIDE: "/mask-wrapper/bin",
+      HOSTEXEC_PATH_PREFIX: "/host wrapper's/bin",
       DIRENV_LOG_FORMAT: "",
     };
     await run({ root, workspace, opsFile, env });
@@ -274,6 +277,7 @@ async function dispatch(
   shell: boolean,
   command: string[],
   stdin?: string,
+  terminal = false,
 ) {
   const entrypoint = await readFile(
     new URL("./embed/entrypoint.sh", import.meta.url),
@@ -286,12 +290,19 @@ async function dispatch(
 nas_measure_start() { printf -v "$1" %s ""; }
 nas_measure_done() { :; }
 mktemp() { command mktemp "$TEST_ROOT/shell-rc.XXXXXX"; }
-exec_nas() { shift; exec /bin/bash "$TEST_LAUNCHER" "$@"; }
+exec_nas() { exec "$@"; }
 EXEC_PREFIX=()
 AGENT_COMMAND=("$@")
-${entrypoint.slice(start)}`;
+${entrypoint.slice(start).replaceAll("/usr/local/bin/nas-direnv-exec", '"$TEST_LAUNCHER"')}`;
+  const argv = [
+    fixture.env.NAS_REAL_BASH!,
+    "-c",
+    script,
+    "dispatch",
+    ...command,
+  ];
   return runProcess(
-    ["/bin/bash", "-c", script, "dispatch", ...command],
+    terminal ? ["script", "-qefc", shellEscape(argv), "/dev/null"] : argv,
     fixture.workspace,
     {
       ...fixture.env,
@@ -300,8 +311,7 @@ ${entrypoint.slice(start)}`;
       WORKSPACE: fixture.workspace,
       NAS_ENV_OPS_FILE: fixture.opsFile,
       NAS_SHELL_MODE: String(shell),
-      HOSTEXEC_PATH_PREFIX: "/host wrapper's/bin",
-      NAS_BASH_OVERRIDE: "/mask-wrapper/bin",
+      SHELL: "/bin/sh",
     },
     stdin,
   );
@@ -389,6 +399,100 @@ async function terminalAvailable(): Promise<boolean> {
   return probe.exitCode === 0;
 }
 const hasTerminal = await terminalAvailable();
+
+// Use the shipped wrapper, relocating only its installed interpreter path.
+// The test supervisor puts its child under pipes like nas-mask-filter does.
+async function withMaskWrapper(fixture: Fixture, run: () => Promise<void>) {
+  const entrypoint = await readFile(
+    new URL("./embed/entrypoint.sh", import.meta.url),
+    "utf8",
+  );
+  const body = entrypoint.match(
+    /<< 'MASK_WRAPPER_BODY'\n([\s\S]*?)\nMASK_WRAPPER_BODY\n/,
+  );
+  if (!body) throw new Error("MASK_WRAPPER_BODY not found");
+  const wrapperDir = path.join(fixture.root, "mask-wrapper");
+  await mkdir(wrapperDir);
+  const filter = path.join(wrapperDir, "filter");
+  const marker = path.join(fixture.root, "supervised");
+  const socket = path.join(fixture.root, "mask.sock");
+  const realBash = fixture.env.NAS_REAL_BASH!;
+  await writeFile(
+    filter,
+    `#!${realBash}
+while [ "$1" != -- ]; do shift; done
+shift
+printf supervised >> "$TEST_SUPERVISED_MARKER"
+NAS_MASK_SUPERVISED=1 "$@" 2>&1 | cat
+exit \${PIPESTATUS[0]}
+`,
+    { mode: 0o755 },
+  );
+  const wrapper = path.join(wrapperDir, "bash");
+  await writeFile(
+    wrapper,
+    `#!${realBash}
+readonly nas_mask_filter_path=${shellEscape([filter])}
+readonly nas_mask_socket_path=${shellEscape([socket])}
+${body[1].replaceAll("/tmp/nas-bash-override/bash.real", realBash)}
+`,
+    { mode: 0o755 },
+  );
+  const server = createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socket, resolve);
+    });
+    Object.assign(fixture.env, {
+      PATH: `${wrapperDir}:${fixture.env.PATH}`,
+      NAS_BASH_OVERRIDE: wrapperDir,
+      NAS_MASK_FILTER: filter,
+      NAS_MASK_SOCKET: socket,
+      NAS_MASK_SUPERVISED: undefined,
+      TEST_SUPERVISED_MARKER: marker,
+    });
+    const probe = await runProcess(
+      [wrapper, "-c", "printf wrapper-probe"],
+      fixture.workspace,
+      fixture.env,
+    );
+    expect(probe.exitCode).toBe(0);
+    expect(probe.stdout).toBe("wrapper-probe");
+    expect(await readFile(marker, "utf8")).toBe("supervised");
+    await rm(marker);
+    await run();
+    expect(await Bun.file(marker).exists()).toBe(false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+for (const shell of [false, true]) {
+  for (const enabled of [false, true]) {
+    test.skipIf(!hasTerminal || (enabled && !integrationAvailable))(
+      `entrypoint preserves masked launch TTY: shell=${shell} direnv=${enabled}`,
+      async () => {
+        await withFixture(async (fixture) => {
+          fixture.env.NAS_DIRENV_ENABLED = String(enabled);
+          await withMaskWrapper(fixture, async () => {
+            const payload =
+              'test -t 0 && test -t 1 && test -t 2 || exit 91; printf "TTY-preserved\\n"; exit 37';
+            const result = await dispatch(
+              fixture,
+              shell,
+              [fixture.env.NAS_REAL_BASH!, "-c", payload],
+              shell ? `${payload}\n` : undefined,
+              true,
+            );
+            expect(result.exitCode).toBe(37);
+            expect(result.stdout).toContain("TTY-preserved");
+          });
+        });
+      },
+    );
+  }
+}
 
 async function makeApprovalReadable(directory: string): Promise<void> {
   await chmod(directory, 0o755);

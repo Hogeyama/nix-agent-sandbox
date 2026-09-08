@@ -401,5 +401,6 @@ if [ "$NAS_SHELL_MODE" = true ]; then
   AGENT_COMMAND=("$NAS_REAL_BASH" --noprofile --rcfile "$SHELL_RC_FILE" -i)
 fi
 nas_measure_done "launch-setup" "$LAUNCH_SETUP_START"
-exec_nas "${EXEC_PREFIX[@]}" /usr/local/bin/nas-direnv-exec \
+# Bypass the PATH bash wrapper so the launcher and payload retain their TTY.
+exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" /usr/local/bin/nas-direnv-exec \
   "$WORKSPACE" "$NAS_ENV_OPS_FILE" "$PATH_PREFIX" "${AGENT_COMMAND[@]}"
