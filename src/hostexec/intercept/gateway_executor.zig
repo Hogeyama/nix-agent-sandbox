@@ -6,18 +6,15 @@
 
 const std = @import("std");
 const c = @cImport({
-    @cDefine("_GNU_SOURCE", "1");
     @cInclude("fcntl.h");
-    @cInclude("spawn.h");
-    @cInclude("signal.h");
     @cInclude("sys/wait.h");
     @cInclude("unistd.h");
 });
 
 const Allocator = std.mem.Allocator;
-const EnvMap = std.process.Environ.Map;
+const EnvMap = std.process.EnvMap;
 const ChildTerm = std.process.Child.Term;
-const posix = @import("posix");
+const posix = std.posix;
 const pid_t = posix.pid_t;
 const test_paths = @import("test_paths.zig");
 
@@ -54,6 +51,15 @@ pub const ChildHandle = struct {
         }
         if (self.exit_observed) return self.term;
 
+        // Child.spawn() reports errors that happen before exec through an
+        // internal CLOEXEC pipe.  Consume it before polling so a failed
+        // chdir/exec cannot be mistaken for a normal exit.
+        self.child.waitForSpawn() catch |err| {
+            reapFailedSpawn(&self.child);
+            self.finishClosed(null, err);
+            return err;
+        };
+
         return self.observeExitNoReap(false);
     }
 
@@ -67,6 +73,11 @@ pub const ChildHandle = struct {
         // Keep the leader waitable after reporting its terminal state.  The
         // process-group cleanup must still signal its PGID before the direct
         // child is reaped.
+        self.child.waitForSpawn() catch |err| {
+            reapFailedSpawn(&self.child);
+            self.finishClosed(null, err);
+            return err;
+        };
         return (try self.observeExitNoReap(true)).?;
     }
 
@@ -85,7 +96,7 @@ pub const ChildHandle = struct {
             return self.term.?;
         }
 
-        var timer: ?posix.Timer = null;
+        var timer: ?std.time.Timer = null;
         if (grace_ms != 0) {
             timer = try timer_start_fn();
         }
@@ -100,7 +111,7 @@ pub const ChildHandle = struct {
                 if (!self.exit_observed) {
                     _ = try self.observeExitNoReap(false);
                 }
-                posix.sleep(std.time.ns_per_ms);
+                std.Thread.sleep(std.time.ns_per_ms);
             }
         }
 
@@ -136,7 +147,7 @@ pub const ChildHandle = struct {
         _ = try self.terminateGroup(100);
     }
 
-    fn signalGroup(self: *ChildHandle, signal: posix.SIG) !void {
+    fn signalGroup(self: *ChildHandle, signal: u8) !void {
         // Once waitpid reaps the direct child, never touch the reusable
         // numeric PGID again.
         if (!self.group_active) return;
@@ -183,24 +194,38 @@ pub const ChildHandle = struct {
     }
 
     fn finishReaped(self: *ChildHandle, term: ChildTerm) void {
-        self.child.id = null;
+        self.child.term = term;
+        self.child.id = undefined;
         self.group_active = false;
         self.term = term;
         self.exit_observed = true;
         self.waited = true;
     }
 
+    fn finishClosed(self: *ChildHandle, term: ?ChildTerm, wait_error: ?anyerror) void {
+        self.closeStreams();
+        self.group_active = false;
+        if (term) |value| self.term = value;
+        self.exit_observed = term != null;
+        self.wait_error = wait_error;
+        self.waited = true;
+    }
+
     fn closeStreams(self: *ChildHandle) void {
+        if (self.child.err_pipe) |fd| {
+            posix.close(fd);
+            self.child.err_pipe = null;
+        }
         if (self.child.stdin) |*file| {
-            posix.close(file.handle);
+            file.close();
             self.child.stdin = null;
         }
         if (self.child.stdout) |*file| {
-            posix.close(file.handle);
+            file.close();
             self.child.stdout = null;
         }
         if (self.child.stderr) |*file| {
-            posix.close(file.handle);
+            file.close();
             self.child.stderr = null;
         }
         self.stdout_fd = -1;
@@ -215,8 +240,8 @@ const SavedStdin = struct {
 
 const RestoreFn = *const fn (?SavedStdin, bool) anyerror!void;
 const CleanupFn = *const fn (*ChildHandle) anyerror!void;
-const SignalGroupFn = *const fn (*ChildHandle, posix.SIG) anyerror!void;
-const TimerStartFn = *const fn () anyerror!posix.Timer;
+const SignalGroupFn = *const fn (*ChildHandle, u8) anyerror!void;
+const TimerStartFn = *const fn () anyerror!std.time.Timer;
 
 pub fn spawn(allocator: Allocator, spec: ExecutionSpec, stdin_fd: ?posix.fd_t) !ChildHandle {
     return spawnWithRestore(allocator, spec, stdin_fd, restoreStdin);
@@ -241,7 +266,7 @@ fn spawnWithRestore(
 
     // A received descriptor is duplicated before touching fd 0.  The caller
     // retains ownership of the received descriptor, while the duplicate is
-    // closed before the child is spawned.  The replacement itself is confined to the
+    // closed after Child.spawn().  The replacement itself is confined to the
     // request handler: the gateway listener must fork before entering here.
     var delegated_fd: ?posix.fd_t = null;
     var saved_stdin: ?SavedStdin = null;
@@ -259,13 +284,50 @@ fn spawnWithRestore(
         delegated_fd = null;
     }
 
-    var child = spawnPosix(allocator, argv, spec.cwd, &spec.env, stdin_fd != null) catch |err| {
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = spec.cwd;
+    child.env_map = &spec.env;
+    child.stdin_behavior = if (stdin_fd != null) .Inherit else .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.pgid = 0;
+
+    child.spawn() catch |err| {
+        closeSpawnStreams(&child);
         restore_fn(saved_stdin, replaced_stdin) catch |restore_err| return restore_err;
         return err;
     };
 
-    const child_pid = child.id.?;
-    // POSIX spawn completes the child-side process-group setup before returning.
+    // Child.spawn() may successfully fork while exec/chdir fails.  Surface
+    // that failure to the broker and reap the failed child before returning.
+    child.waitForSpawn() catch |err| {
+        var restore_error: ?anyerror = null;
+        restore_fn(saved_stdin, replaced_stdin) catch |restore_err| {
+            restore_error = restore_err;
+        };
+        reapFailedSpawn(&child);
+        if (restore_error) |restore_err| return restore_err;
+        return err;
+    };
+
+    const child_pid = child.id;
+    // `pgid = 0` asks the child to create a group whose id is its own pid.
+    // The parent-side call closes the small fork/exec race before a kill can
+    // be requested by the broker.
+    posix.setpgid(child_pid, child_pid) catch |err| switch (err) {
+        error.ProcessNotFound, error.ProcessAlreadyExec => {},
+        else => {
+            var restore_error: ?anyerror = null;
+            restore_fn(saved_stdin, replaced_stdin) catch |restore_err| {
+                restore_error = restore_err;
+            };
+            const cleanup_error = killAndReapSpawnedChild(&child);
+            if (cleanup_error) |cleanup_err| return cleanup_err;
+            if (restore_error) |restore_err| return restore_err;
+            return err;
+        },
+    };
+
     restore_fn(saved_stdin, replaced_stdin) catch |restore_err| {
         if (killAndReapSpawnedChild(&child)) |cleanup_err| return cleanup_err;
         return restore_err;
@@ -277,127 +339,6 @@ fn spawnWithRestore(
         .stderr_fd = child.stderr.?.handle,
         .pid = child_pid,
         .pgid = child_pid,
-    };
-}
-
-// libc's spawn owns the failed child until exec succeeds. Zig 0.16's
-// Threaded.processSpawnPosix returns exec errors without closing its output
-// pipes or reaping that child, so use POSIX spawn for this cleanup boundary.
-fn spawnPosix(allocator: Allocator, argv: []const []const u8, cwd: ?[]const u8, env: *const EnvMap, inherit_stdin: bool) !std.process.Child {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const scratch = arena.allocator();
-    const argv_z = try scratch.allocSentinel(?[*:0]const u8, argv.len, null);
-    for (argv, 0..) |arg, i| argv_z[i] = (try scratch.dupeZ(u8, arg)).ptr;
-    const env_z = try scratch.allocSentinel(?[*:0]const u8, env.count(), null);
-    var iterator = env.iterator();
-    var i: usize = 0;
-    while (iterator.next()) |entry| : (i += 1) {
-        env_z[i] = (try std.fmt.allocPrintSentinel(scratch, "{s}={s}", .{ entry.key_ptr.*, entry.value_ptr.* }, 0)).ptr;
-    }
-
-    const stdout_pipe = try pipeAboveStdio();
-    errdefer posix.close(stdout_pipe[0]);
-    defer posix.close(stdout_pipe[1]);
-    const stderr_pipe = try pipeAboveStdio();
-    errdefer posix.close(stderr_pipe[0]);
-    defer posix.close(stderr_pipe[1]);
-
-    var actions: c.posix_spawn_file_actions_t = undefined;
-    try spawnError(c.posix_spawn_file_actions_init(&actions));
-    defer _ = c.posix_spawn_file_actions_destroy(&actions);
-    if (cwd) |path| {
-        const path_z = try scratch.dupeZ(u8, path);
-        try spawnError(c.posix_spawn_file_actions_addchdir_np(&actions, path_z));
-    }
-    if (!inherit_stdin) try spawnError(c.posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", c.O_RDONLY, 0));
-    try spawnError(c.posix_spawn_file_actions_adddup2(&actions, stdout_pipe[1], 1));
-    try spawnError(c.posix_spawn_file_actions_adddup2(&actions, stderr_pipe[1], 2));
-
-    var attributes: c.posix_spawnattr_t = undefined;
-    try spawnError(c.posix_spawnattr_init(&attributes));
-    defer _ = c.posix_spawnattr_destroy(&attributes);
-    try spawnError(c.posix_spawnattr_setpgroup(&attributes, 0));
-    // Unlike fork, posix_spawn does not invoke the gateway's pthread_atfork
-    // callback. Undo its temporary TERM/INT deferral in the executed child.
-    var mask: c.sigset_t = undefined;
-    if (c.sigprocmask(c.SIG_SETMASK, null, &mask) != 0) return error.SignalMaskFailed;
-    _ = c.sigdelset(&mask, c.SIGTERM);
-    _ = c.sigdelset(&mask, c.SIGINT);
-    try spawnError(c.posix_spawnattr_setsigmask(&attributes, &mask));
-    try spawnError(c.posix_spawnattr_setflags(&attributes, c.POSIX_SPAWN_SETPGROUP | c.POSIX_SPAWN_SETSIGMASK));
-    var pid: c.pid_t = undefined;
-    try spawnExecutable(&pid, argv_z, env_z, &actions, &attributes);
-    return .{
-        .id = pid,
-        .thread_handle = {},
-        .stdin = null,
-        .stdout = .{ .handle = stdout_pipe[0], .flags = .{ .nonblocking = false } },
-        .stderr = .{ .handle = stderr_pipe[0], .flags = .{ .nonblocking = false } },
-        .request_resource_usage_statistics = false,
-    };
-}
-
-fn spawnExecutable(pid: *c.pid_t, argv: [:null]?[*:0]const u8, env: [:null]?[*:0]const u8, actions: *c.posix_spawn_file_actions_t, attributes: *c.posix_spawnattr_t) !void {
-    const executable = std.mem.span(argv[0].?);
-    if (std.mem.indexOfScalar(u8, executable, '/') != null) {
-        return spawnError(c.posix_spawn(pid, argv[0].?, actions, attributes, @ptrCast(argv.ptr), @ptrCast(env.ptr)));
-    }
-    // Match the previous std.process.Child PATH search, including its fallback
-    // and skipping empty entries. Relative entries resolve after the cwd action.
-    const path = posix.getenv("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
-    var entries = std.mem.tokenizeScalar(u8, path, ':');
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var denied = false;
-    var last_error: anyerror = error.FileNotFound;
-    while (entries.next()) |entry| {
-        const candidate = std.fmt.bufPrintSentinel(&buffer, "{s}/{s}", .{ entry, executable }, 0) catch return error.NameTooLong;
-        spawnError(c.posix_spawn(pid, candidate, actions, attributes, @ptrCast(argv.ptr), @ptrCast(env.ptr))) catch |err| {
-            switch (err) {
-                error.AccessDenied => denied = true,
-                error.FileNotFound, error.NotDir => {},
-                else => return err,
-            }
-            last_error = err;
-            continue;
-        };
-        return;
-    }
-    return if (denied) error.AccessDenied else last_error;
-}
-
-// Keep every pipe endpoint away from fd 0/1/2 even if the handler inherited
-// closed standard streams, so child dup2 actions cannot clobber another pipe.
-fn pipeAboveStdio() ![2]posix.fd_t {
-    var fds = try posix.pipe2(.{ .CLOEXEC = true });
-    errdefer {
-        posix.close(fds[0]);
-        posix.close(fds[1]);
-    }
-    for (&fds) |*fd| {
-        if (fd.* >= 3) continue;
-        const duplicate = try duplicateCloexec(fd.*);
-        posix.close(fd.*);
-        fd.* = duplicate;
-    }
-    return fds;
-}
-
-fn spawnError(result: c_int) !void {
-    if (result == 0) return;
-    return switch (@as(std.posix.E, @enumFromInt(result))) {
-        .NOENT => error.FileNotFound,
-        .NOTDIR => error.NotDir,
-        .ACCES => error.AccessDenied,
-        .PERM => error.PermissionDenied,
-        .NOMEM => error.OutOfMemory,
-        .AGAIN => error.SystemResources,
-        .MFILE => error.ProcessFdQuotaExceeded,
-        .NFILE => error.SystemFdQuotaExceeded,
-        .NOEXEC => error.InvalidExe,
-        .NAMETOOLONG => error.NameTooLong,
-        .LOOP => error.SymLinkLoop,
-        else => error.SpawnFailed,
     };
 }
 
@@ -469,18 +410,29 @@ fn duplicateCloexec(fd: posix.fd_t) !posix.fd_t {
 }
 
 fn closeSpawnStreams(child: *std.process.Child) void {
+    if (child.err_pipe) |fd| {
+        posix.close(fd);
+        child.err_pipe = null;
+    }
     if (child.stdin) |*file| {
-        posix.close(file.handle);
+        file.close();
         child.stdin = null;
     }
     if (child.stdout) |*file| {
-        posix.close(file.handle);
+        file.close();
         child.stdout = null;
     }
     if (child.stderr) |*file| {
-        posix.close(file.handle);
+        file.close();
         child.stderr = null;
     }
+}
+
+fn reapFailedSpawn(child: *std.process.Child) void {
+    const failed_pid = child.id;
+    closeSpawnStreams(child);
+    _ = posix.waitpid(failed_pid, 0);
+    child.id = undefined;
 }
 
 fn killAndReapSpawnedChild(child: *std.process.Child) ?anyerror {
@@ -492,8 +444,8 @@ fn killAndReapSpawnedChildWith(child: *std.process.Child, signal_fn: SignalGroup
         .child = child.*,
         .stdout_fd = if (child.stdout) |file| file.handle else -1,
         .stderr_fd = if (child.stderr) |file| file.handle else -1,
-        .pid = child.id.?,
-        .pgid = child.id.?,
+        .pid = child.id,
+        .pgid = child.id,
     };
     defer rollback.closeStreams();
 
@@ -503,20 +455,20 @@ fn killAndReapSpawnedChildWith(child: *std.process.Child, signal_fn: SignalGroup
 
 fn termFromStatus(status: u32) ChildTerm {
     return if (posix.W.IFEXITED(status))
-        .{ .exited = posix.W.EXITSTATUS(status) }
+        .{ .Exited = posix.W.EXITSTATUS(status) }
     else if (posix.W.IFSIGNALED(status))
-        .{ .signal = posix.W.TERMSIG(status) }
+        .{ .Signal = posix.W.TERMSIG(status) }
     else if (posix.W.IFSTOPPED(status))
-        .{ .stopped = posix.W.STOPSIG(status) }
+        .{ .Stopped = posix.W.STOPSIG(status) }
     else
-        .{ .unknown = status };
+        .{ .Unknown = status };
 }
 
 fn termFromSiginfo(info: c.siginfo_t) ChildTerm {
     return switch (info.si_code) {
-        c.CLD_EXITED => .{ .exited = @intCast(siginfoStatus(&info)) },
-        c.CLD_KILLED, c.CLD_DUMPED => .{ .signal = @enumFromInt(siginfoStatus(&info)) },
-        else => .{ .unknown = @bitCast(siginfoStatus(&info)) },
+        c.CLD_EXITED => .{ .Exited = @intCast(siginfoStatus(&info)) },
+        c.CLD_KILLED, c.CLD_DUMPED => .{ .Signal = @intCast(siginfoStatus(&info)) },
+        else => .{ .Unknown = @bitCast(siginfoStatus(&info)) },
     };
 }
 
@@ -554,8 +506,8 @@ fn graceExpired(elapsed_ns: u64, duration_ms: u64) bool {
     return elapsed_ns >= graceDurationNs(duration_ms);
 }
 
-fn startTimer() anyerror!posix.Timer {
-    return posix.Timer.start();
+fn startTimer() anyerror!std.time.Timer {
+    return std.time.Timer.start();
 }
 
 test "child that does not read delegated stdin leaves the pipe untouched" {
@@ -635,12 +587,12 @@ test "delegated child does not inherit the handler's original stdin descriptor" 
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const dir = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(dir);
     const original_path = try std.fs.path.join(allocator, &.{ dir, "handler-stdin" });
     defer allocator.free(original_path);
-    const original_file = try std.Io.Dir.cwd().createFile(std.testing.io, original_path, .{});
-    defer posix.close(original_file.handle);
+    const original_file = try std.fs.cwd().createFile(original_path, .{});
+    defer original_file.close();
 
     const saved_handler_stdin = try testDupCloexec(posix.STDIN_FILENO);
     defer {
@@ -711,10 +663,10 @@ test "delegated regular-file stdin preserves the shared open-file-description of
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const input = try tmp.dir.createFile(std.testing.io, "delegated-stdin", .{ .read = true });
-    defer posix.close(input.handle);
-    _ = try posix.write(input.handle, "payload");
-    try posix.lseek_SET(input.handle, 0);
+    var input = try tmp.dir.createFile("delegated-stdin", .{ .read = true });
+    defer input.close();
+    try input.writeAll("payload");
+    try input.seekTo(0);
     const sibling = try posix.dup(input.handle);
     defer posix.close(sibling);
 
@@ -761,7 +713,7 @@ test "pollExit keeps final stdout and stderr bytes available to drain" {
     defer child.deinit() catch {};
 
     while (try child.pollExit() == null) {
-        posix.sleep(std.time.ns_per_ms);
+        std.Thread.sleep(std.time.ns_per_ms);
     }
     var stdout: [3]u8 = undefined;
     var stderr: [3]u8 = undefined;
@@ -856,12 +808,12 @@ test "delegated stdin restores the original open fd 0 after repeated cleanup" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const dir = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(dir);
     const original_path = try std.fs.path.join(allocator, &.{ dir, "restored-stdin" });
     defer allocator.free(original_path);
-    const original_file = try std.Io.Dir.cwd().createFile(std.testing.io, original_path, .{});
-    defer posix.close(original_file.handle);
+    const original_file = try std.fs.cwd().createFile(original_path, .{});
+    defer original_file.close();
 
     const saved_handler_stdin = try testDupCloexec(posix.STDIN_FILENO);
     defer {
@@ -898,8 +850,8 @@ test "delegated stdin restores fd 0 close-on-exec flags exactly" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const original_file = try tmp.dir.createFile(std.testing.io, "flags-stdin", .{ .read = true });
-    defer posix.close(original_file.handle);
+    var original_file = try tmp.dir.createFile("flags-stdin", .{ .read = true });
+    defer original_file.close();
 
     const saved_handler_stdin = try testDupCloexec(posix.STDIN_FILENO);
     defer {
@@ -970,25 +922,25 @@ fn testFailingRestore(saved_stdin: ?SavedStdin, replaced_stdin: bool) anyerror!v
 fn testChildrenSnapshot(allocator: Allocator) ![]u8 {
     const path = try std.fmt.allocPrint(allocator, "/proc/self/task/{d}/children", .{c.getpid()});
     defer allocator.free(path);
-    return std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(4096));
+    return std.fs.cwd().readFileAlloc(allocator, path, 4096);
 }
 
 fn testOpenDescriptorCount() !usize {
-    var dir = try std.Io.Dir.cwd().openDir(std.testing.io, "/proc/self/fd", .{ .iterate = true });
-    defer dir.close(std.testing.io);
+    var dir = try std.fs.cwd().openDir("/proc/self/fd", .{ .iterate = true });
+    defer dir.close();
     var count: usize = 0;
     var iterator = dir.iterate();
-    while (try iterator.next(std.testing.io)) |_| count += 1;
+    while (try iterator.next()) |_| count += 1;
     return count;
 }
 
 fn testProcessIsLive(pid: pid_t) bool {
     var path: [64]u8 = undefined;
     const path_slice = std.fmt.bufPrint(&path, "/proc/{d}/stat", .{pid}) catch return false;
-    const file = std.Io.Dir.cwd().openFile(std.testing.io, path_slice, .{}) catch return false;
-    defer posix.close(file.handle);
+    var file = std.fs.cwd().openFile(path_slice, .{}) catch return false;
+    defer file.close();
     var buffer: [4096]u8 = undefined;
-    const len = posix.read(file.handle, &buffer) catch return false;
+    const len = file.read(&buffer) catch return false;
     const stat = buffer[0..len];
     const comm_end = std.mem.lastIndexOfScalar(u8, stat, ')') orelse return false;
     if (comm_end + 2 >= stat.len) return false;
@@ -1035,7 +987,7 @@ test "terminateGroup kills a descendant that ignores SIGTERM" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const dir = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(dir);
     const pid_path = try std.fs.path.join(allocator, &.{ dir, "descendant.pid" });
     defer allocator.free(pid_path);
@@ -1057,15 +1009,15 @@ test "terminateGroup kills a descendant that ignores SIGTERM" {
     var descendant_pid: ?posix.pid_t = null;
     var attempts: usize = 0;
     while (attempts < 100 and descendant_pid == null) : (attempts += 1) {
-        if (std.Io.Dir.cwd().openFile(std.testing.io, pid_path, .{})) |file| {
-            defer posix.close(file.handle);
+        if (std.fs.cwd().openFile(pid_path, .{})) |file| {
+            defer file.close();
             var bytes: [32]u8 = undefined;
-            const len = try posix.read(file.handle, &bytes);
+            const len = try file.read(&bytes);
             if (len > 0) {
                 descendant_pid = try std.fmt.parseInt(posix.pid_t, std.mem.trim(u8, bytes[0..len], " \t\r\n"), 10);
             }
         } else |_| {}
-        if (descendant_pid == null) posix.sleep(std.time.ns_per_ms);
+        if (descendant_pid == null) std.Thread.sleep(std.time.ns_per_ms);
     }
     try std.testing.expect(descendant_pid != null);
 
@@ -1078,7 +1030,7 @@ test "terminateGroup kills a descendant that ignores SIGTERM" {
                 gone = true;
                 break;
             }
-            posix.sleep(std.time.ns_per_ms);
+            std.Thread.sleep(std.time.ns_per_ms);
         }
         // The executor owns and reaps the direct child.  A same-group
         // descendant is killed by the group signal but may be an init-owned
@@ -1091,7 +1043,7 @@ test "terminateGroup gives a TERM-handling descendant the full grace period" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const dir = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(dir);
     const pid_path = try std.fs.path.join(allocator, &.{ dir, "grace-descendant.pid" });
     defer allocator.free(pid_path);
@@ -1114,8 +1066,8 @@ test "terminateGroup gives a TERM-handling descendant the full grace period" {
     const descendant_pid = try readFixturePid(pid_path);
     try std.testing.expectEqual(child.pgid, c.getpgid(descendant_pid));
     const term = try child.terminateGroup(100);
-    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
-    const done = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, done_path, allocator, .limited(64));
+    try std.testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
+    const done = try std.fs.cwd().readFileAlloc(allocator, done_path, 64);
     defer allocator.free(done);
     try std.testing.expectEqualStrings("done\n", done);
     try expectFixtureGone(descendant_pid);
@@ -1125,7 +1077,7 @@ test "terminateGroup kills a same-group descendant after the leader exits on TER
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const dir = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(dir);
     const pid_path = try std.fs.path.join(allocator, &.{ dir, "term-exit-descendant.pid" });
     defer allocator.free(pid_path);
@@ -1145,7 +1097,7 @@ test "terminateGroup kills a same-group descendant after the leader exits on TER
     const descendant_pid = try readFixturePid(pid_path);
     try std.testing.expectEqual(child.pgid, c.getpgid(descendant_pid));
     const term = try child.terminateGroup(100);
-    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
+    try std.testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
     try expectFixtureGone(descendant_pid);
 }
 
@@ -1153,7 +1105,7 @@ test "wait leaves a lingering same-group child for later cleanup" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const dir = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(dir);
     const pid_path = try std.fs.path.join(allocator, &.{ dir, "post-wait-descendant.pid" });
     defer allocator.free(pid_path);
@@ -1171,7 +1123,7 @@ test "wait leaves a lingering same-group child for later cleanup" {
     defer child.deinit() catch {};
 
     const term = try child.wait();
-    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
+    try std.testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, term);
     try std.testing.expect(child.group_active);
     const descendant_pid = try readFixturePid(pid_path);
     try std.testing.expect(testProcessIsLive(descendant_pid));
@@ -1208,12 +1160,21 @@ test "rollback cleanup emits TERM then KILL" {
         "-c",
         "trap '' TERM; while :; do :; done",
     };
-    var env = EnvMap.init(allocator);
-    defer env.deinit();
-    var raw = try spawnPosix(allocator, &argv, null, &env, false);
+    var raw = std.process.Child.init(&argv, allocator);
+    raw.stdin_behavior = .Ignore;
+    raw.stdout_behavior = .Pipe;
+    raw.stderr_behavior = .Pipe;
+    raw.pgid = 0;
+    try raw.spawn();
     var raw_owned = true;
     defer if (raw_owned) {
-        _ = killAndReapSpawnedChild(&raw);
+        _ = raw.kill() catch {};
+        closeSpawnStreams(&raw);
+    };
+    try raw.waitForSpawn();
+    posix.setpgid(raw.id, raw.id) catch |err| switch (err) {
+        error.ProcessAlreadyExec, error.ProcessNotFound => {},
+        else => return err,
     };
 
     test_signal_order_count = 0;
@@ -1221,7 +1182,8 @@ test "rollback cleanup emits TERM then KILL" {
     raw.stdin = null;
     raw.stdout = null;
     raw.stderr = null;
-    raw.id = null;
+    raw.err_pipe = null;
+    raw.id = undefined;
     raw_owned = false;
     if (cleanup_error) |err| return err;
 
@@ -1230,10 +1192,10 @@ test "rollback cleanup emits TERM then KILL" {
     try std.testing.expectEqual(posix.SIG.KILL, test_signal_order[1]);
 }
 
-var test_signal_order: [2]posix.SIG = undefined;
+var test_signal_order: [2]u8 = undefined;
 var test_signal_order_count: usize = 0;
 
-fn testRecordingSignalGroup(handle: *ChildHandle, signal: posix.SIG) !void {
+fn testRecordingSignalGroup(handle: *ChildHandle, signal: u8) !void {
     if (test_signal_order_count < test_signal_order.len) {
         test_signal_order[test_signal_order_count] = signal;
         test_signal_order_count += 1;
@@ -1241,24 +1203,24 @@ fn testRecordingSignalGroup(handle: *ChildHandle, signal: posix.SIG) !void {
     try handle.signalGroup(signal);
 }
 
-fn testTimerUnsupported() anyerror!posix.Timer {
+fn testTimerUnsupported() anyerror!std.time.Timer {
     return error.TimerUnsupported;
 }
 
-fn testTimerStart() anyerror!posix.Timer {
-    return posix.Timer.start();
+fn testTimerStart() anyerror!std.time.Timer {
+    return std.time.Timer.start();
 }
 
 fn readFixturePid(path: []const u8) !pid_t {
     var attempts: usize = 0;
     while (attempts < 100) : (attempts += 1) {
-        if (std.Io.Dir.cwd().openFile(std.testing.io, path, .{})) |file| {
-            defer posix.close(file.handle);
+        if (std.fs.cwd().openFile(path, .{})) |file| {
+            defer file.close();
             var bytes: [32]u8 = undefined;
-            const len = try posix.read(file.handle, &bytes);
+            const len = try file.read(&bytes);
             if (len > 0) return std.fmt.parseInt(pid_t, std.mem.trim(u8, bytes[0..len], " \t\r\n"), 10);
         } else |_| {}
-        posix.sleep(std.time.ns_per_ms);
+        std.Thread.sleep(std.time.ns_per_ms);
     }
     return error.TestUnexpectedResult;
 }
@@ -1266,7 +1228,7 @@ fn readFixturePid(path: []const u8) !pid_t {
 fn expectFixtureGone(pid: pid_t) !void {
     var attempts: usize = 0;
     while (attempts < 100 and testProcessIsLive(pid)) : (attempts += 1) {
-        posix.sleep(std.time.ns_per_ms);
+        std.Thread.sleep(std.time.ns_per_ms);
     }
     try std.testing.expect(!testProcessIsLive(pid));
 }
@@ -1288,45 +1250,4 @@ test "deinit reports cleanup failure and can be retried" {
 
 fn testFailCleanup(_: *ChildHandle) anyerror!void {
     return error.TestCleanupFailure;
-}
-
-test "spawn captures both outputs when all handler standard descriptors are closed" {
-    const allocator = std.testing.allocator;
-    var env = EnvMap.init(allocator);
-    defer env.deinit();
-    const argv = [_][]const u8{ test_paths.executable("sh"), "-c", "printf out; printf err >&2" };
-    var saved: [3]posix.fd_t = undefined;
-    var saved_count: usize = 0;
-    defer for (saved[0..saved_count]) |fd| posix.close(fd);
-    for (&saved, 0..) |*fd, source| {
-        fd.* = try duplicateCloexec(@intCast(source));
-        saved_count += 1;
-    }
-    var child = blk: {
-        defer for (saved, 0..) |fd, target| {
-            posix.dup2(fd, @intCast(target)) catch unreachable;
-        };
-        posix.close(0);
-        posix.close(1);
-        posix.close(2);
-        break :blk try spawn(allocator, .{ .argv = &argv, .env = env }, null);
-    };
-    defer child.deinit() catch {};
-    try std.testing.expectEqual(ChildTerm{ .exited = 0 }, try child.wait());
-    var stdout: [3]u8 = undefined;
-    var stderr: [3]u8 = undefined;
-    try std.testing.expectEqual(@as(usize, 3), try posix.read(child.stdout_fd, &stdout));
-    try std.testing.expectEqual(@as(usize, 3), try posix.read(child.stderr_fd, &stderr));
-    try std.testing.expectEqualStrings("out", &stdout);
-    try std.testing.expectEqualStrings("err", &stderr);
-}
-
-test "executable search uses the handler PATH independently of replacement environment" {
-    const allocator = std.testing.allocator;
-    var env = EnvMap.init(allocator);
-    defer env.deinit();
-    try env.put("PATH", "/definitely/missing/nas-path");
-    var child = try spawn(allocator, .{ .argv = &.{"true"}, .env = env }, null);
-    defer child.deinit() catch {};
-    try std.testing.expectEqual(ChildTerm{ .exited = 0 }, try child.wait());
 }

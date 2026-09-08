@@ -52,7 +52,6 @@
 
 const std = @import("std");
 const posix = std.posix;
-const os = @import("posix");
 const mask_stream = @import("mask_stream.zig");
 
 const BUF_SIZE = mask_stream.BUF_SIZE;
@@ -170,8 +169,8 @@ const Conn = struct {
     fn deinit(self: *Conn, gpa: std.mem.Allocator) void {
         if (self.stream) |*s| s.deinit(gpa);
         self.out.deinit(gpa);
-        os.shutdown(self.fd, .send) catch {};
-        os.close(self.fd);
+        posix.shutdown(self.fd, .send) catch {};
+        posix.close(self.fd);
         self.* = undefined;
     }
 
@@ -229,7 +228,7 @@ const Conn = struct {
 
     fn writable(self: *Conn, gpa: std.mem.Allocator) ConnError!void {
         if (self.out.items.len == 0) return;
-        const n = os.write(self.fd, self.out.items) catch |err| switch (err) {
+        const n = posix.write(self.fd, self.out.items) catch |err| switch (err) {
             error.WouldBlock => return,
             else => return error.Failed,
         };
@@ -273,27 +272,27 @@ fn bindListener(sock_path: []const u8) !posix.socket_t {
     @memset(&addr.path, 0);
     @memcpy(addr.path[0..sock_path.len], sock_path);
 
-    const fd = try os.socket(
+    const fd = try posix.socket(
         posix.AF.UNIX,
         posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK,
         0,
     );
-    errdefer os.close(fd);
+    errdefer posix.close(fd);
 
     // 前回のセッションの stale socket が残っていると bind が EADDRINUSE になる。
-    os.unlink(sock_path) catch {};
+    posix.unlink(sock_path) catch {};
 
     // bind 直後の一瞬でも他ユーザから connect できないよう umask を絞り、
     // その後 chmod で 0600 を確定させる。
     const prev_umask = std.c.umask(0o177);
-    os.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch |err| {
+    posix.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch |err| {
         _ = std.c.umask(prev_umask);
         return err;
     };
     _ = std.c.umask(prev_umask);
 
-    try os.fchmodat(posix.AT.FDCWD, sock_path, 0o600, 0);
-    try os.listen(fd, LISTEN_BACKLOG);
+    try posix.fchmodat(posix.AT.FDCWD, sock_path, 0o600, 0);
+    try posix.listen(fd, LISTEN_BACKLOG);
     return fd;
 }
 
@@ -304,7 +303,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
     raiseFileLimit();
 
     const listener = try bindListener(sock_path);
-    defer os.close(listener);
+    defer posix.close(listener);
 
     // MaskStream 未初期化の接続の最初の read 先。全接続で使い回す
     // (poll ループは単一スレッドなので同時に使われることはない)。
@@ -323,7 +322,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
     var listener_backoff_until: i64 = 0;
 
     while (true) {
-        const now = os.milliTimestamp();
+        const now = std.time.milliTimestamp();
 
         // accept は conns に append するので、poll 配列のインデックス対応は
         // **accept 前の** 接続数で確定させる。accept 後の長さで索引すると
@@ -380,7 +379,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
 
         if (listener_armed and pollfds[listener_idx].revents != 0) {
             while (true) {
-                const fd = os.accept(
+                const fd = posix.accept(
                     listener,
                     null,
                     null,
@@ -391,7 +390,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                     error.SystemFdQuotaExceeded,
                     error.SystemResources,
                     => {
-                        listener_backoff_until = os.milliTimestamp() + LISTENER_BACKOFF_MS;
+                        listener_backoff_until = std.time.milliTimestamp() + LISTENER_BACKOFF_MS;
                         break;
                     },
                     // 接続が accept 前に消えた等。次の accept を試す。
@@ -400,7 +399,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                     // 接続で listener は次の周回も readable のままなので、
                     // poll が即返り accept が即失敗する 100% CPU スピンになる。
                     else => {
-                        listener_backoff_until = os.milliTimestamp() + LISTENER_BACKOFF_MS;
+                        listener_backoff_until = std.time.milliTimestamp() + LISTENER_BACKOFF_MS;
                         break;
                     },
                 };
@@ -412,8 +411,8 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                 // 詰まらせた)。即 close ならクライアントは即座に EOF を受け取り、
                 // スーパーバイザがそれを fail-closed な 121 に変換できる。
                 if (conns.items.len >= MAX_CONNECTIONS) {
-                    os.shutdown(fd, .send) catch {};
-                    os.close(fd);
+                    posix.shutdown(fd, .send) catch {};
+                    posix.close(fd);
                     continue;
                 }
                 // append の失敗はホストのメモリ枯渇。次の周回でも同じように失敗する
@@ -421,8 +420,8 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                 // readable のままなので、バックオフを張らないと EMFILE と同じ
                 // 100% CPU スピンになる。
                 conns.append(gpa, .{ .fd = fd }) catch {
-                    os.close(fd);
-                    listener_backoff_until = os.milliTimestamp() + LISTENER_BACKOFF_MS;
+                    posix.close(fd);
+                    listener_backoff_until = std.time.milliTimestamp() + LISTENER_BACKOFF_MS;
                     break;
                 };
             }

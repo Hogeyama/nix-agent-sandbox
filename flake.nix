@@ -35,7 +35,10 @@
         b2n = bun2nix.packages.${system}.default;
         bundle-script = nix-bundle-elf.lib.${system}.bundle-script;
 
-        zig = pkgs.zig;
+        # src/hostexec/intercept, src/maskfs, src/mask-filter は Zig 0.15 の
+        # API を前提に書かれている。pkgs.zig は nixpkgs 側の alias で、追従する
+        # と breaking release でビルドが黙って壊れるため明示的に固定する。
+        zig = pkgs.zig_0_15;
 
         # nixpkgs.pkl は JVM 版なので Apple の release から直接取得する。
         # （JVM版は起動に800msくらいかかる）
@@ -79,14 +82,7 @@
         hostexecIntercept = pkgs.stdenv.mkDerivation {
           pname = "hostexec-intercept";
           version = "0.1.0";
-          src = pkgs.lib.fileset.toSource {
-            root = ./src;
-            fileset = pkgs.lib.fileset.unions [
-              ./src/hostexec/intercept
-              ./src/zig
-            ];
-          };
-          sourceRoot = "source/hostexec/intercept";
+          src = ./src/hostexec/intercept;
           nativeBuildInputs = [ zig ];
           dontConfigure = true;
           dontFixup = true;

@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
         .name = "nas-maskfs",
         .root_module = exe_mod,
     });
-    exe_mod.linkSystemLibrary("fuse3", .{});
+    exe.linkSystemLibrary("fuse3");
     b.installArtifact(exe);
 
     // ── unit tests (mask.zig は FUSE 非依存) ──

@@ -20,12 +20,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     exe_mod.addImport("mask", mask_mod);
-    exe_mod.addImport("posix", b.createModule(.{
-        .root_source_file = b.path("../zig/posix.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    }));
     const exe = b.addExecutable(.{
         .name = "nas-mask-filter",
         .root_module = exe_mod,
@@ -45,12 +39,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     test_mod.addImport("mask", mask_test_mod);
-    test_mod.addImport("posix", b.createModule(.{
-        .root_source_file = b.path("../zig/posix.zig"),
-        .target = host_target,
-        .optimize = optimize,
-        .link_libc = true,
-    }));
     const unit_tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");

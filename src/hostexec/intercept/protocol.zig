@@ -22,7 +22,6 @@
 //   NAS_HOSTEXEC_INTERCEPT_DEBUG  – if set, emit debug messages to stderr
 
 const std = @import("std");
-const posix = @import("posix");
 const linux = std.os.linux;
 const json = std.json;
 const base64_mod = std.base64.standard;
@@ -40,7 +39,7 @@ var debug_flag_cache: std.atomic.Value(DebugFlag) = std.atomic.Value(DebugFlag).
 pub fn debugEnabled() bool {
     const cached = debug_flag_cache.load(.acquire);
     if (cached != .unknown) return cached == .enabled;
-    const val = posix.getenv("NAS_HOSTEXEC_INTERCEPT_DEBUG") orelse "";
+    const val = std.posix.getenv("NAS_HOSTEXEC_INTERCEPT_DEBUG") orelse "";
     const flag: DebugFlag = if (val.len > 0) .enabled else .disabled;
     debug_flag_cache.store(flag, .release);
     return flag == .enabled;
@@ -218,7 +217,7 @@ pub fn decodeBase64(alloc: Allocator, encoded: []const u8) ![]const u8 {
 
 fn generateRequestId(buf: *[36]u8) []const u8 {
     var random_bytes: [16]u8 = undefined;
-    posix.randomBytes(&random_bytes);
+    std.crypto.random.bytes(&random_bytes);
     const encoded = std.fmt.bytesToHex(random_bytes, .lower);
     @memcpy(buf[0..encoded.len], encoded[0..]);
     return buf[0..encoded.len];
@@ -277,12 +276,12 @@ pub fn callBroker(
     // function only after an intercept-path match. Missing routing metadata is
     // therefore a broken/stripped environment, not permission to bypass the
     // broker and execute the command locally.
-    const socket_path = posix.getenv("NAS_HOSTEXEC_SOCKET") orelse {
-        writeAll(posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete (NAS_HOSTEXEC_SOCKET is not set); refusing to run the command locally\n");
+    const socket_path = std.posix.getenv("NAS_HOSTEXEC_SOCKET") orelse {
+        writeAll(std.posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete (NAS_HOSTEXEC_SOCKET is not set); refusing to run the command locally\n");
         return .{ .exit_code = 1, .outcome = .failed };
     };
-    const session_id = posix.getenv("NAS_HOSTEXEC_SESSION_ID") orelse {
-        writeAll(posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete (NAS_HOSTEXEC_SESSION_ID is not set); refusing to run the command locally\n");
+    const session_id = std.posix.getenv("NAS_HOSTEXEC_SESSION_ID") orelse {
+        writeAll(std.posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete (NAS_HOSTEXEC_SESSION_ID is not set); refusing to run the command locally\n");
         return .{ .exit_code = 1, .outcome = .failed };
     };
 
@@ -302,7 +301,7 @@ pub fn callBrokerAt(
     stdin_capable: bool,
 ) BrokerCallResult {
     if (socket_path.len == 0 or session_id.len == 0) {
-        writeAll(posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete; refusing to run the command locally\n");
+        writeAll(std.posix.STDERR_FILENO, "nas hostexec: broker environment is incomplete; refusing to run the command locally\n");
         return .{ .exit_code = 1, .outcome = .failed };
     }
     return callBrokerInner(std.heap.c_allocator, socket_path, session_id, pathname, argv, stdin_capable) catch |err| {
@@ -314,10 +313,10 @@ pub fn callBrokerAt(
         // there is still no safe way to execute a host-requested command
         // locally after the gateway exchange fails.
         debugLog("broker communication failed: {s}", .{@errorName(err)});
-        writeAll(posix.STDERR_FILENO, "nas hostexec: cannot reach the broker (");
-        writeAll(posix.STDERR_FILENO, @errorName(err));
+        writeAll(std.posix.STDERR_FILENO, "nas hostexec: cannot reach the broker (");
+        writeAll(std.posix.STDERR_FILENO, @errorName(err));
         writeAll(
-            posix.STDERR_FILENO,
+            std.posix.STDERR_FILENO,
             "); refusing to run the command locally instead\n",
         );
         return .{ .exit_code = 1, .outcome = .failed };
@@ -340,7 +339,7 @@ fn callBrokerInner(
     const args = if (all_args.len > 1) all_args[1..] else all_args[0..0];
 
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = posix.getcwd(&cwd_buf) catch "/";
+    const cwd = std.posix.getcwd(&cwd_buf) catch "/";
 
     var req_id_buf: [36]u8 = undefined;
     const request_id = generateRequestId(&req_id_buf);
@@ -351,12 +350,12 @@ fn callBrokerInner(
     // working without handing the host command a channel back into the
     // container. Descriptors whose write direction cannot be closed stay
     // rejected.
-    const stdin_fd: ?posix.fd_t = switch (fd_transport.prepareStdin(0, stdin_capable)) {
+    const stdin_fd: ?std.posix.fd_t = switch (fd_transport.prepareStdin(0, stdin_capable)) {
         .none => null,
         .pass_fd => |fd| fd,
         .reject_read_write => {
             writeAll(
-                posix.STDERR_FILENO,
+                std.posix.STDERR_FILENO,
                 "nas hostexec: refusing read-write stdin because it can bypass output masking\n",
             );
             return .{ .exit_code = 1, .outcome = .failed };
@@ -366,7 +365,7 @@ fn callBrokerInner(
         // output channel and cannot be made stdin-only without breaking that.
         .reject_output_alias => {
             writeAll(
-                posix.STDERR_FILENO,
+                std.posix.STDERR_FILENO,
                 "nas hostexec: refusing read-write stdin that is also stdout or stderr\n",
             );
             return .{ .exit_code = 1, .outcome = .failed };
@@ -381,7 +380,7 @@ fn callBrokerInner(
         argv0,
         args,
         cwd,
-        posix.isatty(0),
+        std.posix.isatty(0),
         stdin_mode,
     );
     defer alloc.free(request_json);
@@ -389,7 +388,7 @@ fn callBrokerInner(
     debugLog("connecting to broker at {s}", .{socket_path});
 
     // Connect to Unix socket
-    const sock = try posix.connectUnixSocket(socket_path);
+    const sock = try std.net.connectUnixSocket(socket_path);
     defer sock.close();
 
     // Send the request line and, when supported, the still-open fd 0 in one
@@ -398,7 +397,7 @@ fn callBrokerInner(
 
     // NDJSON streaming loop: the broker emits zero or more `chunk` lines
     // followed by a terminal `result` (or `fallback`/`error`) line.
-    var buf: std.ArrayList(u8) = .empty;
+    var buf: std.ArrayList(u8) = .{};
     defer buf.deinit(alloc);
     var read_buf: [4096]u8 = undefined;
 
@@ -435,8 +434,8 @@ fn callBrokerInner(
                             defer alloc.free(decoded);
                             if (decoded.len > 0) {
                                 const target_fd: ?i32 = switch (response.fd) {
-                                    1 => posix.STDOUT_FILENO,
-                                    2 => posix.STDERR_FILENO,
+                                    1 => std.posix.STDOUT_FILENO,
+                                    2 => std.posix.STDERR_FILENO,
                                     else => null,
                                 };
                                 if (target_fd) |fd| {
@@ -468,12 +467,12 @@ fn callBrokerInner(
                     // inside the container instead of on the host -- so this
                     // never falls back, whatever was written so far.
                     defer if (response.message.len > 0) alloc.free(response.message);
-                    writeAll(posix.STDERR_FILENO, "nas hostexec: ");
-                    writeAll(posix.STDERR_FILENO, if (response.message.len > 0)
+                    writeAll(std.posix.STDERR_FILENO, "nas hostexec: ");
+                    writeAll(std.posix.STDERR_FILENO, if (response.message.len > 0)
                         response.message
                     else
                         "request refused by broker");
-                    writeAll(posix.STDERR_FILENO, "\n");
+                    writeAll(std.posix.STDERR_FILENO, "\n");
                     return .{ .exit_code = 1, .outcome = .failed };
                 },
                 .unknown => {
@@ -510,14 +509,14 @@ fn reportSuppressedFallback() void {
     const reason =
         "nas hostexec: no rule matched, but output was already written and the local command cannot be run again\n";
     debugLog("suppressing fallback: {s}", .{reason});
-    writeAll(posix.STDERR_FILENO, reason);
+    writeAll(std.posix.STDERR_FILENO, reason);
 }
 
 pub fn writeAll(fd: i32, data: []const u8) void {
     var offset: usize = 0;
     while (offset < data.len) {
         const result = linux.write(@bitCast(fd), data[offset..].ptr, data[offset..].len);
-        const errno = linux.errno(result);
+        const errno = linux.E.init(result);
         if (errno == .INTR) continue;
         const signed: isize = @bitCast(result);
         if (signed <= 0) break;
@@ -528,7 +527,7 @@ pub fn writeAll(fd: i32, data: []const u8) void {
 pub fn doExit(exit_code: i32) noreturn {
     // Use linux syscall directly to avoid libc exit handlers
     const status: u8 = @truncate(@as(u32, @bitCast(exit_code)));
-    posix.exit(status);
+    std.posix.exit(status);
 }
 
 // ─── Unit tests ─────────────────────────────────────────────────────

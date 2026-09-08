@@ -50,12 +50,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    lib_mod.addImport("posix", b.createModule(.{
-        .root_source_file = b.path("../../zig/posix.zig"),
-        .target = lib_target,
-        .optimize = optimize,
-        .link_libc = true,
-    }));
     const lib = b.addLibrary(.{
         .linkage = .dynamic,
         .name = "hostexec_intercept",
@@ -87,13 +81,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    const client_posix = b.createModule(.{
-        .root_source_file = b.path("../../zig/posix.zig"),
-        .target = client_target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    client_mod.addImport("posix", client_posix);
     const client = b.addExecutable(.{
         .name = "nas-hostexec-client",
         .root_module = client_mod,
@@ -110,7 +97,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     gateway_mod.addImport("hostexec_test_options", test_options_module);
-    gateway_mod.addImport("posix", client_posix);
     const gateway = b.addExecutable(.{
         .name = "nas-hostexec-gateway",
         .root_module = gateway_mod,
@@ -129,12 +115,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     test_mod.addImport("hostexec_test_options", test_options_module);
-    test_mod.addImport("posix", b.createModule(.{
-        .root_source_file = b.path("../../zig/posix.zig"),
-        .target = host_target,
-        .optimize = optimize,
-        .link_libc = true,
-    }));
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,

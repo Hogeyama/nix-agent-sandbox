@@ -7,7 +7,7 @@
 //! it safe for the listener to accept another request concurrently.
 
 const std = @import("std");
-const posix = @import("posix");
+const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 const fd_transport = @import("fd_transport.zig");
@@ -106,7 +106,7 @@ fn readinessLine(allocator: Allocator, external_socket: []const u8) ![]u8 {
 fn writeReadiness(allocator: Allocator, external_socket: []const u8) !void {
     const line = try readinessLine(allocator, external_socket);
     defer allocator.free(line);
-    try posix.writeAll(1, line);
+    try std.fs.File.stdout().writeAll(line);
 }
 
 fn socketAddress(path: []const u8) !posix.sockaddr.un {
@@ -164,7 +164,7 @@ fn sendSocketAll(fd: posix.fd_t, bytes: []const u8) !void {
 
 const ByteQueue = struct {
     allocator: Allocator,
-    bytes: std.ArrayList(u8) = .empty,
+    bytes: std.ArrayList(u8) = .{},
     offset: usize = 0,
 
     fn init(allocator: Allocator) ByteQueue {
@@ -223,7 +223,7 @@ const ByteQueue = struct {
 
 const LineReader = struct {
     allocator: Allocator,
-    bytes: std.ArrayList(u8) = .empty,
+    bytes: std.ArrayList(u8) = .{},
     start: usize = 0,
 
     fn init(allocator: Allocator) LineReader {
@@ -376,11 +376,11 @@ const SigtermDeferral = struct {
     }
 };
 
-fn onShutdown(_: posix.SIG) callconv(.c) void {
+fn onShutdown(_: i32) callconv(.c) void {
     shutdown_requested.store(true, .seq_cst);
 }
 
-fn onHandlerShutdown(_: posix.SIG) callconv(.c) void {
+fn onHandlerShutdown(_: i32) callconv(.c) void {
     handler_stop_requested.store(true, .seq_cst);
     const fd = handler_wakeup_fd.load(.monotonic);
     if (fd >= 0) _ = std.c.shutdown(fd, 2);
@@ -409,10 +409,10 @@ fn installHandlerShutdownHandlers() void {
 
 fn processExitCode(term: std.process.Child.Term) i32 {
     return switch (term) {
-        .exited => |code| @intCast(code),
-        .signal => |signal| 128 + @as(i32, @intCast(@intFromEnum(signal))),
-        .stopped => |signal| 128 + @as(i32, @intCast(@intFromEnum(signal))),
-        .unknown => 1,
+        .Exited => |code| @intCast(code),
+        .Signal => |signal| 128 + @as(i32, @intCast(signal)),
+        .Stopped => |signal| 128 + @as(i32, @intCast(signal)),
+        .Unknown => 1,
     };
 }
 
@@ -476,7 +476,7 @@ const Handler = struct {
     fn retryCleanupChild(self: *Handler) void {
         while (self.child != null) {
             self.cleanupChild() catch {
-                posix.sleep(cleanup_retry_ns);
+                std.Thread.sleep(cleanup_retry_ns);
                 continue;
             };
         }
@@ -557,7 +557,7 @@ const Handler = struct {
 
     fn flushBrokerForTerminal(self: *Handler) void {
         if (self.internal_fd == null or self.broker_out.empty()) return;
-        var timer = posix.Timer.start() catch return;
+        var timer = std.time.Timer.start() catch return;
         while (!self.broker_out.empty() and timer.read() < terminal_flush_timeout_ns) {
             self.flushBroker() catch return;
             if (self.broker_out.empty()) return;
@@ -684,7 +684,7 @@ const Handler = struct {
     }
 
     fn spawnApproved(self: *Handler, message: anytype) !void {
-        var env = std.process.Environ.Map.init(self.allocator);
+        var env = std.process.EnvMap.init(self.allocator);
         defer env.deinit();
         var env_iter = message.env.map.iterator();
         while (env_iter.next()) |entry| {
@@ -787,7 +787,7 @@ const Handler = struct {
                 if (!std.mem.eql(u8, message.requestId, self.request_id)) return error.RequestMismatch;
                 if (self.child) |child| {
                     if (child.group_active) {
-                        const signal: posix.SIG = if (std.mem.eql(u8, message.signal, "SIGTERM")) posix.SIG.TERM else posix.SIG.KILL;
+                        const signal: u8 = if (std.mem.eql(u8, message.signal, "SIGTERM")) posix.SIG.TERM else posix.SIG.KILL;
                         posix.kill(-child.pgid, signal) catch |err| switch (err) {
                             error.ProcessNotFound => {},
                             else => return err,
@@ -840,14 +840,14 @@ const Handler = struct {
         if (count == 0) {
             if (is_stdout) {
                 if (self.child) |*owned| {
-                    if (owned.child.stdout) |*file| posix.close(file.handle);
+                    if (owned.child.stdout) |*file| file.close();
                     owned.child.stdout = null;
                     owned.stdout_fd = -1;
                 }
                 self.stdout_eof = true;
             } else {
                 if (self.child) |*owned| {
-                    if (owned.child.stderr) |*file| posix.close(file.handle);
+                    if (owned.child.stderr) |*file| file.close();
                     owned.child.stderr = null;
                     owned.stderr_fd = -1;
                 }
@@ -1070,7 +1070,7 @@ const Handler = struct {
             },
         }
 
-        const internal_stream = posix.connectUnixSocket(self.internal_socket_path) catch |err| {
+        const internal_stream = std.net.connectUnixSocket(self.internal_socket_path) catch |err| {
             self.sendExternalErrorBlocking("cannot connect to hostexec broker");
             return err;
         };
@@ -1102,7 +1102,7 @@ fn cleanupGateway(
     signalHandlers(handlers.items, posix.SIG.TERM);
     while (handlers.items.len > 0) {
         reapHandlers(handlers, allocator, false);
-        if (handlers.items.len > 0) posix.sleep(25 * std.time.ns_per_ms);
+        if (handlers.items.len > 0) std.Thread.sleep(25 * std.time.ns_per_ms);
     }
     removeStaleSocket(external_socket) catch {};
     handlers.deinit(allocator);
@@ -1121,7 +1121,7 @@ fn reapHandlers(handlers: *std.ArrayList(HandlerPid), allocator: Allocator, bloc
     _ = allocator;
 }
 
-fn signalHandlers(handlers: []const HandlerPid, signal: posix.SIG) void {
+fn signalHandlers(handlers: []const HandlerPid, signal: u8) void {
     for (handlers) |handler| {
         posix.kill(-handler.pid, signal) catch |err| switch (err) {
             error.ProcessNotFound => {},
@@ -1215,14 +1215,15 @@ fn runGateway(allocator: Allocator, options: GatewayOptions) !void {
     return runGatewayLoop(allocator, options, true);
 }
 
-pub fn main(init: std.process.Init.Minimal) void {
+pub fn main() void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const argv = init.args.toSlice(allocator) catch |err| {
+    const argv = std.process.argsAlloc(allocator) catch |err| {
         std.debug.print("nas-hostexec-gateway: cannot read arguments: {s}\n", .{@errorName(err)});
         posix.exit(1);
     };
+    defer std.process.argsFree(allocator, argv);
 
     var options = parseArguments(allocator, argv) catch |err| {
         std.debug.print("nas-hostexec-gateway: invalid arguments ({s})\n", .{@errorName(err)});
@@ -1241,7 +1242,7 @@ pub fn main(init: std.process.Init.Minimal) void {
 // implementation of the gateway protocol.
 const IntegrationReader = struct {
     allocator: Allocator,
-    bytes: std.ArrayList(u8) = .empty,
+    bytes: std.ArrayList(u8) = .{},
     start: usize = 0,
     // Counts read(2) calls so a test can assert the reader stays chunked
     // instead of asserting on wall-clock time, which a loaded machine makes
@@ -1289,7 +1290,7 @@ const IntegrationReader = struct {
         // these tests send, which overruns the caller's read budget as soon
         // as the machine is busy.
         if (try self.takeBufferedLine()) |line| return line;
-        var timer = try posix.Timer.start();
+        var timer = try std.time.Timer.start();
         while (true) {
             const elapsed_ms = timer.read() / std.time.ns_per_ms;
             if (elapsed_ms >= @as(u64, @intCast(timeout_ms))) return error.IntegrationTimeout;
@@ -1382,7 +1383,7 @@ const GatewayIntegration = struct {
         internal_listener = null;
         errdefer result.deinit();
         try result.waitForExternalSocket();
-        const stream = try posix.connectUnixSocket(result.external_socket);
+        const stream = try std.net.connectUnixSocket(result.external_socket);
         result.external_fd = stream.handle;
         return result;
     }
@@ -1435,7 +1436,7 @@ const GatewayIntegration = struct {
             // handler before it installs its own. Retry at a bounded 100 ms
             // cadence so an early signal is not lost without starving the
             // cooperative shutdown loop with repeated interruptions.
-            posix.sleep(100 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_ms);
             signalGatewayShutdown(pid);
             signal_retries += 1;
         }
@@ -1450,11 +1451,11 @@ const GatewayIntegration = struct {
     }
 
     fn waitForExternalSocket(self: *GatewayIntegration) !void {
-        var timer = try posix.Timer.start();
+        var timer = try std.time.Timer.start();
         while (timer.read() < 3 * std.time.ns_per_s) {
-            std.Io.Dir.cwd().access(std.testing.io, self.external_socket, .{}) catch |err| switch (err) {
+            std.fs.cwd().access(self.external_socket, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
-                    posix.sleep(10 * std.time.ns_per_ms);
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
                     continue;
                 },
                 else => return err,
@@ -1468,21 +1469,21 @@ const GatewayIntegration = struct {
         const gateway_pid = self.gateway_pid orelse return error.IntegrationProcessGone;
         var path_buf: [128]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "/proc/{d}/task/{d}/children", .{ gateway_pid, gateway_pid });
-        var timer = try posix.Timer.start();
+        var timer = try std.time.Timer.start();
         while (timer.read() < 3 * std.time.ns_per_s) {
-            const file = std.Io.Dir.openFileAbsolute(std.testing.io, path, .{}) catch |err| switch (err) {
+            var file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
-                    posix.sleep(10 * std.time.ns_per_ms);
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
                     continue;
                 },
                 else => return err,
             };
-            defer posix.close(file.handle);
+            defer file.close();
             var bytes: [128]u8 = undefined;
-            const count = try posix.read(file.handle, &bytes);
+            const count = try file.read(&bytes);
             var tokens = std.mem.tokenizeAny(u8, bytes[0..count], " \t\n");
             const token = tokens.next() orelse {
-                posix.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
             return std.fmt.parseInt(posix.pid_t, token, 10);
@@ -1492,7 +1493,7 @@ const GatewayIntegration = struct {
 
     fn acceptBroker(self: *GatewayIntegration) !void {
         if (self.broker_fd >= 0) return;
-        var timer = try posix.Timer.start();
+        var timer = try std.time.Timer.start();
         while (timer.read() < 3 * std.time.ns_per_s) {
             var pollfd = [_]posix.pollfd{.{
                 .fd = self.internal_listener,
@@ -1534,7 +1535,7 @@ const GatewayIntegration = struct {
 
     fn reconnectExternal(self: *GatewayIntegration) !void {
         self.closeExternal();
-        const stream = try posix.connectUnixSocket(self.external_socket);
+        const stream = try std.net.connectUnixSocket(self.external_socket);
         self.external_fd = stream.handle;
     }
 
@@ -1608,10 +1609,10 @@ const GatewayIntegration = struct {
         @memcpy(encoded[0..base.len], base);
         @memset(encoded[base.len..], ' ');
         try self.sendBroker(encoded);
-        posix.sleep(100 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
         if (crlf) {
             try self.sendBroker("\r");
-            posix.sleep(100 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_ms);
         }
         try self.sendBroker("\n");
     }
@@ -1707,11 +1708,11 @@ const GatewayIntegration = struct {
     fn expectProcessGroupGone(pid: posix.pid_t) !void {
         var rounds: usize = 0;
         while (rounds < 300) : (rounds += 1) {
-            posix.kill(-pid, @enumFromInt(0)) catch |err| switch (err) {
+            posix.kill(-pid, 0) catch |err| switch (err) {
                 error.ProcessNotFound => return,
                 else => return err,
             };
-            posix.sleep(10 * std.time.ns_per_ms);
+            std.Thread.sleep(10 * std.time.ns_per_ms);
         }
         return error.IntegrationTimeout;
     }
@@ -2046,18 +2047,18 @@ test "ByteQueue compacts consumed prefixes during partial append/drain cycles" {
 test "LineReader retains a full next chunk after maximum CRLF frame" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var writer = try tmp.dir.createFile(std.testing.io, "split-max-frame", .{ .read = true });
-    defer writer.close(std.testing.io);
-    const reader_file = try tmp.dir.openFile(std.testing.io, "split-max-frame", .{ .mode = .read_only });
-    defer posix.close(reader_file.handle);
+    var writer = try tmp.dir.createFile("split-max-frame", .{ .read = true });
+    defer writer.close();
+    var reader_file = try tmp.dir.openFile("split-max-frame", .{ .mode = .read_only });
+    defer reader_file.close();
 
     var payload = std.ArrayList(u8).empty;
     defer payload.deinit(std.testing.allocator);
     try payload.resize(std.testing.allocator, gateway_protocol.max_control_bytes);
     @memset(payload.items, 'x');
-    try posix.writeAll(writer.handle, payload.items);
-    try posix.writeAll(writer.handle, "\r");
-    try posix.lseek_SET(reader_file.handle, 0);
+    try writer.writeAll(payload.items);
+    try writer.writeAll("\r");
+    try reader_file.seekTo(0);
 
     var line_reader = LineReader.init(std.testing.allocator);
     defer line_reader.deinit();
@@ -2069,8 +2070,8 @@ test "LineReader retains a full next chunk after maximum CRLF frame" {
 
     var next_payload: [65_535]u8 = undefined;
     @memset(&next_payload, 'y');
-    try posix.writeAll(writer.handle, "\n");
-    try posix.writeAll(writer.handle, &next_payload);
+    try writer.writeAll("\n");
+    try writer.writeAll(&next_payload);
     try std.testing.expectEqual(@as(usize, 65_536), try line_reader.readAvailable(reader_file.handle));
 
     const first = (try line_reader.next()) orelse return error.UnexpectedEndOfStream;
@@ -2083,16 +2084,16 @@ test "LineReader retains a full next chunk after maximum CRLF frame" {
 test "LineReader preserves a near-limit frame and the next frame" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const file = try tmp.dir.createFile(std.testing.io, "frames", .{ .read = true });
-    defer posix.close(file.handle);
+    var file = try tmp.dir.createFile("frames", .{ .read = true });
+    defer file.close();
 
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(std.testing.allocator);
     try bytes.resize(std.testing.allocator, gateway_protocol.max_control_bytes);
     @memset(bytes.items[0..gateway_protocol.max_control_bytes], 'x');
     try bytes.appendSlice(std.testing.allocator, "\nnext\n");
-    try posix.writeAll(file.handle, bytes.items);
-    try posix.lseek_SET(file.handle, 0);
+    try file.writeAll(bytes.items);
+    try file.seekTo(0);
 
     var reader = LineReader.init(std.testing.allocator);
     defer reader.deinit();
@@ -2119,16 +2120,16 @@ test "LineReader preserves a near-limit frame and the next frame" {
 test "LineReader rejects an oversized first frame before accepting its delimiter" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const file = try tmp.dir.createFile(std.testing.io, "oversized", .{ .read = true });
-    defer posix.close(file.handle);
+    var file = try tmp.dir.createFile("oversized", .{ .read = true });
+    defer file.close();
 
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(std.testing.allocator);
     try bytes.resize(std.testing.allocator, gateway_protocol.max_control_bytes + 1);
     @memset(bytes.items, 'x');
     try bytes.append(std.testing.allocator, '\n');
-    try posix.writeAll(file.handle, bytes.items);
-    try posix.lseek_SET(file.handle, 0);
+    try file.writeAll(bytes.items);
+    try file.seekTo(0);
 
     var reader = LineReader.init(std.testing.allocator);
     defer reader.deinit();
@@ -2146,16 +2147,16 @@ test "LineReader rejects an oversized first frame before accepting its delimiter
 test "LineReader accepts an optional CR whose LF arrives in the next read" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const file = try tmp.dir.createFile(std.testing.io, "split-delimiter", .{ .read = true });
-    defer posix.close(file.handle);
+    var file = try tmp.dir.createFile("split-delimiter", .{ .read = true });
+    defer file.close();
 
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(std.testing.allocator);
     try bytes.resize(std.testing.allocator, gateway_protocol.max_control_bytes - 1);
     @memset(bytes.items, 'x');
     try bytes.appendSlice(std.testing.allocator, "\r\nnext\n");
-    try posix.writeAll(file.handle, bytes.items);
-    try posix.lseek_SET(file.handle, 0);
+    try file.writeAll(bytes.items);
+    try file.seekTo(0);
 
     var reader = LineReader.init(std.testing.allocator);
     defer reader.deinit();
@@ -2182,15 +2183,15 @@ test "LineReader accepts an optional CR whose LF arrives in the next read" {
 test "LineReader rejects max payload plus a non-CR before its delimiter" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const file = try tmp.dir.createFile(std.testing.io, "unterminated-non-cr", .{ .read = true });
-    defer posix.close(file.handle);
+    var file = try tmp.dir.createFile("unterminated-non-cr", .{ .read = true });
+    defer file.close();
 
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(std.testing.allocator);
     try bytes.resize(std.testing.allocator, gateway_protocol.max_control_bytes + 1);
     @memset(bytes.items, 'x');
-    try posix.writeAll(file.handle, bytes.items);
-    try posix.lseek_SET(file.handle, 0);
+    try file.writeAll(bytes.items);
+    try file.seekTo(0);
 
     var reader = LineReader.init(std.testing.allocator);
     defer reader.deinit();
@@ -2201,7 +2202,7 @@ test "LineReader rejects max payload plus a non-CR before its delimiter" {
             saw_error = true;
             break;
         };
-        if (posix.lseek_CUR_get(file.handle) catch 0 == bytes.items.len) break;
+        if (file.getPos() catch 0 == bytes.items.len) break;
     }
     try std.testing.expect(saw_error);
 }
@@ -2209,18 +2210,18 @@ test "LineReader rejects max payload plus a non-CR before its delimiter" {
 test "LineReader accepts max payload plus CR until the following LF arrives" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var writer = try tmp.dir.createFile(std.testing.io, "unterminated-cr", .{ .read = true });
-    defer writer.close(std.testing.io);
-    const reader_file = try tmp.dir.openFile(std.testing.io, "unterminated-cr", .{ .mode = .read_only });
-    defer posix.close(reader_file.handle);
+    var writer = try tmp.dir.createFile("unterminated-cr", .{ .read = true });
+    defer writer.close();
+    var reader_file = try tmp.dir.openFile("unterminated-cr", .{ .mode = .read_only });
+    defer reader_file.close();
 
     var payload = std.ArrayList(u8).empty;
     defer payload.deinit(std.testing.allocator);
     try payload.resize(std.testing.allocator, gateway_protocol.max_control_bytes);
     @memset(payload.items, 'x');
-    try posix.writeAll(writer.handle, payload.items);
-    try posix.writeAll(writer.handle, "\r");
-    try posix.lseek_SET(reader_file.handle, 0);
+    try writer.writeAll(payload.items);
+    try writer.writeAll("\r");
+    try reader_file.seekTo(0);
 
     var line_reader = LineReader.init(std.testing.allocator);
     defer line_reader.deinit();
@@ -2230,7 +2231,7 @@ test "LineReader accepts max payload plus CR until the following LF arrives" {
     }
     try std.testing.expect((try line_reader.next()) == null);
 
-    try posix.writeAll(writer.handle, "\n");
+    try writer.writeAll("\n");
     try std.testing.expectEqual(@as(usize, 1), try line_reader.readAvailable(reader_file.handle));
     const line = (try line_reader.next()) orelse return error.UnexpectedEndOfStream;
     defer std.testing.allocator.free(line);
@@ -2403,7 +2404,7 @@ test "slow consumers reserve room for multiple maximum chunks" {
 }
 
 test "handler retains a real child until cleanup retry succeeds" {
-    var env = std.process.Environ.Map.init(std.testing.allocator);
+    var env = std.process.EnvMap.init(std.testing.allocator);
     defer env.deinit();
     const argv = [_][]const u8{ test_paths.executable("sleep"), "30" };
     const child = try gateway_executor.spawn(std.testing.allocator, .{
@@ -2464,7 +2465,7 @@ test "pthread_atfork registration failure aborts gateway setup" {
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(root);
     const socket_path = try std.fs.path.join(std.testing.allocator, &.{ root, "gateway.sock" });
     defer std.testing.allocator.free(socket_path);
@@ -2478,13 +2479,13 @@ test "pthread_atfork registration failure aborts gateway setup" {
         }, false),
     );
     try std.testing.expect(!sigterm_atfork_registered);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, socket_path, .{}));
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(socket_path, .{}));
 }
 
 test "executed child restores default SIGTERM mask and disposition after handler deferral" {
     try installShutdownHandlers();
 
-    var env = std.process.Environ.Map.init(std.testing.allocator);
+    var env = std.process.EnvMap.init(std.testing.allocator);
     defer env.deinit();
     const argv = [_][]const u8{ test_paths.executable("cat"), "/proc/self/status" };
     var deferral = SigtermDeferral.begin();
@@ -2505,7 +2506,7 @@ test "executed child restores default SIGTERM mask and disposition after handler
     }
     _ = try child.wait();
 
-    const sigterm_bit = @as(u64, 1) << @intCast(@intFromEnum(posix.SIG.TERM) - 1);
+    const sigterm_bit = @as(u64, 1) << @intCast(posix.SIG.TERM - 1);
     var found_blocked = false;
     var found_ignored = false;
     var found_caught = false;
@@ -2595,9 +2596,9 @@ test "gateway shutdown closes stdin while broker does not read initial execute" 
     posix.close(pipe_fds[0]);
     pipe_fds[0] = -1;
     try gateway.acceptBroker();
-    posix.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
-    var timer = try posix.Timer.start();
+    var timer = try std.time.Timer.start();
     gateway.shutdownGateway();
     try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
     try std.testing.expect(gateway.gateway_pid == null);
@@ -2633,9 +2634,9 @@ test "gateway shutdown reaps a running command with a stalled broker queue" {
     // Allow the command output to fill the broker socket and stage raw
     // frames in broker_out. The broker is deliberately never read after
     // spawned.
-    posix.sleep(250 * std.time.ns_per_ms);
+    std.Thread.sleep(250 * std.time.ns_per_ms);
 
-    var timer = try posix.Timer.start();
+    var timer = try std.time.Timer.start();
     gateway.shutdownGateway();
     try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
     try std.testing.expect(gateway.gateway_pid == null);
@@ -2678,13 +2679,13 @@ test "gateway parent shutdown cooperatively cleans a pre-start handler" {
     // Leave the accepted handler in receiveLine with an incomplete request so
     // the parent TERM races the handler's pre-start setup path.
     try sendSocketAll(gateway.external_fd, "{");
-    var timer = try posix.Timer.start();
+    var timer = try std.time.Timer.start();
     var shutdown_thread = try std.Thread.spawn(.{}, shutdownGatewayWorker, .{&gateway});
-    posix.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
     shutdown_thread.join();
     try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
     try std.testing.expect(gateway.gateway_pid == null);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, gateway.external_socket, .{}));
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(gateway.external_socket, .{}));
     try GatewayIntegration.expectProcessGroupGone(handler_pid);
     handler_cleanup_armed = false;
 }
@@ -2706,7 +2707,7 @@ test "gateway parent shutdown waits for running command-group cleanup" {
     // Run parent shutdown concurrently with the child-group disappearance;
     // the handler must complete its normal cooperative cleanup before the
     // parent reports that shutdown is complete.
-    var timer = try posix.Timer.start();
+    var timer = try std.time.Timer.start();
     var shutdown_thread = try std.Thread.spawn(.{}, shutdownGatewayWorker, .{&gateway});
     try GatewayIntegration.expectProcessGroupGone(command_pid);
     shutdown_thread.join();

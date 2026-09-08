@@ -14,7 +14,7 @@
 //   NAS_HOSTEXEC_CLIENT_PATH      – standalone client used for posix_spawn
 
 const std = @import("std");
-const posix = @import("posix");
+const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 const protocol = @import("protocol.zig");
@@ -78,7 +78,7 @@ pub fn resolvePath(alloc: Allocator, pathname: [*:0]const u8) ![]const u8 {
     const path_slice = std.mem.span(pathname);
 
     // Try realpath first via the libc wrapper
-    if (posix.realpathAlloc(alloc, path_slice)) |resolved| {
+    if (std.fs.cwd().realpathAlloc(alloc, path_slice)) |resolved| {
         return resolved;
     } else |_| {}
 
@@ -89,7 +89,7 @@ pub fn resolvePath(alloc: Allocator, pathname: [*:0]const u8) ![]const u8 {
 
     // Relative path: prepend cwd
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = posix.getcwd(&cwd_buf) catch return try alloc.dupe(u8, path_slice);
+    const cwd = std.posix.getcwd(&cwd_buf) catch return try alloc.dupe(u8, path_slice);
     const joined = try std.fs.path.join(alloc, &.{ cwd, path_slice });
     return joined;
 }
@@ -99,7 +99,7 @@ pub const matchesInterceptPaths = intercept_paths.matchesInterceptPaths;
 
 /// Full intercept decision: resolve the path, then match.
 pub fn shouldIntercept(alloc: Allocator, pathname: [*:0]const u8) bool {
-    const intercept_paths_env = posix.getenv("NAS_HOSTEXEC_INTERCEPT_PATHS") orelse return false;
+    const intercept_paths_env = std.posix.getenv("NAS_HOSTEXEC_INTERCEPT_PATHS") orelse return false;
     if (intercept_paths_env.len == 0) return false;
 
     const resolved = resolvePath(alloc, pathname) catch return false;
@@ -122,7 +122,7 @@ fn interceptedSearchPath(alloc: Allocator, pathname: [*:0]const u8) ?[:0]u8 {
     const path_env = posix.getenv("PATH") orelse intercept_paths.default_path;
     const candidate = intercept_paths.findExecutable(alloc, name, path_env) catch return null;
     defer alloc.free(candidate);
-    const canonical = posix.realpathAlloc(alloc, candidate) catch return null;
+    const canonical = std.fs.cwd().realpathAlloc(alloc, candidate) catch return null;
     defer alloc.free(canonical);
     const resolved = alloc.dupeZ(u8, canonical) catch return null;
     if (shouldIntercept(alloc, resolved.ptr)) return resolved;

@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const posix = std.posix;
-const os = @import("posix");
 
 /// パイプ / socket の 1 回の read で受け取る最大バイト数。
 pub const CHUNK_SIZE: usize = 64 * 1024;
@@ -60,9 +59,9 @@ pub const DestError = error{
 };
 
 fn setNonBlocking(fd: posix.fd_t) !void {
-    const flags = try os.fcntl(fd, posix.F.GETFL, 0);
+    const flags = try posix.fcntl(fd, posix.F.GETFL, 0);
     const nonblock: u32 = @bitCast(posix.O{ .NONBLOCK = true });
-    _ = try os.fcntl(fd, posix.F.SETFL, flags | nonblock);
+    _ = try posix.fcntl(fd, posix.F.SETFL, flags | nonblock);
 }
 
 /// 出力先 fd (子の stdout/stderr に対応する本物の fd) へ書き切る。
@@ -80,7 +79,7 @@ fn setNonBlocking(fd: posix.fd_t) !void {
 fn writeAllToDest(fd: posix.fd_t, bytes: []const u8) DestError!void {
     var i: usize = 0;
     while (i < bytes.len) {
-        const n = os.write(fd, bytes[i..]) catch |err| switch (err) {
+        const n = posix.write(fd, bytes[i..]) catch |err| switch (err) {
             error.WouldBlock => {
                 var pfd = [_]posix.pollfd{
                     .{ .fd = fd, .events = posix.POLL.OUT, .revents = 0 },
@@ -130,20 +129,20 @@ pub const Relay = struct {
 
         var attempt: usize = 0;
         while (attempt < CONNECT_ATTEMPTS) : (attempt += 1) {
-            if (attempt > 0) os.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
+            if (attempt > 0) std.Thread.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
 
-            const fd = os.socket(
+            const fd = posix.socket(
                 posix.AF.UNIX,
                 posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
                 0,
             ) catch continue;
-            os.connect(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
+            posix.connect(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
                 // 失敗した socket は状態が未規定なので使い回さず作り直す。
-                os.close(fd);
+                posix.close(fd);
                 continue;
             };
             setNonBlocking(fd) catch {
-                os.close(fd);
+                posix.close(fd);
                 return error.RelayConnectFailed;
             };
             return .{ .fd = fd };
@@ -153,7 +152,7 @@ pub const Relay = struct {
 
     pub fn deinit(self: *Relay, gpa: std.mem.Allocator) void {
         self.pending.deinit(gpa);
-        os.close(self.fd);
+        posix.close(self.fd);
         self.* = undefined;
     }
 
@@ -170,7 +169,7 @@ pub const Relay = struct {
     /// POLLOUT が立ったときに呼ぶ。書けた分だけキューから取り除く。
     pub fn pumpWritable(self: *Relay) RelayError!void {
         if (self.pending.items.len == 0) return;
-        const n = os.write(self.fd, self.pending.items) catch |err| switch (err) {
+        const n = posix.write(self.fd, self.pending.items) catch |err| switch (err) {
             error.WouldBlock => return,
             else => return error.RelayFailed,
         };
@@ -212,7 +211,7 @@ pub const Relay = struct {
     pub fn halfClose(self: *Relay) RelayError!void {
         if (self.write_closed) return;
         std.debug.assert(self.pending.items.len == 0);
-        os.shutdown(self.fd, .send) catch return error.RelayFailed;
+        posix.shutdown(self.fd, .send) catch return error.RelayFailed;
         self.write_closed = true;
     }
 };
@@ -239,7 +238,7 @@ test "Relay.connect: a missing broker fails closed" {
         "/tmp/nas-mf-absent-{d}.sock",
         .{std.c.getpid()},
     );
-    os.unlink(path) catch {};
+    std.fs.cwd().deleteFile(path) catch {};
     try testing.expectError(error.RelayConnectFailed, Relay.connect(path));
 }
 
@@ -248,11 +247,11 @@ fn listenAt(path: []const u8) !posix.socket_t {
     var addr = posix.sockaddr.un{ .family = posix.AF.UNIX, .path = undefined };
     @memset(&addr.path, 0);
     @memcpy(addr.path[0..path.len], path);
-    const fd = try os.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
-    errdefer os.close(fd);
-    os.unlink(path) catch {};
-    try os.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un));
-    try os.listen(fd, 1);
+    const fd = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    errdefer posix.close(fd);
+    posix.unlink(path) catch {};
+    try posix.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un));
+    try posix.listen(fd, 1);
     return fd;
 }
 
@@ -272,15 +271,15 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
 
     const listener = try listenAt(path);
     defer {
-        os.close(listener);
-        os.unlink(path) catch {};
+        posix.close(listener);
+        posix.unlink(path) catch {};
     }
 
     var relay = try Relay.connect(path);
     defer relay.deinit(testing.allocator);
 
-    const peer = try os.accept(listener, null, null, posix.SOCK.CLOEXEC);
-    defer os.close(peer);
+    const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
+    defer posix.close(peer);
 
     // 送信キューは pumpWritable まで実際には書かれない。
     try relay.queueWrite(testing.allocator, "hello");
@@ -293,10 +292,10 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
     try testing.expectEqualStrings("hello", in[0..5]);
 
     // サーバが返したマスク済みバイトは出力先 fd へそのまま流れる。
-    _ = try os.write(peer, "HELLO");
-    const out_pipe = try os.pipe();
-    defer os.close(out_pipe[0]);
-    defer os.close(out_pipe[1]);
+    _ = try posix.write(peer, "HELLO");
+    const out_pipe = try posix.pipe();
+    defer posix.close(out_pipe[0]);
+    defer posix.close(out_pipe[1]);
     try waitReadable(relay.fd);
     var buf: [CHUNK_SIZE]u8 = undefined;
     try testing.expectEqual(@as(usize, 5), try relay.pumpReadable(out_pipe[1], &buf));
@@ -310,7 +309,7 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
     try testing.expectEqual(@as(usize, 0), try posix.read(peer, &in));
 
     // サーバが close したら read_eof が立つ。
-    os.shutdown(peer, .send) catch {};
+    posix.shutdown(peer, .send) catch {};
     try waitReadable(relay.fd);
     try testing.expectEqual(@as(usize, 0), try relay.pumpReadable(out_pipe[1], &buf));
     try testing.expect(relay.read_eof);
@@ -340,21 +339,21 @@ test "Relay.pumpReadable: a closed destination is reported apart from mask failu
 
     const listener = try listenAt(path);
     defer {
-        os.close(listener);
-        os.unlink(path) catch {};
+        posix.close(listener);
+        posix.unlink(path) catch {};
     }
 
     var relay = try Relay.connect(path);
     defer relay.deinit(testing.allocator);
-    const peer = try os.accept(listener, null, null, posix.SOCK.CLOEXEC);
-    defer os.close(peer);
+    const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
+    defer posix.close(peer);
 
-    _ = try os.write(peer, "HELLO");
+    _ = try posix.write(peer, "HELLO");
 
     // 読み手が去った出力先 (`cmd | head` 相当)。
-    const out_pipe = try os.pipe();
-    os.close(out_pipe[0]);
-    defer os.close(out_pipe[1]);
+    const out_pipe = try posix.pipe();
+    posix.close(out_pipe[0]);
+    defer posix.close(out_pipe[1]);
 
     var buf: [CHUNK_SIZE]u8 = undefined;
     try waitReadable(relay.fd);
@@ -374,14 +373,14 @@ test "Relay.pumpWritable: a short write leaves the remainder queued" {
 
     const listener = try listenAt(path);
     defer {
-        os.close(listener);
-        os.unlink(path) catch {};
+        posix.close(listener);
+        posix.unlink(path) catch {};
     }
 
     var relay = try Relay.connect(path);
     defer relay.deinit(testing.allocator);
-    const peer = try os.accept(listener, null, null, posix.SOCK.CLOEXEC);
-    defer os.close(peer);
+    const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
+    defer posix.close(peer);
 
     // 受信側を一切読まないまま socket バッファを超える量を積む。write は
     // 途中までしか通らないので、残りがキューに残っていなければならない
