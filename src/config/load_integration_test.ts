@@ -17,6 +17,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveAsset } from "../lib/asset.ts";
 import { loadConfig, resolveProfile } from "./load.ts";
 import {
@@ -1171,6 +1172,16 @@ for (const { name, reference, referenced } of [
     referenced: true,
   },
   {
+    name: "relative amends",
+    reference: 'amends "global.pkl"',
+    referenced: true,
+  },
+  {
+    name: "dot-relative amends",
+    reference: 'amends "./global.pkl"',
+    referenced: true,
+  },
+  {
     name: "block comment",
     reference: '/*\nimport "modulepath:/global.pkl"\n*/',
     referenced: false,
@@ -1244,3 +1255,110 @@ for (const { name, reference, referenced } of [
     },
   );
 }
+
+test.skipIf(!hasPkl)(
+  "loadConfig: an independent file global does not select the default global",
+  async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), "nas-retired-nix-independent-file-"),
+    );
+    const previous = process.env.XDG_CONFIG_HOME;
+    try {
+      process.env.XDG_CONFIG_HOME = root;
+      const globalDir = path.join(root, "nas");
+      await mkdir(globalDir);
+      await writeFile(
+        path.join(globalDir, "global.pkl"),
+        'amends "Schema.pkl"\nprofiles { ["dev"] { nix { extraPackages {} } } }',
+      );
+
+      const independentDir = path.join(root, "independent");
+      await mkdir(independentDir);
+      const independentGlobal = path.join(independentDir, "global.pkl");
+      await writeFile(independentGlobal, 'tool = "claude"\n');
+      await withNasConfig(
+        `amends "Schema.pkl"
+local imported = import("${pathToFileURL(independentGlobal).href}")
+profiles { ["dev"] { agent = imported.tool } }`,
+        async (dir) => {
+          expect((await loadConfig(dir)).profiles.dev.agent).toBe("claude");
+        },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: a nested modulepath global does not select the default global",
+  async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), "nas-retired-nix-nested-modulepath-"),
+    );
+    const previous = process.env.XDG_CONFIG_HOME;
+    try {
+      process.env.XDG_CONFIG_HOME = root;
+      const globalDir = path.join(root, "nas");
+      await mkdir(globalDir);
+      await writeFile(
+        path.join(globalDir, "global.pkl"),
+        'amends "Schema.pkl"\nprofiles { ["dev"] { nix { extraPackages {} } } }',
+      );
+
+      await withNasConfig(
+        `amends "Schema.pkl"
+local imported = import("modulepath:/other/global.pkl")
+profiles { ["dev"] { agent = imported.tool } }`,
+        async (dir, nasDir) => {
+          const nestedDir = path.join(nasDir, "other");
+          await mkdir(nestedDir);
+          await writeFile(
+            path.join(nestedDir, "global.pkl"),
+            'tool = "claude"\n',
+          );
+          expect((await loadConfig(dir)).profiles.dev.agent).toBe("claude");
+        },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: a file URI to the default global selects that global",
+  async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), "nas-retired-nix-default-file-uri-"),
+    );
+    const previous = process.env.XDG_CONFIG_HOME;
+    try {
+      process.env.XDG_CONFIG_HOME = root;
+      const globalDir = path.join(root, "nas");
+      await mkdir(globalDir);
+      const globalFile = path.join(globalDir, "global.pkl");
+      await writeFile(
+        globalFile,
+        'amends "Schema.pkl"\nprofiles { ["dev"] { nix { extraPackages {} } } }',
+      );
+
+      await withNasConfig(
+        `amends "${pathToFileURL(globalFile).href}"`,
+        async (dir) => {
+          await expect(loadConfig(dir)).rejects.toThrow(
+            `${globalFile}:2: nix.extraPackages is no longer supported`,
+          );
+        },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

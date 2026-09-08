@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { moduleReferences } from "../lib/pkl_source.ts";
 import { detectLegacyIdentifiers } from "../network/authz/validate.ts";
 import { initConfig, resolveSchemaAsset } from "./init.ts";
@@ -36,6 +37,8 @@ const CONFIG_DIR = ".nas";
 const CONFIG_FILENAME = "config.pkl";
 const SCHEMA_FILENAME = "Schema.pkl";
 const PKL_PROJECT_FILENAME = "PklProject";
+const CONFIG_MODULE_URI = "modulepath:/config.pkl";
+const GLOBAL_MODULE_URI = "modulepath:/global.pkl";
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
@@ -108,14 +111,14 @@ async function reportLegacyIdentifiers(configPath: string): Promise<void> {
 async function legacyIdentifiersInGlobal(
   configSource: string,
 ): Promise<readonly string[]> {
+  const globalPath = path.join(getGlobalConfigDir(), "global.pkl");
   if (
     !moduleReferences(configSource).some((uri) =>
-      /(?:^|\/)global\.pkl$/.test(uri),
+      referencesDefaultGlobal(uri, globalPath),
     )
   )
     return [];
 
-  const globalPath = path.join(getGlobalConfigDir(), "global.pkl");
   let source: string;
   try {
     source = await readFile(globalPath, "utf8");
@@ -130,6 +133,30 @@ async function legacyIdentifiersInGlobal(
     ...detectLegacyIdentifiers(source, globalPath).map((d) => d.message),
     ...retiredNixSourceErrors(source, globalPath),
   ];
+}
+
+/**
+ * evalPklConfig imports config.pkl as modulepath:/config.pkl. Resolve relative
+ * references against that identity before comparing them with the root global
+ * module. A direct file URI is the same config only when its filesystem path
+ * is the actual default global path.
+ */
+function referencesDefaultGlobal(uri: string, globalPath: string): boolean {
+  let resolved: URL;
+  try {
+    resolved = new URL(uri, CONFIG_MODULE_URI);
+  } catch {
+    return false;
+  }
+
+  if (resolved.href === GLOBAL_MODULE_URI) return true;
+  if (resolved.protocol !== "file:") return false;
+
+  try {
+    return path.resolve(fileURLToPath(resolved)) === path.resolve(globalPath);
+  } catch {
+    return false;
+  }
 }
 
 /**
