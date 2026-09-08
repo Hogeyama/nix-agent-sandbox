@@ -54,10 +54,12 @@ import {
 // 評価されないまま緑になる。
 let restoreSchemaAsset: (() => Promise<void>) | undefined;
 
+// A cold Zig build can exceed Bun's 5s hook default while the full suite is
+// compiling other native test artifacts in parallel.
 beforeAll(async () => {
   await buildInterceptArtifactsForDev();
   restoreSchemaAsset = await useRepoSchemaAsset();
-});
+}, 30_000);
 
 afterAll(async () => {
   await restoreSchemaAsset?.();
