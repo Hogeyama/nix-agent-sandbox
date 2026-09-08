@@ -13,6 +13,8 @@ export interface RelaySupervisorOptions {
   exec: (cmd: string[]) => Promise<{ code: number; stderr: string }>;
   command: string[];
   isRelayConnected: () => boolean;
+  /** Entrypoint owns startup while true; a timeout must never spawn a rival. */
+  isInitialRelayStarting?: () => boolean;
   waitForControl: (timeoutMs: number) => Promise<boolean>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -50,12 +52,24 @@ export function makeRelaySupervisor(
       consecutiveFailures = 0;
       return "ready";
     }
+    if (opts.isInitialRelayStarting?.()) {
+      if (await opts.waitForControl(CONTROL_WAIT_MS)) {
+        consecutiveFailures = 0;
+        return "ready";
+      }
+      return "unreachable";
+    }
     if (now() < coolOffUntil) return "unreachable";
 
     const sinceLast = now() - lastAttemptAt;
     if (sinceLast < MIN_EXEC_INTERVAL_MS) {
       await sleep(MIN_EXEC_INTERVAL_MS - sinceLast);
     }
+    if (opts.isRelayConnected()) return "ready";
+    if (opts.isInitialRelayStarting?.())
+      return (await opts.waitForControl(CONTROL_WAIT_MS))
+        ? "ready"
+        : "unreachable";
     lastAttemptAt = now();
 
     const result = await opts.exec(opts.command);

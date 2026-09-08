@@ -33,7 +33,7 @@ control.on("error", (err) => {
   process.exit(1);
 });
 control.on("close", () => process.exit(0));
-control.on("connect", () => control.write("control\n"));
+control.on("connect", () => control.write("control-v2\n"));
 
 let buffered = "";
 control.on("data", (chunk) => {
@@ -59,13 +59,36 @@ control.on("data", (chunk) => {
 });
 
 function handle(line) {
+  if (line === "initial-ready") {
+    process.stdout.write("initial-ready\n");
+    return true;
+  }
+  const initialFailure = /^initial-failed (.+)$/.exec(line);
+  if (initialFailure) {
+    process.stderr.write(`initial-failed ${initialFailure[1]}\n`);
+    process.exit(1);
+  }
+  const removal = /^unforward ([0-9a-f]{16}) ([0-9a-f]{32})$/.exec(line);
+  if (removal) {
+    unforward(removal[1], removal[2]);
+    return true;
+  }
+  const addition = /^forward ([0-9a-f]{16}) ([0-9a-f]{32}) ([0-9]{1,5})$/.exec(
+    line,
+  );
+  if (addition) {
+    const port = Number(addition[3]);
+    if (port < 1 || port > 65535)
+      control.write(`fail ${addition[1]} invalid-port\n`);
+    else forward(addition[1], addition[2], port);
+    return true;
+  }
   const watch = /^watch (0|1)$/.exec(line);
   if (watch) {
     setWatching(watch[1] === "1");
     return true;
   }
-  const request =
-    /^(probe|open|forward|unforward) ([0-9a-f]{16}) ([0-9]+)$/.exec(line);
+  const request = /^(probe|open) ([0-9a-f]{16}) ([0-9]+)$/.exec(line);
   if (!request) return false;
   const [, verb, id, rawPort] = request;
   const port = Number(rawPort);
@@ -75,14 +98,6 @@ function handle(line) {
   }
   if (verb === "probe") {
     probe(id, port);
-    return true;
-  }
-  if (verb === "forward") {
-    forward(id, port);
-    return true;
-  }
-  if (verb === "unforward") {
-    unforward(id, port);
     return true;
   }
   open(id, port);
@@ -95,12 +110,12 @@ function handle(line) {
 // is currently listening. A restarted relay starts empty and the host re-sends
 // every forward it still wants.
 
-/** containerPort -> { server, connections } */
+/** containerPort -> listener resources, including its current mapping token. */
 const forwards = new Map();
 
-function forward(id, port) {
+function forward(id, token, port) {
   if (forwards.has(port)) {
-    control.write(`ok ${id}\n`);
+    control.write(`fail ${id} EADDRINUSE\n`);
     return;
   }
   const connections = new Set();
@@ -114,6 +129,8 @@ function forward(id, port) {
     const hold = (chunk) => held.push(chunk);
     client.on("data", hold);
     const stream = connect({ path: socketPath, allowHalfOpen: true });
+    connections.add(stream);
+    stream.once("close", () => connections.delete(stream));
     const abandon = () => {
       client.destroy();
       stream.destroy();
@@ -128,34 +145,60 @@ function forward(id, port) {
       client.off("error", abandon);
       stream.off("error", abandon);
       client.off("data", hold);
-      stream.write(`client ${port}\n`);
+      stream.write(`client ${token}\n`);
       for (const chunk of held) stream.write(chunk);
       pipePair(stream, client);
     });
   });
+  const entry = {
+    token,
+    server,
+    connections,
+    ready: false,
+    cancelled: false,
+    removals: [],
+  };
+  forwards.set(port, entry);
+  const acknowledgeRemoval = () => {
+    for (const requestId of entry.removals) control.write(`ok ${requestId}\n`);
+    entry.removals = [];
+  };
+  entry.close = () => server.close(acknowledgeRemoval);
   const onListenError = (err) => {
+    if (forwards.get(port) === entry) forwards.delete(port);
     control.write(`fail ${id} ${err.code ?? "listen-failed"}\n`);
+    acknowledgeRemoval();
   };
   server.once("error", onListenError);
   server.listen(port, "127.0.0.1", () => {
     server.off("error", onListenError);
+    entry.ready = true;
+    if (entry.cancelled) {
+      entry.close();
+      return;
+    }
     server.on("error", (err) =>
       control.write(`log forward ${port}: ${err.code ?? err.message}\n`),
     );
-    forwards.set(port, { server, connections });
     control.write(`ok ${id}\n`);
   });
 }
 
-function unforward(id, port) {
-  const entry = forwards.get(port);
-  forwards.delete(port);
-  if (entry) {
-    for (const client of entry.connections) client.destroy();
-    entry.connections.clear();
-    entry.server.close();
+function unforward(id, token) {
+  const found = [...forwards.entries()].find(
+    ([, entry]) => entry.token === token,
+  );
+  if (!found) {
+    control.write(`ok ${id}\n`);
+    return;
   }
-  control.write(`ok ${id}\n`);
+  const [port, entry] = found;
+  forwards.delete(port);
+  entry.cancelled = true;
+  entry.removals.push(id);
+  for (const connection of entry.connections) connection.destroy();
+  entry.connections.clear();
+  if (entry.ready) entry.close();
 }
 
 // --- Listener detection ---

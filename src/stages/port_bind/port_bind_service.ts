@@ -5,6 +5,7 @@ import { resolveAsset } from "../../lib/asset.ts";
 import { ensureDir, safeRemove } from "../../lib/fs_utils.ts";
 import {
   type PersistedPorts,
+  type PortBindBroker,
   startPortBindBroker,
 } from "../../network/port_bind_broker.ts";
 import {
@@ -78,6 +79,7 @@ export const PortBindServiceLive: Layer.Layer<
             });
 
             let gateway: RelayGateway | undefined;
+            let broker: PortBindBroker | undefined;
             let supervisor: RelaySupervisor;
             let controlWaiter:
               | { resolve: (connected: boolean) => void }
@@ -108,6 +110,13 @@ export const PortBindServiceLive: Layer.Layer<
                 socketPath: plan.relaySocketSource,
                 ensureRelay: () => supervisor.ensure(),
                 onRelayConnected: () => controlWaiter?.resolve(true),
+                onRelayUnsupported: () => controlWaiter?.resolve(false),
+                currentForwards: () =>
+                  broker
+                    ?.listPortForwards()
+                    .filter((entry) => entry.direction === "remote") ?? [],
+                onForwardState: (port, state, error) =>
+                  broker?.onForwardState(port, state, error),
               });
               supervisor = makeRelaySupervisor({
                 exec: (command) =>
@@ -133,7 +142,7 @@ export const PortBindServiceLive: Layer.Layer<
                   forwards: ports.forwards,
                   portForwards: ports.portForwards,
                 });
-              const broker = await startPortBindBroker({
+              broker = await startPortBindBroker({
                 controlSocketPath: plan.controlSocket,
                 gateway,
                 persist,
@@ -151,7 +160,7 @@ export const PortBindServiceLive: Layer.Layer<
                   Effect.tryPromise({
                     try: async () => {
                       try {
-                        await broker.close();
+                        await broker?.close();
                       } finally {
                         try {
                           await removeSessionRegistry(paths, plan.sessionId);

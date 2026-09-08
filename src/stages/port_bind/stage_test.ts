@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, Exit, Layer } from "effect";
@@ -23,6 +24,7 @@ import { makeDockerServiceFake } from "../../services/docker.ts";
 import { reservedNamespacePorts } from "../dind.ts";
 import {
   makePortBindServiceFake,
+  type PortBindHandle,
   PortBindService,
   PortBindServiceLive,
 } from "./port_bind_service.ts";
@@ -339,6 +341,80 @@ test("starting a session leaves other sessions' relay scripts untouched", async 
     await Effect.runPromise(firstHandle.close());
     expect(await exists(first.relayScriptSource)).toEqual(false);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PortBindServiceLive persists relay loss and reconnect failure through the broker", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-port-bind-state-"));
+  const plan = planAt(root);
+  const paths = {
+    runtimeDir: plan.runtimeDir,
+    sessionsDir: path.join(plan.runtimeDir, "sessions"),
+    pendingDir: path.join(plan.runtimeDir, "pending"),
+    brokersDir: path.join(plan.runtimeDir, "brokers"),
+  };
+  const echo = createServer((socket: Socket) => socket.end());
+  const sockets = new Set<Socket>();
+  let handle: PortBindHandle | undefined;
+  const relay = (fail: boolean) => {
+    const socket = connect({ path: plan.relaySocketSource });
+    sockets.add(socket);
+    let buffered = "";
+    socket.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString();
+      let end = buffered.indexOf("\n");
+      while (end !== -1) {
+        const [, id] = buffered.slice(0, end).split(" ");
+        buffered = buffered.slice(end + 1);
+        socket.write(fail ? `fail ${id} EADDRINUSE\n` : `ok ${id}\n`);
+        end = buffered.indexOf("\n");
+      }
+    });
+    socket.write("control-v2\n");
+    return socket;
+  };
+  const waitForState = async (state: string) => {
+    for (let i = 0; i < 100; i++) {
+      const registry = await readSessionRegistry<PortBindSessionEntry>(
+        paths,
+        plan.sessionId,
+      );
+      const entry = registry?.portForwards?.[0];
+      if (entry?.state === state) return entry;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`registry never reached ${state}`);
+  };
+  try {
+    await new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve));
+    const hostPort = (echo.address() as { port: number }).port;
+    handle = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* PortBindService;
+        return yield* service.start(plan);
+      }).pipe(Effect.provide(liveLayer())),
+    );
+    const first = relay(false);
+    const client = connect({ path: plan.controlSocket });
+    sockets.add(client);
+    const response = new Promise<string>((resolve) =>
+      client.once("data", (chunk: Buffer) => resolve(chunk.toString())),
+    );
+    client.write(
+      `${JSON.stringify({ type: "forward", containerPort: 15432, hostPort })}\n`,
+    );
+    expect(JSON.parse(await response)).toMatchObject({ ok: true });
+    client.destroy();
+    await waitForState("active");
+    first.destroy();
+    await waitForState("unavailable");
+    relay(true);
+    expect(await waitForState("failed")).toMatchObject({ error: "EADDRINUSE" });
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    if (handle) await Effect.runPromise(handle.close());
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -32,6 +32,7 @@ import {
   createsForwardCycle,
   type ForwardOwner,
   type ForwardSpec,
+  type ForwardState,
   forwardKey,
   type ManagedForward,
   type RemoveForwardResult,
@@ -83,6 +84,11 @@ export interface PersistedPorts {
 export interface PortBindBroker {
   readonly controlSocketPath: string;
   listPortForwards(): ManagedForward[];
+  onForwardState(
+    containerPort: number,
+    state: ForwardState,
+    error?: string,
+  ): void;
   addPortForward(
     spec: ForwardSpec,
     owner: ForwardOwner,
@@ -231,6 +237,7 @@ export async function startPortBindBroker(opts: {
   const watchLeaseMs = opts.watchLeaseMs ?? WATCH_LEASE_MS;
   const open = new Map<number, OpenBinding>();
   const managed = new Map<string, ManagedForward>();
+  const generations = new Map<string, symbol>();
   let watchLease: ReturnType<typeof setTimeout> | undefined;
   let mutationTail = Promise.resolve();
   let closing = false;
@@ -263,6 +270,25 @@ export async function startPortBindBroker(opts: {
       () => undefined,
     );
     return result;
+  };
+
+  const onForwardState: PortBindBroker["onForwardState"] = (
+    containerPort,
+    state,
+    error,
+  ) => {
+    const key = forwardKey({ direction: "remote", containerPort });
+    const generation = generations.get(key);
+    if (!generation || closing) return;
+    void mutate(async () => {
+      const entry = managed.get(key);
+      // Capture before queueing: remove/re-add may run ahead of this event.
+      if (!entry || generations.get(key) !== generation) return;
+      entry.state = state;
+      if (error === undefined) delete entry.error;
+      else entry.error = error;
+      await persistRevocation();
+    }).catch((error) => logDebug(`[nas] port-forward state: ${error}`));
   };
 
   const listenOn = (
@@ -415,6 +441,7 @@ export async function startPortBindBroker(opts: {
         state: "pending",
       };
       managed.set(key, entry);
+      generations.set(key, Symbol(key));
       inserted = true;
       if (spec.direction === "local") {
         if (!acquired) {
@@ -445,7 +472,9 @@ export async function startPortBindBroker(opts: {
               "relay-unavailable",
               error.reason === "container-not-running"
                 ? "the container is not running"
-                : "the relay could not be started",
+                : error.reason === "unsupported"
+                  ? "the relay lacks secure forwarding support; restart the session"
+                  : "the relay could not be started",
             );
           }
           throw new ControlError(
@@ -461,6 +490,7 @@ export async function startPortBindBroker(opts: {
     } catch (error) {
       if (inserted) {
         managed.delete(key);
+        generations.delete(key);
         if (spec.direction === "local") open.delete(spec.containerPort);
         else await opts.gateway.unforward(spec.containerPort);
       }
@@ -494,6 +524,7 @@ export async function startPortBindBroker(opts: {
       return { removed, retainedInternal: true, listenerClosed: false };
     }
     managed.delete(id);
+    generations.delete(id);
     let listenerClosed = false;
     if (entry.direction === "local") {
       const binding = open.get(entry.containerPort);
@@ -505,7 +536,7 @@ export async function startPortBindBroker(opts: {
     } else {
       // Gateway revokes permission synchronously before awaiting listener ACK.
       const result = await opts.gateway.unforward(entry.containerPort);
-      listenerClosed = result?.listenerClosed ?? false;
+      listenerClosed = result.listenerClosed;
     }
     await persistRevocation();
     return { removed: true, retainedInternal: false, listenerClosed };
@@ -719,6 +750,7 @@ export async function startPortBindBroker(opts: {
   return {
     controlSocketPath: opts.controlSocketPath,
     listPortForwards,
+    onForwardState,
     addPortForward,
     removePortForward,
     bind,
@@ -736,6 +768,7 @@ export async function startPortBindBroker(opts: {
       for (const entry of open.values()) await closeBinding(entry);
       open.clear();
       managed.clear();
+      generations.clear();
       const controlClosed = new Promise<void>((resolve, reject) => {
         control.close((error) => (error ? reject(error) : resolve()));
       });

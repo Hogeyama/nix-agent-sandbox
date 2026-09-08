@@ -67,6 +67,8 @@ async function withBroker<T>(
       gateway: {
         socketPath: path.join(dir, "relay.sock"),
         isRelayConnected: () => true,
+        relayCapability: () => "v2" as const,
+        completeInitialForwards: () => {},
         openStream: async () => {
           await new Promise((resolve) => setTimeout(resolve, relayDelayMs));
           return connect({ port: echoPort, host: "127.0.0.1" });
@@ -75,7 +77,7 @@ async function withBroker<T>(
         watchListeners: async () => "ready" as const,
         listeners: () => [],
         forward: async () => {},
-        unforward: async () => {},
+        unforward: async () => ({ listenerClosed: true }),
         forwards: () => [],
         close: async () => {},
       },
@@ -164,6 +166,8 @@ test("a failed bind persistence closes and forgets the listener", async () => {
     gateway: {
       socketPath: path.join(dir, "relay.sock"),
       isRelayConnected: () => true,
+      relayCapability: () => "v2" as const,
+      completeInitialForwards: () => {},
       openStream: async () => {
         throw new Error("unused");
       },
@@ -171,7 +175,7 @@ test("a failed bind persistence closes and forgets the listener", async () => {
       watchListeners: async () => "ready" as const,
       listeners: () => [],
       forward: async () => {},
-      unforward: async () => {},
+      unforward: async () => ({ listenerClosed: true }),
       forwards: () => [],
       close: async () => {},
     },
@@ -202,6 +206,8 @@ test("unbind revokes a binding even when persistence fails", async () => {
     gateway: {
       socketPath: path.join(dir, "relay.sock"),
       isRelayConnected: () => true,
+      relayCapability: () => "v2" as const,
+      completeInitialForwards: () => {},
       openStream: async () => {
         throw new Error("unused");
       },
@@ -209,7 +215,7 @@ test("unbind revokes a binding even when persistence fails", async () => {
       watchListeners: async () => "ready" as const,
       listeners: () => [],
       forward: async () => {},
-      unforward: async () => {},
+      unforward: async () => ({ listenerClosed: true }),
       forwards: () => [],
       close: async () => {},
     },
@@ -243,6 +249,8 @@ test("close drains an accepted bind and rejects later mutations", async () => {
     gateway: {
       socketPath: path.join(dir, "relay.sock"),
       isRelayConnected: () => true,
+      relayCapability: () => "v2" as const,
+      completeInitialForwards: () => {},
       openStream: async () => {
         throw new Error("unused");
       },
@@ -250,7 +258,7 @@ test("close drains an accepted bind and rejects later mutations", async () => {
       watchListeners: async () => "ready" as const,
       listeners: () => [],
       forward: async () => {},
-      unforward: async () => {},
+      unforward: async () => ({ listenerClosed: true }),
       forwards: () => [],
       close: async () => {},
     },
@@ -280,6 +288,8 @@ test("close destroys a control client waiting on an incomplete line", async () =
     gateway: {
       socketPath: path.join(dir, "relay.sock"),
       isRelayConnected: () => true,
+      relayCapability: () => "v2" as const,
+      completeInitialForwards: () => {},
       openStream: async () => {
         throw new Error("unused");
       },
@@ -287,7 +297,7 @@ test("close destroys a control client waiting on an incomplete line", async () =
       watchListeners: async () => "ready" as const,
       listeners: () => [],
       forward: async () => {},
-      unforward: async () => {},
+      unforward: async () => ({ listenerClosed: true }),
       forwards: () => [],
       close: async () => {},
     },
@@ -336,6 +346,8 @@ test("a browser that disconnects while waiting cancels the stream request", asyn
     gateway: {
       socketPath: path.join(dir, "relay.sock"),
       isRelayConnected: () => true,
+      relayCapability: () => "v2" as const,
+      completeInitialForwards: () => {},
       openStream: (_port, signal) =>
         new Promise((_resolve, reject) => {
           signal?.addEventListener("abort", () => {
@@ -347,7 +359,7 @@ test("a browser that disconnects while waiting cancels the stream request", asyn
       watchListeners: async () => "ready" as const,
       listeners: () => [],
       forward: async () => {},
-      unforward: async () => {},
+      unforward: async () => ({ listenerClosed: true }),
       forwards: () => [],
       close: async () => {},
     },
@@ -441,6 +453,8 @@ async function withCandidateBroker<T>(
       gateway: {
         socketPath: path.join(dir, "relay.sock"),
         isRelayConnected: () => true,
+        relayCapability: () => "v2" as const,
+        completeInitialForwards: () => {},
         openStream: async () => {
           throw new Error("unused");
         },
@@ -451,7 +465,7 @@ async function withCandidateBroker<T>(
         },
         listeners: () => opts.listeners,
         forward: async () => {},
-        unforward: async () => {},
+        unforward: async () => ({ listenerClosed: true }),
         forwards: () => [],
         close: async () => {},
       },
@@ -552,6 +566,8 @@ function forwardingGateway(opts: {
   const gateway = {
     socketPath: "unused",
     isRelayConnected: () => true,
+    relayCapability: () => "v2" as const,
+    completeInitialForwards: () => {},
     openStream: async () => {
       throw new Error("unused");
     },
@@ -743,7 +759,7 @@ test("a failed forward persistence takes the listener back down", async () => {
   );
 });
 
-test("a timed-out forward closes racing streams and attempts listener teardown", async () => {
+test("a timed-out forward rejects pre-ACK streams and attempts token listener teardown", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-broker-timeout-"));
   const relaySocketPath = path.join(dir, "relay.sock");
   const echo = createServer({ allowHalfOpen: true });
@@ -751,11 +767,10 @@ test("a timed-out forward closes racing streams and attempts listener teardown",
   let relay: Socket | undefined;
   let client: Socket | undefined;
   try {
-    const targetAccepted = new Promise<Socket>((resolve) => {
-      echo.once("connection", (socket: Socket) => {
-        socket.on("data", (chunk: Buffer) => socket.write(chunk));
-        resolve(socket);
-      });
+    let accepted = 0;
+    echo.on("connection", (socket: Socket) => {
+      accepted += 1;
+      socket.destroy();
     });
     const hostPort = await listen(echo);
     const gateway = await startRelayGateway({
@@ -784,7 +799,7 @@ test("a timed-out forward closes racing streams and attempts listener teardown",
         newline = buffered.indexOf("\n");
       }
     });
-    relay.write("control\n");
+    relay.write("control-v2\n");
     for (
       let attempt = 0;
       attempt < 100 && !gateway.isRelayConnected();
@@ -812,25 +827,23 @@ test("a timed-out forward closes racing streams and attempts listener teardown",
     expect(relayLines.some((line) => line.startsWith("forward "))).toBe(true);
 
     client = connect({ path: relaySocketPath });
-    const echoed = new Promise<Buffer>((resolve) =>
-      client?.once("data", (chunk: Buffer) => resolve(chunk)),
-    );
-    client.write("client 5432\nping");
-    client.resume();
-    const target = await targetAccepted;
-    expect((await echoed).toString()).toBe("ping");
+    const token = relayLines
+      .find((line) => line.startsWith("forward "))
+      ?.split(" ")[2];
     const clientClosed = new Promise<void>((resolve) =>
       client?.once("close", () => resolve()),
     );
-    const targetClosed = new Promise<void>((resolve) =>
-      target.once("close", () => resolve()),
-    );
-
+    client.write(`client ${token}\nping`);
+    client.resume();
+    await clientClosed;
+    expect(accepted).toBe(0);
     expect((await addOutcome).message).toContain("timed out");
-    expect(relayLines.some((line) => line.startsWith("unforward "))).toBe(true);
-    await Promise.all([clientClosed, targetClosed]);
+    expect(
+      relayLines.some(
+        (line) => line.startsWith("unforward ") && line.endsWith(` ${token}`),
+      ),
+    ).toBe(true);
     expect(client.destroyed).toBe(true);
-    expect(target.destroyed).toBe(true);
     expect(broker.listPortForwards()).toEqual([]);
   } finally {
     client?.destroy();
@@ -1106,4 +1119,134 @@ test("local ownership uses the shared model and returned snapshots cannot mutate
       broker.addPortForward({ ...spec, containerPort: 4000 }, "dynamic"),
     ).rejects.toThrow("binding-conflict");
   });
+});
+
+test("relay state updates are persisted in order and stale events cannot affect a re-added mapping", async () => {
+  await withForwardBroker({}, async ({ broker, written, echoPort }) => {
+    const spec = {
+      direction: "remote" as const,
+      containerPort: 5432,
+      hostPort: echoPort,
+    };
+    await broker.addPortForward(spec, "dynamic");
+    broker.onForwardState(5432, "unavailable", "relay disconnected");
+    broker.onForwardState(5432, "failed", "EADDRINUSE");
+    // A serialized API request is also a barrier for earlier state events.
+    await broker.addPortForward(spec, "dynamic");
+    expect(written.at(-1)?.portForwards[0]).toMatchObject({
+      state: "failed",
+      error: "EADDRINUSE",
+    });
+    broker.onForwardState(5432, "active");
+    await broker.addPortForward(spec, "dynamic");
+    expect(written.at(-1)?.portForwards[0]).toMatchObject({ state: "active" });
+    expect(written.at(-1)?.portForwards[0]).not.toHaveProperty("error");
+
+    const removing = broker.removePortForward(spec);
+    const replacing = broker.addPortForward(spec, "dynamic");
+    // This event refers to the old generation, even with the same port and time.
+    broker.onForwardState(5432, "failed", "stale failure");
+    await Promise.all([removing, replacing]);
+    await broker.addPortForward(spec, "dynamic");
+    expect(broker.listPortForwards()[0]).toMatchObject({ state: "active" });
+    expect(broker.listPortForwards()[0]).not.toHaveProperty("error");
+  });
+});
+
+test("persistence rollback closes both token streams and rejects the saved token", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-broker-token-"));
+  const socketPath = path.join(dir, "relay.sock");
+  const echo = createServer({ allowHalfOpen: true }, (socket: Socket) =>
+    socket.pipe(socket),
+  );
+  let broker: Awaited<ReturnType<typeof startPortBindBroker>> | undefined;
+  let relay: Socket | undefined;
+  let client: Socket | undefined;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let persisting = false;
+  try {
+    const hostPort = await listen(echo);
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    broker = await startPortBindBroker({
+      controlSocketPath: path.join(dir, "control.sock"),
+      gateway,
+      persist: async () => {
+        persisting = true;
+        await gate;
+        throw new Error("disk full");
+      },
+    });
+    const lines: string[] = [];
+    relay = connect({ path: socketPath });
+    let buffered = "";
+    relay.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString();
+      let end = buffered.indexOf("\n");
+      while (end !== -1) {
+        const line = buffered.slice(0, end);
+        lines.push(line);
+        buffered = buffered.slice(end + 1);
+        relay?.write(`ok ${line.split(" ")[1]}\n`);
+        end = buffered.indexOf("\n");
+      }
+    });
+    relay.write("control-v2\n");
+    for (let i = 0; i < 100 && !gateway.isRelayConnected(); i++)
+      await new Promise((r) => setTimeout(r, 5));
+    const result = broker
+      .addPortForward(
+        { direction: "remote", containerPort: 5432, hostPort },
+        "dynamic",
+      )
+      .catch((error: Error) => error);
+    for (let i = 0; i < 100 && !persisting; i++)
+      await new Promise((r) => setTimeout(r, 5));
+    expect(persisting).toBe(true);
+    const token = lines
+      .find((line) => line.startsWith("forward "))!
+      .split(" ")[2];
+    const targetAccepted = new Promise<Socket>((resolve) =>
+      echo.once("connection", resolve),
+    );
+    client = connect({ path: socketPath });
+    const echoed = new Promise<Buffer>((resolve) =>
+      client?.once("data", resolve),
+    );
+    client.write(`client ${token}\nping`);
+    const target = await targetAccepted;
+    expect((await echoed).toString()).toBe("ping");
+    const clientClosed = new Promise<void>((resolve) =>
+      client?.once("close", resolve),
+    );
+    const targetClosed = new Promise<void>((resolve) =>
+      target.once("close", resolve),
+    );
+    release();
+    expect(await result).toMatchObject({ message: "disk full" });
+    await Promise.all([clientClosed, targetClosed]);
+    expect(gateway.forwards()).toEqual([]);
+    const stale = connect({ path: socketPath });
+    try {
+      const closed = new Promise<void>((resolve) =>
+        stale.once("close", resolve),
+      );
+      stale.write(`client ${token}\nping`);
+      await closed;
+    } finally {
+      stale.destroy();
+    }
+  } finally {
+    release();
+    client?.destroy();
+    relay?.destroy();
+    await broker?.close();
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
 });

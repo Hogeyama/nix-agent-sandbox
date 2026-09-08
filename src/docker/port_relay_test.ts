@@ -20,6 +20,10 @@ async function withRelay<T>(
     gateway: Awaited<ReturnType<typeof startRelayGateway>>;
     echoPort: number;
     procDir: string;
+    socketPath: string;
+    tokens: string[];
+    readOutput: (stream: "stdout" | "stderr") => Promise<string>;
+    waitExit: () => Promise<number>;
   }) => Promise<T>,
 ): Promise<T> {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-relay-proc-"));
@@ -29,6 +33,34 @@ async function withRelay<T>(
   const echo = createServer({ allowHalfOpen: true }, (socket: Socket) => {
     socket.write("HELLO\n");
     socket.on("data", (chunk: Buffer) => socket.write(chunk));
+  });
+  const tokens: string[] = [];
+  const proxySockets = new Set<Socket>();
+  const relayPath = path.join(dir, "container.sock");
+  const proxy = createServer({ allowHalfOpen: true }, (client) => {
+    const upstream = connect({ path: socketPath, allowHalfOpen: true });
+    for (const socket of [client, upstream]) {
+      proxySockets.add(socket);
+      socket.on("error", () => {
+        client.destroy();
+        upstream.destroy();
+      });
+      socket.once("close", () => proxySockets.delete(socket));
+    }
+    let buffer = "";
+    upstream.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      let end = buffer.indexOf("\n");
+      while (end !== -1) {
+        const line = buffer.slice(0, end);
+        const match = /^forward [0-9a-f]{16} ([0-9a-f]{32}) [0-9]+$/.exec(line);
+        if (match) tokens.push(match[1]);
+        buffer = buffer.slice(end + 1);
+        end = buffer.indexOf("\n");
+      }
+    });
+    client.pipe(upstream);
+    upstream.pipe(client);
   });
   let echoListening = false;
   let gateway: Awaited<ReturnType<typeof startRelayGateway>> | undefined;
@@ -44,22 +76,40 @@ async function withRelay<T>(
       ensureRelay: async () => "ready",
     });
     gateway = startedGateway;
+    await new Promise<void>((resolve) => proxy.listen(relayPath, resolve));
     await mkdir(procDir, { recursive: true });
-    proc = Bun.spawn(["bun", SCRIPT], {
+    const startedProc = Bun.spawn(["bun", SCRIPT], {
       env: {
         ...process.env,
-        NAS_PORT_RELAY_SOCKET: socketPath,
+        NAS_PORT_RELAY_SOCKET: relayPath,
         NAS_PORT_RELAY_PROC_DIR: procDir,
         NAS_PORT_RELAY_WATCH_MS: "20",
       },
       stdout: "pipe",
       stderr: "pipe",
     });
+    proc = startedProc;
     for (let i = 0; i < 200 && !startedGateway.isRelayConnected(); i += 1) {
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(startedGateway.isRelayConnected()).toEqual(true);
-    return await fn({ gateway: startedGateway, echoPort, procDir });
+    return await fn({
+      gateway: startedGateway,
+      echoPort,
+      procDir,
+      socketPath,
+      tokens,
+      readOutput: async (stream) => {
+        const reader = startedProc[stream].getReader();
+        try {
+          const { value } = await reader.read();
+          return new TextDecoder().decode(value);
+        } finally {
+          reader.releaseLock();
+        }
+      },
+      waitExit: () => startedProc.exited,
+    });
   } finally {
     try {
       if (proc) {
@@ -68,6 +118,8 @@ async function withRelay<T>(
       }
     } finally {
       try {
+        for (const socket of proxySockets) socket.destroy();
+        await new Promise<void>((resolve) => proxy.close(() => resolve()));
         await gateway?.close();
       } finally {
         try {
@@ -134,7 +186,7 @@ test("the relay closes control for a request with extra fields", async () => {
   });
   const server = createServer((socket: Socket) => {
     socket.once("data", (chunk: Buffer) => {
-      if (chunk.toString() === "control\n") resolveControl(socket);
+      if (chunk.toString() === "control-v2\n") resolveControl(socket);
       else rejectControl(new Error(`unexpected relay header: ${chunk}`));
     });
   });
@@ -369,5 +421,61 @@ test("a connection to a forward whose host port is closed is dropped", async () 
     const client = await dial(containerPort);
     await new Promise<void>((resolve) => client.once("close", resolve));
     await gateway.unforward(containerPort);
+  });
+});
+
+test("a removed real-relay token cannot reach the host after the port is re-added", async () => {
+  await withRelay(async ({ gateway, echoPort, socketPath, tokens }) => {
+    const containerPort = await freePort();
+    await gateway.forward(containerPort, echoPort);
+    const oldToken = tokens.at(-1);
+    expect(oldToken).toMatch(/^[0-9a-f]{32}$/);
+    await gateway.unforward(containerPort);
+    await gateway.forward(containerPort, echoPort);
+    expect(tokens.at(-1)).not.toBe(oldToken);
+    for (const header of [
+      `client ${oldToken}`,
+      `client ${containerPort}`,
+      `client ${"f".repeat(32)} extra`,
+    ]) {
+      const socket = connect({ path: socketPath });
+      let received = false;
+      socket.on("data", () => {
+        received = true;
+      });
+      try {
+        const closed = new Promise<void>((resolve) =>
+          socket.once("close", resolve),
+        );
+        socket.write(`${header}\nping`);
+        await closed;
+        expect(received).toBe(false);
+      } finally {
+        socket.destroy();
+      }
+    }
+    const client = connect({ host: "127.0.0.1", port: containerPort });
+    try {
+      expect((await firstChunk(client)).toString()).toBe("HELLO\n");
+    } finally {
+      client.destroy();
+    }
+    await gateway.unforward(containerPort);
+  });
+});
+
+test("initial-ready is reported without stopping the real relay", async () => {
+  await withRelay(async ({ gateway, echoPort, readOutput }) => {
+    gateway.completeInitialForwards();
+    expect(await readOutput("stdout")).toBe("initial-ready\n");
+    expect(await gateway.probe(echoPort)).toBe("ok");
+  });
+});
+
+test("initial-failed stops the real relay with a failure reason", async () => {
+  await withRelay(async ({ gateway, readOutput, waitExit }) => {
+    gateway.completeInitialForwards("listen-failed");
+    expect(await waitExit()).toBe(1);
+    expect(await readOutput("stderr")).toBe("initial-failed listen-failed\n");
   });
 });

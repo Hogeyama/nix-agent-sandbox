@@ -46,7 +46,7 @@ async function waitForRelay(gateway: {
 /** Minimal stand-in for port-relay.mjs: dials a loopback port on request. */
 function fakeRelay(socketPath: string, target: number): Socket {
   const control = connect({ path: socketPath });
-  control.write("control\n");
+  control.write("control-v2\n");
   control.on("data", (chunk: Buffer) => {
     for (const line of chunk.toString().split("\n").filter(Boolean)) {
       const [verb, id, port] = line.split(" ");
@@ -214,7 +214,7 @@ test("openStream rejects when no stream arrives before the pairing timeout", asy
       pairingTimeoutMs: 50,
     });
     const control = connect({ path: socketPath });
-    control.write("control\n");
+    control.write("control-v2\n");
     await new Promise((resolve) => setTimeout(resolve, 20));
     await expect(gateway.openStream(3000)).rejects.toThrow("timed out");
     control.destroy();
@@ -229,7 +229,7 @@ test("an aborted openStream retires its id, so a late stream is closed", async (
       ensureRelay: async () => "ready",
     });
     const control = connect({ path: socketPath });
-    control.write("control\n");
+    control.write("control-v2\n");
     await waitForRelay(gateway);
     const requested = new Promise<string>((resolve) =>
       control.once("data", (data: Buffer) => resolve(data.toString().trim())),
@@ -255,7 +255,7 @@ test("an already-aborted request is not sent to the relay", async () => {
       ensureRelay: async () => "ready",
     });
     const control = connect({ path: socketPath });
-    control.write("control\n");
+    control.write("control-v2\n");
     await waitForRelay(gateway);
     const abort = new AbortController();
     abort.abort();
@@ -302,7 +302,7 @@ test("a second control connection and unknown stream are refused", async () => {
     const first = fakeRelay(socketPath, 3000);
     await new Promise((resolve) => setTimeout(resolve, 20));
     const second = connect({ path: socketPath });
-    second.write("control\n");
+    second.write("control-v2\n");
     await waitForClose(second);
     expect(gateway.isRelayConnected()).toEqual(true);
 
@@ -321,7 +321,7 @@ test("an invalid control line disconnects the relay", async () => {
       ensureRelay: async () => "ready",
     });
     const control = connect({ path: socketPath });
-    control.write("control\n");
+    control.write("control-v2\n");
     await waitForRelay(gateway);
     const closed = waitForClose(control);
     control.write("unexpected message\n");
@@ -338,7 +338,7 @@ test("control disconnect rejects pending requests and destroys paired streams", 
       ensureRelay: async () => "ready",
     });
     const control = connect({ path: socketPath });
-    control.write("control\n");
+    control.write("control-v2\n");
     await waitForRelay(gateway);
     const pending = gateway.openStream(3000);
     control.destroy();
@@ -362,7 +362,7 @@ test("close rejects a request that is waiting for a stream", async () => {
       ensureRelay: async () => "ready",
     });
     const control = connect({ path: socketPath });
-    control.write("control\n");
+    control.write("control-v2\n");
     await waitForRelay(gateway);
     const requested = new Promise<void>((resolve) =>
       control.once("data", () => resolve()),
@@ -393,7 +393,7 @@ function rawControl(socketPath: string): { socket: Socket; lines: string[] } {
       newline = buffered.indexOf("\n");
     }
   });
-  socket.write("control\n");
+  socket.write("control-v2\n");
   return { socket, lines };
 }
 
@@ -526,6 +526,7 @@ function ackingControl(socketPath: string): {
 test("a forward is recorded on ok and re-sent to a reconnecting relay", async () => {
   await withSocketPath(async (socketPath) => {
     const ensures: number[] = [];
+    const desired: Array<{ containerPort: number; hostPort: number }> = [];
     const gateway = await startRelayGateway({
       socketPath,
       ensureRelay: async () => {
@@ -533,14 +534,18 @@ test("a forward is recorded on ok and re-sent to a reconnecting relay", async ()
         return "ready";
       },
       reEnsureDelayMs: 5,
+      currentForwards: () => desired,
     });
     const first = ackingControl(socketPath);
     let second: { socket: Socket; lines: string[] } | undefined;
     try {
       await waitForRelay(gateway);
       await gateway.forward(5432, 15_432);
+      desired.push({ containerPort: 5432, hostPort: 15_432 });
       expect(
-        first.lines.some((line) => /^forward [0-9a-f]{16} 5432$/.test(line)),
+        first.lines.some((line) =>
+          /^forward [0-9a-f]{16} [0-9a-f]{32} 5432$/.test(line),
+        ),
       ).toBe(true);
       expect(gateway.forwards()).toEqual([
         {
@@ -562,7 +567,7 @@ test("a forward is recorded on ok and re-sent to a reconnecting relay", async ()
       await waitFor(
         () =>
           second?.lines.some((line) =>
-            /^forward [0-9a-f]{16} 5432$/.test(line),
+            /^forward [0-9a-f]{16} [0-9a-f]{32} 5432$/.test(line),
           ) === true,
       );
 
@@ -571,7 +576,7 @@ test("a forward is recorded on ok and re-sent to a reconnecting relay", async ()
       await waitFor(
         () =>
           second?.lines.some((line) =>
-            /^unforward [0-9a-f]{16} 5432$/.test(line),
+            /^unforward [0-9a-f]{16} [0-9a-f]{32}$/.test(line),
           ) === true,
       );
     } finally {
@@ -662,7 +667,10 @@ test("a client line for a forwarded port is piped to the host port", async () =>
       const client = connect({ path: socketPath });
       // The line and the first payload bytes arrive in one write, as a
       // client-first protocol delivers them.
-      client.write("client 5432\nping");
+      const token = relay.lines
+        .find((line) => line.startsWith("forward "))
+        ?.split(" ")[2];
+      client.write(`client ${token}\nping`);
       expect((await firstChunk(client)).toString()).toEqual("ping");
       const closed = waitForClose(client);
       expect(await gateway.unforward(5432)).toEqual({ listenerClosed: true });
@@ -690,6 +698,198 @@ test("unforward without a relay revokes permission but cannot confirm listener c
       await waitFor(() => !gateway.isRelayConnected());
       expect(await gateway.unforward(5432)).toEqual({ listenerClosed: false });
       expect(gateway.forwards()).toEqual([]);
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("an old control handshake is classified as unsupported and never adopted", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const legacy = connect({ path: socketPath });
+    try {
+      const closed = waitForClose(legacy);
+      legacy.write("control\n");
+      await closed;
+      expect(gateway.isRelayConnected()).toBe(false);
+      expect(gateway.relayCapability()).toBe("unsupported");
+      await expect(gateway.forward(5432, 5432)).rejects.toMatchObject({
+        reason: "unsupported",
+      });
+    } finally {
+      legacy.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("a timed-out token stays unavailable after a late ACK and rollback closes its listener", async () => {
+  await withSocketPath(async (socketPath) => {
+    const states: string[] = [];
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+      pairingTimeoutMs: 50,
+      onForwardState: (_port, state) => {
+        states.push(state);
+      },
+    });
+    const relay = rawControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      await expect(gateway.forward(5432, 5432)).rejects.toThrow("timed out");
+      const [, id, token] = relay.lines
+        .find((line) => line.startsWith("forward "))!
+        .split(" ");
+      relay.socket.write(`ok ${id}\n`);
+      const client = connect({ path: socketPath });
+      const closed = waitForClose(client);
+      client.write(`client ${token}\n`);
+      await closed;
+      expect(states).toContain("unavailable");
+      expect(states).not.toContain("active");
+      const removing = gateway.unforward(5432);
+      await waitFor(() =>
+        relay.lines.some((line) => line.startsWith("unforward ")),
+      );
+      const [, removeId, removedToken] = relay.lines
+        .find((line) => line.startsWith("unforward "))!
+        .split(" ");
+      expect(removedToken).toBe(token);
+      relay.socket.write(`ok ${removeId}\n`);
+      expect(await removing).toEqual({ listenerClosed: true });
+    } finally {
+      relay.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("a token issued by another gateway never authorizes a host connection", async () => {
+  await withSocketPath(async (socketPath) => {
+    const otherPath = `${socketPath}.other`;
+    const first = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const second = await startRelayGateway({
+      socketPath: otherPath,
+      ensureRelay: async () => "ready",
+    });
+    let accepted = 0;
+    const echo = createServer((socket: Socket) => {
+      accepted += 1;
+      socket.end("HELLO");
+    });
+    const a = ackingControl(socketPath);
+    const b = ackingControl(otherPath);
+    try {
+      await new Promise<void>((resolve) =>
+        echo.listen(0, "127.0.0.1", resolve),
+      );
+      const hostPort = (echo.address() as { port: number }).port;
+      await Promise.all([waitForRelay(first), waitForRelay(second)]);
+      await Promise.all([
+        first.forward(5432, hostPort),
+        second.forward(5432, hostPort),
+      ]);
+      const token = a.lines
+        .find((line) => line.startsWith("forward "))!
+        .split(" ")[2];
+      const client = connect({ path: otherPath });
+      const closed = waitForClose(client);
+      client.resume();
+      client.write(`client ${token}\n`);
+      await closed;
+      expect(client.destroyed).toBe(true);
+      expect(accepted).toBe(0);
+    } finally {
+      a.socket.destroy();
+      b.socket.destroy();
+      await first.close();
+      await second.close();
+      await new Promise<void>((resolve) => echo.close(() => resolve()));
+    }
+  });
+});
+
+test("reconnect reports failed listener state and only replays current broker mappings", async () => {
+  await withSocketPath(async (socketPath) => {
+    let desired = [
+      { containerPort: 5432, hostPort: 15432 },
+      { containerPort: 6379, hostPort: 16379 },
+    ];
+    const states: Array<[number, string, string | undefined]> = [];
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+      currentForwards: () => desired,
+      onForwardState: (port, state, error) => {
+        states.push([port, state, error]);
+      },
+    });
+    const first = ackingControl(socketPath);
+    let second: ReturnType<typeof rawControl> | undefined;
+    try {
+      await waitForRelay(gateway);
+      await waitFor(
+        () => states.filter(([, state]) => state === "active").length === 2,
+      );
+      const oldToken = first.lines
+        .find((line) => line.endsWith(" 5432"))!
+        .split(" ")[2];
+      first.socket.destroy();
+      await waitFor(() => !gateway.isRelayConnected());
+      expect(states).toContainEqual([
+        5432,
+        "unavailable",
+        "relay disconnected",
+      ]);
+      desired = desired.filter((pair) => pair.containerPort !== 6379);
+      await gateway.unforward(6379);
+      second = rawControl(socketPath);
+      await waitForRelay(gateway);
+      await waitFor(() =>
+        second!.lines.some((line) => line.startsWith("forward ")),
+      );
+      const requests = second.lines.filter((line) =>
+        line.startsWith("forward "),
+      );
+      expect(requests).toHaveLength(1);
+      const [, id, token, port] = requests[0].split(" ");
+      expect(port).toBe("5432");
+      expect(token).not.toBe(oldToken);
+      second.socket.write(`fail ${id} EADDRINUSE\n`);
+      await waitFor(() => states.some(([, state]) => state === "failed"));
+      expect(states.at(-1)).toEqual([5432, "failed", "EADDRINUSE"]);
+    } finally {
+      first.socket.destroy();
+      second?.socket.destroy();
+      await gateway.close();
+    }
+  });
+});
+
+test("initial readiness messages fit the ASCII control frame limit", async () => {
+  await withSocketPath(async (socketPath) => {
+    const gateway = await startRelayGateway({
+      socketPath,
+      ensureRelay: async () => "ready",
+    });
+    const relay = rawControl(socketPath);
+    try {
+      await waitForRelay(gateway);
+      gateway.completeInitialForwards();
+      gateway.completeInitialForwards("接続失敗".repeat(100));
+      await waitFor(() => relay.lines.length === 2);
+      expect(relay.lines[0]).toBe("initial-ready");
+      expect(relay.lines[1]).toMatch(/^initial-failed [\x20-\x7e]+$/);
+      expect(Buffer.byteLength(relay.lines[1])).toBeLessThanOrEqual(128);
     } finally {
       relay.socket.destroy();
       await gateway.close();
