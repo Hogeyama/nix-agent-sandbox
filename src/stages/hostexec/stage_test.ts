@@ -47,6 +47,8 @@ function makeProfile(): Profile {
       scopes: {},
       fallback: "deny",
       defaults: {},
+      localForwards: [],
+      remoteForwards: [],
       proxy: { forwardPorts: [] },
       requestBodyAudit: structuredClone(DEFAULT_REQUEST_BODY_AUDIT_CONFIG),
       pendingTimeoutSeconds: 300,

@@ -207,6 +207,44 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
+  "loadConfig: writes legacy migration guidance to stderr without stdout",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network { proxy { forwardPorts { 5432; 6379 } } }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const stderrSpy = spyOn(console, "error").mockImplementation(() => {});
+      const stdoutSpy = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await loadConfig({ startDir: dir });
+        expect(stderrSpy).toHaveBeenCalledTimes(1);
+        const warning = String(stderrSpy.mock.calls[0]?.[0]);
+        expect(warning).toContain('profile "dev"');
+        expect(warning).toContain("network.proxy.forwardPorts");
+        expect(warning).toContain("network.remoteForwards");
+        expect(warning).toContain(
+          "new PortForwardConfig { hostPort = 5432; containerPort = 5432 }",
+        );
+        expect(warning).toContain(
+          "new PortForwardConfig { hostPort = 6379; containerPort = 6379 }",
+        );
+        expect(warning).toContain("docs/migration/port-forwarding.md");
+        expect(stdoutSpy).not.toHaveBeenCalled();
+      } finally {
+        stderrSpy.mockRestore();
+        stdoutSpy.mockRestore();
+      }
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: defaults hostexec.installScript to false",
   async () => {
     const configPkl = `amends "Schema.pkl"

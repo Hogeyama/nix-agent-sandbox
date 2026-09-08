@@ -173,6 +173,14 @@ class ProxyConfig {
   forwardPorts: Listing<Int> = new {}
 }
 
+class PortForwardConfig {
+  /// Host-side TCP port.
+  hostPort: Int
+
+  /// Container-side TCP port.
+  containerPort: Int
+}
+
 class RequestBodyAuditConfig {
   /// masking 前の exact request body を host audit DB に保存する。既定では送信もしない。
   enable: Boolean = false
@@ -395,6 +403,12 @@ class NetworkDefaults {
 }
 
 class NetworkConfig {
+  /// Host listener forwarded to a container service (-L).
+  localForwards: Listing<PortForwardConfig> = new {}
+
+  /// Container listener forwarded to a host service (-R).
+  remoteForwards: Listing<PortForwardConfig> = new {}
+
   /// スコープ。キーがルール ID の名前空間になる。
   ///
   /// リクエストのターゲットから 1 つのスコープを選ぶ。選択はターゲットパターンの

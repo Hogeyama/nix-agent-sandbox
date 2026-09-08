@@ -68,6 +68,8 @@ function makeProfile(
     scopes: networkOverrides.scopes ?? {},
     fallback: networkOverrides.fallback ?? "deny",
     defaults: networkOverrides.defaults ?? {},
+    localForwards: networkOverrides.localForwards ?? [],
+    remoteForwards: networkOverrides.remoteForwards ?? [],
     proxy: networkOverrides.proxy
       ? { forwardPorts: [...networkOverrides.proxy.forwardPorts] }
       : { forwardPorts: [] },

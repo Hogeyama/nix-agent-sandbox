@@ -26,6 +26,7 @@ import {
   migrateYml2Pkl,
 } from "./migrate.ts";
 import { getGlobalConfigDir } from "./paths.ts";
+import { normalizePortForwards } from "./port_forwards.ts";
 import { retiredNixSourceErrors } from "./retired_nix.ts";
 import { ensureConfigTrusted, recordConfigTrust } from "./trust.ts";
 import type { Config } from "./types.ts";
@@ -73,8 +74,13 @@ export async function loadConfig(
   // the error can name the replacement.
   await reportLegacyIdentifiers(found.configPath);
 
-  const raw = await evalPklConfig(found.nasDir, found.configPath);
-  return validateConfig(raw as Config);
+  const raw = (await evalPklConfig(found.nasDir, found.configPath)) as Config;
+  const config = validateConfig(raw);
+  for (const [profileName, profile] of Object.entries(raw.profiles)) {
+    const result = normalizePortForwards(profileName, profile.network, []);
+    for (const warning of result.warnings) console.error(warning);
+  }
+  return config;
 }
 
 /**
