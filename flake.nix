@@ -174,6 +174,43 @@
           '';
         };
 
+        # 単一の静的バイナリとして配る。Zig が musl を同梱しているので、
+        # nix-bundle-elf で glibc を束ねる必要が無い。テストは実行ファイルの
+        # ターゲットとは別にホスト向けにビルドされる (build.zig を参照)。
+        sumi = pkgs.stdenv.mkDerivation {
+          pname = "sumi";
+          version = self.shortRev or self.dirtyShortRev or "dirty";
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./contrib/sumi
+              ./src/mask-filter
+              ./src/zig
+            ];
+          };
+          sourceRoot = "source/contrib/sumi";
+          nativeBuildInputs = [ zig ];
+          dontConfigure = true;
+          dontFixup = true;
+          doCheck = true;
+          buildPhase = ''
+            zig build \
+              --global-cache-dir "$TMPDIR/sumi-zig-cache" \
+              -Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
+              -Doptimize=ReleaseSafe \
+              -Dstrip=true \
+              -Dversion=${self.shortRev or self.dirtyShortRev or "dirty"}
+          '';
+          checkPhase = ''
+            zig build test \
+              --global-cache-dir "$TMPDIR/sumi-zig-cache"
+          '';
+          installPhase = ''
+            mkdir -p $out/bin
+            cp zig-out/bin/sumi $out/bin/
+          '';
+        };
+
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
         nasAssets = pkgs.runCommand "nas-assets" { } ''
@@ -282,6 +319,7 @@
           maskfs = maskfsPackage;
           maskfs-bundled = maskfsBundled;
           mask-filter = maskFilter;
+          sumi = sumi;
         };
 
         devShells.default = pkgs.mkShell {
