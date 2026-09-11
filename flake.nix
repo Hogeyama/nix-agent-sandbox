@@ -281,6 +281,7 @@
           bundled = nasBundled;
           maskfs = maskfsPackage;
           maskfs-bundled = maskfsBundled;
+          mask-filter = maskFilter;
         };
 
         devShells.default = pkgs.mkShell {
