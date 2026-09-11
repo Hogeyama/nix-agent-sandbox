@@ -254,7 +254,10 @@ hook 全体に 15 秒の期限を置く。期限が来たら、残りのトー�
 
 `tool_input.command` を `<self> run --secrets-file F -- <shell> -c <command>` に書き換えて
 `hookSpecificOutput.updatedInput` で返す。`<self>` は `/proc/self/exe` の解決結果、各引数は
-POSIX シェルとして安全に quote する。command が既に `<self> run ` で始まる場合は触らない。
+POSIX シェルとして安全に quote する。command 全体が、同じ `<self>`、F、`<shell>` を使って
+この形式に正規化された 1 コマンドと完全に一致する場合だけ、既に書き換え済みとして触らない。
+末尾に別のコマンドや pipeline が続く場合、別の secrets ファイルや shell を使う場合、外側の
+shell で展開される未 quote の文字列がある場合は、入力全体を改めて包む。
 
 `permissionDecision` は返さない。返すと `allow` なら全 Bash が承認プロンプトを迂回し、
 `ask` でも通常の判定を上書きする。返さなければ、書き換え後の command に対して通常の
