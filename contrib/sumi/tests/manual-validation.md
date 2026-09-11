@@ -93,9 +93,9 @@ CLAUDE_CONFIG_DIR="$SUMI_MANUAL_DIR/claude-protected" \
   --root "$SUMI_MANUAL_DIR/additional-secret"
 ```
 
-同じ起動コマンドで再度 Claude Code を起動し、`@notes.txt` が通ることと、秘密を持つ `@app.properties` は拒否されることを確認します。秘密を持つ fixture は、`--root` を設定する前には添付しないでください。スラッシュがなく拡張子が 4 文字を超える未解決トークンは、パス形の判定だけでは拒否されないためです。これにより `--root` が無条件の許可ではなく、検査する場所の追加であることを確認できます。
+同じ起動コマンドで再度 Claude Code を起動し、`@notes.txt` が通ることと、秘密を持つ `@app.properties` は拒否されることを確認します。`--root` を設定する前は、解決できない `@app.properties` も拡張子の長さにかかわらず拒否されます。これにより `--root` が無条件の許可ではなく、検査する場所の追加であることを確認できます。
 
-Bash の allow ルールは、隔離設定だけに `Bash(cat:*)` を追加して確認します。Claude Code を再起動して `cat config/app.properties` を依頼し、元の `cat` ではなく `sumi run ...` へ書き換えられたコマンドに対してルールが照合されるため、`Bash(cat:*)` では権限プロンプトを省略できないことを確認します。設定形式は使用中の Claude Code バージョンの UI または公式設定方法に従い、通常の設定には追加しないでください。
+隔離設定の `permissions.allow` に `Bash(cat:*)`、`permissions.deny` に `Bash(git:*)` を追加します。Claude Code を再起動して `cat config/app.properties` を依頼し、権限プロンプトなしで実行され、出力がマスクされることを確認します。別々の依頼で `git --version` と `echo ok && git --version` を実行させ、どちらも拒否されることを確認します。モデルが呼び出し自体を省略した場合は、権限チェックを実測したことにはせず、未検証として記録してください。`CLAUDE_CODE_SHELL_PREFIX` によるマスクは、元のコマンドに対する権限判定後に適用されます。通常の Claude 設定には検証用のルールを追加しないでください。
 
 ## hook 無効化の対照セッション
 

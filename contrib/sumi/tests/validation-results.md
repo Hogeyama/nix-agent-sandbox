@@ -1,5 +1,7 @@
 # Claude Code での検証記録
 
+以下の旧版の記録では、Bash を PreToolUse hook で書き換える sumi `14751bb` を使用しています。現行の shell prefix 方式とは区別して読んでください。
+
 ホスト上の Claude Code を使い、利用者の対話操作と `claude -p` による実ツール呼び出しで確認した結果です。sumi は `14751bb` のビルドを使い、捨てリポジトリ、隔離した `CLAUDE_CONFIG_DIR`、デコイ値 `Tr0ub4dor` と `rotated-value-1` を用意しました。確認手順は [tests/manual-validation.md](manual-validation.md) にあります。
 
 開始時は 2.1.263 でしたが、途中の再起動後に 2.1.268 へ更新されていました。追加ディレクトリ、ペイロード、手動モードでの権限確認は、その更新を確認した後に実施しています。Read・Grep・Bash・Git 履歴の出力は 2.1.268 で実ツール呼び出しを再確認しました。表のバージョンは、それぞれの観測が得られた環境を示します。
@@ -29,6 +31,20 @@ Claude Code 2.1.268 と sumi `14751bb` で、ローカルの stdio MCP サーバ
 | `isError: true` のツールエラー | `PostToolUseFailure` | `tool_error: credential=McpFailureDecoy_7429` |
 | JSON-RPC エラー（code `-32603`） | `PostToolUseFailure` | `Intentional protocol failure: credential=McpFailureDecoy_7429` |
 
-hook の入力・sumi の出力・Claude Code の `tool_result` を照合しました。エラー2件では sumi は `systemMessage` だけを返し、ツール結果に平文が残りました。モデルの最終返答にも、その値が引用されました。したがって、現在の sumi で MCP の失敗本文から登録済みの値がモデルへ届く例は実測済みです。Read や Edit の失敗本文については、この試験では確認していません。
+hook の入力・sumi の出力・Claude Code の `tool_result` を照合しました。エラー2件では sumi は `systemMessage` だけを返し、ツール結果に平文が残りました。モデルの最終返答にも、その値が引用されました。したがって、この旧版の sumi で MCP の失敗本文から登録済みの値がモデルへ届く例は実測済みです。Read や Edit の失敗本文については、この試験では確認していません。
 
 この試験は専用の作業ディレクトリと設定で実行し、`--no-session-persistence` を指定しました。上の9件の保護側トランスクリプト検査とは別の応答ストリームとして記録しています。
+
+## shell prefix 方式（2026-09-12）
+
+Claude Code 2.1.268 と sumi の shell prefix 実装（`77e344e6`）を使い、隔離した設定と作業ディレクトリで実ツールを呼び出しました。公開デコイ値 `PrefixDecoy_7429` をファイルに置き、プロンプトには含めていません。`init` が生成した exec 形式の hook と `CLAUDE_CODE_SHELL_PREFIX` をそのまま使用しています。
+
+| 実際のツール呼び出し | 結果 |
+| --- | --- |
+| `Read sample.txt` | `password=****************` |
+| `Bash: cat sample.txt` | `Bash(cat:*)` の許可で実行され、出力は `password=****************`、終了コード 0 |
+| `Bash: cat sample.txt && false` | 出力は同じくマスクされ、終了コード 1 とエラー状態を保持 |
+| `Bash: git --version` | `Bash(git:*)` の deny により拒否され、`permission_denials` に元のコマンドが記録された |
+| `Bash: echo ok && git --version` | 別セッションで実際に呼び出し、同じ deny により拒否された |
+
+`--permission-mode default`、`--setting-sources ''`、`--no-session-persistence` を指定し、検証用 settings の allow／deny だけで確認しました。拒否2件はモデルが呼び出しを省略した結果ではありません。Read と実行された Bash のツール結果にはデコイの平文がなく、元のコマンド文字列も書き換えられていません。MCP はこの方式の検証対象に含めていません。
