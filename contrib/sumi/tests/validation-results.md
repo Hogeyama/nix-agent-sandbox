@@ -18,3 +18,17 @@
 | 権限プロンプトが従来どおり出ること | 2.1.268 確認後 | `--permission-mode default` で `sumi run … -- bash -c 'cat config/app.properties'` の承認画面が出た。今回だけ許可した後の表示も `db.password=***************` にマスクされた |
 | Bash の allow ルールがラッパーに対して照合されること | 2.1.268 確認後 | `Bash(cat:*)` を許可しても承認が必要だった。恒久許可の候補は `sumi run *` と表示された。auto mode では classifier が許可したため、手動モードで区別して確認した |
 | 保護側トランスクリプトに平文が無いこと | 2.1.263 / 2.1.268 | 上記の確認後、保護側 `projects` 以下の JSONL 全9件で新旧両方のデコイ値が0件。CLI の応答ストリームにも平文なし。元の作業ファイルには更新後の平文が残っていることを別途確認した |
+
+## MCP ツールの失敗本文（2026-09-12）
+
+Claude Code 2.1.268 と sumi `14751bb` で、ローカルの stdio MCP サーバーを使って確認しました。登録済みの公開デコイ値 `McpFailureDecoy_7429` を返す3つのツールを、実際の `claude -p` から1回ずつ呼び出しました。プロンプトやツールの説明には値を含めていません。
+
+| MCP の応答 | 発火した hook | モデルへ渡ったツール結果 |
+| --- | --- | --- |
+| 正常なテキスト応答 | `PostToolUse` | `success: credential=********************` |
+| `isError: true` のツールエラー | `PostToolUseFailure` | `tool_error: credential=McpFailureDecoy_7429` |
+| JSON-RPC エラー（code `-32603`） | `PostToolUseFailure` | `Intentional protocol failure: credential=McpFailureDecoy_7429` |
+
+hook の入力・sumi の出力・Claude Code の `tool_result` を照合しました。エラー2件では sumi は `systemMessage` だけを返し、ツール結果に平文が残りました。モデルの最終返答にも、その値が引用されました。したがって、現在の sumi で MCP の失敗本文から登録済みの値がモデルへ届く例は実測済みです。Read や Edit の失敗本文については、この試験では確認していません。
+
+この試験は専用の作業ディレクトリと設定で実行し、`--no-session-persistence` を指定しました。上の9件の保護側トランスクリプト検査とは別の応答ストリームとして記録しています。
