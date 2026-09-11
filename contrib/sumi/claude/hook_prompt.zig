@@ -47,15 +47,6 @@ pub fn extractTokens(a: std.mem.Allocator, prompt: []const u8) ![]const []const 
     return out.toOwnedSlice(a);
 }
 
-pub fn looksLikePath(token: []const u8) bool {
-    if (std.mem.indexOfScalar(u8, token, '/') != null) return true;
-    const dot = std.mem.lastIndexOfScalar(u8, token, '.') orelse return false;
-    const ext = token[dot + 1 ..];
-    if (ext.len == 0 or ext.len > 4 or !std.ascii.isAlphabetic(ext[0])) return false;
-    for (ext[1..]) |c| if (!std.ascii.isAlphanumeric(c)) return false;
-    return true;
-}
-
 pub fn isMcpResource(token: []const u8) bool {
     return std.mem.indexOf(u8, token, "://") != null;
 }
@@ -174,7 +165,7 @@ pub const Checker = struct {
             }
         }
         if (found) return .clean;
-        return if (looksLikePath(path)) .unverifiable else .clean;
+        return .unverifiable;
     }
 };
 
@@ -341,13 +332,7 @@ test "extractTokens: lone marker yields nothing" {
     try testing.expectEqual(@as(usize, 0), got.len);
 }
 
-test "path and MCP resource recognition" {
-    try testing.expect(looksLikePath("src/main.zig"));
-    try testing.expect(looksLikePath("gone.java"));
-    try testing.expect(!looksLikePath("gone.properties"));
-    try testing.expect(!looksLikePath("Override"));
-    try testing.expect(!looksLikePath("v1.2.3"));
-    try testing.expect(!looksLikePath("file.12345"));
+test "MCP resource recognition" {
     try testing.expect(isMcpResource("github:repo://owner/name"));
     try testing.expect(isMcpResource("https://example.invalid"));
 }
@@ -361,18 +346,21 @@ test "expandHome: only leading home marker expands" {
     try testing.expectEqualStrings("x/~/y", same);
 }
 
-test "Checker: real files, missing paths, and plain names" {
+test "Checker: real files pass and every missing token is unverifiable" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "holds.java", .data = "db.password=Tr0ub4dor\n" });
     try tmp.dir.writeFile(.{ .sub_path = "clean.java", .data = "nothing\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "clean", .data = "nothing\n" });
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
     const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.holds_value, try c.check("holds.java"));
     try testing.expectEqual(Verdict.clean, try c.check("clean.java"));
-    try testing.expectEqual(Verdict.unverifiable, try c.check("gone.java"));
-    try testing.expectEqual(Verdict.clean, try c.check("Override"));
+    try testing.expectEqual(Verdict.clean, try c.check("clean"));
+    try testing.expectEqual(Verdict.unverifiable, try c.check("gone.properties"));
+    try testing.expectEqual(Verdict.unverifiable, try c.check("Override"));
+    try testing.expectEqual(Verdict.unverifiable, try c.check("gone.txt"));
 }
 
 test "Checker: directory and basename search use real files" {
