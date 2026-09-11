@@ -1,7 +1,7 @@
 //! POSIX シェル向けの quote。
 //!
-//! hook の command は Claude Code が `sh -c` で実行し、pre-bash が書き換えた
-//! command も同じ経路を通る。英数字と `_ / . - = : @ ,` だけの文字列はそのまま返し、
+//! Claude Code の shell prefix はシェルコマンドとして保存される。英数字と
+//! `_ / . - = : @ ,` だけの文字列はそのまま返し、
 //! それ以外は単引用符で包み、内側の単引用符は `'\''` にする。
 
 const std = @import("std");
@@ -19,26 +19,26 @@ pub fn needsQuote(s: []const u8) bool {
     return false;
 }
 
-/// True only for the exact spelling produced by quote for one complete word.
-pub fn isCanonicalWord(word: []const u8) bool {
-    if (word.len == 0) return false;
-    if (word[0] != '\'') return !needsQuote(word);
-    if (word.len < 2 or word[word.len - 1] != '\'') return false;
-    if (word.len == 2) return true;
+pub fn isExecutableFile(path: []const u8) bool {
+    const file = std.fs.cwd().openFile(path, .{}) catch return false;
+    defer file.close();
+    if ((file.stat() catch return false).kind != .file) return false;
+    std.posix.access(path, std.posix.X_OK) catch return false;
+    return true;
+}
 
-    var needed_quote = false;
-    var i: usize = 1;
-    while (i < word.len - 1) {
-        if (word[i] == '\'') {
-            if (i + 4 > word.len - 1 or !std.mem.eql(u8, word[i .. i + 4], "'\\''")) return false;
-            needed_quote = true;
-            i += 4;
-            continue;
-        }
-        if (!isBare(word[i])) needed_quote = true;
-        i += 1;
+pub fn resolveBash(allocator: std.mem.Allocator) !?[]u8 {
+    const path = std.posix.getenv("PATH") orelse return null;
+    var it = std.mem.splitScalar(u8, path, ':');
+    while (it.next()) |dir| {
+        if (dir.len == 0) continue;
+        const candidate = try std.fs.path.join(allocator, &.{ dir, "bash" });
+        defer allocator.free(candidate);
+        const absolute = std.fs.cwd().realpathAlloc(allocator, candidate) catch continue;
+        if (isExecutableFile(absolute)) return absolute;
+        allocator.free(absolute);
     }
-    return needed_quote;
+    return null;
 }
 
 pub fn quote(allocator: std.mem.Allocator, s: []const u8) ![]u8 {

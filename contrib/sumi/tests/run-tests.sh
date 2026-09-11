@@ -61,12 +61,6 @@ prompt() {
   record_success_status prompt "${statuses[1]}"
 }
 
-prebash() {
-  printf '%s' "$1" | "$sumi" hook --agent claude pre-bash --secrets-file "${2:-$work/secrets.txt}" --shell /bin/bash
-  local statuses=("${PIPESTATUS[@]}")
-  record_success_status pre-bash "${statuses[1]}"
-}
-
 prompt_with_missing_secrets() {
   printf '%s' '{"prompt":""}' | "$sumi" hook --agent claude prompt --secrets-file "$work/missing.txt" | decision
   local statuses=("${PIPESTATUS[@]}")
@@ -87,7 +81,7 @@ leaks() {
 out="$(printf 'before=%s after=%s\n' "$current" "$retired" | filter_success)"
 check "filter masks every listed value" 'before=********* after=**********' "$out"
 
-"$sumi" run --secrets-file "$work/secrets.txt" -- /bin/bash -c \
+"$sumi" run --secrets-file "$work/secrets.txt" --shell /bin/bash \
   'printf "stdout=%s\n" "Tr0ub4dor"; printf "stderr=%s\n" "hunter2xyz" >&2; exit 7' \
   >"$work/run.stdout" 2>"$work/run.stderr"
 status=$?
@@ -95,19 +89,19 @@ check "run masks stdout" 'stdout=*********' "$(cat "$work/run.stdout")"
 check "run masks stderr" 'stderr=**********' "$(cat "$work/run.stderr")"
 check "run keeps the child exit status" "7" "$status"
 
-out="$("$sumi" run --secrets-file "$work/secrets.txt" -- /bin/bash -c 'printf %s "$SUMI_SUPERVISED"')"
+out="$("$sumi" run --secrets-file "$work/secrets.txt" 'printf %s "$SUMI_SUPERVISED"')"
 record_success_status "run supervised child" "$?"
 check "run marks the child as supervised" "1" "$out"
 
-"$sumi" run --secrets-file "$work/missing.txt" -- /bin/bash -c \
-  'touch "$1"; printf Tr0ub4dor' _ "$work/missing-ran" >"$work/missing.out" 2>"$work/missing.err"
+"$sumi" run --secrets-file "$work/missing.txt" --shell /bin/bash \
+  "touch '$work/missing-ran'; printf Tr0ub4dor" >"$work/missing.out" 2>"$work/missing.err"
 status=$?
 check "run with a missing list exits 121" "121" "$status"
 check "run with a missing list suppresses execution" "no" "$([ -e "$work/missing-ran" ] && echo yes || echo no)"
 check "run with a missing list suppresses stdout" "0" "$(wc -c < "$work/missing.out" | tr -d ' ')"
 
-"$sumi" run --secrets-file "$work/empty.txt" -- /bin/bash -c \
-  'touch "$1"; printf Tr0ub4dor' _ "$work/empty-ran" >"$work/empty.out" 2>"$work/empty.err"
+"$sumi" run --secrets-file "$work/empty.txt" --shell /bin/bash \
+  "touch '$work/empty-ran'; printf Tr0ub4dor" >"$work/empty.out" 2>"$work/empty.err"
 status=$?
 check "run with an empty list exits 121" "121" "$status"
 check "run with an empty list suppresses execution" "no" "$([ -e "$work/empty-ran" ] && echo yes || echo no)"
@@ -125,6 +119,25 @@ check "filter with an empty list suppresses input" "0" "$(wc -c < "$work/filter-
 check "filter unsupported argument exits 2" "2" "$?"
 "$sumi" run --secrets-file "$work/secrets.txt" >/dev/null 2>&1
 check "run missing command exits 2" "2" "$?"
+
+whole_command="IFS= read -r value; printf 'file=%s\\n' \"\$value\" > '$work/whole-command.txt'; cat '$work/whole-command.txt'; printf 'stderr=%s\\n' 'hunter2xyz' >&2; exit 9"
+printf '%s\n' "$current" | "$sumi" run --secrets-file "$work/secrets.txt" --shell /bin/bash "$whole_command" >"$work/prefix.stdout" 2>"$work/prefix.stderr"
+statuses=("${PIPESTATUS[@]}")
+check "prefix run evaluates one whole command with stdin and redirects" 'file=*********' "$(cat "$work/prefix.stdout")"
+check "prefix run masks stderr" 'stderr=**********' "$(cat "$work/prefix.stderr")"
+check "prefix run preserves compound command status" "9" "${statuses[1]}"
+
+"$sumi" run --secrets-file "$work/secrets.txt" --shell bin/bash "touch '$work/relative-shell-ran'" >/dev/null 2>&1
+check "prefix run rejects a relative shell" "121" "$?"
+check "relative shell does not execute the command" "no" "$([ -e "$work/relative-shell-ran" ] && echo yes || echo no)"
+printf '#!/bin/sh\nexit 0\n' > "$work/not-executable"
+chmod 600 "$work/not-executable"
+"$sumi" run --secrets-file "$work/secrets.txt" --shell "$work/not-executable" "touch '$work/nonexec-shell-ran'" >/dev/null 2>&1
+check "prefix run rejects a non-executable shell" "121" "$?"
+check "non-executable shell does not execute the command" "no" "$([ -e "$work/nonexec-shell-ran" ] && echo yes || echo no)"
+
+"$sumi" run --secrets-file "$work/secrets.txt" --shell /bin/bash 'true' extra >/dev/null 2>&1
+check "prefix run rejects extra command operands" "2" "$?"
 
 # --- post-tool ---------------------------------------------------------------
 
@@ -238,57 +251,6 @@ check "empty prompt with missing secrets is blocked" "block" "$out"
 depth_prompt_payload="{\"prompt\":\"clean\",\"nested\":${depth_open_over}0${depth_close_over}}"
 check "prompt beyond the JSON depth boundary is blocked" "block" "$(prompt "$depth_prompt_payload" | decision)"
 
-# --- pre-bash ----------------------------------------------------------------
-
-wrapped="$(prebash '{"tool_input":{"command":"cat decoy && false"}}' | jq -r '.hookSpecificOutput.updatedInput.command')"
-case "$wrapped" in
-  *" run --secrets-file "*" -- /bin/bash -c 'cat decoy && false'") check "pre-bash wraps the command" "ok" "ok" ;;
-  *) check "pre-bash wraps the command" "ok" "$wrapped" ;;
-esac
-
-check "pre-bash returns no permissionDecision" "null" "$(prebash '{"tool_input":{"command":"ls"}}' | jq -r '.hookSpecificOutput.permissionDecision')"
-
-printf 'db.password=%s\n' "$current" > "$work/decoy.txt"
-observed="$(bash -c "$(prebash "$(jq -nc --arg f "$work/decoy.txt" '{tool_input:{command:("cat " + $f + " && false")}}')" | jq -r '.hookSpecificOutput.updatedInput.command')" 2>&1)"
-check "wrapped command masks a failing command's output" "no" "$(leaks "$observed")"
-bash -c "$(prebash '{"tool_input":{"command":"exit 7"}}' | jq -r '.hookSpecificOutput.updatedInput.command')" >/dev/null 2>&1
-check "wrapped command keeps the exit status" "7" "$?"
-check "already wrapped command is left alone" "" "$(prebash "$(jq -nc --arg w "$wrapped" '{tool_input:{command:$w}}')")"
-
-compound_wrapper="$wrapped; cat '$work/decoy.txt'; false"
-compound_rewrite="$(prebash "$(jq -nc --arg w "$compound_wrapper" '{tool_input:{command:$w}}')" | jq -r '.hookSpecificOutput.updatedInput.command // ""')"
-check "a compound command after a wrapper is wrapped again" "yes" "$([ -n "$compound_rewrite" ] && echo yes || echo no)"
-compound_observed="$(bash -c "$compound_rewrite" 2>&1)"
-compound_status=$?
-check "a compound wrapper command masks all output" "no" "$(leaks "$compound_observed")"
-check "a compound wrapper command keeps its final status" "1" "$compound_status"
-
-sumi_real="$(readlink -f "$sumi")"
-wrong_secrets_wrapper="$sumi_real run --secrets-file $work/quoted.txt -- /bin/bash -c true"
-wrong_shell_wrapper="$sumi_real run --secrets-file $work/secrets.txt -- /bin/sh -c true"
-unquoted_expansion="$sumi_real run --secrets-file $work/secrets.txt -- /bin/bash -c \$(printf Tr0ub4dor)"
-for unsafe_wrapper_case in "$wrong_secrets_wrapper" "$wrong_shell_wrapper" "$unquoted_expansion"; do
-  out="$(prebash "$(jq -nc --arg w "$unsafe_wrapper_case" '{tool_input:{command:$w}}')" | jq -r '.hookSpecificOutput.updatedInput.command // ""')"
-  case "$out" in
-    *"$unsafe_wrapper_case"*) check "noncanonical wrapper input is wrapped again" "ok" "ok" ;;
-    *) check "noncanonical wrapper input is wrapped again" "ok" "$out" ;;
-  esac
-done
-check "pre-bash denies when the list is unreadable" "deny" "$(prebash '{"tool_input":{"command":"ls"}}' "$work/missing.txt" | jq -r '.hookSpecificOutput.permissionDecision // ""')"
-check "pre-bash denies on an empty list" "deny" "$(prebash '{"tool_input":{"command":"ls"}}' "$work/empty.txt" | jq -r '.hookSpecificOutput.permissionDecision // ""')"
-check "malformed pre-bash input is denied" "deny" "$(prebash 'not json' | jq -r '.hookSpecificOutput.permissionDecision // ""')"
-check "empty pre-bash input is denied" "deny" "$(prebash '' | jq -r '.hookSpecificOutput.permissionDecision // ""')"
-depth_bash_payload="{\"tool_input\":{\"command\":\"true\"},\"nested\":${depth_open_over}0${depth_close_over}}"
-check "pre-bash beyond the JSON depth boundary is denied" "deny" "$(prebash "$depth_bash_payload" | jq -r '.hookSpecificOutput.permissionDecision // ""')"
-
-printf '' | "$sumi" hook --agent claude pre-bash --secrets-file "$work/secrets.txt" --shell /bin/bash > /dev/full 2>"$work/pre-bash-write.err"
-write_statuses=("${PIPESTATUS[@]}")
-check "pre-bash keeps its decision status when stdout is unusable" "0" "${write_statuses[1]}"
-case "$(cat "$work/pre-bash-write.err")" in
-  sumi:\ pre-bash\ could\ not\ write*) check "pre-bash reports an unusable decision channel" "ok" "ok" ;;
-  *) check "pre-bash reports an unusable decision channel" "sumi: pre-bash could not write..." "$(cat "$work/pre-bash-write.err")" ;;
-esac
-
 printf '' | "$sumi" hook --agent claude prompt --secrets-file "$work/secrets.txt" > /dev/full 2>"$work/prompt-write.err"
 write_statuses=("${PIPESTATUS[@]}")
 check "prompt keeps its decision status when stdout is unusable" "0" "${write_statuses[1]}"
@@ -309,6 +271,98 @@ case "$(cat "$work/init-diagnostic.err")" in
   *) check "init diagnostic starts with sumi colon" "ok" "$(cat "$work/init-diagnostic.err")" ;;
 esac
 
+settings="$work/settings.json"
+mkdir -p "$work/tool dir"
+renamed_sumi="$work/tool dir/renamed-tool"
+cp "$sumi" "$renamed_sumi"
+chmod 755 "$renamed_sumi"
+mkdir -p "$work/secret dir"
+init_secrets="$work/secret dir/list file"
+cp "$work/secrets.txt" "$init_secrets"
+chmod 600 "$init_secrets"
+jq -n '{
+  permissions:{allow:["Bash(cat:*)"],deny:["Bash(git:*)"]},
+  env:{KEEP:"yes"},
+  hooks:{
+    PreToolUse:[{matcher:"Bash",custom:"keep-group",hooks:[
+      {type:"command",command:"/bin/foreign-hook"}
+    ]}],
+    PostToolUse:[{matcher:"foreign",hooks:[
+      {type:"command",command:"/bin/foreign-post"}
+    ]}]
+  }
+}' > "$settings"
+"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/init.err"
+check "init succeeds" "0" "$?"
+check "init installs exactly three own exec-form hooks" "3" "$(jq --arg exe "$renamed_sumi" '[.hooks[][]?.hooks[]? | select(.type == "command" and .command == $exe and (.args[0:3] == ["hook","--agent","claude"]))] | length' "$settings")"
+check "init preserves foreign PreToolUse" "/bin/foreign-hook" "$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.command == "/bin/foreign-hook") | .command' "$settings")"
+check "init preserves foreign group metadata" "keep-group" "$(jq -r '.hooks.PreToolUse[]? | select(.hooks[]?.command == "/bin/foreign-hook") | .custom' "$settings")"
+check "init preserves permissions" '{"allow":["Bash(cat:*)"],"deny":["Bash(git:*)"]}' "$(jq -c '.permissions' "$settings")"
+check "init preserves unrelated environment" "yes" "$(jq -r '.env.KEEP' "$settings")"
+check "init stores the selected shell for Claude" "$(readlink -f /bin/bash)" "$(jq -r '.env.CLAUDE_CODE_SHELL' "$settings")"
+expected_prefix="$(readlink -f /bin/bash) -c 'exec \"\$@\"' 'sumi-prefix' '$renamed_sumi' 'run' '--secrets-file' '$init_secrets' '--shell' '$(readlink -f /bin/bash)'"
+check "init encodes the prefix for Claude's executable split" "$expected_prefix" "$(jq -r '.env.CLAUDE_CODE_SHELL_PREFIX' "$settings")"
+check "installed hooks carry the absolute secrets path" "3" "$(jq --arg exe "$renamed_sumi" --arg secrets "$init_secrets" '[.hooks[][]?.hooks[]? | select(.command == $exe and (.args[-2:] == ["--secrets-file",$secrets]) or (.command == $exe and (.args | index("--secrets-file")) != null and (.args[(.args | index("--secrets-file")) + 1] == $secrets)))] | length' "$settings")"
+check "installed prompt keeps repeated roots and deny paths" '["hook","--agent","claude","prompt","--secrets-file","'"$init_secrets"'","--root","'"$work/attach"'","--root","'"$work/other"'","--deny-path","app.properties"]' "$(jq -c --arg exe "$renamed_sumi" '.hooks.UserPromptSubmit[]?.hooks[]? | select(.command == $exe) | .args' "$settings")"
+
+"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/reinit.err"
+check "repeated init succeeds" "0" "$?"
+check "repeated init remains exactly three own hooks" "3" "$(jq --arg exe "$renamed_sumi" '[.hooks[][]?.hooks[]? | select(.command == $exe)] | length' "$settings")"
+
+token_settings="$work/token-settings.json"
+"$renamed_sumi" init --agent claude --secrets-file "$work/token.txt" --settings "$token_settings" --shell /bin/bash >/dev/null 2>"$work/token-init.err"
+check "init self-check accepts a JSON structural-looking secret" "0" "$?"
+mapfile -d '' -t hook_argv < <(jq -j '.hooks.PostToolUse[0].hooks[0] | .command, "\u0000", (.args[] | ., "\u0000")' "$token_settings")
+out="$(printf '%s' '{"hook_event_name":"PostToolUse","tool_response":{"ok":true,"s":"true"}}' | "${hook_argv[@]}" | delivered)"
+check "actual installed exec hook preserves structural JSON" '{"ok":true,"s":"****"}' "$out"
+
+allstars_settings="$work/allstars-settings.json"
+printf '*****\n' > "$work/allstars.txt"
+"$renamed_sumi" init --agent claude --secrets-file "$work/allstars.txt" --settings "$allstars_settings" --shell /bin/bash >/dev/null 2>"$work/allstars-init.err"
+check "init self-check keeps all-stars malformed negative probe" "0" "$?"
+
+split_dir="$work/prefix - path's"
+mkdir -p "$split_dir"
+split_sumi="$split_dir/renamed-tool"
+split_secrets="$split_dir/secret - list"
+split_settings="$split_dir/settings.json"
+cp "$sumi" "$split_sumi"
+chmod 755 "$split_sumi"
+cp "$work/secrets.txt" "$split_secrets"
+chmod 600 "$split_secrets"
+"$split_sumi" init --agent claude --secrets-file "$split_secrets" --settings "$split_settings" --shell /bin/bash >/dev/null 2>"$work/split-init.err"
+check "init self-check executes a prefix with delimiter-like path bytes" "0" "$?"
+split_prefix="$(jq -r '.env.CLAUDE_CODE_SHELL_PREFIX' "$split_settings")"
+split_tail="${split_prefix##* -}"
+case "$split_tail" in
+  c\ *) check "the intended -c remains Claude's final prefix delimiter" "ok" "ok" ;;
+  *) check "the intended -c remains Claude's final prefix delimiter" "c ..." "$split_tail" ;;
+esac
+
+conflict_settings="$work/conflict-settings.json"
+printf '%s' '{"env":{"KEEP":"yes","CLAUDE_CODE_SHELL_PREFIX":"foreign-wrapper"}}' > "$conflict_settings"
+conflict_before="$(sha256sum "$conflict_settings" | cut -d ' ' -f1)"
+"$renamed_sumi" init --agent claude --secrets-file "$work/secrets.txt" --settings "$conflict_settings" --shell /bin/bash >/dev/null 2>"$work/conflict.err"
+check "init rejects a foreign shell prefix" "1" "$?"
+check "foreign prefix failure leaves settings unchanged" "$conflict_before" "$(sha256sum "$conflict_settings" | cut -d ' ' -f1)"
+check "foreign prefix failure happens before backup" "0" "$(find "$work" -maxdepth 1 -name 'conflict-settings.json.bak.*' | wc -l | tr -d ' ')"
+
+bad_env_settings="$work/bad-env-settings.json"
+printf '%s' '{"env":[],"permissions":{"allow":["Bash(cat:*)"]}}' > "$bad_env_settings"
+bad_env_before="$(sha256sum "$bad_env_settings" | cut -d ' ' -f1)"
+"$renamed_sumi" init --agent claude --secrets-file "$work/secrets.txt" --settings "$bad_env_settings" --shell /bin/bash >/dev/null 2>"$work/bad-env.err"
+check "init rejects a non-object env" "1" "$?"
+check "bad env failure leaves settings unchanged" "$bad_env_before" "$(sha256sum "$bad_env_settings" | cut -d ' ' -f1)"
+check "bad env failure happens before backup" "0" "$(find "$work" -maxdepth 1 -name 'bad-env-settings.json.bak.*' | wc -l | tr -d ' ')"
+
+bad_shell_settings="$work/bad-shell-settings.json"
+printf '%s' '{"permissions":{"allow":["Bash(cat:*)"]}}' > "$bad_shell_settings"
+bad_shell_before="$(sha256sum "$bad_shell_settings" | cut -d ' ' -f1)"
+"$renamed_sumi" init --agent claude --secrets-file "$work/secrets.txt" --settings "$bad_shell_settings" --shell /bin/sh >/dev/null 2>"$work/bad-shell.err"
+check "init rejects unsupported Claude shells" "1" "$?"
+check "unsupported shell failure leaves settings unchanged" "$bad_shell_before" "$(sha256sum "$bad_shell_settings" | cut -d ' ' -f1)"
+check "unsupported shell failure happens before backup" "0" "$(find "$work" -maxdepth 1 -name 'bad-shell-settings.json.bak.*' | wc -l | tr -d ' ')"
+
 # --- argument errors ---------------------------------------------------------
 
 check_hook_usage() {
@@ -327,11 +381,6 @@ check_hook_usage "prompt rejects unknown options" prompt --secrets-file "$work/s
 check_hook_usage "prompt rejects duplicate singular options" prompt --secrets-file "$work/secrets.txt" --secrets-file "$work/secrets.txt"
 check_hook_usage "prompt rejects missing option values" prompt --secrets-file "$work/secrets.txt" --deny-path
 check_hook_usage "prompt rejects positional arguments" prompt --secrets-file "$work/secrets.txt" stray
-
-check_hook_usage "pre-bash rejects unknown options" pre-bash --secrets-file "$work/secrets.txt" --shell /bin/bash --wat x
-check_hook_usage "pre-bash rejects duplicate singular options" pre-bash --secrets-file "$work/secrets.txt" --shell /bin/bash --shell /bin/sh
-check_hook_usage "pre-bash rejects missing option values" pre-bash --secrets-file "$work/secrets.txt" --shell
-check_hook_usage "pre-bash rejects positional arguments" pre-bash --secrets-file "$work/secrets.txt" --shell /bin/bash stray
 
 "$sumi" hook --agent copilot post-tool --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "unsupported --agent exits 2" "2" "$?"

@@ -6,7 +6,8 @@ const secrets = @import("../secrets.zig");
 const cli = @import("../main.zig");
 
 pub const HOOK_TIMEOUT: i64 = 20;
-pub const HookEntries = struct { pre_bash: []const u8, post_tool: []const u8, prompt: []const u8 };
+pub const ExecCommand = struct { command: []const u8, args: []const []const u8 };
+pub const HookEntries = struct { post_tool: ExecCommand, prompt: ExecCommand };
 
 pub fn formatTimestamp(buf: *[14]u8, secs: u64) []const u8 {
     const es = std.time.epoch.EpochSeconds{ .secs = secs };
@@ -16,43 +17,33 @@ pub fn formatTimestamp(buf: *[14]u8, secs: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{d:0>4}{d:0>2}{d:0>2}{d:0>2}{d:0>2}{d:0>2}", .{ yd.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() }) catch unreachable;
 }
 
-fn firstWord(command: []const u8, buf: []u8) ?struct { word: []const u8, rest: []const u8 } {
-    var i: usize = 0;
-    var n: usize = 0;
-    var quoted = false;
-    while (i < command.len) {
-        const c = command[i];
-        if (!quoted and (c == ' ' or c == '\t')) break;
-        if (c == '\'') {
-            quoted = !quoted;
-            i += 1;
-            continue;
-        }
-        if (!quoted and c == '\\') {
-            i += 1;
-            if (i == command.len) return null;
-        }
-        if (n == buf.len) return null;
-        buf[n] = command[i];
-        n += 1;
-        i += 1;
+fn isOwnArgv(words: []const []const u8) bool {
+    if (words.len < 4) return false;
+    if (!std.mem.eql(u8, words[0], "hook") or !std.mem.eql(u8, words[1], "--agent") or !std.mem.eql(u8, words[2], "claude")) return false;
+    return std.mem.eql(u8, words[3], "post-tool") or std.mem.eql(u8, words[3], "prompt");
+}
+
+fn isOwnHook(hook: std.json.Value, self_path: []const u8) bool {
+    if (hook != .object) return false;
+    const command = hook.object.get("command") orelse return false;
+    if (command != .string or !std.mem.eql(u8, command.string, self_path)) return false;
+    const args = hook.object.get("args") orelse return false;
+    if (args != .array or args.array.items.len < 4) return false;
+    var words: [4][]const u8 = undefined;
+    for (args.array.items[0..4], 0..) |value, i| {
+        if (value != .string) return false;
+        words[i] = value.string;
     }
-    if (quoted or n == 0) return null;
-    return .{ .word = buf[0..n], .rest = command[i..] };
+    return isOwnArgv(&words);
 }
 
-pub fn isOwnEntry(command: []const u8, self_basename: []const u8) bool {
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const got = firstWord(command, &buf) orelse return false;
-    if (!std.mem.eql(u8, std.fs.path.basename(got.word), self_basename)) return false;
-    const rest = std.mem.trimLeft(u8, got.rest, " \t");
-    return std.mem.startsWith(u8, rest, "hook") and (rest.len == 4 or rest[4] == ' ' or rest[4] == '\t');
-}
-
-fn makeEntry(allocator: std.mem.Allocator, command: []const u8, matcher: ?[]const u8) !std.json.Value {
+fn makeEntry(allocator: std.mem.Allocator, command: ExecCommand, matcher: ?[]const u8) !std.json.Value {
     var hook = std.json.ObjectMap.init(allocator);
     try hook.put("type", .{ .string = "command" });
-    try hook.put("command", .{ .string = command });
+    try hook.put("command", .{ .string = command.command });
+    var args = std.json.Array.init(allocator);
+    for (command.args) |arg| try args.append(.{ .string = arg });
+    try hook.put("args", .{ .array = args });
     try hook.put("timeout", .{ .integer = HOOK_TIMEOUT });
     var list = std.json.Array.init(allocator);
     try list.append(.{ .object = hook });
@@ -64,6 +55,7 @@ fn makeEntry(allocator: std.mem.Allocator, command: []const u8, matcher: ?[]cons
 
 fn validateSettings(settings: std.json.Value) !void {
     if (settings != .object) return error.SettingsMustBeObject;
+    if (settings.object.get("env")) |env| if (env != .object) return error.EnvMustBeObject;
     const hooks = settings.object.get("hooks") orelse return;
     if (hooks != .object) return error.HooksMustBeObject;
     for (hooks.object.values()) |event| {
@@ -75,7 +67,7 @@ fn validateSettings(settings: std.json.Value) !void {
     }
 }
 
-fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_name: []const u8, basename: []const u8, command: []const u8, matcher: ?[]const u8) !usize {
+fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_name: []const u8, self_path: []const u8, command: ExecCommand, matcher: ?[]const u8) !usize {
     var entries = std.json.Array.init(allocator);
     var removed: usize = 0;
     if (hooks.get(event_name)) |event| for (event.array.items) |original| {
@@ -86,8 +78,7 @@ fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_na
         };
         var list = std.json.Array.init(allocator);
         for (list_value.array.items) |hook| {
-            const value = if (hook == .object) hook.object.get("command") else null;
-            if (value != null and value.? == .string and isOwnEntry(value.?.string, basename)) removed += 1 else try list.append(hook);
+            if (isOwnHook(hook, self_path)) removed += 1 else try list.append(hook);
         }
         if (list.items.len != 0) {
             list_value.* = .{ .array = list };
@@ -99,28 +90,30 @@ fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_na
     return removed;
 }
 
-pub fn mergeHooks(allocator: std.mem.Allocator, settings: *std.json.Value, basename: []const u8, commands: HookEntries) !usize {
+pub fn mergeHooks(allocator: std.mem.Allocator, settings: *std.json.Value, self_path: []const u8, commands: HookEntries) !usize {
     try validateSettings(settings.*);
     try settings.object.put("disableAllHooks", .{ .bool = false });
     if (settings.object.get("hooks") == null) try settings.object.put("hooks", .{ .object = std.json.ObjectMap.init(allocator) });
     const hooks = &settings.object.getPtr("hooks").?.object;
     var removed: usize = 0;
-    removed += try mergeEvent(allocator, hooks, "PreToolUse", basename, commands.pre_bash, "Bash");
-    removed += try mergeEvent(allocator, hooks, "PostToolUse", basename, commands.post_tool, null);
-    removed += try mergeEvent(allocator, hooks, "PostToolUseFailure", basename, commands.post_tool, null);
-    removed += try mergeEvent(allocator, hooks, "UserPromptSubmit", basename, commands.prompt, null);
+    removed += try mergeEvent(allocator, hooks, "PostToolUse", self_path, commands.post_tool, null);
+    removed += try mergeEvent(allocator, hooks, "PostToolUseFailure", self_path, commands.post_tool, null);
+    removed += try mergeEvent(allocator, hooks, "UserPromptSubmit", self_path, commands.prompt, null);
     return removed;
 }
 
-pub fn buildCommands(allocator: std.mem.Allocator, self_path: []const u8, secrets_file: []const u8, shell_path: []const u8, roots: []const []const u8, deny_paths: []const []const u8) !HookEntries {
-    const pre = try shell.join(allocator, &.{ self_path, "hook", "--agent", "claude", "pre-bash", "--secrets-file", secrets_file, "--shell", shell_path });
-    const post = try shell.join(allocator, &.{ self_path, "hook", "--agent", "claude", "post-tool", "--secrets-file", secrets_file });
+pub fn buildCommands(allocator: std.mem.Allocator, self_path: []const u8, secret_path: []const u8, roots: []const []const u8, deny_paths: []const []const u8) !HookEntries {
+    const post_args = try allocator.dupe([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--secrets-file", secret_path });
+    errdefer allocator.free(post_args);
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-    try argv.appendSlice(allocator, &.{ self_path, "hook", "--agent", "claude", "prompt", "--secrets-file", secrets_file });
+    try argv.appendSlice(allocator, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", secret_path });
     for (roots) |root| try argv.appendSlice(allocator, &.{ "--root", root });
     for (deny_paths) |path| try argv.appendSlice(allocator, &.{ "--deny-path", path });
-    return .{ .pre_bash = pre, .post_tool = post, .prompt = try shell.join(allocator, argv.items) };
+    return .{
+        .post_tool = .{ .command = self_path, .args = post_args },
+        .prompt = .{ .command = self_path, .args = try argv.toOwnedSlice(allocator) },
+    };
 }
 
 pub fn defaultSettingsPath(allocator: std.mem.Allocator, config_dir: ?[]const u8, home: []const u8) ![]u8 {
@@ -128,26 +121,68 @@ pub fn defaultSettingsPath(allocator: std.mem.Allocator, config_dir: ?[]const u8
     return std.fs.path.join(allocator, &.{ home, ".claude", "settings.json" });
 }
 
-fn executableFile(path: []const u8) bool {
-    const file = std.fs.cwd().openFile(path, .{}) catch return false;
-    defer file.close();
-    if ((file.stat() catch return false).kind != .file) return false;
-    std.posix.access(path, std.posix.X_OK) catch return false;
-    return true;
+fn validateEnvironment(settings: std.json.Value, expected_prefix: []const u8) !void {
+    const env = settings.object.get("env") orelse return;
+    if (env != .object) return error.EnvMustBeObject;
+    const prefix = env.object.get("CLAUDE_CODE_SHELL_PREFIX") orelse return;
+    if (prefix != .string) return error.ForeignShellPrefix;
+    if (prefix.string.len != 0 and !std.mem.eql(u8, prefix.string, expected_prefix)) return error.ForeignShellPrefix;
 }
 
-pub fn resolveShell(allocator: std.mem.Allocator) !?[]u8 {
-    const path = std.posix.getenv("PATH") orelse return null;
-    var it = std.mem.splitScalar(u8, path, ':');
-    while (it.next()) |dir| {
-        if (dir.len == 0) continue;
-        const candidate = try std.fs.path.join(allocator, &.{ dir, "bash" });
-        defer allocator.free(candidate);
-        const absolute = std.fs.cwd().realpathAlloc(allocator, candidate) catch continue;
-        if (executableFile(absolute)) return absolute;
-        allocator.free(absolute);
+fn installEnvironment(allocator: std.mem.Allocator, settings: *std.json.Value, shell_path: []const u8, prefix: []const u8) !void {
+    if (settings.object.get("env") == null) try settings.object.put("env", .{ .object = std.json.ObjectMap.init(allocator) });
+    const env = &settings.object.getPtr("env").?.object;
+    try env.put("CLAUDE_CODE_SHELL", .{ .string = shell_path });
+    try env.put("CLAUDE_CODE_SHELL_PREFIX", .{ .string = prefix });
+}
+
+fn isSupportedClaudeShell(path: []const u8) bool {
+    const name = std.fs.path.basename(path);
+    return std.mem.eql(u8, name, "bash") or std.mem.eql(u8, name, "zsh");
+}
+
+fn quotePrefixArg(allocator: std.mem.Allocator, arg: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(allocator, '\'');
+    for (arg, 0..) |byte, i| {
+        if (byte == '\'') {
+            try out.appendSlice(allocator, "'\\''");
+        } else if (byte == ' ' and i + 1 < arg.len and arg[i + 1] == '-') {
+            try out.appendSlice(allocator, " ''");
+        } else {
+            try out.append(allocator, byte);
+        }
     }
-    return null;
+    try out.append(allocator, '\'');
+    return out.toOwnedSlice(allocator);
+}
+
+fn formatShellPrefix(allocator: std.mem.Allocator, self_path: []const u8, secret_path: []const u8, shell_path: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(allocator, shell_path);
+    try out.appendSlice(allocator, " -c");
+    const args = [_][]const u8{ "exec \"$@\"", "sumi-prefix", self_path, "run", "--secrets-file", secret_path, "--shell", shell_path };
+    for (&args) |arg| {
+        try out.append(allocator, ' ');
+        const quoted = try quotePrefixArg(allocator, arg);
+        defer allocator.free(quoted);
+        try out.appendSlice(allocator, quoted);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn formatClaudeInvocation(allocator: std.mem.Allocator, prefix: []const u8, command: []const u8) ![]u8 {
+    // Claude Code 2.1.268 splits a prefix at its last literal ` -`, treats the
+    // left side as the executable, leaves the suffix as arguments, and appends
+    // the Bash command as one quoted argument. Prefix arguments are encoded so
+    // the intended ` -c` is always that final delimiter.
+    const split = std.mem.lastIndexOf(u8, prefix, " -") orelse return error.InvalidShellPrefix;
+    if (split == 0 or split + 2 >= prefix.len) return error.InvalidShellPrefix;
+    const executable = try quotePrefixArg(allocator, prefix[0..split]);
+    defer allocator.free(executable);
+    const quoted_command = try quotePrefixArg(allocator, command);
+    defer allocator.free(quoted_command);
+    return std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ executable, prefix[split + 1 ..], quoted_command });
 }
 
 fn fail(message: []const u8) u8 {
@@ -166,8 +201,13 @@ fn warn(message: []const u8) void {
     std.debug.print("sumi: warning: {s}\n", .{message});
 }
 
-fn runHook(allocator: std.mem.Allocator, command: []const u8, input: []const u8) !struct { code: u8, stdout: []u8 } {
-    var child = std.process.Child.init(&.{ "sh", "-c", command }, allocator);
+fn runCommand(allocator: std.mem.Allocator, command: ExecCommand, input: []const u8, env: *const std.process.EnvMap) !struct { code: u8, stdout: []u8 } {
+    const argv = try allocator.alloc([]const u8, command.args.len + 1);
+    defer allocator.free(argv);
+    argv[0] = command.command;
+    @memcpy(argv[1..], command.args);
+    var child = std.process.Child.init(argv, allocator);
+    child.env_map = env;
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -225,32 +265,32 @@ fn selectProbe(values: []const []const u8) []const u8 {
     return values[0];
 }
 
-fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, probe: []const u8) !void {
+fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, secret_path: []const u8, shell_path: []const u8, prefix: []const u8, probe: []const u8) !void {
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("CLAUDE_CODE_SHELL", shell_path);
+    try env.put("CLAUDE_CODE_SHELL_PREFIX", prefix);
+
     const quoted = try jsonio.quoteString(allocator, probe);
     const payload = try std.fmt.allocPrint(allocator, "{{\"hook_event_name\":\"PostToolUse\",\"tool_response\":{s}}}", .{quoted});
-    const post = try runHook(allocator, commands.post_tool, payload);
+    const post = try runCommand(allocator, commands.post_tool, payload, &env);
     if (post.code != 0) return error.PostToolCheckFailed;
     try validatePostOutput(allocator, probe, post.stdout);
     if (std.mem.allEqual(u8, probe, '*')) {
-        const malformed = try runHook(allocator, commands.post_tool, "");
+        const malformed = try runCommand(allocator, commands.post_tool, "", &env);
         if (malformed.code != 0) return error.PostToolCheckFailed;
         try validateWithholdingDecision(allocator, malformed.stdout);
     }
 
     const synthetic = "IFS= read -r sumi_probe; printf '%b' \"$sumi_probe\"; exit 3";
-    const synthetic_json = try jsonio.quoteString(allocator, synthetic);
-    const pre_payload = try std.fmt.allocPrint(allocator, "{{\"tool_input\":{{\"command\":{s}}}}}", .{synthetic_json});
-    const pre = try runHook(allocator, commands.pre_bash, pre_payload);
-    if (pre.code != 0) return error.PreBashCheckFailed;
-    var parsed = jsonio.parse(allocator, pre.stdout) catch return error.PreBashCheckFailed;
-    defer parsed.deinit();
-    const specific = jsonio.getObject(parsed.value, "hookSpecificOutput") orelse return error.PreBashCheckFailed;
-    const updated = specific.get("updatedInput") orelse return error.PreBashCheckFailed;
-    const wrapped = jsonio.getString(updated, "command") orelse return error.PreBashCheckFailed;
+    const expected_prefix = try formatShellPrefix(allocator, self_path, secret_path, shell_path);
+    if (!std.mem.eql(u8, prefix, expected_prefix)) return error.PrefixCheckFailed;
+    const invocation = try formatClaudeInvocation(allocator, prefix, synthetic);
+    const run_args = [_][]const u8{ "-c", invocation };
     const encoded_probe = try octalLine(allocator, probe);
-    const ran = try runHook(allocator, wrapped, encoded_probe);
+    const ran = try runCommand(allocator, .{ .command = shell_path, .args = &run_args }, encoded_probe, &env);
     if (ran.code != 3 or ran.stdout.len != probe.len or !std.mem.allEqual(u8, ran.stdout, '*')) return error.WrappedCommandCheckFailed;
-    const prompt = try runHook(allocator, commands.prompt, "{\"prompt\":\"\",\"cwd\":\"/\"}");
+    const prompt = try runCommand(allocator, commands.prompt, "{\"prompt\":\"\",\"cwd\":\"/\"}", &env);
     if (prompt.code != 0 or prompt.stdout.len != 0) return error.PromptCheckFailed;
 }
 
@@ -328,8 +368,9 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     const downloads = try std.fs.path.join(allocator, &.{ home, "Downloads" });
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
     if (std.mem.startsWith(u8, self_path, "/tmp/") or std.mem.startsWith(u8, self_path, tmpdir) or std.mem.startsWith(u8, self_path, downloads)) warn("this binary may be removed or moved; install it permanently and rerun init");
-    const shell_path = if (parsed_args.shell_path) |path| (std.fs.cwd().realpathAlloc(allocator, path) catch return fail("the shell given by --shell does not exist")) else ((try resolveShell(allocator)) orelse return fail("bash was not found on PATH; pass --shell"));
-    if (!executableFile(shell_path)) return fail("the shell is not a regular executable file");
+    const shell_path = if (parsed_args.shell_path) |path| (std.fs.cwd().realpathAlloc(allocator, path) catch return fail("the shell given by --shell does not exist")) else ((try shell.resolveBash(allocator)) orelse return fail("bash was not found on PATH; pass --shell"));
+    if (!shell.isExecutableFile(shell_path)) return fail("the shell is not a regular executable file");
+    if (!isSupportedClaudeShell(shell_path)) return fail("the shell must be bash or zsh");
     const settings_path = if (parsed_args.settings) |path| try allocator.dupe(u8, path) else try defaultSettingsPath(allocator, std.posix.getenv("CLAUDE_CONFIG_DIR"), home);
     const existing = std.fs.cwd().readFileAlloc(allocator, settings_path, 16 * 1024 * 1024) catch |err| switch (err) {
         error.FileNotFound => null,
@@ -338,8 +379,11 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     var parsed = jsonio.parse(allocator, existing orelse "{}") catch return fail("the settings file is not valid JSON");
     defer parsed.deinit();
     validateSettings(parsed.value) catch return fail("the settings file has an incompatible hooks structure");
-    const commands = try buildCommands(allocator, self_path, secret_path, shell_path, parsed_args.roots, parsed_args.deny_paths);
-    const removed = try mergeHooks(parsed.arena.allocator(), &parsed.value, std.fs.path.basename(self_path), commands);
+    const prefix = try formatShellPrefix(allocator, self_path, secret_path, shell_path);
+    validateEnvironment(parsed.value, prefix) catch return fail("CLAUDE_CODE_SHELL_PREFIX is already set by another tool; remove it or choose which prefix to keep");
+    const commands = try buildCommands(allocator, self_path, secret_path, parsed_args.roots, parsed_args.deny_paths);
+    const removed = try mergeHooks(parsed.arena.allocator(), &parsed.value, self_path, commands);
+    try installEnvironment(parsed.arena.allocator(), &parsed.value, shell_path, prefix);
     var backup_path: ?[]u8 = null;
     if (existing) |data| {
         var ts: [14]u8 = undefined;
@@ -351,7 +395,7 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     std.debug.print("sumi: hooks written to {s}\n", .{settings_path});
     if (removed != 0) std.debug.print("sumi: replaced {d} existing sumi hook(s)\n", .{removed});
     if (backup_path) |path| std.debug.print("sumi: backup at {s}\n", .{path});
-    selfCheck(allocator, commands, selectProbe(values)) catch |err| {
+    selfCheck(allocator, commands, self_path, secret_path, shell_path, prefix, selectProbe(values)) catch |err| {
         std.debug.print("sumi: self-check failed ({s}); settings were written", .{@errorName(err)});
         if (backup_path) |path| std.debug.print("; restore {s}", .{path});
         std.debug.print("\n", .{});
@@ -381,38 +425,98 @@ test "backup: mode 0600 is preserved under umask 022" {
     defer file.close();
     try testing.expectEqual(@as(u32, 0o600), (try file.stat()).mode & 0o777);
 }
-test "isOwnEntry: parses shell.join quoting" {
-    try testing.expect(isOwnEntry("/opt/x/sumi hook --agent claude post-tool", "sumi"));
-    try testing.expect(isOwnEntry("'/home/u/my tools/sumi' hook", "sumi"));
-    try testing.expect(isOwnEntry("'/home/u/it'\\''s tools/sumi' hook", "sumi"));
-    try testing.expect(!isOwnEntry("/opt/x/sumi run -- bash", "sumi"));
+test "isOwnHook: recognizes current exec form only" {
+    var exec = try jsonio.parse(testing.allocator, "{\"type\":\"command\",\"command\":\"/moved/renamed-masker\",\"args\":[\"hook\",\"--agent\",\"claude\",\"prompt\",\"--root\",\"/x\"]}");
+    defer exec.deinit();
+    try testing.expect(isOwnHook(exec.value, "/moved/renamed-masker"));
+    try testing.expect(!isOwnHook(exec.value, "/other/renamed-masker"));
+
+    var foreign = try jsonio.parse(testing.allocator, "{\"command\":\"/opt/sumi run\"}");
+    defer foreign.deinit();
+    try testing.expect(!isOwnHook(foreign.value, "/opt/sumi"));
 }
 test "mergeHooks: keeps foreign hooks in mixed groups and is idempotent" {
-    var parsed = try jsonio.parse(testing.allocator, "{\"theme\":\"dark\",\"hooks\":{\"PostToolUse\":[{\"matcher\":\"foreign\",\"hooks\":[{\"command\":\"prettier --write\"},{\"command\":\"/old/sumi hook post-tool\"}]}]}}");
+    var parsed = try jsonio.parse(testing.allocator, "{\"theme\":\"dark\",\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"command\":\"foreign-pre\"}]}],\"PostToolUse\":[{\"matcher\":\"foreign\",\"hooks\":[{\"command\":\"prettier --write\"},{\"type\":\"command\",\"command\":\"/new/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"post-tool\"]}]}]}}");
     defer parsed.deinit();
-    const commands = HookEntries{ .pre_bash = "/new/sumi hook pre-bash", .post_tool = "/new/sumi hook post-tool", .prompt = "/new/sumi hook prompt" };
-    try testing.expectEqual(@as(usize, 1), try mergeHooks(parsed.arena.allocator(), &parsed.value, "sumi", commands));
-    try testing.expectEqual(@as(usize, 4), try mergeHooks(parsed.arena.allocator(), &parsed.value, "sumi", commands));
+    const post_args = [_][]const u8{ "hook", "--agent", "claude", "post-tool" };
+    const prompt_args = [_][]const u8{ "hook", "--agent", "claude", "prompt" };
+    const commands = HookEntries{
+        .post_tool = .{ .command = "/new/sumi", .args = &post_args },
+        .prompt = .{ .command = "/new/sumi", .args = &prompt_args },
+    };
+    try testing.expectEqual(@as(usize, 1), try mergeHooks(parsed.arena.allocator(), &parsed.value, "/new/sumi", commands));
+    try testing.expectEqual(@as(usize, 3), try mergeHooks(parsed.arena.allocator(), &parsed.value, "/new/sumi", commands));
     const out = try jsonio.stringify(testing.allocator, parsed.value);
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "prettier --write") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "foreign-pre") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"matcher\":\"foreign\"") != null);
-    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, out, commands.post_tool));
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out, "\"command\":\"/new/sumi\""));
 }
 test "mergeHooks: incompatible input is unchanged" {
     var parsed = try jsonio.parse(testing.allocator, "{\"theme\":\"dark\",\"hooks\":[]}");
     defer parsed.deinit();
-    const commands = HookEntries{ .pre_bash = "a", .post_tool = "b", .prompt = "c" };
-    try testing.expectError(error.HooksMustBeObject, mergeHooks(parsed.arena.allocator(), &parsed.value, "sumi", commands));
+    const args = [_][]const u8{ "hook", "--agent", "claude", "post-tool" };
+    const commands = HookEntries{ .post_tool = .{ .command = "a", .args = &args }, .prompt = .{ .command = "a", .args = &args } };
+    try testing.expectError(error.HooksMustBeObject, mergeHooks(parsed.arena.allocator(), &parsed.value, "a", commands));
     try testing.expectEqualStrings("dark", parsed.value.object.get("theme").?.string);
 }
-test "buildCommands: routes and quotes options" {
-    const got = try buildCommands(testing.allocator, "/opt/s/sumi", "/opt/s/secrets.txt", "/bin/bash", &.{"/extra dir"}, &.{"app.properties"});
-    defer testing.allocator.free(got.pre_bash);
-    defer testing.allocator.free(got.post_tool);
-    defer testing.allocator.free(got.prompt);
-    try testing.expectEqualStrings("/opt/s/sumi hook --agent claude pre-bash --secrets-file /opt/s/secrets.txt --shell /bin/bash", got.pre_bash);
-    try testing.expectEqualStrings("/opt/s/sumi hook --agent claude prompt --secrets-file /opt/s/secrets.txt --root '/extra dir' --deny-path app.properties", got.prompt);
+test "buildCommands: creates exec-form argv with the absolute secrets path" {
+    const got = try buildCommands(testing.allocator, "/opt/s/sumi", "/secret path/list", &.{"/extra dir"}, &.{"app.properties"});
+    defer testing.allocator.free(got.post_tool.args);
+    defer testing.allocator.free(got.prompt.args);
+    try testing.expectEqualStrings("/opt/s/sumi", got.post_tool.command);
+    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--secrets-file", "/secret path/list" }, got.post_tool.args);
+    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", "/secret path/list", "--root", "/extra dir", "--deny-path", "app.properties" }, got.prompt.args);
+}
+test "environment install preserves unrelated keys and sets one supported shell" {
+    var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"KEEP\":\"yes\",\"CLAUDE_CODE_SHELL_PREFIX\":\"/old/sumi run --secrets-file /s --shell /bin/zsh\"},\"permissions\":{\"deny\":[\"Bash(git:*)\"]}}");
+    defer parsed.deinit();
+    try validateEnvironment(parsed.value, "/old/sumi run --secrets-file /s --shell /bin/zsh");
+    try installEnvironment(parsed.arena.allocator(), &parsed.value, "/bin/zsh", "'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh");
+    const env = parsed.value.object.get("env").?.object;
+    try testing.expectEqualStrings("yes", env.get("KEEP").?.string);
+    try testing.expectEqualStrings("/bin/zsh", env.get("CLAUDE_CODE_SHELL").?.string);
+    try testing.expectEqualStrings("'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh", env.get("CLAUDE_CODE_SHELL_PREFIX").?.string);
+    try testing.expectEqualStrings("Bash(git:*)", parsed.value.object.get("permissions").?.object.get("deny").?.array.items[0].string);
+}
+test "environment validation rejects malformed env and foreign prefixes" {
+    var malformed = try jsonio.parse(testing.allocator, "{\"env\":[]}");
+    defer malformed.deinit();
+    try testing.expectError(error.EnvMustBeObject, validateSettings(malformed.value));
+
+    var foreign = try jsonio.parse(testing.allocator, "{\"env\":{\"CLAUDE_CODE_SHELL_PREFIX\":\"other-wrapper\"}}");
+    defer foreign.deinit();
+    try testing.expectError(error.ForeignShellPrefix, validateEnvironment(foreign.value, "/new/sumi run"));
+
+    var non_string = try jsonio.parse(testing.allocator, "{\"env\":{\"CLAUDE_CODE_SHELL_PREFIX\":true}}");
+    defer non_string.deinit();
+    try testing.expectError(error.ForeignShellPrefix, validateEnvironment(non_string.value, "/new/sumi run"));
+}
+test "supported Claude shells are limited to bash and zsh" {
+    try testing.expect(isSupportedClaudeShell("/bin/bash"));
+    try testing.expect(isSupportedClaudeShell("/usr/bin/zsh"));
+    try testing.expect(!isSupportedClaudeShell("/bin/sh"));
+}
+test "shell prefix uses one Claude executable delimiter" {
+    const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", "/secret list", "/bin/bash");
+    defer testing.allocator.free(prefix);
+    try testing.expectEqualStrings(
+        "/bin/bash -c 'exec \"$@\"' 'sumi-prefix' '/opt/sumi' 'run' '--secrets-file' '/secret list' '--shell' '/bin/bash'",
+        prefix,
+    );
+    try testing.expectEqual(@as(?usize, "/bin/bash".len), std.mem.lastIndexOf(u8, prefix, " -"));
+}
+test "shell prefix hides delimiter-like bytes in every argument" {
+    const selected_shell = "/shell - choice/bash";
+    const prefix = try formatShellPrefix(testing.allocator, "/tool - dir/it's/sumi", "/secret - list", selected_shell);
+    defer testing.allocator.free(prefix);
+    try testing.expectEqual(@as(?usize, selected_shell.len), std.mem.lastIndexOf(u8, prefix, " -"));
+    try testing.expect(std.mem.indexOf(u8, prefix, "'/tool ''- dir/it'\\''s/sumi'") != null);
+
+    const invocation = try formatClaudeInvocation(testing.allocator, prefix, "printf '%s' 'ok - value'");
+    defer testing.allocator.free(invocation);
+    try testing.expect(std.mem.startsWith(u8, invocation, "'/shell ''- choice/bash' -c "));
 }
 test "defaultSettingsPath: config directory or home" {
     const a = try defaultSettingsPath(testing.allocator, "/cfg", "/home/u");

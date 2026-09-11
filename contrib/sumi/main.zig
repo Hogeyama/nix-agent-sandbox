@@ -3,8 +3,7 @@
 //!   sumi init   --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
 //!   sumi hook   --agent claude post-tool --secrets-file F
 //!   sumi hook   --agent claude prompt    --secrets-file F [--root DIR]... [--deny-path P]...
-//!   sumi hook   --agent claude pre-bash  --secrets-file F --shell PATH
-//!   sumi run    --secrets-file F -- PROGRAM [ARGS...]
+//!   sumi run    --secrets-file F [--shell PATH] COMMAND
 //!   sumi filter --secrets-file F
 //!   sumi --version
 //!
@@ -16,9 +15,9 @@ const std = @import("std");
 const build_options = @import("build_options");
 const supervise = @import("supervise");
 const secrets = @import("secrets.zig");
+const shell = @import("shell.zig");
 const claude_post = @import("claude/hook_post.zig");
 const claude_prompt = @import("claude/hook_prompt.zig");
-const claude_bash = @import("claude/hook_bash.zig");
 const claude_init = @import("claude/init.zig");
 
 pub const EXIT_USAGE: u8 = 2;
@@ -30,8 +29,7 @@ const usage_text =
     \\usage: sumi init   --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
     \\       sumi hook   --agent claude post-tool --secrets-file F
     \\       sumi hook   --agent claude prompt    --secrets-file F [--root DIR]... [--deny-path P]...
-    \\       sumi hook   --agent claude pre-bash  --secrets-file F --shell PATH
-    \\       sumi run    --secrets-file F -- PROGRAM [ARGS...]
+    \\       sumi run    --secrets-file F [--shell PATH] COMMAND
     \\       sumi filter --secrets-file F
     \\       sumi --version
     \\
@@ -73,18 +71,40 @@ fn runFilter(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     return 0;
 }
 
-fn runSupervised(allocator: std.mem.Allocator, args: []const []const u8) u8 {
-    // 形は `--secrets-file F -- PROGRAM [ARGS...]` に固定する。
-    if (args.len < 4 or !std.mem.eql(u8, args[0], "--secrets-file") or !std.mem.eql(u8, args[2], "--")) {
-        return usage("run takes --secrets-file F -- PROGRAM [ARGS...]");
+const RunArgs = struct { secrets_file: []const u8, shell_path: ?[]const u8, command: []const u8 };
+
+fn parseRunArgs(args: []const []const u8) !RunArgs {
+    if (args.len < 3 or !std.mem.eql(u8, args[0], "--secrets-file")) return error.InvalidArguments;
+    if (args[1].len == 0 or std.mem.startsWith(u8, args[1], "--")) return error.InvalidArguments;
+    if (std.mem.eql(u8, args[2], "--shell")) {
+        if (args.len != 5 or args[3].len == 0 or std.mem.startsWith(u8, args[3], "--")) return error.InvalidArguments;
+        return .{ .secrets_file = args[1], .shell_path = args[3], .command = args[4] };
     }
-    const program = args[3];
-    const list = secrets.load(allocator, args[1]) catch |err| {
-        // 一覧が読めないまま走らせるとマスクなしで素通しになる。
+    if (args.len != 3) return error.InvalidArguments;
+    return .{ .secrets_file = args[1], .shell_path = null, .command = args[2] };
+}
+
+fn runSupervised(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+    const parsed = parseRunArgs(args) catch return usage("run takes --secrets-file F [--shell PATH] COMMAND");
+    const shell_path = if (parsed.shell_path) |path|
+        std.fs.cwd().realpathAlloc(allocator, path) catch {
+            std.debug.print("sumi: the shell path could not be resolved; output suppressed\n", .{});
+            return EXIT_SUPPRESSED;
+        }
+    else
+        (shell.resolveBash(allocator) catch null) orelse {
+            std.debug.print("sumi: bash was not found on PATH; output suppressed\n", .{});
+            return EXIT_SUPPRESSED;
+        };
+    if (!shell.isExecutableFile(shell_path)) {
+        std.debug.print("sumi: the shell is not a regular executable file; output suppressed\n", .{});
+        return EXIT_SUPPRESSED;
+    }
+    const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
         std.debug.print("sumi: {s}; output suppressed\n", .{secrets.describe(err)});
         return EXIT_SUPPRESSED;
     };
-    return supervise.runLocal(allocator, list, program, program, args[4..], .{
+    return supervise.runLocal(allocator, list, shell_path, shell_path, &.{ "-c", parsed.command }, .{
         .prog_name = PROG,
         .marker_env = MARKER_ENV,
     }) catch |err| {
@@ -132,15 +152,11 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
                     };
                     return claude_init.main(allocator, taken.rest, self);
                 }
-                if (taken.rest.len == 0) return usage("hook needs a subcommand: post-tool | prompt | pre-bash");
+                if (taken.rest.len == 0) return usage("hook needs a subcommand: post-tool | prompt");
                 const hook = taken.rest[0];
                 const hook_args = taken.rest[1..];
                 if (std.mem.eql(u8, hook, "post-tool")) return claude_post.main(allocator, hook_args);
                 if (std.mem.eql(u8, hook, "prompt")) return claude_prompt.main(allocator, hook_args);
-                if (std.mem.eql(u8, hook, "pre-bash")) {
-                    const self = resolve_self_path(allocator) catch null;
-                    return claude_bash.main(allocator, hook_args, self);
-                }
                 return usage("unknown hook subcommand");
             },
         }
@@ -162,7 +178,6 @@ test {
     _ = @import("jsonio.zig");
     _ = @import("claude/hook_post.zig");
     _ = @import("claude/hook_prompt.zig");
-    _ = @import("claude/hook_bash.zig");
     _ = @import("claude/init.zig");
 }
 
@@ -179,6 +194,17 @@ test "argument allocation failure becomes a handled startup failure" {
 test "post-tool and prompt dispatch do not resolve the executable path" {
     try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "hook", "--agent", "claude", "post-tool", "--invalid", "x" }, unavailableSelfPath));
     try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "hook", "--agent", "claude", "prompt", "--invalid", "x" }, unavailableSelfPath));
+}
+
+test "run arguments carry one complete command and optional shell" {
+    const defaulted = try parseRunArgs(&.{ "--secrets-file", "/s", "echo 'a b'; exit 3" });
+    try testing.expectEqualStrings("/s", defaulted.secrets_file);
+    try testing.expectEqual(@as(?[]const u8, null), defaulted.shell_path);
+    try testing.expectEqualStrings("echo 'a b'; exit 3", defaulted.command);
+    const selected = try parseRunArgs(&.{ "--secrets-file", "/s", "--shell", "/bin/zsh", "echo ok" });
+    try testing.expectEqualStrings("/bin/zsh", selected.shell_path.?);
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s" }));
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s", "true", "extra" }));
 }
 
 test "takeAgent: claude is accepted and consumed" {
