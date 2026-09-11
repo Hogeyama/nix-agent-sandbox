@@ -31,6 +31,9 @@ jobs:
       - name: Build maskfs bundled binary
         run: nix build .#maskfs-bundled --out-link result-maskfs --print-build-logs
 
+      - name: Build sumi static binary
+        run: nix build .#sumi --out-link result-sumi --print-build-logs
+
       - name: Prepare artifacts
         run: |
           cp -L result-nas nas
@@ -41,12 +44,16 @@ jobs:
           chmod 755 maskfs
           tar czf maskfs-${{ github.ref_name }}_${{ matrix.system }}.tar.gz maskfs
 
+          cp -L result-sumi/bin/sumi sumi-${{ matrix.system }}
+          chmod 755 sumi-${{ matrix.system }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ github.ref_name }}_${{ matrix.system }}
           path: |
             nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
             maskfs-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
+            sumi-${{ matrix.system }}
 
   release:
     needs: build
@@ -68,4 +75,6 @@ jobs:
             "nas-${TAG}_x86_64-linux.tar.gz" \
             "nas-${TAG}_aarch64-linux.tar.gz" \
             "maskfs-${TAG}_x86_64-linux.tar.gz" \
-            "maskfs-${TAG}_aarch64-linux.tar.gz"
+            "maskfs-${TAG}_aarch64-linux.tar.gz" \
+            "sumi-x86_64-linux" \
+            "sumi-aarch64-linux"

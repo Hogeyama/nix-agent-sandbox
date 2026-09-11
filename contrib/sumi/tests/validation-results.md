@@ -1,0 +1,50 @@
+# Claude Code での検証記録
+
+以下の旧版の記録では、Bash を PreToolUse hook で書き換える sumi `14751bb` を使用しています。現行の shell prefix 方式とは区別して読んでください。
+
+ホスト上の Claude Code を使い、利用者の対話操作と `claude -p` による実ツール呼び出しで確認した結果です。sumi は `14751bb` のビルドを使い、捨てリポジトリ、隔離した `CLAUDE_CONFIG_DIR`、デコイ値 `Tr0ub4dor` と `rotated-value-1` を用意しました。確認手順は [tests/manual-validation.md](manual-validation.md) にあります。
+
+開始時は 2.1.263 でしたが、途中の再起動後に 2.1.268 へ更新されていました。追加ディレクトリ、ペイロード、手動モードでの権限確認は、その更新を確認した後に実施しています。Read・Grep・Bash・Git 履歴の出力は 2.1.268 で実ツール呼び出しを再確認しました。表のバージョンは、それぞれの観測が得られた環境を示します。
+
+| 確認したこと | Claude Code | 結果 |
+| --- | --- | --- |
+| `Read` の出力 | 2.1.263 / 2.1.268 | 旧値は `*********`、更新後の値は `***************` にマスクされた |
+| `Grep` の content 出力 | 2.1.268 | `--tools Grep` で実際に呼び出し、ツール結果が `1:db.password=***************`。初期の対話セッションではツールが利用できなかったため、明示的に有効化して確認した |
+| `cat path` | 2.1.263 / 2.1.268 | Bash の出力がマスクされた。2.1.268 の再確認では exit 0 と `db.password=***************` |
+| `git show HEAD:path` | 2.1.268 | 作業ファイルから値を変更した後も、履歴に残る古い値が `*********` にマスクされ、exit 0 |
+| `cat path && false` (失敗) | 2.1.263 / 2.1.268 | Bash の exit 1 を保ち、出力はマスクされた。2.1.268 のツール結果でもエラー状態と `db.password=***************` を確認 |
+| `@path` の添付 | 2.1.263 | 保護対象の値を含むため UserPromptSubmit が拒否した |
+| hook 無しでの `@` 添付 | — | 未実施 |
+| UserPromptSubmit のペイロードに添付内容が入らないこと | 2.1.268 | `prompt` に `@config/app.properties` があり、添付内のデコイ値は入力 JSON に含まれなかった |
+| `--add-dir` 越しの `@` 添付 | 2.1.268 | `--root` 未設定では検証不能として拒否。登録後は秘密値のない添付が通り、同じファイルに秘密値を入れると拒否された |
+| 権限プロンプトが従来どおり出ること | 2.1.268 確認後 | `--permission-mode default` で `sumi run … -- bash -c 'cat config/app.properties'` の承認画面が出た。今回だけ許可した後の表示も `db.password=***************` にマスクされた |
+| Bash の allow ルールがラッパーに対して照合されること | 2.1.268 確認後 | `Bash(cat:*)` を許可しても承認が必要だった。恒久許可の候補は `sumi run *` と表示された。auto mode では classifier が許可したため、手動モードで区別して確認した |
+| 保護側トランスクリプトに平文が無いこと | 2.1.263 / 2.1.268 | 上記の確認後、保護側 `projects` 以下の JSONL 全9件で新旧両方のデコイ値が0件。CLI の応答ストリームにも平文なし。元の作業ファイルには更新後の平文が残っていることを別途確認した |
+
+## MCP ツールの失敗本文（2026-09-12）
+
+Claude Code 2.1.268 と sumi `14751bb` で、ローカルの stdio MCP サーバーを使って確認しました。登録済みの公開デコイ値 `McpFailureDecoy_7429` を返す3つのツールを、実際の `claude -p` から1回ずつ呼び出しました。プロンプトやツールの説明には値を含めていません。
+
+| MCP の応答 | 発火した hook | モデルへ渡ったツール結果 |
+| --- | --- | --- |
+| 正常なテキスト応答 | `PostToolUse` | `success: credential=********************` |
+| `isError: true` のツールエラー | `PostToolUseFailure` | `tool_error: credential=McpFailureDecoy_7429` |
+| JSON-RPC エラー（code `-32603`） | `PostToolUseFailure` | `Intentional protocol failure: credential=McpFailureDecoy_7429` |
+
+hook の入力・sumi の出力・Claude Code の `tool_result` を照合しました。エラー2件では sumi は `systemMessage` だけを返し、ツール結果に平文が残りました。モデルの最終返答にも、その値が引用されました。したがって、この旧版の sumi で MCP の失敗本文から登録済みの値がモデルへ届く例は実測済みです。Read や Edit の失敗本文については、この試験では確認していません。
+
+この試験は専用の作業ディレクトリと設定で実行し、`--no-session-persistence` を指定しました。上の9件の保護側トランスクリプト検査とは別の応答ストリームとして記録しています。
+
+## shell prefix 方式（2026-09-12）
+
+Claude Code 2.1.268 と sumi の shell prefix 実装（`77e344e6`）を使い、隔離した設定と作業ディレクトリで実ツールを呼び出しました。公開デコイ値 `PrefixDecoy_7429` をファイルに置き、プロンプトには含めていません。`init` が生成した exec 形式の hook と `CLAUDE_CODE_SHELL_PREFIX` をそのまま使用しています。
+
+| 実際のツール呼び出し | 結果 |
+| --- | --- |
+| `Read sample.txt` | `password=****************` |
+| `Bash: cat sample.txt` | `Bash(cat:*)` の許可で実行され、出力は `password=****************`、終了コード 0 |
+| `Bash: cat sample.txt && false` | 出力は同じくマスクされ、終了コード 1 とエラー状態を保持 |
+| `Bash: git --version` | `Bash(git:*)` の deny により拒否され、`permission_denials` に元のコマンドが記録された |
+| `Bash: echo ok && git --version` | 別セッションで実際に呼び出し、同じ deny により拒否された |
+
+`--permission-mode default`、`--setting-sources ''`、`--no-session-persistence` を指定し、検証用 settings の allow／deny だけで確認しました。拒否2件はモデルが呼び出しを省略した結果ではありません。Read と実行された Bash のツール結果にはデコイの平文がなく、元のコマンド文字列も書き換えられていません。MCP はこの方式の検証対象に含めていません。

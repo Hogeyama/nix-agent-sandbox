@@ -60,8 +60,10 @@
 
 const std = @import("std");
 const posix = std.posix;
+pub const mask_stream = @import("mask_stream.zig");
 const relay_mod = @import("relay.zig");
 
+const MaskStream = mask_stream.MaskStream;
 const Relay = relay_mod.Relay;
 const CHUNK_SIZE = relay_mod.CHUNK_SIZE;
 
@@ -91,7 +93,7 @@ const SOCKET_DRAIN_MS: i64 = 5000;
 const RELAY_MAX_PENDING: usize = 256 * 1024;
 
 /// exec に失敗したときの終了コード (POSIX シェル互換)。
-const EXIT_EXEC_FAILED: u8 = 127;
+pub const EXIT_EXEC_FAILED: u8 = 127;
 
 /// 入れ子の supervise を抑止するためのマーカー。子に渡し、bash ラッパーは
 /// これが設定済みなら supervisor を挟まず素の bash を exec する。
@@ -104,24 +106,29 @@ const EXIT_EXEC_FAILED: u8 = 127;
 /// 抑止してもカバレッジは減らない。子孫はすべて最外周 supervisor のパイプを
 /// 継承するので出力は既にマスクされており、最外周から逃げる出力 (ファイルへの
 /// リダイレクト、/dev/tty への書き込み) は内側の層からも同様に逃げる。
-const SUPERVISED_ENTRY: [*:0]const u8 = "NAS_MASK_SUPERVISED=1";
-const SUPERVISED_PREFIX = "NAS_MASK_SUPERVISED=";
+/// nas のコンテナ内ラッパーが使うマーカー。sumi は自前の名前を渡す。
+pub const NAS_SUPERVISED_ENTRY: [:0]const u8 = "NAS_MASK_SUPERVISED=1";
 
 /// 子へ渡す環境を組み立てる。**fork の前に**呼ぶこと (子ではアロケートしない)。
 ///
-/// 既存の `NAS_MASK_SUPERVISED=` は追加ではなく**置換**する。append すると
-/// 同名の重複エントリが残り、どちらが効くかは getenv の実装依存になる。
+/// `marker_entry` は `NAME=1` の形。既存の同名エントリは追加ではなく**置換**する。
+/// append すると同名の重複エントリが残り、どちらが効くかは getenv の実装依存になる。
 fn buildChildEnvp(
     allocator: std.mem.Allocator,
     environ: [*:null]?[*:0]u8,
+    marker_entry: [:0]const u8,
 ) ![:null]?[*:0]const u8 {
+    const eq = std.mem.indexOfScalar(u8, marker_entry, '=') orelse return error.InvalidMarkerEnvironment;
+    if (eq == 0) return error.InvalidMarkerEnvironment;
+    const prefix = marker_entry[0 .. eq + 1];
+
     var n: usize = 0;
     while (environ[n] != null) : (n += 1) {}
 
     var replace_at: ?usize = null;
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        if (std.mem.startsWith(u8, std.mem.span(environ[i].?), SUPERVISED_PREFIX)) {
+        if (std.mem.startsWith(u8, std.mem.span(environ[i].?), prefix)) {
             replace_at = i;
             break;
         }
@@ -130,7 +137,7 @@ fn buildChildEnvp(
     const envp = try allocator.allocSentinel(?[*:0]const u8, if (replace_at == null) n + 1 else n, null);
     i = 0;
     while (i < n) : (i += 1) envp[i] = environ[i].?;
-    envp[replace_at orelse n] = SUPERVISED_ENTRY;
+    envp[replace_at orelse n] = marker_entry.ptr;
     return envp;
 }
 
@@ -264,19 +271,28 @@ pub fn exitCodeFromStatus(status: u32) u8 {
     return 1;
 }
 
-/// program を argv0/args で起動し、その出力を sock_path のブローカー経由で
-/// マスクして中継する。戻り値は子の終了ステータスに対応する終了コード。
+/// spawnChild が親へ返す資源。パイプの読み出し端と self-pipe の所有権は
+/// 呼び出し元へ移る。
+const Child = struct {
+    pid: posix.pid_t,
+    out_fd: posix.fd_t,
+    err_fd: posix.fd_t,
+    sig_fd: posix.fd_t,
+};
+
+/// 子を fork/exec し、その stdout/stderr をパイプに繋ぐ。
 ///
-/// リレーは **fork の前に** 2 本とも張る。どちらか一方でも張れなければ子を
-/// 起動せずにエラーを返す (起動してしまうと、マスクできない出力を持つ
-/// プロセスが動き出す)。
-pub fn run(
+/// リレーを張り終えた後に呼ぶこと。ブローカーへの socket のように、子へ渡っては
+/// ならない fd は `extra_child_close` で渡す。
+fn spawnChild(
     allocator: std.mem.Allocator,
-    sock_path: []const u8,
     argv0: []const u8,
     program: []const u8,
     args: []const []const u8,
-) !u8 {
+    extra_child_close: []const posix.fd_t,
+    prog_name: []const u8,
+    marker_entry: [:0]const u8,
+) !Child {
     // exec 用の引数は fork 前に用意する (fork 後の子でアロケートしない)。
     const program_z = try allocator.dupeZ(u8, program);
     const argv_z = try allocator.allocSentinel(?[*:0]const u8, args.len + 1, null);
@@ -284,20 +300,12 @@ pub fn run(
     for (args, 0..) |arg, i| {
         argv_z[i + 1] = (try allocator.dupeZ(u8, arg)).ptr;
     }
-    const envp_z = try buildChildEnvp(allocator, std.c.environ);
+    const envp_z = try buildChildEnvp(allocator, std.c.environ, marker_entry);
 
     // socket / 出力先 fd への write が EPIPE を返す前にプロセスが死なないよう、
     // SIGPIPE を無視する。無視しないと fail-closed の 121 に到達できず、
     // シグナル終了 (141) になってしまう。
     setDisposition(posix.SIG.PIPE, posix.SIG.IGN);
-
-    var out_relay = try Relay.connect(sock_path);
-    var err_relay = Relay.connect(sock_path) catch |err| {
-        out_relay.deinit(allocator);
-        return err;
-    };
-    defer out_relay.deinit(allocator);
-    defer err_relay.deinit(allocator);
 
     // SIGCHLD 通知用 self-pipe。ハンドラ内から書くので NONBLOCK にしておく。
     const sig_pipe = try posix.pipe2(.{ .NONBLOCK = true });
@@ -322,33 +330,76 @@ pub fn run(
         // 注入オラクルになる: ストリーム途中に 1 バイト差し込むとサーバ側の
         // マッチが崩れて原文が返るため、差し込んだ値を知っていれば原文を
         // 復元できてしまう (単なる情報漏れでは済まない)。
-        const child_close = [_]posix.fd_t{
-            out_pipe[0], out_pipe[1], err_pipe[0],  err_pipe[1],
-            sig_pipe[0], sig_pipe[1], out_relay.fd, err_relay.fd,
+        const own_close = [_]posix.fd_t{
+            out_pipe[0], out_pipe[1], err_pipe[0],
+            err_pipe[1], sig_pipe[0], sig_pipe[1],
         };
-        for (child_close) |fd| {
+        for (own_close) |fd| {
+            if (fd > posix.STDERR_FILENO) posix.close(fd);
+        }
+        for (extra_child_close) |fd| {
             if (fd > posix.STDERR_FILENO) posix.close(fd);
         }
         const err = posix.execveZ(program_z, argv_z.ptr, envp_z.ptr);
         // 子の stderr は既にパイプ (= マスク経路) なので、この診断は
         // マスクを通ってから出る。program はエージェントが与えた文字列で
         // シークレット由来ではない。
-        std.debug.print("nas-mask-filter: exec {s} failed: {}\n", .{ program, err });
+        std.debug.print("{s}: exec {s} failed: {}\n", .{ prog_name, program, err });
         posix.exit(EXIT_EXEC_FAILED);
     }
 
     // --- 親プロセス (スーパーバイザ) ---
     g_child_pid.store(pid, .monotonic);
-    // 出力を捨てて抜けるときに、マスクされない出力を持ったまま走り続ける
-    // プロセスを残さない。
-    errdefer _ = std.c.kill(pid, posix.SIG.KILL);
     // 書き込み端は子だけが持つ。親が握ったままだと EOF が来ない。
     posix.close(out_pipe[1]);
     posix.close(err_pipe[1]);
 
+    return .{
+        .pid = pid,
+        .out_fd = out_pipe[0],
+        .err_fd = err_pipe[0],
+        .sig_fd = sig_pipe[0],
+    };
+}
+
+/// program を argv0/args で起動し、その出力を sock_path のブローカー経由で
+/// マスクして中継する。戻り値は子の終了ステータスに対応する終了コード。
+///
+/// リレーは **fork の前に** 2 本とも張る。どちらか一方でも張れなければ子を
+/// 起動せずにエラーを返す (起動してしまうと、マスクできない出力を持つ
+/// プロセスが動き出す)。
+pub fn run(
+    allocator: std.mem.Allocator,
+    sock_path: []const u8,
+    argv0: []const u8,
+    program: []const u8,
+    args: []const []const u8,
+) !u8 {
+    var out_relay = try Relay.connect(sock_path);
+    var err_relay = Relay.connect(sock_path) catch |err| {
+        out_relay.deinit(allocator);
+        return err;
+    };
+    defer out_relay.deinit(allocator);
+    defer err_relay.deinit(allocator);
+
+    const child = try spawnChild(
+        allocator,
+        argv0,
+        program,
+        args,
+        &.{ out_relay.fd, err_relay.fd },
+        "nas-mask-filter",
+        NAS_SUPERVISED_ENTRY,
+    );
+    const pid = child.pid;
+    // 出力を捨てて抜けるときに、マスクされない出力を持ったまま走り続ける
+    // プロセスを残さない。
+    errdefer _ = std.c.kill(pid, posix.SIG.KILL);
+
     var streams = [2]Stream{
-        .{ .pipe_fd = out_pipe[0], .dst_fd = posix.STDOUT_FILENO, .relay = &out_relay },
-        .{ .pipe_fd = err_pipe[0], .dst_fd = posix.STDERR_FILENO, .relay = &err_relay },
+        .{ .pipe_fd = child.out_fd, .dst_fd = posix.STDOUT_FILENO, .relay = &out_relay },
+        .{ .pipe_fd = child.err_fd, .dst_fd = posix.STDERR_FILENO, .relay = &err_relay },
     };
 
     const scratch = try allocator.alloc(u8, CHUNK_SIZE);
@@ -392,7 +443,7 @@ pub fn run(
         }
         var sig_idx: ?usize = null;
         if (child_status == null) {
-            fds[n_fds] = .{ .fd = sig_pipe[0], .events = posix.POLL.IN, .revents = 0 };
+            fds[n_fds] = .{ .fd = child.sig_fd, .events = posix.POLL.IN, .revents = 0 };
             sig_idx = n_fds;
             n_fds += 1;
         }
@@ -472,7 +523,7 @@ pub fn run(
         if (sig_idx) |idx| {
             if (fds[idx].revents != 0) {
                 var sink: [64]u8 = undefined;
-                _ = posix.read(sig_pipe[0], &sink) catch {};
+                _ = posix.read(child.sig_fd, &sink) catch {};
                 const res = posix.waitpid(pid, posix.W.NOHANG);
                 if (res.pid == pid) child_status = res.status;
             }
@@ -486,10 +537,236 @@ pub fn run(
 }
 
 // ---------------------------------------------------------------------------
+// ローカルマスク (ブローカーなし)
+// ---------------------------------------------------------------------------
+
+/// 出力先 fd への writeAll。MaskStream の writer として渡す。
+///
+/// EPIPE だけは `error.DestinationClosed` として区別する。`cmd | head` で
+/// 読み手が去っただけであり、マスクは効いているので抑止には当たらない。
+const FdWriter = struct {
+    fd: posix.fd_t,
+
+    pub fn writeAll(self: FdWriter, bytes: []const u8) !void {
+        var off: usize = 0;
+        while (off < bytes.len) {
+            const n = posix.write(self.fd, bytes[off..]) catch |err| switch (err) {
+                error.BrokenPipe => return error.DestinationClosed,
+                error.WouldBlock => {
+                    var pfd = [_]posix.pollfd{
+                        .{ .fd = self.fd, .events = posix.POLL.OUT, .revents = 0 },
+                    };
+                    _ = try posix.poll(&pfd, -1);
+                    continue;
+                },
+                else => return err,
+            };
+            if (n == 0) return error.DestinationClosed;
+            off += n;
+        }
+    }
+};
+
+/// 子の 1 本のパイプと、そのローカルなマスク状態。
+const LocalStream = struct {
+    pipe_fd: posix.fd_t,
+    dst_fd: posix.fd_t,
+    /// 所有者は `runLocal` のローカル変数。値で持つと deinit が二重になる。
+    mask: *MaskStream,
+    pipe_done: bool = false,
+    dst_closed: bool = false,
+    pipe_closed: bool = false,
+
+    /// socket 版の同名メソッドと同じ理由で、パイプの読み出し端まで閉じる。
+    fn abandonDestination(self: *LocalStream) void {
+        self.dst_closed = true;
+        if (!self.pipe_closed) {
+            posix.close(self.pipe_fd);
+            self.pipe_closed = true;
+        }
+        self.pipe_done = true;
+    }
+};
+
+/// poll が readable を報告したパイプを 1 回読み、マスクして出力先へ書く。
+fn drainLocalOnce(s: *LocalStream) !void {
+    const buf = s.mask.readBuf();
+    const n = posix.read(s.pipe_fd, buf) catch |err| switch (err) {
+        error.WouldBlock => return,
+        else => return err,
+    };
+    if (n == 0) {
+        s.pipe_done = true;
+        return;
+    }
+    try s.mask.push(n, FdWriter{ .fd = s.dst_fd });
+}
+
+/// runLocal の呼び出し元ごとに変わるもの。診断のプログラム名と、子に付ける
+/// 「監督下にある」印の環境変数。
+pub const LocalOptions = struct {
+    prog_name: []const u8,
+    marker_env: [:0]const u8,
+};
+
+/// ブローカーを介さず、このプロセス内でマスクして中継する supervise。
+///
+/// マスクの一覧を隔離する相手がいない場面 (呼び出し元がエージェントと同じ UID で
+/// ホスト上に動く場合) 向け。socket 版と違って phase 3 が無い。マスクは同期的に
+/// 終わり、保持しているのは MaskStream の overlap だけで、それはループを抜けてから
+/// `finish` で吐き切る。
+pub fn runLocal(
+    allocator: std.mem.Allocator,
+    secrets: []const []const u8,
+    argv0: []const u8,
+    program: []const u8,
+    args: []const []const u8,
+    opts: LocalOptions,
+) !u8 {
+    var out_mask = try MaskStream.init(allocator, secrets);
+    defer out_mask.deinit(allocator);
+    var err_mask = try MaskStream.init(allocator, secrets);
+    defer err_mask.deinit(allocator);
+
+    const child = try spawnChild(allocator, argv0, program, args, &.{}, opts.prog_name, opts.marker_env);
+    errdefer _ = std.c.kill(child.pid, posix.SIG.KILL);
+
+    var streams = [2]LocalStream{
+        .{ .pipe_fd = child.out_fd, .dst_fd = posix.STDOUT_FILENO, .mask = &out_mask },
+        .{ .pipe_fd = child.err_fd, .dst_fd = posix.STDERR_FILENO, .mask = &err_mask },
+    };
+
+    var child_status: ?u32 = null;
+
+    while (!streams[0].pipe_done or !streams[1].pipe_done) {
+        var fds: [3]posix.pollfd = undefined;
+        var n_fds: usize = 0;
+        var pipe_idx: [2]?usize = .{ null, null };
+
+        for (&streams, 0..) |*s, i| {
+            if (s.pipe_done) continue;
+            fds[n_fds] = .{ .fd = s.pipe_fd, .events = posix.POLL.IN, .revents = 0 };
+            pipe_idx[i] = n_fds;
+            n_fds += 1;
+        }
+        var sig_idx: ?usize = null;
+        if (child_status == null) {
+            fds[n_fds] = .{ .fd = child.sig_fd, .events = posix.POLL.IN, .revents = 0 };
+            sig_idx = n_fds;
+            n_fds += 1;
+        }
+
+        const timeout: i32 = if (child_status == null) -1 else DRAIN_IDLE_MS;
+        const ready = try posix.poll(fds[0..n_fds], timeout);
+
+        for (&streams, 0..) |*s, i| {
+            const idx = pipe_idx[i] orelse continue;
+            if (fds[idx].revents == 0) continue;
+            drainLocalOnce(s) catch |err| switch (err) {
+                error.DestinationClosed => s.abandonDestination(),
+                else => return err,
+            };
+        }
+
+        // アイドル打ち切り。socket 版と同じく「POLLIN を張ったのに発火しな
+        // かった」で判定する。
+        if (ready == 0 and child_status != null) {
+            for (&streams, 0..) |*s, i| {
+                if (pipe_idx[i] != null) s.pipe_done = true;
+            }
+        }
+
+        if (sig_idx) |idx| {
+            if (fds[idx].revents != 0) {
+                var sink: [64]u8 = undefined;
+                _ = posix.read(child.sig_fd, &sink) catch {};
+                const res = posix.waitpid(child.pid, posix.W.NOHANG);
+                if (res.pid == child.pid) child_status = res.status;
+            }
+        }
+    }
+
+    // 保持中の overlap を吐き切る。忘れると末尾の maxSecretLen-1 バイトが消える。
+    for (&streams) |*s| {
+        if (s.dst_closed) continue;
+        s.mask.finish(FdWriter{ .fd = s.dst_fd }) catch |err| switch (err) {
+            error.DestinationClosed => {},
+            else => return err,
+        };
+    }
+
+    const status = child_status orelse posix.waitpid(child.pid, 0).status;
+    return exitCodeFromStatus(status);
+}
+
+// ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+const DelayedPipeReader = struct {
+    fn run(fd: posix.fd_t) void {
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+        var buf: [4096]u8 = undefined;
+        _ = posix.read(fd, &buf) catch {};
+    }
+};
+
+fn timespecNs(ts: posix.timespec) u64 {
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+test "FdWriter: waits without spinning when a nonblocking destination is full" {
+    const pipe = try posix.pipe2(.{ .NONBLOCK = true });
+    defer posix.close(pipe[0]);
+    defer posix.close(pipe[1]);
+    var fill: [4096]u8 = @splat('x');
+    while (true) {
+        _ = posix.write(pipe[1], &fill) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => return err,
+        };
+    }
+
+    const reader = try std.Thread.spawn(.{}, DelayedPipeReader.run, .{pipe[0]});
+    var reader_joined = false;
+    defer if (!reader_joined) reader.join();
+    const before = timespecNs(try posix.clock_gettime(posix.CLOCK.THREAD_CPUTIME_ID));
+    try (FdWriter{ .fd = pipe[1] }).writeAll("y");
+    const cpu_ns = timespecNs(try posix.clock_gettime(posix.CLOCK.THREAD_CPUTIME_ID)) - before;
+    reader.join();
+    reader_joined = true;
+
+    var saw_y = false;
+    while (true) {
+        const n = posix.read(pipe[0], &fill) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        if (std.mem.indexOfScalar(u8, fill[0..n], 'y') != null) saw_y = true;
+    }
+    try testing.expect(saw_y);
+    try testing.expect(cpu_ns < 25 * std.time.ns_per_ms);
+}
+
+test "drainLocalOnce: a pipe read error is propagated without completing the stream" {
+    var stream_mask = try MaskStream.init(testing.allocator, &.{"Tr0ub4dor"});
+    defer stream_mask.deinit(testing.allocator);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const write_only = try tmp.dir.createFile("write-only", .{});
+    defer write_only.close();
+    var stream = LocalStream{
+        .pipe_fd = write_only.handle,
+        .dst_fd = posix.STDOUT_FILENO,
+        .mask = &stream_mask,
+    };
+
+    try testing.expectError(error.NotOpenForReading, drainLocalOnce(&stream));
+    try testing.expect(!stream.pipe_done);
+}
 
 test "exitCodeFromStatus: normal exit" {
     // WIFEXITED: 下位 7 bit が 0、終了コードは 8..16 bit。
@@ -500,7 +777,7 @@ test "exitCodeFromStatus: normal exit" {
 
 test "buildChildEnvp: appends the marker when absent" {
     var environ = [_:null]?[*:0]u8{ @constCast("A=1"), @constCast("B=2") };
-    const envp = try buildChildEnvp(testing.allocator, &environ);
+    const envp = try buildChildEnvp(testing.allocator, &environ, "NAS_MASK_SUPERVISED=1");
     defer testing.allocator.free(envp);
 
     try testing.expectEqual(@as(usize, 3), envp.len);
@@ -516,13 +793,29 @@ test "buildChildEnvp: replaces an existing marker instead of appending" {
         @constCast("NAS_MASK_SUPERVISED=0"),
         @constCast("B=2"),
     };
-    const envp = try buildChildEnvp(testing.allocator, &environ);
+    const envp = try buildChildEnvp(testing.allocator, &environ, "NAS_MASK_SUPERVISED=1");
     defer testing.allocator.free(envp);
 
     try testing.expectEqual(@as(usize, 3), envp.len);
     try testing.expectEqualStrings("A=1", std.mem.span(envp[0].?));
     try testing.expectEqualStrings("NAS_MASK_SUPERVISED=1", std.mem.span(envp[1].?));
     try testing.expectEqualStrings("B=2", std.mem.span(envp[2].?));
+}
+
+test "buildChildEnvp: marker name comes from the caller" {
+    var environ = [_:null]?[*:0]u8{ @constCast("A=1"), @constCast("SUMI_SUPERVISED=0") };
+    const envp = try buildChildEnvp(testing.allocator, &environ, "SUMI_SUPERVISED=1");
+    defer testing.allocator.free(envp);
+
+    try testing.expectEqual(@as(usize, 2), envp.len);
+    try testing.expectEqualStrings("A=1", std.mem.span(envp[0].?));
+    try testing.expectEqualStrings("SUMI_SUPERVISED=1", std.mem.span(envp[1].?));
+}
+
+test "buildChildEnvp: rejects malformed marker entries" {
+    var environ = [_:null]?[*:0]u8{@constCast("A=1")};
+    try testing.expectError(error.InvalidMarkerEnvironment, buildChildEnvp(testing.allocator, &environ, "SUMI_SUPERVISED"));
+    try testing.expectError(error.InvalidMarkerEnvironment, buildChildEnvp(testing.allocator, &environ, "=1"));
 }
 
 test "exitCodeFromStatus: killed by signal maps to 128+signo" {
