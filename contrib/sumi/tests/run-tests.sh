@@ -127,9 +127,9 @@ check "prefix run evaluates one whole command with stdin and redirects" 'file=**
 check "prefix run masks stderr" 'stderr=**********' "$(cat "$work/prefix.stderr")"
 check "prefix run preserves compound command status" "9" "${statuses[1]}"
 
-"$sumi" run --secrets-file "$work/secrets.txt" --shell bin/bash "touch '$work/relative-shell-ran'" >/dev/null 2>&1
-check "prefix run rejects a relative shell" "121" "$?"
-check "relative shell does not execute the command" "no" "$([ -e "$work/relative-shell-ran" ] && echo yes || echo no)"
+"$sumi" run --secrets-file "$work/secrets.txt" --shell "$work/missing-shell" "touch '$work/missing-shell-ran'" >/dev/null 2>&1
+check "prefix run rejects a missing shell" "121" "$?"
+check "missing shell does not execute the command" "no" "$([ -e "$work/missing-shell-ran" ] && echo yes || echo no)"
 printf '#!/bin/sh\nexit 0\n' > "$work/not-executable"
 chmod 600 "$work/not-executable"
 "$sumi" run --secrets-file "$work/secrets.txt" --shell "$work/not-executable" "touch '$work/nonexec-shell-ran'" >/dev/null 2>&1
