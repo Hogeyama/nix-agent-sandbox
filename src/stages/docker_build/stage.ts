@@ -35,7 +35,16 @@ export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
       "../../docker/embed/",
     ),
     outputDir: "",
-    files: ["Dockerfile", "entrypoint.sh", "direnv-exec.sh", "local-proxy.mjs"],
+    files: [
+      "Dockerfile",
+      "entrypoint.sh",
+      "direnv-exec.sh",
+      "direnv-bootstrap.sh",
+      "direnv-lib.sh",
+      "nix-direnv.sh",
+      "nix-direnv.LICENSE",
+      "local-proxy.mjs",
+    ],
   },
 ] as const;
 

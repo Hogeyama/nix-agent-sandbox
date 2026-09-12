@@ -53,5 +53,10 @@ if ! /usr/bin/jq -e '.state.foundRC == null or .state.foundRC.allowed == 0' \
   exit 1
 fi
 
+if /usr/bin/jq -e '.state.foundRC != null' >/dev/null <<<"$status"; then
+  /usr/local/libexec/nas-direnv-bootstrap \
+    /usr/local/share/nas/direnv-lib.sh
+fi
+
 exec /usr/bin/direnv exec "$workspace" "$real_bash" -c "$finish" \
   nas-direnv "$ops_file" "$path_prefix" "$@"

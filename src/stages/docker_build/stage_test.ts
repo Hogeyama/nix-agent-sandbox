@@ -171,22 +171,29 @@ test("DockerBuildStage.run: calls DockerBuildService.buildImage when image does 
   expect(buildImageCalls[0].assetGroups.length).toBeGreaterThan(0);
 });
 
-test("DockerBuildStage.run: materializes the direnv launcher in the build context", async () => {
+test("DockerBuildStage.run: materializes every embedded build asset", async () => {
   const buildProbes: BuildProbes = {
     imageName: "nas-sandbox",
     imageExists: false,
     currentEmbedHash: "abc123",
     imageEmbedHash: null,
   };
-  let materializedLauncher: string | undefined;
+  const materializedAssets = new Map<string, string>();
 
   const docker = makeDockerServiceFake({
     build: (contextDir) =>
       Effect.promise(async () => {
-        materializedLauncher = await readFile(
-          path.join(contextDir, "direnv-exec.sh"),
-          "utf8",
-        );
+        for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+          for (const file of group.files) {
+            materializedAssets.set(
+              path.join(group.outputDir, file),
+              await readFile(
+                path.join(contextDir, group.outputDir, file),
+                "utf8",
+              ),
+            );
+          }
+        }
       }),
   });
   const dockerBuild = DockerBuildServiceLive.pipe(
@@ -201,11 +208,44 @@ test("DockerBuildStage.run: materializes the direnv launcher in the build contex
     ),
   );
 
-  const sourceLauncher = await readFile(
-    path.join(EMBEDDED_BUILD_ASSET_GROUPS[0].baseDir, "direnv-exec.sh"),
+  for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+    for (const file of group.files) {
+      expect(materializedAssets.get(path.join(group.outputDir, file))).toEqual(
+        await readFile(path.join(group.baseDir, file), "utf8"),
+      );
+    }
+  }
+});
+
+test("packaged nix-direnv is the pinned unmodified 3.2.0 release", async () => {
+  const group = EMBEDDED_BUILD_ASSET_GROUPS[0];
+  const source = await readFile(path.join(group.baseDir, "nix-direnv.sh"));
+  const hash = new Bun.CryptoHasher("sha256").update(source).digest("hex");
+  expect(hash).toBe(
+    "856e8d0b5247b9edc88d9377b8333a97a2363cc69abaa7760fb857609d597ebe",
+  );
+  expect(
+    await readFile(path.join(group.baseDir, "nix-direnv.LICENSE"), "utf8"),
+  ).toStartWith("MIT License\n");
+  const dockerfile = await readFile(
+    path.join(group.baseDir, "Dockerfile"),
     "utf8",
   );
-  expect(materializedLauncher).toEqual(sourceLauncher);
+  expect(dockerfile).toContain(hash);
+  expect(dockerfile).toContain("sha256sum -c -");
+});
+
+test("computeEmbedHash includes the complete Docker build asset list", async () => {
+  const parts: string[] = [];
+  for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+    for (const file of group.files) {
+      parts.push(await readFile(path.join(group.baseDir, file), "utf8"));
+    }
+  }
+  const expected = new Bun.CryptoHasher("sha256")
+    .update(parts.join("\n"))
+    .digest("hex");
+  expect(await computeEmbedHash()).toBe(expected);
 });
 
 test("DockerBuildStage.run: rebuilds when image exists with stale embed hash", async () => {

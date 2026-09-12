@@ -5,6 +5,8 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -141,6 +143,11 @@ test("disabled mode launches the payload without invoking direnv", async () => {
     expect(result.exitCode).toBe(0);
     expect(await readFile(fixture.payloadMarker, "utf8")).toBe("ran");
     expect(await Bun.file(fixture.callsFile).exists()).toBe(false);
+    expect(
+      await Bun.file(
+        path.join(fixture.env.XDG_CONFIG_HOME, "direnv/lib/nas-nix-direnv.sh"),
+      ).exists(),
+    ).toBe(false);
   });
 });
 
@@ -227,6 +234,121 @@ test("payload exit status is preserved", async () => {
 
     expect(await proc.exited).toBe(37);
   });
+});
+
+test("no-RC and unapproved paths do not install the direnv library", async () => {
+  await withFixture(async (fixture) => {
+    const installed = path.join(
+      fixture.env.XDG_CONFIG_HOME,
+      "direnv/lib/nas-nix-direnv.sh",
+    );
+    const noRc = await launch(fixture, ["/bin/true"]);
+    expect(noRc.exitCode).toBe(0);
+    expect(await Bun.file(installed).exists()).toBe(false);
+
+    const rc = path.join(fixture.workspace, ".envrc");
+    await writeFile(rc, "export SHOULD_NOT_RUN=yes\n");
+    const unapproved = await launch(fixture, ["/bin/true"], {
+      FAKE_STATUS_JSON: JSON.stringify({
+        state: { foundRC: { path: rc, allowed: -1 } },
+      }),
+    });
+    expect(unapproved.exitCode).toBe(1);
+    expect(unapproved.stderr).toContain("direnv allow");
+    expect(await Bun.file(installed).exists()).toBe(false);
+  });
+});
+
+test("bootstrap honors DIRENV_CONFIG and leaves identical installs untouched", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-direnv-bootstrap-"));
+  try {
+    const bootstrap = new URL("./embed/direnv-bootstrap.sh", import.meta.url)
+      .pathname;
+    const source = path.join(root, "library source.sh");
+    const explicitConfig = path.join(root, "explicit config");
+    const xdgConfig = path.join(root, "xdg config");
+    const destination = path.join(explicitConfig, "lib", "nas-nix-direnv.sh");
+    await writeFile(source, "export NAS_TEST_LIBRARY=loaded\n");
+
+    const runBootstrap = () => {
+      const proc = Bun.spawn(["/bin/bash", bootstrap, source], {
+        env: {
+          ...process.env,
+          HOME: path.join(root, "home"),
+          XDG_CONFIG_HOME: xdgConfig,
+          DIRENV_CONFIG: explicitConfig,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      return proc.exited;
+    };
+
+    expect(await runBootstrap()).toBe(0);
+    expect(await readFile(destination, "utf8")).toBe(
+      "export NAS_TEST_LIBRARY=loaded\n",
+    );
+    await utimes(destination, new Date(1000), new Date(1000));
+    expect(await runBootstrap()).toBe(0);
+    expect((await stat(destination)).mtimeMs).toBe(1000);
+    expect(
+      await Bun.file(
+        path.join(xdgConfig, "direnv/lib/nas-nix-direnv.sh"),
+      ).exists(),
+    ).toBe(false);
+
+    const home = path.join(root, "home fallback");
+    const homeProc = Bun.spawn(["/bin/bash", bootstrap, source], {
+      env: {
+        ...process.env,
+        HOME: home,
+        DIRENV_CONFIG: "",
+        XDG_CONFIG_HOME: "",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await homeProc.exited).toBe(0);
+    expect(
+      await readFile(
+        path.join(home, ".config/direnv/lib/nas-nix-direnv.sh"),
+        "utf8",
+      ),
+    ).toBe("export NAS_TEST_LIBRARY=loaded\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap rejects a directory at its managed library path", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-direnv-bootstrap-"));
+  try {
+    const bootstrap = new URL("./embed/direnv-bootstrap.sh", import.meta.url)
+      .pathname;
+    const source = path.join(root, "source.sh");
+    const config = path.join(root, "config");
+    const destination = path.join(config, "lib", "nas-nix-direnv.sh");
+    await writeFile(source, "export NAS_TEST_LIBRARY=loaded\n");
+    await mkdir(destination, { recursive: true });
+
+    const proc = Bun.spawn(["/bin/bash", bootstrap, source], {
+      env: { ...process.env, DIRENV_CONFIG: config },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("not a regular file");
+    expect(
+      await Bun.file(path.join(destination, path.basename(source))).exists(),
+    ).toBe(false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("approval dependencies ignore workspace commands in PATH", async () => {
