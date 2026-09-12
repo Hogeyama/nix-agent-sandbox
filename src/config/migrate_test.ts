@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +25,19 @@ import {
   normalizeEnvSnakeCaseKeys,
   objectToPklSource,
 } from "./migrate.ts";
+
+import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
+
+// Installed nas assets may be older than the schema under test.
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
 
 // ---------------------------------------------------------------------------
 // objectToPklSource
