@@ -1058,7 +1058,18 @@ test "terminateGroup gives a TERM-handling descendant the full grace period" {
     const argv = [_][]const u8{
         test_paths.executable("sh"),
         "-c",
-        "trap 'exit 0' TERM; (trap 'sleep 0.02; echo done > \"$NAS_EXECUTOR_DONE_FILE\"; exit 0' TERM; while :; do :; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; while :; do :; done",
+        // The descendant publishes its own PID only after installing the
+        // handler, so reading it also confirms readiness to receive TERM.
+        // A separate shell gives $$ the descendant's PID instead of the
+        // leader's PID, which a (...) subshell would retain.
+        \\trap 'exit 0' TERM
+        \\sh -c '
+        \\  trap '\''sleep 0.02; echo done > "$NAS_EXECUTOR_DONE_FILE"; exit 0'\'' TERM
+        \\  echo $$ > "$NAS_EXECUTOR_PID_FILE"
+        \\  while :; do :; done
+        \\' &
+        \\while :; do :; done
+        ,
     };
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
