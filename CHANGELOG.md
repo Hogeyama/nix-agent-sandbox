@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.16.0] - 2026-09-12
+
+### Changed
+
+- **Breaking — network and secrets**: replace `reviewRules` and `credentials` with named scopes, rules, and secrets; select masking inputs with `mask.apply`. See the [migration guide](docs/migration/network-scopes.md).
+- **Breaking — project environments**: remove `nix.extraPackages` and automatic devShell loading. Use `.envrc`, enable `direnv.enable`, and approve it on the host with `direnv allow`.
+- **Breaking — Docker**: reject `docker.shared = true` when Docker is enabled; use isolated per-session daemons with a shared public Docker Hub pull cache.
+
 ### Added
 
-- **Network — dynamic host port forward**: `nas network forward <session>:<port> [<host-port>]` / `unforward` and the UI's **Ports · out** panel make a host loopback port reachable at `localhost:<port>` inside a running container, without editing `forwardPorts` or restarting the session. Rides the existing port-bind relay: the relay opens the container listener, the host dials `127.0.0.1` only for ports the user registered, and forwards are re-established when the relay restarts.
+- **Network**: scoped request/body validation, secret masking and injection, explicit WebSocket permissions, and SSRF/DNS-rebinding defenses.
+- **Ports**: bidirectional forwarding through `nas network bind -L/-R` and the UI. Configure `localForwards` / `remoteForwards`; legacy `proxy.forwardPorts` remains supported with a [migration warning](docs/migration/port-forwarding.md).
+- **Masking**: stream shell and hostexec output through `mask.filter`; add [sumi](contrib/sumi/README.md), a standalone Claude Code masking tool distributed for x86_64 and aarch64 Linux.
+- **HostExec**: session-scoped `hostexec` command with streaming output and preserved stdin.
+- **UI and docs**: clearer approvals and cross-session notifications, clipboard Markdown review, and a searchable user guide.
+
+### Fixed
+
+- Preserve Codex shell environments; improve hostexec execution integrity, stdin handling, and disconnect cleanup.
+- Fix JVM proxy trust and Testcontainers port access; improve startup speed, live output latency, and audit storage limits.
 
 ## [0.15.2] - 2026-07-03
 

@@ -735,10 +735,10 @@ describe("migrateYml2Pkl", () => {
       process.chdir(tmpDir);
       await migrateYml2Pkl({ global: true });
 
-      // Schema.pkl should be overwritten (bundled 0.15.3 > 0.0.1)
+      // Schema.pkl should be overwritten (bundled 0.16.0 > 0.0.1)
       const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
       expect(content).not.toEqual(oldSchema);
-      expect(content).toContain("@version 0.15.3");
+      expect(content).toContain("@version 0.16.0");
     });
 
     test("does not overwrite existing Schema.pkl when existing version is newer", async () => {
@@ -758,7 +758,7 @@ describe("migrateYml2Pkl", () => {
       process.chdir(tmpDir);
       await migrateYml2Pkl({ global: true });
 
-      // Schema.pkl should NOT be overwritten (999.0.0 > 0.15.3)
+      // Schema.pkl should NOT be overwritten (999.0.0 > 0.16.0)
       const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
       expect(content).toEqual(newerSchema);
     });

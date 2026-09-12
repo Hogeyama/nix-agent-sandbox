@@ -1,4 +1,4 @@
-/// @version 0.15.3
+/// @version 0.16.0
 /// Typed schema for nas (Nix Agent Sandbox) configuration.
 ///
 /// User configuration files (`.nas/config.pkl`) `amends` this module to
