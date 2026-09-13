@@ -5,6 +5,7 @@
 //! 4 バイト以上。1024 件を上限にする。
 
 const std = @import("std");
+const patterns = @import("patterns.zig");
 
 pub const MIN_LEN: usize = 4;
 pub const MAX_COUNT: usize = 1024;
@@ -17,6 +18,7 @@ pub const LoadError = error{
     InvalidUtf8,
     TooMany,
     OutOfMemory,
+    ExpansionTooLarge,
 };
 
 /// 利用者へ見せる理由文。hook の decision と init の診断で共用する。
@@ -27,6 +29,7 @@ pub fn describe(err: LoadError) []const u8 {
         error.TooShort => "the secrets file holds a value shorter than 4 bytes",
         error.InvalidUtf8 => "the secrets file holds a value that is not valid UTF-8",
         error.TooMany => "the secrets file holds more than 1024 values",
+        error.ExpansionTooLarge => "encoded mask patterns exceed the 64 MiB or 262144-pattern limit",
         error.OutOfMemory => "out of memory while reading the secrets file",
     };
 }
@@ -65,7 +68,10 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) LoadError![]const []
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.Unreadable,
     };
-    return parse(allocator, text);
+    defer allocator.free(text);
+    const values = try parse(allocator, text);
+    defer allocator.free(values);
+    return patterns.expand(allocator, values);
 }
 
 const testing = std.testing;

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Exercise the built sumi binary against decoy values. Never touches a real
-# repository; needs bash and jq.
+# repository; needs bash, jq and Python 3.
 set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sumi="${SUMI_BIN:-$script_dir/../zig-out/bin/sumi}"
 [ -x "$sumi" ] || { echo "sumi not found at $sumi; run 'zig build' in contrib/sumi first" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -359,10 +360,14 @@ check "init rejects a non-object env" "1" "$?"
 check "bad env failure leaves settings unchanged" "$bad_env_before" "$(sha256sum "$bad_env_settings" | cut -d ' ' -f1)"
 check "bad env failure happens before backup" "0" "$(find "$work" -maxdepth 1 -name 'bad-env-settings.json.bak.*' | wc -l | tr -d ' ')"
 
+# /bin/sh may resolve to supported bash; use an explicitly unsupported name.
+bad_shell="$work/unsupported-shell"
+printf '#!/bin/sh\nexit 0\n' > "$bad_shell"
+chmod +x "$bad_shell"
 bad_shell_settings="$work/bad-shell-settings.json"
 printf '%s' '{"permissions":{"allow":["Bash(cat:*)"]}}' > "$bad_shell_settings"
 bad_shell_before="$(sha256sum "$bad_shell_settings" | cut -d ' ' -f1)"
-"$renamed_sumi" init --agent claude --secrets-file "$work/secrets.txt" --settings "$bad_shell_settings" --shell /bin/sh >/dev/null 2>"$work/bad-shell.err"
+"$renamed_sumi" init --agent claude --secrets-file "$work/secrets.txt" --settings "$bad_shell_settings" --shell "$bad_shell" >/dev/null 2>"$work/bad-shell.err"
 check "init rejects unsupported Claude shells" "1" "$?"
 check "unsupported shell failure leaves settings unchanged" "$bad_shell_before" "$(sha256sum "$bad_shell_settings" | cut -d ' ' -f1)"
 check "unsupported shell failure happens before backup" "0" "$(find "$work" -maxdepth 1 -name 'bad-shell-settings.json.bak.*' | wc -l | tr -d ' ')"
@@ -395,6 +400,9 @@ while IFS=$'\t' read -r invocation status; do
   [ -n "$invocation" ] || continue
   check "$invocation exits 0" "0" "$status"
 done < "$status_failures"
+
+SUMI_BIN="$sumi" python3 "$script_dir/encoded-values.py"
+check "encoded-value regressions" "0" "$?"
 
 printf '\npassed %d, failed %d\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
