@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.17.0] - 2026-09-14
+
+### Added
+
+- **sumi**: automatically mask URL-encoded and base64 variants of registered secrets, including embedded values and 76-column base64 wrapping. Pattern expansion is bounded and fails closed when its limits are exceeded. See the [supported formats and limitations](contrib/sumi/README.md).
+
+### Changed
+
+- **direnv**: cache container dev shells with a pinned nix-direnv installation so repeated workspace launches can reuse evaluations.
+- **sumi documentation**: refresh validation results for shell prefix masking, HTTP tool failures, and stdio MCP connection limitations.
+
 ## [0.16.0] - 2026-09-12
 
 ### Changed
