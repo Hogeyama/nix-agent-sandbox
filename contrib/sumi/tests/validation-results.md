@@ -20,12 +20,17 @@ Claude Code 2.1.268 で、sumi の shell prefix 方式を検証しました。Re
 | stdio MCP の起動（単一ラッパーパスへ変更） | サーバーは起動するが、初期化応答が完結せず30秒で接続タイムアウト | 2026-09-14 |
 | Read・Edit の失敗本文 | 未検証 | — |
 
-## 検証条件と観測内容
+## 検証条件
 
-2026-09-12 は sumi `77e344e6` とデコイ値 `PrefixDecoy_7429` を使用しました。`init` が生成した exec 形式の hook と `CLAUDE_CODE_SHELL_PREFIX` をそのまま使い、`--permission-mode default` と検証用 settings の allow／deny で確認しました。拒否2件はモデルが呼び出しを省略した結果ではありません。Read と実行された Bash のツール結果にはデコイの平文がなく、元のコマンド文字列も書き換えられていません。
+| 検証日（JST） | sumi | 登録したデコイ値 | 設定 |
+| --- | --- | --- | --- |
+| 2026-09-12 | `77e344e6` | `PrefixDecoy_7429` | `init` の生成設定。`--permission-mode default`、`Bash(cat:*)` を allow、`Bash(git:*)` を deny |
+| 2026-09-14 | 検証時の作業ツリーのバイナリ | `McpFailureDecoy_7429` | `init` の生成設定に hook 入出力の記録を追加。stdio の再試行だけ prefix を単一ラッパーパスに変更 |
 
-2026-09-14 は作業ツリーの shell prefix 方式の sumi バイナリとデコイ値 `McpFailureDecoy_7429` を使用しました。localhost の HTTP サーバーが返す3種類の応答を各1回呼び出し、hook の入力・sumi の出力・Claude Code の `tool_result` を照合しました。prefix は `init` の生成値のまま有効で、hook は観測用ラッパーを介して sumi を実行しました。`--strict-mcp-config`、`--tools ''`、`--allowedTools 'mcp__decoy__*'`、`--permission-mode dontAsk` により、検証用の3ツールだけを利用可能にしました。認証は既存環境を利用しており、`CLAUDE_CONFIG_DIR` の隔離は行っていません。
+2026-09-14 の HTTP 試験では、localhost の検証用サーバーを使い、`--strict-mcp-config --tools '' --allowedTools 'mcp__decoy__*' --permission-mode dontAsk` で3ツールだけを許可しました。認証は既存環境を利用し、`CLAUDE_CONFIG_DIR` は変更していません。
 
-成功時は sumi が `updatedToolOutput` を返してマスクされました。失敗2件では `systemMessage` だけを返し、ツール結果とモデルの最終返答にデコイ値の平文が残りました。HTTP 通信は shell prefix を通らないため、prefix を有効にしてもこの失敗経路は保護されません。
+## 不具合の確認根拠
 
-stdio サーバーの起動には prefix が適用されます。生成設定での起動失敗後、`sumi run --secrets-file … --shell /bin/bash "$@"` を呼ぶ単一ラッパーパスに変更しても接続がタイムアウトしました。同じサーバーへの初期化要求を直接実行と sumi 経由で比較すると、直接実行では改行を含む158バイトが届き、sumi 経由では139バイトだけが届きました。ストリームマスクが、次のチャンクにまたがる値を検出するために末尾19バイト（登録値20バイト − 1）を保持し、応答を区切る改行も保留していました。ツール呼び出しまで進んでいないため、この経路の成功・失敗本文がマスクされるかは未検証です。
+HTTP の失敗2件では、hook の入力・sumi の出力・Claude Code の `tool_result` を照合しました。sumi が返したのは警告の `systemMessage` だけで、モデルの最終返答にもデコイ値の平文が残りました。HTTP 通信は shell prefix を通りません。
+
+stdio のタイムアウトは、初期化応答を直接実行と sumi 経由で比較しました。直接実行では改行を含む158バイト、sumi 経由では139バイトが届きました。ストリームマスクがチャンク境界の検査用に末尾19バイト（登録値20バイト − 1）を保持し、応答を区切る改行も保留していました。ここで使用したラッパーは `sumi run --secrets-file … --shell /bin/bash "$@"` を実行します。ツール呼び出しには進めていないため、この経路の出力マスクは未検証です。
