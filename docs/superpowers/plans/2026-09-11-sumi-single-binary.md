@@ -42,7 +42,7 @@ Spec: `docs/superpowers/specs/2026-09-11-sumi-single-binary-design.md`
 | `contrib/sumi/claude/hook_post.zig` (create) | PostToolUse / PostToolUseFailure。 |
 | `contrib/sumi/claude/hook_prompt.zig` (create) | UserPromptSubmit: `@` トークン抽出、ファイル走査、拒否判定。 |
 | `contrib/sumi/claude/init.zig` (create) | settings.json のマージ、バックアップ、自己診断。 |
-| `contrib/sumi/tests/run-tests.sh` (create) | ビルド済み `sumi` に JSON を流す黒箱テスト。bash と jq を使う。 |
+| `contrib/sumi/tests/run-tests.sh` (create) | ビルド済み `sumi` に JSON を流すブラックボックステスト。bash と jq を使う。 |
 | `contrib/sumi/README.md` (create) | 導入手順、塞ぐ経路、守らないもの、固める構成、実測表。 |
 | `flake.nix` (modify) | `packages.sumi`。 |
 | `.github/workflows/release.yml` (modify) | `sumi-<system>` を Release に添付。 |
@@ -2429,7 +2429,7 @@ EOF
 
 ---
 
-### Task 8: 黒箱テスト (tests/run-tests.sh)
+### Task 8: ブラックボックステスト (tests/run-tests.sh)
 
 **Files:**
 - Create: `contrib/sumi/tests/run-tests.sh`
@@ -2672,7 +2672,7 @@ cd /home/cq2n-iwym/repo/nix-agent-sandbox && nix build .#sumi --print-build-logs
 
 Expected: `not a dynamic executable`、`sumi <rev または dirty>`。サンドボックス内で `nix build` がネットワークを要求して失敗する場合は `hostexec nix build .#sumi` を試し、それも通らなければ「未確認」として ledger に記録する (Task 2 Step 7 の `zig build -Dtarget=...` で静的リンク自体は確認済み)。
 
-- [ ] **Step 3: ci.yml に Zig テストと黒箱テストを足す**
+- [ ] **Step 3: ci.yml に Zig テストとブラックボックステストを足す**
 
 `Hostexec Zig tests` の step の直後に追加:
 
