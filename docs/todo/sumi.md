@@ -2,7 +2,7 @@ sumi の未解決の課題です。
 
 **1. secrets ファイル自体が、sandbox 内の Bash から加工して読み出せる**
 
-`xxd ~/.claude/sumi/secrets.txt` のように加工して出力すると、sumi のマスクをすり抜けて値が読めます。sumi の出力マスクが止めるのは、平文、URL エンコード版、base64 版だけです。2 重 base64、`xxd -p`、逆順、`gzip | base64`、`od -An -c` は止まりません（[scan mask の設計](../superpowers/specs/2026-09-15-sumi-scan-mask-design.md) の G2）。
+`xxd ~/.claude/sumi/secrets.txt` のように加工して出力すると、sumi のマスクをすり抜けて値が読めます。sumi の出力マスクが止めるのは、平文、URL エンコード版、base64 版だけです。2 重 base64、`xxd -p`、逆順、`gzip | base64`、`od -An -c` は止まりません（[scan mask の実験記録](../superpowers/probes/2026-09-15-sumi-credential-mask-results.md) の G2）。
 
 Claude Code の設定では防げません。
 
