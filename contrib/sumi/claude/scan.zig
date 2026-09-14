@@ -405,6 +405,20 @@ fn validateReportedPaths(settings: std.json.Value, record: std.json.Value, findi
     }
 }
 
+/// A verified rule describes the scanned bytes. Saving a secret-bearing holder
+/// would invalidate that verification and could also copy secrets into a backup.
+/// Follow the output's final symlink, and compare device plus inode for hardlinks.
+/// Only existing, changing outputs are checked; any stat error remains unknown.
+fn validateChangingOutput(path: []const u8, findings: Findings) !void {
+    const output = try std.posix.fstatat(std.posix.AT.FDCWD, path, 0);
+    for (findings.files.items) |finding| {
+        if (finding.outcome == .clean) continue;
+        const holder = try std.posix.fstatat(std.posix.AT.FDCWD, finding.path, std.posix.AT.SYMLINK_NOFOLLOW);
+        if (!std.posix.S.ISREG(holder.mode)) return error.UnknownHolderIdentity;
+        if (output.dev == holder.dev and output.ino == holder.ino) return error.SelfMutatingHolder;
+    }
+}
+
 fn note(settings: std.json.Value, settings_path: []const u8) void {
     const sandbox = jsonio.getObject(settings, "sandbox");
     const enabled = if (sandbox) |s| s.get("enabled") else null;
@@ -461,6 +475,9 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     validatePath(settings_path, values) catch return fail(path_error);
     if (record_changed) validatePath(sidecar, values) catch return fail(path_error);
     validateReportedPaths(parsed.value, record.value, findings, result, values, settings_changed, record_changed) catch return fail(path_error);
+    const holder_error = "a secret-bearing scanned file aliases a changing output or its identity could not be checked; scan cancelled";
+    if (settings_changed and existing != null) validateChangingOutput(settings_path, findings) catch return fail(holder_error);
+    if (record_changed and record_existing != null) validateChangingOutput(sidecar, findings) catch return fail(holder_error);
     if (settings_changed) if (existing) |data| {
         var ts: [14]u8 = undefined;
         _ = init.backup(allocator, settings_path, init.formatTimestamp(&ts, @intCast(std.time.timestamp())), data) catch return fail("the backup could not be written");
@@ -729,4 +746,29 @@ test "main refuses secret-bearing filenames before creating outputs" {
         try testing.expect((try readOptional(a, record)) == null);
         try std.fs.cwd().deleteFile(path);
     }
+}
+
+test "changing output identity checks preserve unknown filesystem knowledge" {
+    var temp = testing.tmpDir(.{});
+    defer temp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base = try temp.dir.realpathAlloc(a, ".");
+    const output = try std.fs.path.join(a, &.{ base, "settings.json" });
+    const holder = try std.fs.path.join(a, &.{ base, "holder" });
+    try Writer.writeFile(null, output, "{}");
+    var findings = Findings{};
+    try findings.add(a, holder, .{ .masked = null });
+    try testing.expectError(error.FileNotFound, validateChangingOutput(output, findings));
+    try Writer.writeFile(null, holder, "DecoySelfSettings9");
+    try validateChangingOutput(output, findings);
+    try std.fs.cwd().deleteFile(output);
+    try testing.expectError(error.FileNotFound, validateChangingOutput(output, findings));
+    try temp.dir.symLink("holder", "settings.json", .{});
+    try testing.expectError(error.SelfMutatingHolder, validateChangingOutput(output, findings));
+    try std.fs.cwd().deleteFile(holder);
+    try temp.dir.symLink("settings.json", "holder", .{});
+    // The loop is an identity lookup failure, never evidence of distinct files.
+    try testing.expectError(error.SymLinkLoop, validateChangingOutput(output, findings));
 }
