@@ -122,6 +122,9 @@ jobs:
               "sumi-x86_64-linux" \
               "sumi-aarch64-linux"
             gh release edit sumi-latest --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes"
+            # Keep the tag on the commit the assets were built from, so it never
+            # holds on to an older or rewritten commit.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/sumi-latest" -f sha="$GITHUB_SHA" -F force=true
           else
             gh release create sumi-latest \
               --repo "$GITHUB_REPOSITORY" \
