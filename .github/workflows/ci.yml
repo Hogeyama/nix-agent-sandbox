@@ -39,7 +39,7 @@ jobs:
         run: nix develop -c bash -lc 'cd contrib/sumi && zig build test'
 
       - name: sumi black-box tests
-        run: nix develop -c bash -lc 'cd contrib/sumi && zig build && ./tests/run-tests.sh'
+        run: nix develop -c bash -lc 'command -v bun >/dev/null && cd contrib/sumi && zig build && zig build extract-fixtures && ./tests/run-tests.sh'
 
       - name: Hostexec native integration
         run: >-
