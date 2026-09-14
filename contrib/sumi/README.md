@@ -72,7 +72,7 @@ sumi は下記の限界があります。これが許容できない場合はよ
 
 * `CLAUDE.md`など hook が使われない経路で読まれる情報にシークレットが含まれるとき
 * シークレットがエンコードされたとき
-  * 単純なbase64やquoteには対応していますが、2重でbase64
+  * 単純な base64 や quote には対応していますが、2重でbase64をかけた場合などはすり抜けます
 * hook が無効化されたとき
   * Claude Codeが入れ子で `claude --bare` や `claude --settings '{"disableAllHooks":true}'` を実行するケースや
   * Claude Codeが `settings.json` を編集するケース
