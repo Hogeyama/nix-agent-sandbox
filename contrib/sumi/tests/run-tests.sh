@@ -694,6 +694,113 @@ print(f"{count} path validation fixtures passed")
 PY_PATHS
 check "scan rejects secret-bearing output paths without writes" "0" "$?"
 
+# A rule must not target bytes that this scan itself rewrites, through any alias.
+python3 - "$sumi" "$work/self-output-validation" <<'PY_SELF_OUTPUT'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+binary, base = sys.argv[1], Path(sys.argv[2])
+token = "DecoySelfSettings9"
+failures = []
+count = 0
+
+def snapshot(folder):
+    result = {}
+    for p in [folder, *folder.rglob("*")]:
+        info = p.lstat()
+        content = os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else None
+        result[str(p.relative_to(folder))] = (content, info.st_mtime_ns, info.st_mode, info.st_dev, info.st_ino)
+    return result
+
+def run_case(output_kind, alias, behavior):
+    folder = base / (output_kind + "-" + alias + "-" + behavior)
+    root = folder / "project"
+    root.mkdir(parents=True)
+    listed = folder / "secrets.txt"
+    listed.write_text(token + "\n")
+    settings = (root if alias == "direct" else folder) / "settings.json"
+    record = settings.with_name("settings.sumi-scan.json")
+    output = settings if output_kind == "settings" else record
+    holder = output if alias == "direct" else root / "holder.json"
+    if behavior == "skipped":
+        holder = root / "holder*.json"
+    settings_data = {"env": {"TOKEN": token if output_kind == "settings" and behavior != "clean" else "public"}}
+    record_data = {"credentialsFiles": [], "custom": token if output_kind == "record" and behavior != "clean" else "public"}
+    if behavior in ("unchanged", "other-changes"):
+        settings_data["sandbox"] = {"credentials": {"files": [{"path": str(holder), "mode": "deny"}]}}
+    if behavior == "other-changes":
+        if output_kind == "settings":
+            # Deduplication changes only ownership, outside this scan root.
+            record_data["credentialsFiles"] = [str(folder / "outside")] * 2
+        else:
+            # Repairing an already owned entry changes only settings.
+            safe = root / "safe.env"
+            safe.write_text("password=" + token)
+            record_data["credentialsFiles"] = [str(safe)]
+            settings_data["sandbox"]["credentials"]["files"].append({"path": str(safe), "mode": "deny"})
+    if behavior in ("clean", "skipped"):
+        (root / "safe.env").write_text("password=" + token)
+    settings.write_text(json.dumps(settings_data, separators=(",", ":")))
+    record.write_text(json.dumps(record_data, separators=(",", ":")))
+    if holder != output:
+        if alias == "symlink":
+            output.rename(holder)
+            output.symlink_to(holder)
+        else:
+            os.link(output, holder)
+    # Keep an existing backup outside the scan root, so it cannot be a new holder.
+    (folder / "settings.json.bak.existing").write_bytes(b"previous backup\n")
+    before = snapshot(folder)
+    result = subprocess.run([binary, "scan", "--agent", "claude",
+        "--secrets-file", str(listed), "--root", str(root),
+        "--settings", str(settings)], capture_output=True)
+    assert result.stdout == b"", "unexpected stdout"
+    assert token.encode() not in result.stderr, "diagnostic leaked a value"
+    if behavior in ("changed", "skipped"):
+        assert result.returncode == 1, ("expected validation failure", result.returncode)
+        assert result.stderr == b"sumi: a secret-bearing scanned file aliases a changing output or its identity could not be checked; scan cancelled\n", result.stderr
+        assert snapshot(folder) == before, "output bytes, names, identities, modes or mtimes changed"
+    else:
+        assert result.returncode == 0, result.stderr
+        if behavior == "unchanged":
+            assert snapshot(folder) == before, "unchanged holder caused writes"
+        elif behavior == "other-changes":
+            after = snapshot(folder)
+            for preserved in (output, holder):
+                key = str(preserved.relative_to(folder))
+                assert after[key] == before[key], "unchanged output or holder was rewritten"
+            other = record if output_kind == "settings" else settings
+            key = str(other.relative_to(folder))
+            assert after[key][0] != before[key][0], "control must change the other output"
+        else:
+            entries = json.loads(settings.read_text())["sandbox"]["credentials"]["files"]
+            assert [entry["path"] for entry in entries] == [str(root / "safe.env")], entries
+            assert json.loads(record.read_text())["credentialsFiles"] == [str(root / "safe.env")]
+            assert holder.read_bytes() == output.read_bytes(), "output alias lost"
+
+for output_kind in ("settings", "record"):
+    for alias in ("direct", "symlink", "hardlink"):
+        for behavior in ("changed", "unchanged", "other-changes", "clean"):
+            try:
+                run_case(output_kind, alias, behavior)
+                count += 1
+            except AssertionError as error:
+                failures.append((output_kind, alias, behavior, str(error)))
+    try:
+        run_case(output_kind, "hardlink", "skipped")
+        count += 1
+    except AssertionError as error:
+        failures.append((output_kind, "hardlink", "skipped", str(error)))
+for failure in failures:
+    print("FAIL self-output fixture:", failure)
+print(f"{count} self-output validation fixtures passed, {len(failures)} failed")
+assert not failures, failures
+PY_SELF_OUTPUT
+check "scan refuses self-mutating secret holders and preserves clean or unchanged outputs" "0" "$?"
+
 # --- argument errors ---------------------------------------------------------
 
 check_hook_usage() {
