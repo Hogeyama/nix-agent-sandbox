@@ -388,8 +388,8 @@ deny_list() { jq -c '.sandbox.filesystem.denyRead' "$scan_settings"; }
 
 (cd "$proj" && "$sumi" scan --agent claude --secrets-file listed-secrets.txt) >/dev/null 2>"$work/scan.err"
 check "scan succeeds" "0" "$?"
-check "scan lists plain and encoded holders, skipping .git, symlinks and the secrets file" \
-  "[\"$proj/config/app.properties\",\"$proj/sub/deep/encoded.env\"]" "$(deny_list)"
+check "scan lists plain and encoded holders as project-relative paths, skipping .git, symlinks and the secrets file" \
+  '["./config/app.properties","./sub/deep/encoded.env"]' "$(deny_list)"
 check "scan writes no permission rules" "null" "$(jq -c '.permissions' "$scan_settings")"
 check "scan records the entries it owns" "$(deny_list)" "$(jq -c '.denyRead' "$scan_record")"
 case "$(cat "$work/scan.err")" in
@@ -398,14 +398,14 @@ case "$(cat "$work/scan.err")" in
 esac
 
 rm "$proj/sub/deep/encoded.env"
-jq --arg p "$proj/README.md" '.theme = "dark" | .sandbox.enabled = true | .sandbox.filesystem.denyRead += ["/decoy/manual", $p]' "$scan_settings" > "$work/edited.json"
+jq '.theme = "dark" | .sandbox.enabled = true | .sandbox.filesystem.denyRead += ["/decoy/manual", "./README.md"]' "$scan_settings" > "$work/edited.json"
 cp "$work/edited.json" "$scan_settings"
 printf '%s' "$current" > "$proj/README.md"
 "$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>"$work/rescan.err"
 check "rescan succeeds" "0" "$?"
 check "rescan drops stale owned entries and keeps user entries" \
-  "[\"$proj/config/app.properties\",\"/decoy/manual\",\"$proj/README.md\"]" "$(deny_list)"
-check "rescan does not claim an entry the user wrote" "[\"$proj/config/app.properties\"]" "$(jq -c '.denyRead' "$scan_record")"
+  '["./config/app.properties","/decoy/manual","./README.md"]' "$(deny_list)"
+check "rescan does not claim an entry the user wrote" '["./config/app.properties"]' "$(jq -c '.denyRead' "$scan_record")"
 check "rescan preserves unrelated settings" "dark true" "$(jq -r '"\(.theme) \(.sandbox.enabled)"' "$scan_settings")"
 check "rescan backs up the previous settings" "1" "$(find "$proj/.claude" -name 'settings.local.json.bak.*' | wc -l | tr -d ' ')"
 
@@ -418,6 +418,21 @@ printf '%s' "$current" > "$proj/sub/pattern*name"
 check "a holder whose name reads as a pattern makes scan fail" "1" "$?"
 check "a pattern-like name is not listed" "no" "$(deny_list | grep -q 'pattern' && echo yes || echo no)"
 rm "$proj/sub/pattern*name"
+
+shared_settings="$work/shared-user-settings.json"
+other="$work/scan-other"
+mkdir -p "$other"
+printf 'token=%s\n' "$current" > "$other/.env"
+"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" --settings "$shared_settings" >/dev/null 2>&1
+check "scan into settings outside the project succeeds" "0" "$?"
+"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$other" --settings "$shared_settings" >/dev/null 2>&1
+check "second project into the same settings succeeds" "0" "$?"
+check "settings outside the project get absolute paths and keep every project's entries" \
+  "[\"$proj/README.md\",\"$proj/config/app.properties\",\"$other/.env\"]" "$(jq -c '.sandbox.filesystem.denyRead' "$shared_settings")"
+rm "$other/.env"
+"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$other" --settings "$shared_settings" >/dev/null 2>&1
+check "rescanning one project leaves the other project's entries" \
+  "[\"$proj/README.md\",\"$proj/config/app.properties\"]" "$(jq -c '.sandbox.filesystem.denyRead' "$shared_settings")"
 
 custom_settings="$work/scan-custom.json"
 printf '%s' '{"sandbox":{"filesystem":{"denyRead":"not-a-list"}}}' > "$custom_settings"

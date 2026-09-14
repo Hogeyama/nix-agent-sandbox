@@ -148,6 +148,36 @@ const Walk = struct {
     }
 };
 
+/// A sandbox path starting with "./" resolves against the project root only
+/// when it sits in project settings; in user settings it resolves against
+/// ~/.claude, and for any other file the base is unknown. Entries are therefore
+/// project-relative exactly when the settings file is the root's own
+/// `.claude/` settings, so a shared `.claude/settings.json` stays portable.
+pub fn isProjectSettings(allocator: std.mem.Allocator, root: []const u8, settings_path: []const u8) !bool {
+    const resolved = try std.fs.path.resolve(allocator, &.{settings_path});
+    defer allocator.free(resolved);
+    const dir = std.fs.path.dirname(resolved) orelse return false;
+    const claude_dir = try std.fs.path.join(allocator, &.{ root, ".claude" });
+    defer allocator.free(claude_dir);
+    return std.mem.eql(u8, dir, claude_dir);
+}
+
+/// `path` is an absolute path found under `root`.
+pub fn entryFor(allocator: std.mem.Allocator, root: []const u8, path: []const u8, relative: bool) ![]const u8 {
+    if (!relative) return allocator.dupe(u8, path);
+    const rel = try std.fs.path.relative(allocator, root, path);
+    defer allocator.free(rel);
+    return std.fmt.allocPrint(allocator, "./{s}", .{rel});
+}
+
+/// Whether an entry names a path this scan's root covers, and so may be removed
+/// when the scan no longer finds it.
+pub fn underRoot(entry: []const u8, root: []const u8) bool {
+    if (std.mem.startsWith(u8, entry, "./")) return true;
+    if (std.mem.eql(u8, root, "/")) return std.mem.startsWith(u8, entry, "/");
+    return entry.len > root.len and std.mem.startsWith(u8, entry, root) and entry[root.len] == '/';
+}
+
 fn lessThan(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
@@ -164,19 +194,24 @@ pub const Merge = struct {
     removed: usize,
 };
 
-/// Replace the entries sumi owns with the current findings. An existing entry
-/// sumi did not write stays in place and is not claimed, so a later rescan never
-/// removes it.
-pub fn merge(allocator: std.mem.Allocator, existing: []const []const u8, previous: []const []const u8, found: []const []const u8) !Merge {
+/// Replace the entries sumi owns under `root` with the current findings. An
+/// existing entry sumi did not write stays in place and is not claimed, so a
+/// later rescan never removes it. Entries sumi wrote for another root, as when
+/// several projects share user settings, are kept and stay owned.
+pub fn merge(allocator: std.mem.Allocator, root: []const u8, existing: []const []const u8, previous: []const []const u8, found: []const []const u8) !Merge {
     var deny: std.ArrayList([]const u8) = .empty;
     var managed: std.ArrayList([]const u8) = .empty;
     var removed: usize = 0;
     for (existing) |entry| {
-        if (contains(previous, entry) and !contains(found, entry)) {
+        const owned = contains(previous, entry);
+        const covered = underRoot(entry, root);
+        if (owned and covered and !contains(found, entry)) {
             removed += 1;
             continue;
         }
-        if (!contains(deny.items, entry)) try deny.append(allocator, entry);
+        if (contains(deny.items, entry)) continue;
+        try deny.append(allocator, entry);
+        if (owned and !covered) try managed.append(allocator, entry);
     }
     var added: usize = 0;
     for (found) |path| {
@@ -268,9 +303,12 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     var findings = Findings{};
     var walk = Walk{ .allocator = allocator, .values = values, .secrets_path = secrets_path, .findings = &findings };
     try walk.dir(root);
-    std.mem.sort([]const u8, findings.holding.items, {}, lessThan);
+    const relative = try isProjectSettings(allocator, root, settings_path);
+    const found = try allocator.alloc([]const u8, findings.holding.items.len);
+    for (findings.holding.items, 0..) |path, i| found[i] = try entryFor(allocator, root, path, relative);
+    std.mem.sort([]const u8, found, {}, lessThan);
 
-    const merged = try merge(allocator, current, previous, findings.holding.items);
+    const merged = try merge(allocator, root, current, previous, found);
     var deny_array = std.json.Array.init(arena);
     for (merged.deny_read) |entry| try deny_array.append(.{ .string = entry });
     try filesystem.put("denyRead", .{ .array = deny_array });
@@ -294,8 +332,8 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     const record_text = try jsonio.stringifyPretty(allocator, .{ .object = record });
     std.fs.cwd().writeFile(.{ .sub_path = sidecar, .data = record_text }) catch return fail("the scan record could not be written; denyRead was updated but a rescan will not remove these entries");
 
-    for (findings.holding.items) |path| std.debug.print("sumi: deny read {s}\n", .{path});
-    std.debug.print("sumi: {d} file(s) hold a value; {d} entr{s} added, {d} removed in {s}\n", .{ findings.holding.items.len, merged.added, if (merged.added == 1) "y" else "ies", merged.removed, settings_path });
+    for (found) |entry| std.debug.print("sumi: deny read {s}\n", .{entry});
+    std.debug.print("sumi: {d} file(s) hold a value; {d} entr{s} added, {d} removed in {s}\n", .{ found.len, merged.added, if (merged.added == 1) "y" else "ies", merged.removed, settings_path });
     if (findings.skipped_secrets_file) std.debug.print("sumi: warning: the secrets file is inside the root and was not listed, because sumi run reads it inside the sandbox; keep it outside the project\n", .{});
     note(parsed.value, settings_path);
     if (findings.unreadable != 0 or findings.unexpressible != 0) {
@@ -335,13 +373,50 @@ test "readerHolds: finds a value split across chunk boundaries" {
 }
 
 test "merge: replaces owned entries and never claims or drops foreign ones" {
-    const got = try merge(testing.allocator, &.{ "/user/manual", "/p/stale", "/p/kept", "/p/also-user" }, &.{ "/p/stale", "/p/kept" }, &.{ "/p/also-user", "/p/kept", "/p/new" });
+    const got = try merge(testing.allocator, "/p", &.{ "/user/manual", "/p/stale", "/p/kept", "/p/also-user" }, &.{ "/p/stale", "/p/kept" }, &.{ "/p/also-user", "/p/kept", "/p/new" });
     defer testing.allocator.free(got.deny_read);
     defer testing.allocator.free(got.managed);
     try testing.expectEqualSlices([]const u8, &.{ "/user/manual", "/p/kept", "/p/also-user", "/p/new" }, got.deny_read);
     try testing.expectEqualSlices([]const u8, &.{ "/p/kept", "/p/new" }, got.managed);
     try testing.expectEqual(@as(usize, 1), got.added);
     try testing.expectEqual(@as(usize, 1), got.removed);
+}
+
+test "merge: entries owned for another root survive and stay owned" {
+    const got = try merge(testing.allocator, "/b", &.{ "/a/secret", "/b/stale", "/bb/secret" }, &.{ "/a/secret", "/b/stale", "/bb/secret" }, &.{"/b/new"});
+    defer testing.allocator.free(got.deny_read);
+    defer testing.allocator.free(got.managed);
+    try testing.expectEqualSlices([]const u8, &.{ "/a/secret", "/bb/secret", "/b/new" }, got.deny_read);
+    try testing.expectEqualSlices([]const u8, &.{ "/a/secret", "/bb/secret", "/b/new" }, got.managed);
+    try testing.expectEqual(@as(usize, 1), got.removed);
+}
+
+test "merge: absolute entries from an older scan give way to relative ones" {
+    const got = try merge(testing.allocator, "/p", &.{"/p/config/app.properties"}, &.{"/p/config/app.properties"}, &.{"./config/app.properties"});
+    defer testing.allocator.free(got.deny_read);
+    defer testing.allocator.free(got.managed);
+    try testing.expectEqualSlices([]const u8, &.{"./config/app.properties"}, got.deny_read);
+    try testing.expectEqual(@as(usize, 1), got.removed);
+}
+
+test "path form follows the settings scope" {
+    try testing.expect(try isProjectSettings(testing.allocator, "/p", "/p/.claude/settings.local.json"));
+    try testing.expect(try isProjectSettings(testing.allocator, "/p", "/p/.claude/settings.json"));
+    try testing.expect(!try isProjectSettings(testing.allocator, "/p", "/home/u/.claude/settings.json"));
+    try testing.expect(!try isProjectSettings(testing.allocator, "/p", "/p/sub/.claude/settings.json"));
+
+    const rel = try entryFor(testing.allocator, "/p", "/p/config/app.properties", true);
+    defer testing.allocator.free(rel);
+    try testing.expectEqualStrings("./config/app.properties", rel);
+    const abs = try entryFor(testing.allocator, "/p", "/p/config/app.properties", false);
+    defer testing.allocator.free(abs);
+    try testing.expectEqualStrings("/p/config/app.properties", abs);
+
+    try testing.expect(underRoot("./x", "/p"));
+    try testing.expect(underRoot("/p/x", "/p"));
+    try testing.expect(!underRoot("/pp/x", "/p"));
+    try testing.expect(!underRoot("/p", "/p"));
+    try testing.expect(underRoot("/x", "/"));
 }
 
 test "hasGlobBytes and sidecarPath" {

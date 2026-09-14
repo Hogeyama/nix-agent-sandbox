@@ -2,10 +2,11 @@ name: Release sumi
 
 # sumi is released separately from nas. To release:
 #   1. set contrib/sumi/VERSION and add a matching "## [X.Y.Z]" section to
-#      contrib/sumi/CHANGELOG.md; update the pinned URL in contrib/sumi/README.md
+#      contrib/sumi/CHANGELOG.md
 #   2. commit, then push the tag sumi-vX.Y.Z
 # Releases are created with --latest=false so /releases/latest keeps pointing
-# at nas.
+# at nas. The same binaries are also uploaded to the rolling "sumi-latest"
+# release, whose download URL the README uses so it never needs editing.
 
 on:
   push:
@@ -107,3 +108,27 @@ jobs:
             --latest=false \
             "sumi-x86_64-linux" \
             "sumi-aarch64-linux"
+
+      - name: Update the rolling sumi-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          title="sumi latest (${VERSION})"
+          notes="Always the newest sumi release, currently ${VERSION}. Use the ${TAG} release to pin this version."
+          if gh release view sumi-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload sumi-latest --repo "$GITHUB_REPOSITORY" --clobber \
+              "sumi-x86_64-linux" \
+              "sumi-aarch64-linux"
+            gh release edit sumi-latest --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes"
+          else
+            gh release create sumi-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes "$notes" \
+              --latest=false \
+              "sumi-x86_64-linux" \
+              "sumi-aarch64-linux"
+          fi

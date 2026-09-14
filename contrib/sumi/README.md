@@ -18,11 +18,12 @@ sumi を設定すると、Claude Code には `db.password=*********` と見え�
 
 ```bash
 mkdir -p ~/.local/bin
-curl -fsSLo ~/.local/bin/sumi https://github.com/Hogeyama/nix-agent-sandbox/releases/download/sumi-v0.1.0/sumi-x86_64-linux
+curl -fsSLo ~/.local/bin/sumi https://github.com/Hogeyama/nix-agent-sandbox/releases/download/sumi-latest/sumi-x86_64-linux
 chmod +x ~/.local/bin/sumi
 ```
 
-sumi は nas 本体とは別に `sumi-v*` タグでリリースしています。変更点は [CHANGELOG](CHANGELOG.md) を、インストール済みのバージョンは `sumi --version` で確認できます。
+この URL は常に最新の sumi を指すので、更新するときも同じコマンドを実行してください。インストール済みのバージョンは `sumi --version` で、変更点は [CHANGELOG](CHANGELOG.md) で確認できます。
+特定のバージョンに固定したい場合は、URL の `sumi-latest` を `sumi-v0.1.0` のようなタグに替えてください（sumi は nas 本体とは別に `sumi-v*` タグでリリースしています）。
 
 ### シークレットファイルの作成
 
@@ -69,6 +70,7 @@ sumi scan --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 
 これは、プロジェクト内のファイルを検査し、シークレットを含むファイルのパスを `.claude/settings.local.json` の `sandbox.filesystem.denyRead` に追加します。
 
+* 書き込み先は `--settings` で変えられます。例: `--settings .claude/settings.json`
 * `Read` や `Grep` は拒否されず、これまでどおりマスクされた内容を返します。`permissions.deny` の `Read(...)` は sandbox にも取り込まれ、これらのツールまで拒否してしまうため、書き込みません
 * sandbox が有効（`sandbox.enabled: true`）で、sandbox 外での再実行を禁止している（`sandbox.allowUnsandboxedCommands: false`）ときだけ意味があります。どちらかが設定ファイルに無い場合は注意を表示します
 * 検査は実行した時点のものです。シークレットを含むファイルを追加・削除したら再実行してください。追加したエントリは `.claude/settings.local.sumi-scan.json` に記録され、再実行時に不要になったものだけを削除します。手で書いたエントリは変更しません
