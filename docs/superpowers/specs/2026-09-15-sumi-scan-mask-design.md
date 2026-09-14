@@ -170,7 +170,7 @@ Claude Code の挙動についての主張には ID を付け、根拠を次の�
 - D: https://code.claude.com/docs/en/sandboxing#mask-environment-variables
   > Set `network.tlsTerminate` so the proxy terminates TLS itself.
 - 実験で確かめていないこと: HTTPS 経路での差し替え。`scan` は送信先を書かない
-  (U1) ので、README の案内にだけ関わる。
+  (F15) ので、README の案内にだけ関わる。
 
 ### F12: 差し替えはヘッダーと本文の両方に効く
 
@@ -197,8 +197,47 @@ Claude Code の挙動についての主張には ID を付け、根拠を次の�
 - 帰結: 値のすべての箇所で形式を認識する必要は無い。1 箇所で値を拾えれば、
   同じファイル内のそのままのコピーは置き換わる。エンコードされた形は
   「そのままのコピー」ではないので、この仕組みでは拾えない。
-- 未確認: コピーの探し方 (重なり、一致区間との境界) と、コピーも送信時に本物へ
-  戻るか (U8)。
+- 実験の結果は F16。
+
+### F15: 利用者が書いた `injectHosts: []` は、本物をどこにも送らない
+
+- E4 (`probe empty`、2026-09-15):
+  - sandbox 内の `cat` は `api.token=fake_value_<uuid>` を返した。
+  - `od -An -c` の出力から空白と改行を除いても、本物の値は現れなかった。
+  - `network.allowedDomains` に載せたリスナーに値を送ると、リスナーは身代わりの値
+    `fake_value_<uuid>` を受け取った (`injectHosts` は空)。
+  - Claude Code は起動時に次の警告を出した。
+    > sandbox.credentials mask entries (<path>) have an empty injectHosts —
+    > sandboxed commands see only a sentinel and the proxy never substitutes the
+    > real credential, so tools needing these will fail to authenticate.
+- 間接的な根拠:
+  - D (https://code.claude.com/docs/en/claude-apps-gateway#restrict-parent-settings):
+    親プロセスから渡された mask は `injectHosts` を空にして転送され、
+    "the proxy never substitutes the real value" と書かれている。
+  - B: `forwards sentinel-only (injectHosts forced empty)`
+- 帰結: `scan` が書いたエントリは、利用者が `injectHosts` を足すまで、Claude Code の
+  起動のたびに上の警告を出す。`scan` の注意表示と README で、この警告が出ることと
+  その意味を案内する。
+
+### F16: `maskDuplicates: true` は、一致区間の外にあるコピーを同じ身代わりの値にする
+
+- E5 (`probe dup-on` と `probe dup-off`、2026-09-15)
+  - ファイル: `db.host=localhost`、`api.token=<値>`、`backup: <値>`、`# old token <値>`
+    の 4 行。
+  - extract: `api\.token=(\S+)`
+  - 観測:
+    - `dup-on`: sandbox 内の `cat` で、3 箇所すべてが同じ身代わりの値
+      (`fake_value_<同じ uuid>`) になった。`od -An -c` の出力から空白と改行を除いても、
+      本物の値は現れなかった。`api.token=` の行から取り出して送った値は、リスナーで
+      本物に戻っていた。
+    - `dup-off` (対照): `api.token=` だけが身代わりになり、`backup:` とコメントには
+      本物の値が残った。
+- 実験していないこと:
+  - コピーの箇所から取り出した値を送ったときに本物へ戻るか。身代わりの値が
+    `api.token=` の箇所と同じ文字列なので、同じく戻ると見込むが、`scan` の安全性には
+    関わらない。
+  - 重なった出現や、一致区間に接する出現の扱い。設計は、置き換えられると見込む
+    コピーを控えめに数える (「安全確認」のコピーの数え方)。
 
 ## 背景: 0.1.0 の scan を置き換える理由
 
@@ -420,7 +459,8 @@ C の末尾から改行 (`\n` または `\r\n`) を 1 つだけ取り除いた�
 - G の区間の文字列 (重複除去) ごとに、C を左から走査する。
 - G のどの区間とも重ならない出現だけを数え、数えたら、その出現の末尾から次を探す
   (重ならない出現だけを数える)。
-- この下限が本物の挙動に含まれることは U8 で確かめる。
+- 本物の挙動は、一致区間の外にあるコピーを同じ身代わりの値にする (F16)。この下限は
+  E5 で観測した置き換えに含まれる。重なった出現の扱いは実験していないので、数えない。
 
 照合器の仕様は次のとおり。
 
@@ -455,7 +495,7 @@ C の末尾から改行 (`\n` または `\r\n`) を 1 つだけ取り除いた�
     エントリのファイル 1 つだけに適用されるので、置き換えが増える範囲はそのファイル内に
     限られる。
   - 必要なときだけ付けることで、置き換えが増える範囲をさらに狭める。
-- `injectHosts: []` は、本物をどこにも送らない意図で書く。この意味は U1 で確かめる。
+- `injectHosts: []` は、本物をどこにも送らないために書く (F15)。
 
 ## 設定ファイルへの反映
 
@@ -521,6 +561,7 @@ C の末尾から改行 (`\n` または `\r\n`) を 1 つだけ取り除いた�
   - `injectHosts` が空なので、本物はどこにも送られないこと
   - 送信を許すには、`injectHosts` と `network.allowedDomains` にホスト名を足し、
     HTTPS なら `network.tlsTerminate` も設定すること
+  - 足すまでは、Claude Code が起動のたびに empty injectHosts の警告を出すこと (F15)
 - 見えるのは書き込み先の設定ファイルだけであること。README にも書く。
 
 ## 表示と終了コード
@@ -567,21 +608,9 @@ contrib/sumi/
 
 ## 未確認事項
 
-### U1: 利用者が書いた `injectHosts: []` は、どこにも差し替えない
+### U1: 解決済み
 
-- 根拠 (間接的なもの):
-  - D (https://code.claude.com/docs/en/claude-apps-gateway#restrict-parent-settings):
-    > forwarded sentinel-only, as a whole-file mask whose `injectHosts` is the
-    > empty list, so the proxy never substitutes the real value for a
-    > parent-supplied entry on any platform.
-
-    ただし、これは親プロセスから渡された設定についての記述である。
-  - B: `forwards sentinel-only (injectHosts forced empty)`。無効化された
-    ユーザー設定のための処理にある。
-- 確かめる方法: `probe empty` を実行し、リスナーの受信が `not the real value:` で
-  始まる (身代わりの値を受け取った) か、`nothing received` であることを確かめる。
-- 実装計画の最初の作業とする。結果が `real decoy value (substituted)` なら、
-  実装に進まずに設計を見直す。
+利用者が書いた `injectHosts: []` の意味は、実験で確かめた (F15)。
 
 ### U2: 固定長の後読みを含む extract が Claude Code の実行環境で動く
 
@@ -612,24 +641,9 @@ contrib/sumi/
 
 - 設計はフラグで意味の変わる構文を使わない (F5)。
 
-### U8: `maskDuplicates` の実際の挙動
+### U8: 解決済み
 
-- 根拠: F14 のドキュメントの記述だけで、実験していない。
-- 確かめること:
-  - 一致区間の外にあるそのままのコピーが、身代わりの値になる。
-  - 身代わりの値が、グループ 1 の箇所と同じ値か。
-  - 送信時に本物へ戻るか。
-- 確かめる方法:
-  - `probe dup-on` で、次を確かめる。
-    - sandbox 内の `cat` の結果に、本物のデコイ値が現れない。
-    - 身代わりの値が 3 箇所 (`api.token=`、`backup:`、コメント) に現れる。
-    - リスナーが本物の値を受け取る。
-  - `probe dup-off` で、`backup:` とコメントの箇所に本物の値が残ることを確かめる
-    (対照)。
-- U1 と同じく、実装計画の最初の作業とする。
-  - コピーが置き換わらなければ、`maskDuplicates` を使わない設計に戻す
-    (形式に当たらない箇所があれば `coverage`)。
-  - 置き換わるが送信時に戻らない場合は、安全性には影響しない。README の案内だけを直す。
+`maskDuplicates` の置き換えは、実験で確かめた (F16)。
 
 ## 検証と受け入れ条件
 
@@ -684,7 +698,7 @@ contrib/sumi/
 - `maskDuplicates` の置き換えは Claude Code の機能なので、この試験の対象外である。
   JavaScript の置き換えの後に、sumi の「コピーの数え方」で求めた区間も
   `SENTINEL` にしてから、値が残らないことを確かめる。コピーの挙動そのものは、
-  ホストでの検証 (U8) で確かめる。
+  F16 で確かめた。
 - bun が無い環境では `skip` と表示し、失敗にしない。CI (`nix develop`) には bun がある。
 
 ### 黒箱テスト (`tests/run-tests.sh`)
@@ -702,8 +716,7 @@ contrib/sumi/
 
 ### ホストでの検証 (`tests/manual-validation.md` と `validation-results.md` に追記)
 
-- U1 を `probe empty` で確かめ、結果を記録する。
-- U8 を `probe dup-on` と `probe dup-off` で確かめ、結果を記録する。
+- F15 と F16 の実験 (`probe empty`、`dup-on`、`dup-off`) の結果を記録する。
 - `sumi scan` が生成した設定を `claude --settings` で使い、次を記録する。
   - `dq`、`sq`、`bare` を含む `.env` と、JSON のファイルで、sandbox 内の `cat` と
     `od -An -c` に本物の値が現れない (U2)。
