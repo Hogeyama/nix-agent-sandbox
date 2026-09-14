@@ -405,6 +405,24 @@ fn validateReportedPaths(settings: std.json.Value, record: std.json.Value, findi
     }
 }
 
+/// A failed read can mean a dangling final symlink, not an absent directory entry.
+/// Require true absence before creating an output; an existing entry has unknown
+/// identity relative to the other output (including a shared missing target).
+fn validateAbsentOutput(path: []const u8) !void {
+    _ = std.posix.fstatat(std.posix.AT.FDCWD, path, std.posix.AT.SYMLINK_NOFOLLOW) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    return error.UnknownOutputIdentity;
+}
+
+/// Two independently serialized outputs cannot share storage when either changes.
+fn validateDistinctOutputs(settings_path: []const u8, sidecar: []const u8) !void {
+    const settings = try std.posix.fstatat(std.posix.AT.FDCWD, settings_path, 0);
+    const record = try std.posix.fstatat(std.posix.AT.FDCWD, sidecar, 0);
+    if (settings.dev == record.dev and settings.ino == record.ino) return error.AliasedOutputs;
+}
+
 /// A verified rule describes the scanned bytes. Saving a secret-bearing holder
 /// would invalidate that verification and could also copy secrets into a backup.
 /// Follow the output's final symlink, and compare device plus inode for hardlinks.
@@ -475,6 +493,12 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     validatePath(settings_path, values) catch return fail(path_error);
     if (record_changed) validatePath(sidecar, values) catch return fail(path_error);
     validateReportedPaths(parsed.value, record.value, findings, result, values, settings_changed, record_changed) catch return fail(path_error);
+    const alias_error = "settings and scan record alias the same file or their identities could not be checked; scan cancelled";
+    if (settings_changed and existing == null) validateAbsentOutput(settings_path) catch return fail(alias_error);
+    if (record_changed and record_existing == null) validateAbsentOutput(sidecar) catch return fail(alias_error);
+    if ((settings_changed or record_changed) and existing != null and record_existing != null) {
+        validateDistinctOutputs(settings_path, sidecar) catch return fail(alias_error);
+    }
     const holder_error = "a secret-bearing scanned file aliases a changing output or its identity could not be checked; scan cancelled";
     if (settings_changed and existing != null) validateChangingOutput(settings_path, findings) catch return fail(holder_error);
     if (record_changed and record_existing != null) validateChangingOutput(sidecar, findings) catch return fail(holder_error);
@@ -748,7 +772,7 @@ test "main refuses secret-bearing filenames before creating outputs" {
     }
 }
 
-test "changing output identity checks preserve unknown filesystem knowledge" {
+test "output identity checks preserve unknown filesystem knowledge" {
     var temp = testing.tmpDir(.{});
     defer temp.cleanup();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -761,14 +785,21 @@ test "changing output identity checks preserve unknown filesystem knowledge" {
     var findings = Findings{};
     try findings.add(a, holder, .{ .masked = null });
     try testing.expectError(error.FileNotFound, validateChangingOutput(output, findings));
+    try testing.expectError(error.FileNotFound, validateDistinctOutputs(output, holder));
+    try validateAbsentOutput(holder);
     try Writer.writeFile(null, holder, "DecoySelfSettings9");
     try validateChangingOutput(output, findings);
+    try validateDistinctOutputs(output, holder);
     try std.fs.cwd().deleteFile(output);
     try testing.expectError(error.FileNotFound, validateChangingOutput(output, findings));
+    try testing.expectError(error.FileNotFound, validateDistinctOutputs(output, holder));
     try temp.dir.symLink("holder", "settings.json", .{});
     try testing.expectError(error.SelfMutatingHolder, validateChangingOutput(output, findings));
+    try testing.expectError(error.AliasedOutputs, validateDistinctOutputs(output, holder));
     try std.fs.cwd().deleteFile(holder);
     try temp.dir.symLink("settings.json", "holder", .{});
     // The loop is an identity lookup failure, never evidence of distinct files.
     try testing.expectError(error.SymLinkLoop, validateChangingOutput(output, findings));
+    try testing.expectError(error.SymLinkLoop, validateDistinctOutputs(output, holder));
+    try testing.expectError(error.UnknownOutputIdentity, validateAbsentOutput(output));
 }
