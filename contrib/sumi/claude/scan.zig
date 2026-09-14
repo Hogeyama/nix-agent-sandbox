@@ -106,6 +106,7 @@ const Findings = struct {
     files: std.ArrayList(Finding) = .empty,
     preserved: std.ArrayList([]const u8) = .empty,
     unreadable: usize = 0,
+    warnings: std.ArrayList([]const u8) = .empty,
     skipped_secrets_file: bool = false,
 
     fn keep(self: *Findings, allocator: std.mem.Allocator, path: []const u8) !void {
@@ -114,7 +115,7 @@ const Findings = struct {
     fn unknown(self: *Findings, allocator: std.mem.Allocator, path: []const u8) !void {
         try self.keep(allocator, path);
         self.unreadable += 1;
-        std.debug.print("sumi: warning: could not be read: {s}\n", .{path});
+        try self.warnings.append(allocator, self.preserved.items[self.preserved.items.len - 1]);
     }
     fn add(self: *Findings, allocator: std.mem.Allocator, path: []const u8, outcome: Outcome) !void {
         try self.files.append(allocator, .{ .path = try allocator.dupe(u8, path), .outcome = outcome });
@@ -373,6 +374,37 @@ fn save(writer: Writer, settings_path: []const u8, sidecar: []const u8, original
         return error.RecordWriteFailed;
     };
 }
+fn warnsEmptyHosts(entry: std.json.Value) bool {
+    const mode = jsonio.getString(entry, "mode") orelse return false;
+    if (!std.mem.eql(u8, mode, "mask")) return false;
+    const hosts = entry.object.get("injectHosts") orelse return false;
+    return hosts == .array and hosts.array.items.len == 0;
+}
+
+fn validatePath(path: []const u8, values: []const []const u8) !void {
+    if (mask.containsAny(path, values)) return error.SecretInOutputPath;
+}
+
+/// Validate path surfaces before printing warnings or writing either output.
+/// Preserved user strings are not generated secrets; inspect only path fields
+/// that will be serialized and paths that this invocation will report.
+fn validateReportedPaths(settings: std.json.Value, record: std.json.Value, findings: Findings, result: Reconciled, values: []const []const u8, settings_changed: bool, record_changed: bool) !void {
+    for (findings.warnings.items) |path| try validatePath(path, values);
+    for (result.events.items) |event| try validatePath(event.path, values);
+    if (record_changed) {
+        for (record.object.get("credentialsFiles").?.array.items) |path| try validatePath(path.string, values);
+    }
+    if (jsonio.getObject(settings, "sandbox")) |sandbox| {
+        if (sandbox.get("credentials")) |credentials| {
+            if (credentials.object.get("files")) |files| {
+                for (files.array.items) |entry| {
+                    if (settings_changed or warnsEmptyHosts(entry)) try validatePath(jsonio.getString(entry, "path").?, values);
+                }
+            }
+        }
+    }
+}
+
 fn note(settings: std.json.Value, settings_path: []const u8) void {
     const sandbox = jsonio.getObject(settings, "sandbox");
     const enabled = if (sandbox) |s| s.get("enabled") else null;
@@ -381,13 +413,7 @@ fn note(settings: std.json.Value, settings_path: []const u8) void {
         if (s.get("credentials")) |credentials| {
             if (credentials.object.get("files")) |files| {
                 for (files.array.items) |entry| {
-                    const mode = jsonio.getString(entry, "mode") orelse continue;
-                    if (!std.mem.eql(u8, mode, "mask")) continue;
-                    if (entry.object.get("injectHosts")) |hosts| {
-                        if (hosts == .array and hosts.array.items.len == 0) {
-                            std.debug.print("sumi: note: empty injectHosts does not restore real values when sending and causes a Claude Code startup warning: {s}\n", .{jsonio.getString(entry, "path").?});
-                        }
-                    }
+                    if (warnsEmptyHosts(entry)) std.debug.print("sumi: note: empty injectHosts does not restore real values when sending and causes a Claude Code startup warning: {s}\n", .{jsonio.getString(entry, "path").?});
                 }
             }
         }
@@ -429,12 +455,18 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     const record_formatted = try jsonio.stringifyPretty(allocator, record.value);
     const output = if (existing != null and std.mem.eql(u8, settings_before, formatted)) existing.? else formatted;
     const record_output = if (record_existing != null and std.mem.eql(u8, record_before, record_formatted)) record_existing.? else record_formatted;
-    if (differs(existing, output)) if (existing) |data| {
+    const settings_changed = differs(existing, output);
+    const record_changed = differs(record_existing, record_output);
+    const path_error = "an output path contains a secret pattern; scan cancelled";
+    validatePath(settings_path, values) catch return fail(path_error);
+    if (record_changed) validatePath(sidecar, values) catch return fail(path_error);
+    validateReportedPaths(parsed.value, record.value, findings, result, values, settings_changed, record_changed) catch return fail(path_error);
+    if (settings_changed) if (existing) |data| {
         var ts: [14]u8 = undefined;
-        const backup_path = init.backup(allocator, settings_path, init.formatTimestamp(&ts, @intCast(std.time.timestamp())), data) catch return fail("the backup could not be written");
-        std.debug.print("sumi: backup at {s}\n", .{backup_path});
+        _ = init.backup(allocator, settings_path, init.formatTimestamp(&ts, @intCast(std.time.timestamp())), data) catch return fail("the backup could not be written");
+        std.debug.print("sumi: settings backup created\n", .{});
     };
-    if (differs(existing, output) or differs(record_existing, record_output)) std.fs.cwd().makePath(std.fs.path.dirname(settings_path).?) catch return fail("the settings directory could not be created");
+    if (settings_changed or record_changed) std.fs.cwd().makePath(std.fs.path.dirname(settings_path).?) catch return fail("the settings directory could not be created");
     save(.{}, settings_path, sidecar, existing, output, record_existing, record_output) catch |err| {
         if (err == error.RestoreFailed) {
             std.debug.print("sumi: settings recovery required: {s}; scan record: {s}\n", .{ settings_path, sidecar });
@@ -442,6 +474,7 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
         }
         return fail(if (err == error.RecordWriteFailed) "the scan record could not be written; settings restored" else "the settings file could not be written");
     };
+    for (findings.warnings.items) |path| std.debug.print("sumi: warning: could not be read: {s}\n", .{path});
     var masked: usize = 0;
     var unmasked: usize = 0;
     var skipped: usize = 0;
@@ -673,4 +706,27 @@ test "walk and reconcile never serialize secrets.load expansions" {
     _ = try reconcile(a, &settings.value, &record.value, root, findings);
     try testing.expect(!mask.containsAny(try jsonio.stringifyPretty(a, settings.value), values));
     try testing.expect(!mask.containsAny(try jsonio.stringifyPretty(a, record.value), values));
+}
+
+test "main refuses secret-bearing filenames before creating outputs" {
+    var temp = testing.tmpDir(.{});
+    defer temp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try temp.dir.makePath("project");
+    try temp.dir.writeFile(.{ .sub_path = "secrets", .data = "DecoyFilenameToken9\n" });
+    const base = try temp.dir.realpathAlloc(a, ".");
+    const root = try std.fs.path.join(a, &.{ base, "project" });
+    const listed = try std.fs.path.join(a, &.{ base, "secrets" });
+    const settings = try std.fs.path.join(a, &.{ base, "settings.json" });
+    const record = try sidecarPath(a, settings);
+    for ([_][]const u8{ "DecoyFilenameToken9", "RGVjb3lGaWxlbmFtZVRva2VuOQ==" }) |name| {
+        const path = try std.fs.path.join(a, &.{ root, name });
+        try Writer.writeFile(null, path, "password=DecoyFilenameToken9");
+        try testing.expectEqual(@as(u8, 1), try main(a, &.{ "--secrets-file", listed, "--root", root, "--settings", settings }));
+        try testing.expect((try readOptional(a, settings)) == null);
+        try testing.expect((try readOptional(a, record)) == null);
+        try std.fs.cwd().deleteFile(path);
+    }
 }

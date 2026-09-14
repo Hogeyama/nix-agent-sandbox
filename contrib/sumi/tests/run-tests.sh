@@ -565,6 +565,135 @@ check "scan with missing secrets exits 1" "1" "$?"
 "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --deny-path x >/dev/null 2>&1
 check "scan rejects unknown options" "2" "$?"
 
+# Path strings are output too: refuse incompatible inputs before any writes.
+python3 - "$sumi" "$work/path-validation" <<'PY_PATHS'
+import base64
+import os
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+binary, base = sys.argv[1], Path(sys.argv[2])
+raw = "DecoyFilenameToken9"
+encoded = base64.b64encode(raw.encode()).decode()
+
+def snapshot(folder):
+    return {str(p.relative_to(folder)): (p.read_bytes() if p.is_file() else None, p.stat().st_mtime_ns)
+            for p in folder.rglob("*")}
+
+def refusal(case, pattern, kind, existing=True):
+    folder = base / case
+    root = folder / "project"
+    root.mkdir(parents=True)
+    listed = folder / "secrets.txt"
+    listed.write_text(raw + "\n")
+    settings = folder / "settings.json"
+    record = folder / "settings.sumi-scan.json"
+    (root / "safe.env").write_text("password=" + raw)
+    target = root / pattern
+    settings_data = {"custom": "preserve"}
+    record_data = {"credentialsFiles": [], "custom": "preserve"}
+    if kind in ("new", "skip", "conflict", "unreadable-file"):
+        target.write_text(raw if kind == "new" else "password=" + raw)
+        if kind == "skip":
+            target.write_text("unrecognized " + raw)
+    if kind == "unreadable-dir":
+        target.mkdir()
+    if kind in ("old-owned", "conflict", "note", "carried-entry", "carried-record"):
+        if kind in ("note", "carried-entry", "carried-record"):
+            target = folder / pattern
+        entry = {"path": str(target), "mode": "deny"}
+        if kind == "note":
+            entry.update(mode="mask", injectHosts=[])
+        if kind != "carried-record":
+            settings_data["sandbox"] = {"credentials": {"files": [entry]}}
+        if kind == "note":
+            (root / "safe.env").unlink()
+        if kind in ("old-owned", "carried-record"):
+            record_data["credentialsFiles"] = [str(target)]
+    if kind == "settings":
+        settings = folder / (pattern + ".json")
+        record = folder / (pattern + ".sumi-scan.json")
+    if kind == "sidecar":
+        listed.write_text(".sumi-scan.json\n")
+        (root / "safe.env").write_text("password=.sumi-scan.json")
+    if existing:
+        settings.write_text(json.dumps(settings_data) + "\n \n")
+        record.write_text(json.dumps(record_data) + "\n \n")
+        settings.with_name(settings.name + ".bak.existing").write_bytes(b"previous backup\n")
+    before = snapshot(folder)
+    locked = kind in ("unreadable-file", "unreadable-dir")
+    if locked:
+        target.chmod(0)
+    try:
+        result = subprocess.run([binary, "scan", "--agent", "claude",
+            "--secrets-file", str(listed), "--root", str(root),
+            "--settings", str(settings)], capture_output=True)
+    finally:
+        if locked:
+            target.chmod(0o700 if kind == "unreadable-dir" else 0o600)
+    assert result.returncode == 1, (case, "expected validation failure", result.returncode)
+    assert result.stdout == b"", (case, "unexpected stdout")
+    assert result.stderr == b"sumi: an output path contains a secret pattern; scan cancelled\n", (case, "unexpected diagnostic", result.stderr)
+    assert snapshot(folder) == before, (case, "files changed or were created")
+
+count = 0
+for label, pattern in (("raw", raw), ("expanded", encoded)):
+    for kind in ("new", "skip", "conflict", "old-owned", "note", "carried-entry", "carried-record", "settings", "unreadable-file", "unreadable-dir"):
+        if kind.startswith("unreadable") and os.geteuid() == 0:
+            print("SKIP path validation permission fixture under root")
+            continue
+        refusal(label + "-" + kind, pattern, kind)
+        count += 1
+    refusal(label + "-new-outputs", pattern, "new", existing=False)
+    count += 1
+refusal("sidecar", raw, "sidecar")
+count += 1
+
+# Existing unrelated values must survive. Unreported paths in an unchanged
+# output are also compatible; do not broaden the refusal into a JSON scrubber.
+for kind in ("user-metadata", "unchanged-paths", "backup"):
+    folder = base / kind
+    root = folder / "project"
+    root.mkdir(parents=True)
+    listed = folder / "secrets.txt"
+    token = ".bak." if kind == "backup" else raw
+    listed.write_text(token + "\n")
+    settings = folder / "settings.json"
+    record = folder / "settings.sumi-scan.json"
+    settings_data = {"custom": raw}
+    record_data = {"credentialsFiles": [], "custom": raw}
+    if kind == "unchanged-paths":
+        path = str(folder / raw)
+        settings_data["sandbox"] = {"credentials": {"files": [{"path": path, "mode": "deny"}]}}
+        record_data["credentialsFiles"] = [path]
+        (root / raw).write_text("clean content")
+    else:
+        (root / "safe.env").write_text("password=" + token)
+    settings.write_text(json.dumps(settings_data) + "\n \n")
+    record.write_text(json.dumps(record_data) + "\n \n")
+    before = snapshot(folder)
+    result = subprocess.run([binary, "scan", "--agent", "claude",
+        "--secrets-file", str(listed), "--root", str(root),
+        "--settings", str(settings)], capture_output=True)
+    assert result.returncode == 0, (kind, result.stderr)
+    assert token.encode() not in result.stdout + result.stderr, kind
+    assert json.loads(settings.read_text())["custom"] == raw, kind
+    assert json.loads(record.read_text())["custom"] == raw, kind
+    if kind == "unchanged-paths":
+        assert snapshot(folder) == before, "unreported existing paths must not force writes"
+    if kind == "backup":
+        backups = list(folder.glob("settings.json.bak.*"))
+        assert len(backups) == 1, "backup must still be created"
+        assert backups[0].read_bytes() == before["settings.json"][0]
+        assert backups[0].stat().st_mode & 0o777 == 0o600
+        assert b"sumi: settings backup created\n" in result.stderr
+    count += 1
+print(f"{count} path validation fixtures passed")
+PY_PATHS
+check "scan rejects secret-bearing output paths without writes" "0" "$?"
+
 # --- argument errors ---------------------------------------------------------
 
 check_hook_usage() {
