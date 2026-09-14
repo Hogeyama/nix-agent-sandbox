@@ -52,7 +52,7 @@ mYImP0rTaNTpaSS
 下記の `sumi init` コマンドを実行すると、`~/.claude/settings.json` にマスク用の hooks と環境変数 `CLAUDE_CODE_SHELL{,_PREFIX}` が追加されます。
 
 ```
-~/.local/bin/sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
+sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 ```
 
 変更前の設定は同ディレクトリ内にバックアップされるようになっています。
