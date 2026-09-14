@@ -379,71 +379,189 @@ mkdir -p "$proj/config" "$proj/.git" "$proj/sub/deep"
 printf 'db.password=%s\n' "$current" > "$proj/config/app.properties"
 printf 'nothing of interest\n' > "$proj/README.md"
 printf '%s' "$current" > "$proj/.git/packed-leak"
-printf 'x=%s\n' "$(printf '%s' "$current" | base64)" > "$proj/sub/deep/encoded.env"
+printf 'encoded=%s\n' "$(printf '%s' "$current" | base64)" > "$proj/sub/deep/encoded.env"
 ln -s ../config/app.properties "$proj/sub/link"
 cp "$work/secrets.txt" "$proj/listed-secrets.txt"
-scan_settings="$proj/.claude/settings.local.json"
-scan_record="$proj/.claude/settings.local.sumi-scan.json"
-deny_list() { jq -c '.sandbox.filesystem.denyRead' "$scan_settings"; }
-
-(cd "$proj" && "$sumi" scan --agent claude --secrets-file listed-secrets.txt) >/dev/null 2>"$work/scan.err"
+scan_settings="$work/scan-settings.json"
+scan_record="$work/scan-settings.sumi-scan.json"
+scan() { "$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" --settings "$scan_settings" "$@" >"$work/scan.out" 2>"$work/scan.err"; }
+paths() { jq -c '[.sandbox.credentials.files[].path]' "$scan_settings"; }
+scan
 check "scan succeeds" "0" "$?"
-check "scan lists plain and encoded holders as project-relative paths, skipping .git, symlinks and the secrets file" \
-  '["./config/app.properties","./sub/deep/encoded.env"]' "$(deny_list)"
-check "scan writes no permission rules" "null" "$(jq -c '.permissions' "$scan_settings")"
-check "scan records the entries it owns" "$(deny_list)" "$(jq -c '.denyRead' "$scan_record")"
-case "$(cat "$work/scan.err")" in
-  *"secrets file is inside the root"*) check "scan explains the skipped secrets file" "ok" "ok" ;;
-  *) check "scan explains the skipped secrets file" "ok" "$(cat "$work/scan.err")" ;;
-esac
+check "scan selects absolute regular files and excludes git, links, secrets" "[\"$proj/config/app.properties\",\"$proj/sub/deep/encoded.env\"]" "$(paths)"
+check "scan records ownership" "$(paths)" "$(jq -c .credentialsFiles "$scan_record")"
+check "scan creates exact extracted mask fields" 'true' "$(jq 'all(.sandbox.credentials.files[]; .mode == "mask" and (.extract | startswith("(?:^|\\n)")) and .maskDuplicates == true and .injectHosts == [] and .onExtractNoMatch == "deny" and (keys | length) == 6)' "$scan_settings")"
+check "scan creates neither filesystem nor permissions" '[null,null]' "$(jq -c '[.sandbox.filesystem,.permissions]' "$scan_settings")"
+check "scan reports counts" "1" "$(grep -c '2 masked, 0 unmasked, 0 skipped in ' "$work/scan.err")"
+check "scan warns on empty injectHosts" "2" "$(grep -c 'empty injectHosts' "$work/scan.err")"
+check "scan explains excluded secrets file" "1" "$(grep -c 'secrets file is inside the root' "$work/scan.err")"
+check "scan sends results only to stderr" "0" "$(wc -c < "$work/scan.out" | tr -d ' ')"
+for output in "$scan_settings" "$scan_record" "$work/scan.err"; do
+  check "scan output excludes raw decoys: $(basename "$output")" "no" "$(leaks "$(cat "$output")")"
+done
+for decoy in "$current" "$retired"; do
+  encoded_decoy="$(printf '%s' "$decoy" | base64)"
+  for output in "$scan_settings" "$scan_record" "$work/scan.err"; do
+    check "scan output excludes base64 decoys: $(basename "$output")" "0" "$(grep -Fc "$encoded_decoy" "$output")"
+  done
+done
 
-rm "$proj/sub/deep/encoded.env"
-jq '.theme = "dark" | .sandbox.enabled = true | .sandbox.filesystem.denyRead += ["/decoy/manual", "./README.md"]' "$scan_settings" > "$work/edited.json"
+# Both file mtimes and backup names remain unchanged on a no-op, even with
+# noncanonical original whitespace; compare metadata rather than sleeping.
+jq -c . "$scan_settings" > "$work/edited.json"
 cp "$work/edited.json" "$scan_settings"
-printf '%s' "$current" > "$proj/README.md"
-"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>"$work/rescan.err"
-check "rescan succeeds" "0" "$?"
-check "rescan drops stale owned entries and keeps user entries" \
-  '["./config/app.properties","/decoy/manual","./README.md"]' "$(deny_list)"
-check "rescan does not claim an entry the user wrote" '["./config/app.properties"]' "$(jq -c '.denyRead' "$scan_record")"
-check "rescan preserves unrelated settings" "dark true" "$(jq -r '"\(.theme) \(.sandbox.enabled)"' "$scan_settings")"
-check "rescan backs up the previous settings" "1" "$(find "$proj/.claude" -name 'settings.local.json.bak.*' | wc -l | tr -d ' ')"
+jq -c . "$scan_record" > "$work/edited.json"
+cp "$work/edited.json" "$scan_record"
+touch -t 202001010000 "$scan_settings" "$scan_record"
+scan_before="$(stat -c '%Y' "$scan_settings" "$scan_record")"
+scan
+check "unchanged scan succeeds" "0" "$?"
+check "unchanged scan writes neither output" "$scan_before" "$(stat -c '%Y' "$scan_settings" "$scan_record")"
+check "unchanged scan writes no backup" "0" "$(find "$work" -maxdepth 1 -name 'scan-settings.json.bak.*' | wc -l | tr -d ' ')"
 
-"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>&1
-check "unchanged rescan succeeds" "0" "$?"
-check "unchanged rescan writes no new backup" "1" "$(find "$proj/.claude" -name 'settings.local.json.bak.*' | wc -l | tr -d ' ')"
+jq '.theme="dark" | .sandbox.enabled=true | .sandbox.credentials.files[0] += {mode:"deny",maskDuplicates:false,injectHosts:["api.example.test"],custom:7} | .extra=true' "$scan_settings" > "$work/edited.json"
+cp "$work/edited.json" "$scan_settings"
+jq '.custom="keep"' "$scan_record" > "$work/edited.json"
+cp "$work/edited.json" "$scan_record"
+rm "$proj/sub/deep/encoded.env"
+scan
+check "rescan updates owned entry and deletes disappeared file" "0" "$?"
+check "rescan retains user metadata and repairs fixed fields" '["dark",true,"mask",true,["api.example.test"],7]' "$(jq -c '[.theme,.sandbox.enabled,.sandbox.credentials.files[0].mode,.sandbox.credentials.files[0].maskDuplicates,.sandbox.credentials.files[0].injectHosts,.sandbox.credentials.files[0].custom]' "$scan_settings")"
+check "rescan retains record metadata" "keep" "$(jq -r .custom "$scan_record")"
+check "configured injectHosts suppress empty warning" "0" "$(grep -c 'empty injectHosts' "$work/scan.err")"
+check "enabled sandbox suppresses enabled note" "0" "$(grep -c 'sandbox.enabled' "$work/scan.err")"
+check "backup is private" "600" "$(stat -c '%a' "$scan_settings".bak.*)"
 
-printf '%s' "$current" > "$proj/sub/pattern*name"
-"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>&1
-check "a holder whose name reads as a pattern makes scan fail" "1" "$?"
-check "a pattern-like name is not listed" "no" "$(deny_list | grep -q 'pattern' && echo yes || echo no)"
-rm "$proj/sub/pattern*name"
+printf '%s\n' "$current" > "$proj/config/app.properties"
+scan
+check "extracted to whole-file succeeds" "0" "$?"
+check "whole-file removes extract and maskDuplicates" '[false,false,["api.example.test"]]' "$(jq -c '.sandbox.credentials.files[0] | [has("extract"),has("maskDuplicates"),.injectHosts]' "$scan_settings")"
+jq 'del(.sandbox.credentials.files[0].injectHosts)' "$scan_settings" > "$work/edited.json"
+cp "$work/edited.json" "$scan_settings"
+printf 'new.token=%s\n' "$current" > "$proj/config/app.properties"
+scan
+check "whole-file to extracted succeeds" "0" "$?"
+check "regeneration keeps absent injectHosts absent" '[true,true,false]' "$(jq -c '.sandbox.credentials.files[0] | [has("extract"),.maskDuplicates,has("injectHosts")]' "$scan_settings")"
+printf '# %s\n' "$current" > "$proj/config/app.properties"
+scan
+check "non-generatable owned file fails" "1" "$?"
+check "non-generatable owned file removes settings and ownership" '[0,0]' "$(jq -nc --argjson a "$(jq '.sandbox.credentials.files|length' "$scan_settings")" --argjson b "$(jq '.credentialsFiles|length' "$scan_record")" '[$a,$b]')"
+check "unsafe old mask removal is explicit" "1" "$(grep -c 'unmask .*: was masked, now no-form' "$work/scan.err")"
+scan
+check "new non-generatable file is a successful skip" "0" "$?"
+check "no-form reason" "1" "$(grep -c ': no-form' "$work/scan.err")"
 
-shared_settings="$work/shared-user-settings.json"
-other="$work/scan-other"
-mkdir -p "$other"
-printf 'token=%s\n' "$current" > "$other/.env"
-"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" --settings "$shared_settings" >/dev/null 2>&1
-check "scan into settings outside the project succeeds" "0" "$?"
-"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$other" --settings "$shared_settings" >/dev/null 2>&1
-check "second project into the same settings succeeds" "0" "$?"
-check "settings outside the project get absolute paths and keep every project's entries" \
-  "[\"$proj/README.md\",\"$proj/config/app.properties\",\"$other/.env\"]" "$(jq -c '.sandbox.filesystem.denyRead' "$shared_settings")"
-rm "$other/.env"
-"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$other" --settings "$shared_settings" >/dev/null 2>&1
-check "rescanning one project leaves the other project's entries" \
-  "[\"$proj/README.md\",\"$proj/config/app.properties\"]" "$(jq -c '.sandbox.filesystem.denyRead' "$shared_settings")"
+printf '%s' "$current" > "$proj/glob*name"
+printf '\377%s' "$current" > "$proj/invalid.bin"
+python3 - "$proj/large" "$current" <<'PY'
+import sys
+with open(sys.argv[1], 'wb') as f:
+    f.write(('token='+sys.argv[2]+'\n').encode())
+    f.truncate(8*1024*1024+1)
+PY
+printf 'foo=ab%sab\n# %s\n' "$current" "$current" > "$proj/coverage"
+scan
+check "new skipped files do not force failure" "0" "$?"
+for reason in glob-chars too-large not-utf8 coverage; do
+  check "skip reason $reason" "1" "$(grep -c ": $reason" "$work/scan.err")"
+done
+rm "$proj/glob*name" "$proj/invalid.bin" "$proj/large" "$proj/coverage"
 
-custom_settings="$work/scan-custom.json"
-printf '%s' '{"sandbox":{"filesystem":{"denyRead":"not-a-list"}}}' > "$custom_settings"
-custom_before="$(sha256sum "$custom_settings" | cut -d ' ' -f1)"
-"$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" --settings "$custom_settings" >/dev/null 2>&1
-check "scan rejects a non-list denyRead" "1" "$?"
-check "rejected denyRead leaves settings unchanged" "$custom_before" "$(sha256sum "$custom_settings" | cut -d ' ' -f1)"
-check "rejected denyRead writes no record" "no" "$([ -e "$work/scan-custom.sumi-scan.json" ] && echo yes || echo no)"
+# A user entry, duplicate entries and exact denyRead entries take precedence,
+# including when the corresponding owned file has disappeared.
+printf 'token=%s\n' "$current" > "$proj/user"
+jq -n --arg p "$proj" '{sandbox:{credentials:{files:[{path:($p+"/user"),custom:1},{path:($p+"/dup")},{path:($p+"/dup")},{path:($p+"/deny")}]},filesystem:{denyRead:[($p+"/deny")]}}}' > "$scan_settings"
+jq -n --arg p "$proj" '{credentialsFiles:[($p+"/dup"),($p+"/deny")]}' > "$scan_record"
+scan
+check "conflicting entries are skipped without failure" "0" "$?"
+check "user and duplicate entry conflicts are reported" "2" "$(grep -c ': existing-entry' "$work/scan.err")"
+check "denyRead conflict precedes deletion" "1" "$(grep -c ': denyread-conflict' "$work/scan.err")"
+check "conflicts retain entries" "4" "$(jq '.sandbox.credentials.files|length' "$scan_settings")"
+check "user entry is never claimed" "false" "$(jq --arg p "$proj/user" '.credentialsFiles|index($p)!=null' "$scan_record")"
 
-"$sumi" scan --agent claude --secrets-file "$work/missing.txt" --root "$proj" >/dev/null 2>&1
-check "scan with a missing list exits 1" "1" "$?"
+# Exclusions, dangling symlink ancestors, and other roots preserve ownership.
+mkdir -p "$work/scan-project-other"
+ln -s "$work/missing-target" "$proj/dangling"
+jq -n --arg p "$proj" '{credentialsFiles:[($p+"/.git/old"),($p+"/listed-secrets.txt"),($p+"/sub/link"),($p+"/dangling/old"),($p+"-other/old")]}' > "$scan_record"
+jq '{sandbox:{credentials:{files:[.credentialsFiles[]|{path:.,mode:"mask"}]}}}' "$scan_record" > "$scan_settings"
+scan
+check "excluded and outside paths survive" "0" "$?"
+check "excluded and outside paths retain ownership" "6" "$(jq '.credentialsFiles|length' "$scan_record")"
+check "excluded and outside entries survive" "6" "$(jq '.sandbox.credentials.files|length' "$scan_settings")"
+
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -p "$proj/locked-dir"
+  printf 'token=%s\n' "$current" > "$proj/locked-dir/owned"
+  printf 'token=%s\n' "$current" > "$proj/locked-file"
+  scan
+  check "readable files initially become owned" "0" "$?"
+  chmod 000 "$proj/locked-dir" "$proj/locked-file"
+  scan
+  locked_status=$?
+  chmod 700 "$proj/locked-dir"
+  chmod 600 "$proj/locked-file"
+  check "unreadable files and directories fail" "1" "$locked_status"
+  check "unreadable files and directories remain owned" "2" "$(jq --arg p "$proj" '[.credentialsFiles[]|select(. == ($p+"/locked-file") or . == ($p+"/locked-dir/owned"))]|length' "$scan_record")"
+else
+  printf 'SKIP unreadability fixtures: root bypasses filesystem permission bits\n'
+fi
+
+# A readable but non-writable record forces failure after settings are written.
+# Compare the restored settings bytes and preserve original record bytes too.
+if [ "$(id -u)" -ne 0 ]; then
+  rollback_root="$work/rollback-root"
+  mkdir -p "$rollback_root"
+  printf 'token=%s\n' "$current" > "$rollback_root/owned"
+  rollback_settings="$work/rollback.json"
+  rollback_record="$work/rollback.sumi-scan.json"
+  "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$rollback_root" --settings "$rollback_settings" >/dev/null 2>"$work/rollback.err"
+  check "rollback fixture registers mask" "0" "$?"
+  cp "$rollback_settings" "$work/rollback-before.json"
+  cp "$rollback_record" "$work/rollback-record-before.json"
+  rm "$rollback_root/owned"
+  chmod 400 "$rollback_record"
+  "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$rollback_root" --settings "$rollback_settings" >/dev/null 2>"$work/rollback.err"
+  rollback_status=$?
+  chmod 600 "$rollback_record"
+  check "record write failure exits 1" "1" "$rollback_status"
+  check "record write failure restores original settings bytes" "yes" "$(cmp -s "$rollback_settings" "$work/rollback-before.json" && echo yes || echo no)"
+  check "failed record write keeps original record bytes" "yes" "$(cmp -s "$rollback_record" "$work/rollback-record-before.json" && echo yes || echo no)"
+  check "record write failure reports rollback" "1" "$(grep -c 'settings restored' "$work/rollback.err")"
+else
+  printf 'SKIP readonly record rollback fixture: root bypasses filesystem permission bits\n'
+fi
+
+# Default paths never address the real user's configuration.
+CLAUDE_CONFIG_DIR="$work/default-config" "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" >/dev/null 2>"$work/default.err"
+check "scan defaults to CLAUDE_CONFIG_DIR" "0" "$?"
+check "default settings were created" "yes" "$([ -f "$work/default-config/settings.json" ] && echo yes || echo no)"
+env -u CLAUDE_CONFIG_DIR HOME="$work/fake-home" "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" >/dev/null 2>"$work/default.err"
+check "scan defaults to HOME .claude" "0" "$?"
+check "home settings were created" "yes" "$([ -f "$work/fake-home/.claude/settings.json" ] && echo yes || echo no)"
+mkdir -p "$work/project/.claude"
+ln -s "$work/project/.claude" "$work/claude-alias"
+ln -s "$work/project" "$work/project-alias"
+for rejected in "$work/project/.claude/settings.json" "$work/claude-alias/settings.json" "$work/project-alias/new/.claude/settings.json"; do
+  "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" --settings "$rejected" >/dev/null 2>"$work/reject.err"
+  check "reject project settings $rejected" "1" "$?"
+  check "rejected settings are not written" "no" "$([ -e "$rejected" ] && echo yes || echo no)"
+done
+
+for invalid in '[]' '{"sandbox":[]}' '{"sandbox":{"credentials":false}}' '{"sandbox":{"filesystem":[]}}' '{"sandbox":{"credentials":{"files":{}}}}' '{"sandbox":{"credentials":{"files":[{}]}}}' '{"sandbox":{"filesystem":{"denyRead":[1]}}}'; do
+  printf '%s' "$invalid" > "$work/invalid-settings.json"
+  "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" --settings "$work/invalid-settings.json" >/dev/null 2>"$work/invalid.err"
+  check "invalid settings shape fails: $invalid" "1" "$?"
+  check "invalid settings stay byte-identical" "$invalid" "$(cat "$work/invalid-settings.json")"
+done
+for invalid in '[]' '{}' '{"denyRead":[]}' '{"credentialsFiles":["./relative"]}' '{"credentialsFiles":[1]}'; do
+  printf '{}' > "$work/invalid-settings.json"
+  printf '%s' "$invalid" > "$work/invalid-settings.sumi-scan.json"
+  "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" --settings "$work/invalid-settings.json" >/dev/null 2>"$work/invalid.err"
+  check "invalid ownership fails: $invalid" "1" "$?"
+  check "invalid ownership leaves settings untouched" '{}' "$(cat "$work/invalid-settings.json")"
+done
+"$sumi" scan --agent claude --secrets-file "$work/missing.txt" --root "$proj" --settings "$work/unused.json" >/dev/null 2>&1
+check "scan with missing secrets exits 1" "1" "$?"
 "$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --deny-path x >/dev/null 2>&1
 check "scan rejects unknown options" "2" "$?"
 
@@ -478,6 +596,13 @@ done < "$status_failures"
 
 SUMI_BIN="$sumi" python3 "$script_dir/encoded-values.py"
 check "encoded-value regressions" "0" "$?"
+
+if command -v bun >/dev/null; then
+  (cd "$script_dir/.." && bun tests/extract-parity.ts)
+  check "Zig to JavaScript extraction parity" "0" "$?"
+else
+  printf 'SKIP extraction parity: Bun is unavailable\n'
+fi
 
 printf '\npassed %d, failed %d\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

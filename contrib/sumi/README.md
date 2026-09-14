@@ -58,23 +58,36 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 変更前の設定は同ディレクトリ内にバックアップされるようになっています。
 設定が完了したら、Claude Code を起動すると、マスクが有効になります。
 
-### Bash からの読み取りを拒否する（オプショナル）
+### 秘密を置き換えたファイルを Bash から読む（オプショナル）
 
-マスクは出力に対して行うため、Bash でエンコードを重ねるなどして加工された値は見逃すことがあります（[リミテーション](#リミテーション)）。
-Claude Code の [sandbox](https://code.claude.com/docs/en/sandboxing) を使っている場合は、`sumi scan` でシークレットを含むファイルを列挙し、sandbox 内の Bash から中身を読めなくできます。
+Linux / WSL2 の Claude Code sandbox では、`sumi scan` を使うと、設定ファイルの秘密を身代わりの文字列に置き換えた状態で Bash から読めます。例えば秘密一覧に `Tr0ub4dor` があり、`config/app.properties` が次の内容なら、
 
+```properties
+db.password=Tr0ub4dor
 ```
+
+sandbox 内では `db.password=fake_value_<uuid>` のように読めます。値の置き換えは Claude Code が行い、元のファイルは変更しません。macOS ではファイル mask が読み取り禁止になるため、この使い方の対象外です。
+
+```sh
 cd path/to/project
 sumi scan --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 ```
 
-これは、プロジェクト内のファイルを検査し、シークレットを含むファイルのパスを `.claude/settings.local.json` の `sandbox.filesystem.denyRead` に追加します。
+既定ではカレントディレクトリを検査し、絶対パスと抽出ルールをユーザー設定の `sandbox.credentials.files` に `mode: "mask"` で登録します。走査対象は `--root DIR` で変更できます。書き込み先は `$CLAUDE_CONFIG_DIR/settings.json`、環境変数がなければ `~/.claude/settings.json` です。`--settings /path/to/settings.json` で別ファイルに書く場合は、Claude Code もそのファイルを `--settings` で読み込んでください。プロジェクト設定の mask は Claude Code に無視されるため、ユーザー設定以外の `.claude` ディレクトリへの書き込みは拒否します。sandbox の有効化（`sandbox.enabled: true`）も必要です。
 
-* 書き込み先は `--settings` で変えられます。例: `--settings .claude/settings.json`
-* `Read` や `Grep` は拒否されず、これまでどおりマスクされた内容を返します。`permissions.deny` の `Read(...)` は sandbox にも取り込まれ、これらのツールまで拒否してしまうため、書き込みません
-* sandbox が有効（`sandbox.enabled: true`）で、sandbox 外での再実行を禁止している（`sandbox.allowUnsandboxedCommands: false`）ときだけ意味があります。どちらかが設定ファイルに無い場合は注意を表示します
-* 検査は実行した時点のものです。シークレットを含むファイルを追加・削除したら再実行してください。追加したエントリは `.claude/settings.local.sumi-scan.json` に記録され、再実行時に不要になったものだけを削除します。手で書いたエントリは変更しません
-* シークレットファイル自体は、プロジェクト内にあっても `denyRead` に列挙しません。`sumi` は sandbox の内側で動き、このファイルを読む必要があるためです。同じ理由で、sandbox 内の Bash からシークレットファイルを加工して読み出す経路は塞げません。プロジェクトの外に置いてください
+登録しただけでは、本物の値を使う認証はできません。新規エントリは `injectHosts: []` なので、送信時にも身代わりのままで、Claude Code の起動時に empty injectHosts の警告が出ます。本物を送る必要がある場合は、利用者が `injectHosts` と `sandbox.network.allowedDomains` に送信先を指定し、HTTPS では `sandbox.network.tlsTerminate` も設定してください。scan は送信先を追加せず、この書き込み先以外の設定スコープも確認しません。
+
+実行結果は stderr に表示されます。
+
+* `mask <path>`：登録または更新しました。
+* `skip <path>: <理由>`：登録を見送りました。パスに glob 文字がある、8 MiB を超える、不正な UTF-8、抽出できない形式、一部の秘密を隠せない、既存のユーザー設定と競合する、といった理由があります。新規ファイルの skip だけなら終了コードは0です。
+* `unmask <path>`：ファイルが消えた、秘密がなくなった、またはルールを再生成できなくなったため、所有する設定を削除しました。再生成できない場合は `was masked, now <理由>` と表示し、終了コード1を返します。この場合、そのファイルは秘密を含むまま読めるため、内容や設定を確認してください。
+
+ファイルの内容・配置や秘密一覧を変更したら再実行してください。所有記録は設定ファイルに隣接する `settings.sumi-scan.json` などに保存し、sumi が登録した分だけを更新・削除します。利用者が変更した `injectHosts` やその他の独自フィールドは維持し、手で書いた別エントリ、同じパスの重複、同じ絶対パスの `denyRead` との競合は残して skip にします。読めないファイル・ディレクトリは警告して終了コード1とし、確認できなかった設定は残します。設定の変更時には原本をバックアップし、変更のない再実行では書き込みません。
+
+抽出した値はその全体が置き換わります。例えば秘密を含む URL は URL 全体が身代わりになるため、値の構造を使う処理が動かなくなる場合があります。抽出ルールでは `maskDuplicates: true` により、同じファイル内の同じ値のコピーも置き換わります。短い値・一般的な値なら別の箇所にも影響します。秘密の値一つだけのファイルは全体をマスクします。
+
+`.git`、シンボリックリンク、通常ファイル以外と秘密一覧ファイルは走査対象から除きます。sumi 自体が sandbox 内で秘密一覧を読む必要があるため、この機能では Bash がその一覧を加工して読み出す経路を塞げません。秘密一覧はプロジェクト外に置いてください。
 
 ## リミテーション
 
