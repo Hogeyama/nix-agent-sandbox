@@ -65,4 +65,24 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    const extract_mod = b.createModule(.{
+        .root_source_file = b.path("claude/extract.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const extract_tests = b.addTest(.{ .root_module = extract_mod });
+    test_step.dependOn(&b.addRunArtifact(extract_tests).step);
+
+    // Parity fixtures are explicitly built for development, never installed by
+    // the ordinary sumi executable target.
+    const fixtures_mod = b.createModule(.{
+        .root_source_file = b.path("tests/extract-fixtures.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    fixtures_mod.addImport("extract", extract_mod);
+    const fixtures = b.addExecutable(.{ .name = "sumi-extract-fixtures", .root_module = fixtures_mod });
+    const install_fixtures = b.addInstallArtifact(fixtures, .{});
+    b.step("extract-fixtures", "Build test-only extraction parity fixtures").dependOn(&install_fixtures.step);
 }
