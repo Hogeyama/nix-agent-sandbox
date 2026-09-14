@@ -1,0 +1,109 @@
+name: Release sumi
+
+# sumi is released separately from nas. To release:
+#   1. set contrib/sumi/VERSION and add a matching "## [X.Y.Z]" section to
+#      contrib/sumi/CHANGELOG.md; update the pinned URL in contrib/sumi/README.md
+#   2. commit, then push the tag sumi-vX.Y.Z
+# Releases are created with --latest=false so /releases/latest keeps pointing
+# at nas.
+
+on:
+  push:
+    tags:
+      - "sumi-v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag, VERSION and changelog agree
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(tr -d '\n' < contrib/sumi/VERSION)"
+          if [ "sumi-v${version}" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match contrib/sumi/VERSION ($version)"
+            exit 1
+          fi
+          if ! grep -q "^## \[${version}\]" contrib/sumi/CHANGELOG.md; then
+            echo "::error::contrib/sumi/CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710
+
+      - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
+
+      - name: Build sumi static binary
+        run: nix build .#sumi --out-link result-sumi --print-build-logs
+
+      - name: Check the binary reports the release version
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          actual="$(result-sumi/bin/sumi --version)"
+          if [ "$actual" != "sumi ${VERSION}" ]; then
+            echo "::error::sumi --version printed '$actual', expected 'sumi ${VERSION}'"
+            exit 1
+          fi
+
+      - name: Prepare artifact
+        run: |
+          cp -L result-sumi/bin/sumi sumi-${{ matrix.system }}
+          chmod 755 sumi-${{ matrix.system }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sumi-${{ github.ref_name }}_${{ matrix.system }}
+          path: sumi-${{ matrix.system }}
+
+  release:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' contrib/sumi/CHANGELOG.md > notes.md
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "sumi ${VERSION}" \
+            --notes-file notes.md \
+            --latest=false \
+            "sumi-x86_64-linux" \
+            "sumi-aarch64-linux"

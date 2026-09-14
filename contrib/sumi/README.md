@@ -18,9 +18,11 @@ sumi を設定すると、Claude Code には `db.password=*********` と見え�
 
 ```bash
 mkdir -p ~/.local/bin
-curl -fsSLo ~/.local/bin/sumi https://github.com/Hogeyama/nix-agent-sandbox/releases/latest/download/sumi-x86_64-linux
+curl -fsSLo ~/.local/bin/sumi https://github.com/Hogeyama/nix-agent-sandbox/releases/download/sumi-v0.1.0/sumi-x86_64-linux
 chmod +x ~/.local/bin/sumi
 ```
+
+sumi は nas 本体とは別に `sumi-v*` タグでリリースしています。変更点は [CHANGELOG](CHANGELOG.md) を、インストール済みのバージョンは `sumi --version` で確認できます。
 
 ### シークレットファイルの作成
 

@@ -174,12 +174,16 @@
           '';
         };
 
+        # sumi は nas とは別に sumi-v* タグでリリースする。バージョンの出どころは
+        # contrib/sumi/VERSION だけで、release-sumi.yml がタグとの一致を検査する。
+        sumiVersion = pkgs.lib.removeSuffix "\n" (builtins.readFile ./contrib/sumi/VERSION);
+
         # 単一の静的バイナリとして配る。Zig が musl を同梱しているので、
         # nix-bundle-elf で glibc を束ねる必要が無い。テストは実行ファイルの
         # ターゲットとは別にホスト向けにビルドされる (build.zig を参照)。
         sumi = pkgs.stdenv.mkDerivation {
           pname = "sumi";
-          version = self.shortRev or self.dirtyShortRev or "dirty";
+          version = sumiVersion;
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
@@ -199,7 +203,7 @@
               -Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
               -Doptimize=ReleaseSafe \
               -Dstrip=true \
-              -Dversion=${self.shortRev or self.dirtyShortRev or "dirty"}
+              -Dversion=${sumiVersion}
           '';
           checkPhase = ''
             zig build test \

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- **sumi**: release and version sumi separately under `sumi-v*` tags, starting at `sumi-v0.1.0`; nas releases no longer attach sumi binaries. See the [sumi changelog](contrib/sumi/CHANGELOG.md).
+
 ## [0.17.0] - 2026-09-14
 
 ### Added
