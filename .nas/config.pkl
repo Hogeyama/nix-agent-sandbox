@@ -75,7 +75,7 @@ local commonNetwork: NetworkConfig = new {
     }
 
     ["github-tls"] {
-      targets { "github.com:443"; "api.github.com:443" }
+      targets { "github.com:443"; "api.github.com:443"; "uploads.github.com:443" }
       fallback = "allow"
       secrets { ["gh-token-basic"] = "inject" }
       inject {
