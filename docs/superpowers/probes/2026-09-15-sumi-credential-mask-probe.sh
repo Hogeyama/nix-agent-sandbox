@@ -8,17 +8,20 @@
 # address. Uses only a freshly generated decoy token; nothing leaves the host
 # and the listener only replies "ok".
 #
-# Usage: sumi-credential-mask-probe.sh [listed|empty|omitted]
+# Usage: sumi-credential-mask-probe.sh [listed|empty|omitted|dup-on|dup-off]
 #   listed   injectHosts: [<listener host>]  (spec E1)
 #   empty    injectHosts: []                 (spec U1)
 #   omitted  no injectHosts key              (spec F8)
+#   dup-on   extract captures only api.token; the same value also appears
+#            under another key and in a comment; maskDuplicates: true (spec U8)
+#   dup-off  same file and extract with maskDuplicates: false (control for U8)
 #
 # Requires on the host: claude, bwrap (unprivileged user namespaces), jq,
 # python3, ip, and DNS resolution of nip.io.
 set -uo pipefail
 
 mode="${1:-listed}"
-case "$mode" in listed|empty|omitted) ;; *) echo "usage: $0 [listed|empty|omitted]" >&2; exit 2 ;; esac
+case "$mode" in listed|empty|omitted|dup-on|dup-off) ;; *) echo "usage: $0 [listed|empty|omitted|dup-on|dup-off]" >&2; exit 2 ;; esac
 
 real="DecoyMaskToken-$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
@@ -30,7 +33,10 @@ echo "injectHosts mode: $mode"
 w="$(mktemp -d)"
 echo "== workdir $w (kept for inspection)"
 mkdir -p "$w/proj"
-printf 'db.host=localhost\napi.token=%s\n' "$real" > "$w/proj/app.properties"
+case "$mode" in
+  dup-*) printf 'db.host=localhost\napi.token=%s\nbackup: %s\n# old token %s\n' "$real" "$real" "$real" > "$w/proj/app.properties" ;;
+  *) printf 'db.host=localhost\napi.token=%s\n' "$real" > "$w/proj/app.properties" ;;
+esac
 git -C "$w/proj" init -q
 
 port=$((20000 + RANDOM % 20000))
@@ -65,6 +71,8 @@ settings="$(jq -n --arg path "$w/proj/app.properties" --arg name "$name" --arg m
   }
   | if $mode == "listed" then . + {injectHosts: [$name]}
     elif $mode == "empty" then . + {injectHosts: []}
+    elif $mode == "dup-on" then . + {injectHosts: [$name], maskDuplicates: true}
+    elif $mode == "dup-off" then . + {injectHosts: [$name], maskDuplicates: false}
     else . end
   | {
       sandbox: {
@@ -107,4 +115,11 @@ if [ -s "$w/received.log" ]; then
 else
   echo "nothing received"
 fi
+case "$mode" in
+  dup-*)
+    echo "== sentinels in cat output (dup modes: one per masked occurrence)"
+    jq -r 'select(.type == "user") | .message.content[]? | select(.type == "tool_result") | (.content | if type == "string" then . else tojson end)' "$w/stream.jsonl" \
+      | head -c 4000 | grep -o 'fake_value_[0-9a-f-]*' | sort | uniq -c
+    ;;
+esac
 tail -5 "$w/claude.err"
