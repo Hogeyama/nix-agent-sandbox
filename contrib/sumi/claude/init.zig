@@ -337,7 +337,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !InitArgs {
     };
 }
 
-fn backup(allocator: std.mem.Allocator, path: []const u8, stamp: []const u8, data: []const u8) ![]u8 {
+pub fn backup(allocator: std.mem.Allocator, path: []const u8, stamp: []const u8, data: []const u8) ![]u8 {
     var suffix: usize = 0;
     while (true) : (suffix += 1) {
         const candidate = if (suffix == 0) try std.fmt.allocPrint(allocator, "{s}.bak.{s}", .{ path, stamp }) else try std.fmt.allocPrint(allocator, "{s}.bak.{s}.{d}", .{ path, stamp, suffix });

@@ -55,6 +55,23 @@ mYImP0rTaNTpaSS
 変更前の設定は同ディレクトリ内にバックアップされるようになっています。
 設定が完了したら、Claude Code を起動すると、マスクが有効になります。
 
+### Bash からの読み取りを拒否する（オプショナル）
+
+マスクは出力に対して行うため、Bash でエンコードを重ねるなどして加工された値は見逃すことがあります（[リミテーション](#リミテーション)）。
+Claude Code の [sandbox](https://code.claude.com/docs/en/sandboxing) を使っている場合は、`sumi scan` でシークレットを含むファイルを列挙し、sandbox 内の Bash から中身を読めなくできます。
+
+```
+cd path/to/project
+sumi scan --agent claude --secrets-file ~/.claude/sumi/secrets.txt
+```
+
+これは、プロジェクト内のファイルを検査し、シークレットを含むファイルのパスを `.claude/settings.local.json` の `sandbox.filesystem.denyRead` に追加します。
+
+* `Read` や `Grep` は拒否されず、これまでどおりマスクされた内容を返します。`permissions.deny` の `Read(...)` は sandbox にも取り込まれ、これらのツールまで拒否してしまうため、書き込みません
+* sandbox が有効（`sandbox.enabled: true`）で、sandbox 外での再実行を禁止している（`sandbox.allowUnsandboxedCommands: false`）ときだけ意味があります。どちらかが設定ファイルに無い場合は注意を表示します
+* 検査は実行した時点のものです。シークレットを含むファイルを追加・削除したら再実行してください。追加したエントリは `.claude/settings.local.sumi-scan.json` に記録され、再実行時に不要になったものだけを削除します。手で書いたエントリは変更しません
+* シークレットファイル自体は、プロジェクト内にあっても `denyRead` に列挙しません。`sumi` は sandbox の内側で動き、このファイルを読む必要があるためです。同じ理由で、sandbox 内の Bash からシークレットファイルを加工して読み出す経路は塞げません。プロジェクトの外に置いてください
+
 ## リミテーション
 
 sumi は下記の限界があります。これが許容できない場合はより強力なシークレット保護を提供する nix-agent-sandbox 本体の利用を検討してみてください。

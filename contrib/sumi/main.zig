@@ -1,6 +1,7 @@
 //! sumi: 列挙した値を Claude Code に見せない単一バイナリ。
 //!
 //!   sumi init   --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
+//!   sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
 //!   sumi hook   --agent claude post-tool --secrets-file F
 //!   sumi hook   --agent claude prompt    --secrets-file F [--root DIR]... [--deny-path P]...
 //!   sumi run    --secrets-file F [--shell PATH] COMMAND
@@ -19,6 +20,7 @@ const shell = @import("shell.zig");
 const claude_post = @import("claude/hook_post.zig");
 const claude_prompt = @import("claude/hook_prompt.zig");
 const claude_init = @import("claude/init.zig");
+const claude_scan = @import("claude/scan.zig");
 
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_SUPPRESSED: u8 = 121;
@@ -27,6 +29,7 @@ pub const MARKER_ENV: [:0]const u8 = "SUMI_SUPERVISED=1";
 
 const usage_text =
     \\usage: sumi init   --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
+    \\       sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
     \\       sumi hook   --agent claude post-tool --secrets-file F
     \\       sumi hook   --agent claude prompt    --secrets-file F [--root DIR]... [--deny-path P]...
     \\       sumi run    --secrets-file F [--shell PATH] COMMAND
@@ -140,7 +143,7 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
     if (std.mem.eql(u8, sub, "filter")) return runFilter(allocator, args);
     if (std.mem.eql(u8, sub, "run")) return runSupervised(allocator, args);
 
-    if (std.mem.eql(u8, sub, "hook") or std.mem.eql(u8, sub, "init")) {
+    if (std.mem.eql(u8, sub, "hook") or std.mem.eql(u8, sub, "init") or std.mem.eql(u8, sub, "scan")) {
         const taken = takeAgent(args) catch return usage("unsupported --agent value (only 'claude' is implemented)");
         const agent = taken.agent orelse return usage("--agent is required");
         switch (agent) {
@@ -152,6 +155,7 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
                     };
                     return claude_init.main(allocator, taken.rest, self);
                 }
+                if (std.mem.eql(u8, sub, "scan")) return claude_scan.main(allocator, taken.rest);
                 if (taken.rest.len == 0) return usage("hook needs a subcommand: post-tool | prompt");
                 const hook = taken.rest[0];
                 const hook_args = taken.rest[1..];
@@ -179,6 +183,7 @@ test {
     _ = @import("claude/hook_post.zig");
     _ = @import("claude/hook_prompt.zig");
     _ = @import("claude/init.zig");
+    _ = @import("claude/scan.zig");
 }
 
 const testing = std.testing;

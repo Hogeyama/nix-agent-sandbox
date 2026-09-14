@@ -372,6 +372,66 @@ check "init rejects unsupported Claude shells" "1" "$?"
 check "unsupported shell failure leaves settings unchanged" "$bad_shell_before" "$(sha256sum "$bad_shell_settings" | cut -d ' ' -f1)"
 check "unsupported shell failure happens before backup" "0" "$(find "$work" -maxdepth 1 -name 'bad-shell-settings.json.bak.*' | wc -l | tr -d ' ')"
 
+# --- scan --------------------------------------------------------------------
+
+proj="$work/scan-project"
+mkdir -p "$proj/config" "$proj/.git" "$proj/sub/deep"
+printf 'db.password=%s\n' "$current" > "$proj/config/app.properties"
+printf 'nothing of interest\n' > "$proj/README.md"
+printf '%s' "$current" > "$proj/.git/packed-leak"
+printf 'x=%s\n' "$(printf '%s' "$current" | base64)" > "$proj/sub/deep/encoded.env"
+ln -s ../config/app.properties "$proj/sub/link"
+cp "$work/secrets.txt" "$proj/listed-secrets.txt"
+scan_settings="$proj/.claude/settings.local.json"
+scan_record="$proj/.claude/settings.local.sumi-scan.json"
+deny_list() { jq -c '.sandbox.filesystem.denyRead' "$scan_settings"; }
+
+(cd "$proj" && "$sumi" scan --agent claude --secrets-file listed-secrets.txt) >/dev/null 2>"$work/scan.err"
+check "scan succeeds" "0" "$?"
+check "scan lists plain and encoded holders, skipping .git, symlinks and the secrets file" \
+  "[\"$proj/config/app.properties\",\"$proj/sub/deep/encoded.env\"]" "$(deny_list)"
+check "scan writes no permission rules" "null" "$(jq -c '.permissions' "$scan_settings")"
+check "scan records the entries it owns" "$(deny_list)" "$(jq -c '.denyRead' "$scan_record")"
+case "$(cat "$work/scan.err")" in
+  *"secrets file is inside the root"*) check "scan explains the skipped secrets file" "ok" "ok" ;;
+  *) check "scan explains the skipped secrets file" "ok" "$(cat "$work/scan.err")" ;;
+esac
+
+rm "$proj/sub/deep/encoded.env"
+jq --arg p "$proj/README.md" '.theme = "dark" | .sandbox.enabled = true | .sandbox.filesystem.denyRead += ["/decoy/manual", $p]' "$scan_settings" > "$work/edited.json"
+cp "$work/edited.json" "$scan_settings"
+printf '%s' "$current" > "$proj/README.md"
+"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>"$work/rescan.err"
+check "rescan succeeds" "0" "$?"
+check "rescan drops stale owned entries and keeps user entries" \
+  "[\"$proj/config/app.properties\",\"/decoy/manual\",\"$proj/README.md\"]" "$(deny_list)"
+check "rescan does not claim an entry the user wrote" "[\"$proj/config/app.properties\"]" "$(jq -c '.denyRead' "$scan_record")"
+check "rescan preserves unrelated settings" "dark true" "$(jq -r '"\(.theme) \(.sandbox.enabled)"' "$scan_settings")"
+check "rescan backs up the previous settings" "1" "$(find "$proj/.claude" -name 'settings.local.json.bak.*' | wc -l | tr -d ' ')"
+
+"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>&1
+check "unchanged rescan succeeds" "0" "$?"
+check "unchanged rescan writes no new backup" "1" "$(find "$proj/.claude" -name 'settings.local.json.bak.*' | wc -l | tr -d ' ')"
+
+printf '%s' "$current" > "$proj/sub/pattern*name"
+"$sumi" scan --agent claude --secrets-file "$proj/listed-secrets.txt" --root "$proj" >/dev/null 2>&1
+check "a holder whose name reads as a pattern makes scan fail" "1" "$?"
+check "a pattern-like name is not listed" "no" "$(deny_list | grep -q 'pattern' && echo yes || echo no)"
+rm "$proj/sub/pattern*name"
+
+custom_settings="$work/scan-custom.json"
+printf '%s' '{"sandbox":{"filesystem":{"denyRead":"not-a-list"}}}' > "$custom_settings"
+custom_before="$(sha256sum "$custom_settings" | cut -d ' ' -f1)"
+"$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --root "$proj" --settings "$custom_settings" >/dev/null 2>&1
+check "scan rejects a non-list denyRead" "1" "$?"
+check "rejected denyRead leaves settings unchanged" "$custom_before" "$(sha256sum "$custom_settings" | cut -d ' ' -f1)"
+check "rejected denyRead writes no record" "no" "$([ -e "$work/scan-custom.sumi-scan.json" ] && echo yes || echo no)"
+
+"$sumi" scan --agent claude --secrets-file "$work/missing.txt" --root "$proj" >/dev/null 2>&1
+check "scan with a missing list exits 1" "1" "$?"
+"$sumi" scan --agent claude --secrets-file "$work/secrets.txt" --deny-path x >/dev/null 2>&1
+check "scan rejects unknown options" "2" "$?"
+
 # --- argument errors ---------------------------------------------------------
 
 check_hook_usage() {
