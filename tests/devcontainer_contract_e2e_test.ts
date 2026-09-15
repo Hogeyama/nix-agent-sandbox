@@ -132,28 +132,29 @@ test.skipIf(
     const configPath = path.join(devcontainerDir, "devcontainer.json");
     const projectName = `nas-contract-${crypto.randomUUID()}`;
 
-    await mkdir(devcontainerDir, { recursive: true });
-    await writeFile(
-      composePath,
-      JSON.stringify(
-        {
-          name: projectName,
-          services: {
-            agent: {
-              image: FIXTURE_IMAGE,
-              command: ["/bin/sh", "-c", "while :; do sleep 3600; done"],
-              working_dir: workspace,
-              volumes: [`${workspace}:${workspace}`],
+    try {
+      await mkdir(devcontainerDir, { recursive: true });
+      await writeFile(
+        composePath,
+        JSON.stringify(
+          {
+            name: projectName,
+            services: {
+              agent: {
+                image: FIXTURE_IMAGE,
+                command: ["/bin/sh", "-c", "while :; do sleep 3600; done"],
+                working_dir: workspace,
+                volumes: [`${workspace}:${workspace}`],
+              },
             },
           },
-        },
-        null,
-        2,
-      ),
-    );
-    await writeFile(
-      initializeScript,
-      `#!/bin/sh
+          null,
+          2,
+        ),
+      );
+      await writeFile(
+        initializeScript,
+        `#!/bin/sh
 set -eu
 compose_path=$1
 project_name=$2
@@ -161,46 +162,45 @@ marker_path=$3
 docker compose --project-name "$project_name" --file "$compose_path" up -d
 docker compose --project-name "$project_name" --file "$compose_path" ps -q agent > "$marker_path"
 `,
-    );
-    await chmod(initializeScript, 0o755);
-    await writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          name: "nas Dev Containers contract fixture",
-          initializeCommand: [
-            initializeScript,
-            composePath,
-            projectName,
-            markerPath,
-          ],
-          dockerComposeFile: composePath,
-          service: "agent",
-          workspaceFolder: workspace,
-          remoteUser: "nas-test",
-          updateRemoteUserUID: false,
-          overrideCommand: false,
-          shutdownAction: "none",
-          customizations: {
-            vscode: {
-              extensions: ["dbaeumer.vscode-eslint"],
-              settings: { "remote.autoForwardPorts": false },
+      );
+      await chmod(initializeScript, 0o755);
+      await writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            name: "nas Dev Containers contract fixture",
+            initializeCommand: [
+              initializeScript,
+              composePath,
+              projectName,
+              markerPath,
+            ],
+            dockerComposeFile: composePath,
+            service: "agent",
+            workspaceFolder: workspace,
+            remoteUser: "nas-test",
+            updateRemoteUserUID: false,
+            overrideCommand: false,
+            shutdownAction: "none",
+            customizations: {
+              vscode: {
+                extensions: ["dbaeumer.vscode-eslint"],
+                settings: { "remote.autoForwardPorts": false },
+              },
             },
           },
-        },
-        null,
-        2,
-      ),
-    );
+          null,
+          2,
+        ),
+      );
 
-    const devcontainerArgs = [
-      "--workspace-folder",
-      workspace,
-      "--config",
-      configPath,
-    ];
+      const devcontainerArgs = [
+        "--workspace-folder",
+        workspace,
+        "--config",
+        configPath,
+      ];
 
-    try {
       const firstUp = await run(["devcontainer", "up", ...devcontainerArgs]);
       requireSuccess(firstUp, "first devcontainer up");
       const attachedContainerId = parseDevcontainerResult(
