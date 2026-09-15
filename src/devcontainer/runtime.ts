@@ -156,8 +156,8 @@ export async function runDevcontainerRuntime(
     buildProbes,
     mountProbes,
     devcontainerMounts: {
-      claudeDir: paths.claudeDir,
-      claudeJson: paths.claudeJson,
+      claudeDir: path.join(host.home, ".claude"),
+      claudeJson: path.join(host.home, ".claude.json"),
       vscodeDir: paths.vscodeDir,
       gitMetadataPaths,
     },

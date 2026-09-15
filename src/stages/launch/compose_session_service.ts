@@ -131,6 +131,7 @@ function pathContains(parent: string, child: string): boolean {
 
 export function validateComposeSessionRequest(
   request: ComposeSessionRequest,
+  hostHome?: string,
 ): void {
   if (request.registration.workspace !== request.container.workDir)
     throw new Error(
@@ -151,12 +152,16 @@ export function validateComposeSessionRequest(
   const user = request.container.env.static.NAS_USER?.trim() || "nas";
   const requiredMounts = [
     {
-      source: `${request.registration.stateRoot}/claude`,
+      source: hostHome
+        ? `${hostHome}/.claude`
+        : `${request.registration.stateRoot}/claude`,
       target: `/home/${user}/.claude`,
       readOnly: false,
     },
     {
-      source: `${request.registration.stateRoot}/claude.json`,
+      source: hostHome
+        ? `${hostHome}/.claude.json`
+        : `${request.registration.stateRoot}/claude.json`,
       target: `/home/${user}/.claude.json`,
       readOnly: false,
     },
@@ -571,7 +576,7 @@ export function makeComposeSessionOpsLive(
       return ComposeSessionOps.of({
         validate: (request) =>
           Effect.try({
-            try: () => validateComposeSessionRequest(request),
+            try: () => validateComposeSessionRequest(request, host.home),
             catch: (e) => e as Error,
           }),
         publishCompose: (file, bytes) =>

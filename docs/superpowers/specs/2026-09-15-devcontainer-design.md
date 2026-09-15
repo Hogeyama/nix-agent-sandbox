@@ -157,9 +157,9 @@ guide の追加ディレクトリと profile の agentArgs は一度だけ付加
 
 ## 共有範囲と強制境界
 
-初版の IDE 用 profile は Claude 専用 state を workspace ごとに用意する。
-ホストの `.claude` / `.claude.json` 全体の RW 共有は行わず、専用 state で初回認証する。
-認証状態・履歴は `down` 後も残す。VS Code Server と拡張キャッシュも workspace ごとに
+IDE 用 profile は通常 CLI と同じホストの `~/.claude` / `~/.claude.json` を RW で共有し、
+ホストの認証状態・履歴を利用する。認証状態・履歴は `down` 後もホストに残す。
+VS Code Server と拡張キャッシュは workspace ごとに
 分離し、他プロジェクトへ実行コードを持ち越さない。キャッシュを消すと再取得が必要になる。
 
 Nix は初版の IDE 用 profile では無効にする。自動検出によるホスト store / daemon の
