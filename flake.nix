@@ -346,6 +346,14 @@
             pkgs.pnpm
             pkgs.chromium
             pkgs.dtach
+            # claude-code (unfree) only seeds CLAUDE_CODE_EXECUTABLE's default;
+            # nas always sets it to the mounted host binary.
+            (pkgs.claude-agent-acp.override {
+              claude-code = pkgs.writeShellScriptBin "claude" ''
+                echo "CLAUDE_CODE_EXECUTABLE is not set" >&2
+                exit 1
+              '';
+            })
             # display.sandbox: xpra が生成した cookie の読み出しに使う。
             # xpra 本体は opt-in なのでホスト提供に任せるが、xauth は
             # closure が小さく、無いと DisplayStage が起動時に落ちる。
