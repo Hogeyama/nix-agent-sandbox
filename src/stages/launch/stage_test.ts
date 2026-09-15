@@ -460,3 +460,15 @@ function createTestInput(overrides: { container?: ContainerPlan } = {}): {
     container,
   };
 }
+
+test("ACP launch propagates protocol mode without changing command or workspace", () => {
+  const { input, container } = createTestInput({});
+  input.profile.mode = "acp";
+  const plan = planLaunch({ ...input, container });
+  expect(plan.opts.mode).toBe("acp");
+  expect(plan.opts.envVars.NAS_EXECUTION_MODE).toBe("acp");
+  expect(plan.opts.args).toContain(container.workDir);
+  const terminal = compileLaunchOpts(container, "nas-agent-test", "terminal");
+  expect(terminal.mode).toBeUndefined();
+  expect(terminal.envVars.NAS_EXECUTION_MODE).toBeUndefined();
+});

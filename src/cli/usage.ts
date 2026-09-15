@@ -39,6 +39,7 @@ Options:
   -h, --help      Show this help
   -V, --version   Show version
   -q, --quiet     Suppress info logs
+  --log-file <path>   Append nas diagnostics to a host file (before profile)
   -v, --verbose   Show debug logs (stage timing, etc.)
   -b, --worktree <branch>  Create a git worktree for this session and base it on <branch>.
                            Use @ or HEAD for the current HEAD.
