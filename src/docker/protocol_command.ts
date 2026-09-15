@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import type { Readable, Writable } from "node:stream";
+import { type Readable, Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 
 export class ProtocolCommandError extends Error {
   readonly exitCode: number;
@@ -30,6 +31,18 @@ export async function runProtocolCommand(
     stdio: ["pipe", "pipe", "inherit"],
     detached: true,
   });
+  let forwarding = false;
+  // The private bridge owns each write callback and final flush. Ending it
+  // never ends the caller-owned stdout stream.
+  const bridge = new Writable({
+    write(chunk, _encoding, done) {
+      forwarding = true;
+      output.write(chunk, (error) => {
+        forwarding = false;
+        done(error);
+      });
+    },
+  });
   let reason: "eof" | "disconnect" | "signal" | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -51,15 +64,29 @@ export async function runProtocolCommand(
   };
   const kill = () => {
     signalGroup("SIGTERM");
-    killTimer ??= setTimeout(() => signalGroup("SIGKILL"), graceMs);
+    killTimer ??= setTimeout(() => {
+      signalGroup("SIGKILL");
+      if (forwarding) {
+        streamError ??= new Error("ACP output did not flush before shutdown");
+        disconnect();
+      }
+    }, graceMs);
   };
   const stop = (why: typeof reason) => {
-    if (reason) return;
+    if (reason && (reason !== "eof" || why === "eof")) return;
     reason = why;
     input.unpipe(child.stdin);
     child.stdin.end();
     if (why === "eof") timer = setTimeout(kill, graceMs);
-    else kill();
+    else {
+      bridge.destroy();
+      child.stdout.unpipe(bridge);
+      child.stdout.resume();
+      // A cancelled destination cannot retain an outstanding write forever.
+      // destroy also prevents a late callback error becoming an unhandled event.
+      if (forwarding) output.destroy();
+      kill();
+    }
   };
   const eof = () => stop("eof");
   const disconnect = () => stop("disconnect");
@@ -82,7 +109,7 @@ export async function runProtocolCommand(
   input.once("end", eof);
   input.once("error", inputError);
   output.once("close", disconnect);
-  output.once("error", outputError);
+  output.on("error", outputError);
   child.stdin.on("error", childInputError);
   options.signal?.addEventListener("abort", abort, { once: true });
   const completion = new Promise<{
@@ -92,13 +119,20 @@ export async function runProtocolCommand(
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
-  child.stdout.pipe(output, { end: false });
+  const flushed = finished(bridge, { cleanup: true }).catch((error: Error) => {
+    if (reason !== "signal" && reason !== "disconnect") {
+      streamError ??= error;
+      disconnect();
+    }
+  });
+  child.stdout.pipe(bridge);
   input.pipe(child.stdin);
   if (input.readableEnded) eof();
   if (output.destroyed) disconnect();
   if (options.signal?.aborted) abort();
   try {
     const result = await completion;
+    await flushed;
     if (reason === "signal")
       throw new ProtocolCommandError("ACP launch interrupted", 130);
     if (reason === "disconnect" || streamError)
@@ -120,7 +154,11 @@ export async function runProtocolCommand(
     if (killTimer) clearTimeout(killTimer);
     input.unpipe(child.stdin);
     input.pause();
-    child.stdout.unpipe(output);
+    child.stdout.unpipe(bridge);
+    bridge.destroy();
+    // Stream error/close notifications queued by the final write must run
+    // while the transport still owns its output error handler.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     input.off("end", eof);
     input.off("error", inputError);
     output.off("close", disconnect);

@@ -119,3 +119,70 @@ test("transport-issued EOF TERM is a normal shutdown", async () => {
     },
   );
 });
+
+for (const exitCode of [0, 23]) {
+  test(`payload exit ${exitCode} waits for the final asynchronous output write`, async () => {
+    let flushed = false;
+    const output = new Writable({
+      write(_chunk, _encoding, done) {
+        setTimeout(() => {
+          flushed = true;
+          done();
+        }, 60);
+      },
+    });
+    const running = runProtocolCommand(
+      "bash",
+      ["-c", `echo payload; exit ${exitCode}`],
+      {
+        input: new PassThrough(),
+        output,
+      },
+    );
+    if (exitCode === 0) await running;
+    else await expect(running).rejects.toThrow("code 23");
+    expect(flushed).toBe(true);
+    expect(output.writableLength).toBe(0);
+    expect(output.writableEnded).toBe(false);
+    expect(output.listenerCount("error")).toBe(0);
+    expect(output.listenerCount("close")).toBe(0);
+  });
+}
+
+test("late asynchronous output failure rejects without an unhandled stream error", async () => {
+  const output = new Writable({
+    write(_chunk, _encoding, done) {
+      setTimeout(() => done(new Error("late EPIPE")), 60);
+    },
+  });
+  await expect(
+    runProtocolCommand("bash", ["-c", "echo payload"], {
+      input: new PassThrough(),
+      output,
+    }),
+  ).rejects.toThrow("late EPIPE");
+  expect(output.listenerCount("error")).toBe(0);
+  expect(output.listenerCount("close")).toBe(0);
+});
+
+test("cancellation settles a destination whose write callback is stalled", async () => {
+  const controller = new AbortController();
+  let lateCallback: ((error?: Error | null) => void) | undefined;
+  const output = new Writable({
+    write(_chunk, _encoding, done) {
+      lateCallback = done;
+      controller.abort();
+    },
+  });
+  await expect(
+    runProtocolCommand("bash", ["-c", "echo payload"], {
+      input: new PassThrough(),
+      output,
+      signal: controller.signal,
+    }),
+  ).rejects.toThrow("interrupted");
+  lateCallback?.(new Error("late error after cancellation"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(output.destroyed).toBe(true);
+  expect(output.listenerCount("error")).toBe(0);
+});
