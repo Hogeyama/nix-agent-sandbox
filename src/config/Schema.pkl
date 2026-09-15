@@ -53,6 +53,9 @@ class Profile {
   /// 使用するエージェント。
   agent: "claude"|"copilot"|"codex"
 
+  /// エージェントの起動モード。
+  mode: "terminal"|"acp" = "terminal"
+
   /// エージェントに渡す追加引数。
   agentArgs: Listing<String> = new {}
 

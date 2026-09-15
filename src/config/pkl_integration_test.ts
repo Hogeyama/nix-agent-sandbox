@@ -150,6 +150,7 @@ profiles {
     await setupNasDir(tmpDir, configPkl);
     const config = await loadConfig({ startDir: tmpDir });
     expect(config.profiles.dev.agent).toEqual("claude");
+    expect(config.profiles.dev.mode).toEqual("terminal");
     expect(config.profiles.dev.network).toMatchObject({
       requestBodyAudit: {
         enable: false,

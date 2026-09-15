@@ -20,6 +20,8 @@ const EMBEDDED_ASSET_GROUPS = [
       "nix-direnv.sh",
       "nix-direnv.LICENSE",
       "local-proxy.mjs",
+      "claude-agent-acp-package.json",
+      "claude-agent-acp-package-lock.json",
     ],
   },
 ] as const;

@@ -227,6 +227,7 @@ export const DEFAULT_GUIDE_CONFIG: GuideConfig = {
 /** プロファイル */
 export interface Profile {
   agent: AgentType;
+  mode?: "terminal" | "acp";
   agentArgs: string[];
   worktree?: WorktreeConfig;
   session: SessionConfig;
