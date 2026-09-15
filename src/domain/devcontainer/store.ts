@@ -13,6 +13,7 @@ import {
 import * as path from "node:path";
 import { Context, Effect, Layer } from "effect";
 import pkg from "../../../package.json";
+import { readFileOrNull } from "../../config/init.ts";
 import {
   findExistingConfig,
   loadConfig,
@@ -336,18 +337,14 @@ export async function loadDevcontainerInputs(
       await readProtectedFile(path.join(found.nasDir, entry), uid, false);
   }
   const before = await computeConfigTrustHash(found.nasDir);
-  const global = await readProtectedFile(
+  const global = await readDevcontainerGlobalConfigSnapshot(
     path.join(getGlobalConfigDir(), "global.pkl"),
-    uid,
-    false,
   );
   const config = await loadConfig({ startDir: workspace });
   const resolved = resolveProfile(config, profileName);
   const after = await computeConfigTrustHash(found.nasDir);
-  const globalAfter = await readProtectedFile(
+  const globalAfter = await readDevcontainerGlobalConfigSnapshot(
     path.join(getGlobalConfigDir(), "global.pkl"),
-    uid,
-    false,
   );
   if (
     before !== after ||
@@ -365,6 +362,13 @@ export async function loadDevcontainerInputs(
     embedHash: await computeEmbedHash(),
     command: [execPath, ...prefix],
   };
+}
+
+/** Global config is user input, not a nas-owned private record; Home Manager may symlink it. */
+export async function readDevcontainerGlobalConfigSnapshot(
+  file: string,
+): Promise<string | null> {
+  return await readFileOrNull(file);
 }
 
 function recordObject(bytes: string): Record<string, unknown> {
