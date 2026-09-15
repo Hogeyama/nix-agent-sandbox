@@ -111,6 +111,28 @@ test("serializeCompose: escapes dollar signs exactly once during compilation", (
   expect(JSON.parse(first).services.agent.environment).toHaveProperty("VALUE");
 });
 
+test("compileCompose: preserves own __proto__ environment and label keys", () => {
+  const parsed = JSON.parse(
+    '{"env":{"static":{"__proto__":"env-literal"},"dynamicOps":[]},"labels":{"__proto__":"label-literal"}}',
+  ) as Pick<ContainerPlan, "env" | "labels">;
+  const document = compileCompose(
+    makePlan(parsed),
+    "nas-agent-test",
+    "nas-test",
+  );
+
+  const environment = document.services.agent.environment;
+  const labels = document.services.agent.labels!;
+  expect(Object.hasOwn(environment, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(environment, "__proto__")?.value).toBe(
+    "env-literal",
+  );
+  expect(Object.hasOwn(labels, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(labels, "__proto__")?.value).toBe(
+    "label-literal",
+  );
+});
+
 test("compileCompose: omits an alias when the network has none", () => {
   const document = compileCompose(
     makePlan({ network: { mode: "network", name: "nas-session" } }),
