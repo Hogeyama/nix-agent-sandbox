@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Reserve protocol descriptors across entrypoint AND direnv setup. Only the
+# final payload restores them; hooks and bootstrap tools get no client stdin.
+if [ "${NAS_EXECUTION_MODE:-terminal}" = acp ]; then
+  exec 8<&0 9>&1
+  exec </dev/null >&2
+fi
+
 # --shell モード: docker exec 経由で対話シェルを起動する際に使う。
 # PID 1 で実行される通常モードと異なり、初回のみ必要な初期化
 # (ユーザー作成、ローカルプロキシ起動、/etc/nix/nix.conf への追記) を

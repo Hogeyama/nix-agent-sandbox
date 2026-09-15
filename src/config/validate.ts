@@ -52,6 +52,29 @@ export function validateConfig(config: Config): Config {
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
 
+  if (profile.mode === "acp") {
+    if (profile.agent !== "claude") {
+      errors.push(
+        `profile "${name}": mode "acp" currently supports only agent "claude"; use mode "terminal" for agent "${profile.agent}"`,
+      );
+    }
+    if (profile.agentArgs.length > 0) {
+      errors.push(
+        `profile "${name}": agentArgs are not supported in ACP mode; configure Claude through the ACP client or Claude settings`,
+      );
+    }
+    if (profile.guide.enable) {
+      errors.push(
+        `profile "${name}": guide.enable is not supported in ACP mode; configure instructions through the ACP client or Claude settings`,
+      );
+    }
+    if (profile.worktree) {
+      errors.push(
+        `profile "${name}": worktree creation is not supported in ACP mode; start nas from the workspace or an existing worktree`,
+      );
+    }
+  }
+
   // --- 秘密のレジストリと、それを使うネットワーク認可 ---
   errors.push(...validateSecretRegistry(name, profile.secrets));
   errors.push(...validateAuthz(name, profile));

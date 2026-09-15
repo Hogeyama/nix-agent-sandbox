@@ -123,6 +123,7 @@ Sessions で作業を選び、Pending の承認要求や Ports · in の公開�
 
 ## 作業環境の設定
 
+- [ACP クライアントとの接続](https://hogeyama.github.io/nix-agent-sandbox/configuration/acp/)
 - [ファイルの共有と非公開](https://hogeyama.github.io/nix-agent-sandbox/configuration/files/)
 - [ホストコマンドの実行許可](https://hogeyama.github.io/nix-agent-sandbox/configuration/host-commands/)
 - [ホストの DB・API への接続](https://hogeyama.github.io/nix-agent-sandbox/configuration/host-services/)

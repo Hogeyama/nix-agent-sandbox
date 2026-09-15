@@ -502,6 +502,7 @@ export function planMount(
   applyAgentResult(
     configureAgent({
       agent: profile.agent,
+      mode: profile.mode ?? "terminal",
       containerHome,
       hostHome: host.home,
       probes: probes.agentProbes,

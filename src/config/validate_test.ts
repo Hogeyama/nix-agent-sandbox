@@ -126,6 +126,49 @@ test("validate: no default is ok", () => {
   expect(config.default).toEqual(undefined);
 });
 
+test("validate: absent profile mode remains valid terminal configuration", () => {
+  const profile = makeProfile();
+  expect(profile.mode).toBeUndefined();
+  expect(validateConfig(makeConfig()).profiles.test?.mode).toBeUndefined();
+});
+
+test("validate: ACP mode supports Claude", () => {
+  expect(
+    validateConfig(
+      makeConfig({ profiles: { test: makeProfile({ mode: "acp" }) } }),
+    ).profiles.test?.mode,
+  ).toEqual("acp");
+});
+
+test("validate: ACP mode rejects unsupported agents", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: { test: makeProfile({ agent: "codex", mode: "acp" }) },
+      }),
+    ),
+  ).toThrow('mode "acp" currently supports only agent "claude"');
+});
+
+test("validate: ACP mode rejects terminal-only profile settings", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            mode: "acp",
+            agentArgs: ["--model", "opus"],
+            guide: { enable: true },
+            worktree: { base: "main", onCreate: "" },
+          }),
+        },
+      }),
+    ),
+  ).toThrow(
+    /agentArgs are not supported[\s\S]*guide\.enable is not supported[\s\S]*worktree creation is not supported/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // docker.shared
 // ---------------------------------------------------------------------------

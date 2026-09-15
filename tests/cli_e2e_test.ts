@@ -315,6 +315,27 @@ test("CLI: exits with error when no config file found", async () => {
   }
 });
 
+test("CLI: auto-initializes config when stdio is piped", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-autoinit-"));
+  try {
+    // runNas pipes stdout/stderr. A missing profile stops before Docker.
+    const result = await runNas(["nonexistent"], {
+      cwd: tmpDir,
+      env: {
+        HOME: tmpDir,
+        XDG_CONFIG_HOME: path.join(tmpDir, ".config"),
+        NAS_NO_AUTO_INIT: "",
+      },
+    });
+    expect(result.stderr).toContain("Auto-initializing .nas/");
+    expect(result.stderr).toContain('Profile "nonexistent" not found');
+    expect(result.code).toEqual(1);
+    await stat(path.join(tmpDir, ".nas", "config.pkl"));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("CLI: exits with error for nonexistent profile", async () => {
   const pkl = `
 profiles {

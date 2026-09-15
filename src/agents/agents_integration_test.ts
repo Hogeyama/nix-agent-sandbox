@@ -89,6 +89,7 @@ async function withoutBinary(
 test("configureAgent: dispatches claude configuration", () => {
   const result = configureAgent({
     agent: "claude",
+    mode: "terminal",
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes: {
@@ -106,6 +107,7 @@ test("configureAgent: dispatches claude configuration", () => {
 test("configureAgent: dispatches copilot configuration", () => {
   const result = configureAgent({
     agent: "copilot",
+    mode: "terminal",
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes: {
@@ -121,6 +123,7 @@ test("configureAgent: dispatches copilot configuration", () => {
 test("configureAgent: dispatches codex configuration", () => {
   const result = configureAgent({
     agent: "codex",
+    mode: "terminal",
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes: {

@@ -4,6 +4,7 @@ import type { CopilotProbes } from "./copilot.ts";
 
 /** エージェント種別 */
 export type AgentType = "claude" | "copilot" | "codex";
+export type AgentMode = "terminal" | "acp";
 
 /** configureAgent 系の共通出力 */
 export interface AgentConfigResult {
@@ -15,6 +16,7 @@ export interface AgentConfigResult {
 /** configureAgent 系の共通入力 */
 export interface AgentConfigInput {
   readonly agent: AgentType;
+  readonly mode: AgentMode;
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: AgentProbes;
