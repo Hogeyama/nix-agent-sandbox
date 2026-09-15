@@ -364,9 +364,12 @@ test("AbortSignal interruption awaits scoped cleanup", async () => {
   const f = fake({ monitor: "never" });
   const controller = new AbortController();
   const promise = Effect.runPromiseExit(
-    Effect.scoped(serveComposeSession(request, Date.now() + 5_000)).pipe(
-      Effect.provide(f.layer),
-    ),
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => completeComposeSession(request));
+        yield* serveComposeSession(request, Date.now() + 5_000);
+      }),
+    ).pipe(Effect.provide(f.layer)),
     { signal: controller.signal },
   );
   while (!f.events.includes("ready")) await Bun.sleep(1);
@@ -374,4 +377,16 @@ test("AbortSignal interruption awaits scoped cleanup", async () => {
   const exit = await promise;
   expect(Exit.isFailure(exit)).toBe(true);
   expect(f.events).toContain("remove-container");
+  expect(f.events).toContain("stopped");
+  expect(f.phases.map(({ phase }) => phase)).toEqual([
+    "starting",
+    "ready",
+    "stopping",
+    "stopping",
+  ]);
+  expect(f.phases.at(-1)).toEqual({
+    phase: "stopping",
+    diagnostic: null,
+    containerId: null,
+  });
 });
