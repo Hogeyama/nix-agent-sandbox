@@ -132,6 +132,7 @@ interface FakeOptions {
     | "inspect"
     | "readiness"
     | "broker"
+    | "stopping-write"
     | "stop"
     | "remove";
   readonly monitor?: "return" | "never" | "broker-failure";
@@ -168,10 +169,14 @@ function fake(options: FakeOptions = {}) {
       validate: () => step("validate", "validate"),
       publishCompose: () => step("publish-compose"),
       publishPhase: (_request, phase, containerId, diagnostic) =>
-        Effect.sync(() => {
-          phases.push({ phase, diagnostic, containerId });
-          if (phase === "ready") events.push("ready");
-        }),
+        phase === "stopping" &&
+        containerId !== null &&
+        options.failAt === "stopping-write"
+          ? Effect.fail(new Error("state-write failure"))
+          : Effect.sync(() => {
+              phases.push({ phase, diagnostic, containerId });
+              if (phase === "ready") events.push("ready");
+            }),
       finalizeStopped: () =>
         Effect.sync(() => {
           const current = phases.at(-1);
@@ -326,6 +331,17 @@ test("cleanup failure is retained with the original monitor failure", async () =
   expect(diagnostic).toContain("broker monitor failure");
   expect(diagnostic).toContain("stop failed");
   expect(result.events).not.toContain("stopped");
+});
+
+test("stopping state write failure does not skip owned-container cleanup", async () => {
+  const result = await run({ failAt: "stopping-write" });
+  expect(result.events).toContain("stop-container");
+  expect(result.events).toContain("remove-container");
+  expect(result.events).toContain("release-brokers");
+  expect(result.phases.at(-1)?.phase).toBe("failed");
+  expect(result.phases.at(-1)?.diagnostic).toContain(
+    "stopping state publish failed",
+  );
 });
 
 test("replacement identity is never stopped or removed", async () => {
