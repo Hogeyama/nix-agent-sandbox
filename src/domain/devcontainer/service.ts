@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { Cause, Context, Effect, Exit, Layer, Option } from "effect";
+import { expandTilde } from "../../lib/fs_utils.ts";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import {
@@ -221,9 +222,10 @@ export function makeDevcontainerServiceLive(
             }),
           );
           for (const mount of inputs.profile.extraMounts) {
-            const raw = mount.src.startsWith("~/")
-              ? path.join(host.home, mount.src.slice(2))
-              : path.resolve(workspace, mount.src);
+            const raw = path.resolve(
+              workspace,
+              expandTilde(mount.src, host.home),
+            );
             const source = yield* ops.canonicalSource(raw);
             errors.push(
               ...validateDevcontainerMount(source, mount.dst, policy).map(
