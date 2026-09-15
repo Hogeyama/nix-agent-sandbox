@@ -532,3 +532,55 @@ async function resolveDirenvDataDir(
     throw error;
   }
 }
+
+/** Canonical metadata roots needed when the IDE binds only its workspace. */
+export async function resolveDevcontainerGitMetadata(
+  workDir: string,
+): Promise<readonly string[]> {
+  const proc = Bun.spawn(
+    [
+      "git",
+      "-C",
+      workDir,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+      "--git-dir",
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const [output, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) {
+    if (await fileExists(path.join(workDir, ".git")))
+      throw new Error("[nas] Cannot resolve IDE Git metadata");
+    return [];
+  }
+  const roots: string[] = [];
+  for (const entry of output.trimEnd().split("\n")) {
+    if (!path.isAbsolute(entry))
+      throw new Error("[nas] IDE Git metadata must use absolute paths");
+    const canonical = await realpath(entry);
+    if (canonical !== entry)
+      throw new Error(
+        "[nas] IDE Git metadata references a non-canonical path; use canonical Git paths",
+      );
+    if (!(await stat(canonical)).isDirectory())
+      throw new Error("[nas] IDE Git metadata must be a directory");
+    const rel = path.relative(workDir, canonical);
+    if (
+      rel !== "" &&
+      (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel))
+    )
+      roots.push(canonical);
+  }
+  // The common directory already contains a linked worktree's own metadata.
+  return [...new Set(roots)].filter(
+    (root) =>
+      !roots.some(
+        (other) => other !== root && root.startsWith(`${other}${path.sep}`),
+      ),
+  );
+}

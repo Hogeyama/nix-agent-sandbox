@@ -2,6 +2,7 @@
  * mount ステージ — barrel re-export
  */
 
+export { resolveDevcontainerGitMetadata } from "./mount/mount_probes.ts";
 export {
   type MountDirectoryEntry,
   MountSetupService,
@@ -11,6 +12,7 @@ export {
 } from "./mount/mount_setup_service.ts";
 export {
   createMountStage,
+  type DevcontainerMountInput,
   type MountPlan,
   type MountPlanDirectory,
   type MountProbes,

@@ -1,3 +1,4 @@
+import type { MountSpec } from "../pipeline/state.ts";
 import type { ClaudeProbes } from "./claude.ts";
 import type { CodexProbes } from "./codex.ts";
 import type { CopilotProbes } from "./copilot.ts";
@@ -6,8 +7,14 @@ import type { CopilotProbes } from "./copilot.ts";
 export type AgentType = "claude" | "copilot" | "codex";
 export type AgentMode = "terminal" | "acp";
 
+export interface ClaudeStatePaths {
+  readonly claudeDir: string;
+  readonly claudeJson: string;
+}
+
 /** configureAgent 系の共通出力 */
 export interface AgentConfigResult {
+  readonly mounts?: readonly MountSpec[];
   readonly dockerArgs: string[];
   readonly envVars: Record<string, string>;
   readonly agentCommand: string[];
@@ -15,6 +22,7 @@ export interface AgentConfigResult {
 
 /** configureAgent 系の共通入力 */
 export interface AgentConfigInput {
+  readonly claudeState?: ClaudeStatePaths;
   readonly agent: AgentType;
   readonly mode: AgentMode;
   readonly containerHome: string;

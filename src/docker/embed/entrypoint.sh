@@ -281,6 +281,7 @@ if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
       fi
       if [ "$i" -eq 500 ]; then
         echo "[nas] WARNING: local proxy failed to start within 5s" >&2
+        if [ "${NAS_DEVCONTAINER:-false}" = true ]; then exit 1; fi
       fi
       sleep 0.01
     done
@@ -432,6 +433,33 @@ if [ "$NAS_SHELL_MODE" = true ]; then
   AGENT_COMMAND=("$NAS_REAL_BASH" --noprofile --rcfile "$SHELL_RC_FILE" -i)
 fi
 nas_measure_done "launch-setup" "$LAUNCH_SETUP_START"
+# IDE starts through the same root initialization above, then retains only the
+# reusable non-secret environment. Do not route this through --shell mode.
+if [ "${NAS_DEVCONTAINER:-false}" = true ]; then
+  if [ "$NAS_UID" = 0 ] || [ "$NAS_SHELL_MODE" = true ] ||
+     [ "${AGENT_COMMAND[0]}" != /usr/local/bin/nas-devcontainer-idle ]; then
+    echo '[nas] Dev Container startup requires non-root idle mode' >&2
+    exit 1
+  fi
+  install -d -o 0 -g 0 -m 755 /usr/local/lib/nas/devcontainer
+  install -d -o "$NAS_UID" -g "$NAS_GID" -m 755 /run/nas-devcontainer
+  rm -f /run/nas-devcontainer/ready
+  export LOGNAME="$NAS_USER" SHELL="${SHELL:-/bin/bash}"
+  source /usr/local/lib/nas/devcontainer-env.sh
+  nas_devcontainer_capture "$NAS_ENV_OPS_FILE" "$PATH_PREFIX" "${AGENT_COMMAND[@]:1}"
+  if [ -n "$NAS_ENV_OPS_FILE" ]; then rm -f "$NAS_ENV_OPS_FILE"; fi
+  cat > /etc/profile.d/nas.sh <<'NAS_IDE_PROFILE'
+if [ -n "${BASH_VERSION:-}" ]; then
+  source /usr/local/lib/nas/devcontainer-env.sh
+  nas_devcontainer_apply || exit $?
+fi
+NAS_IDE_PROFILE
+  chmod 644 /etc/profile.d/nas.sh
+  unset NAS_UPSTREAM_PROXY
+  exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" /usr/local/bin/nas-devcontainer-exec \
+    /usr/local/bin/nas-devcontainer-idle
+fi
+
 # Bypass the PATH bash wrapper so the launcher and payload retain their TTY.
 exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" /usr/local/bin/nas-direnv-exec \
   "$WORKSPACE" "$NAS_ENV_OPS_FILE" "$PATH_PREFIX" "${AGENT_COMMAND[@]}"

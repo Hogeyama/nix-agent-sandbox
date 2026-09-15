@@ -374,3 +374,27 @@ test("approval dependencies ignore workspace commands in PATH", async () => {
     expect(await Bun.file(hostileMarker).exists()).toBe(false);
   });
 });
+
+test("environment output mode emits only changed exports and no inherited secret", async () => {
+  await withFixture(async (fixture) => {
+    await writeFile(
+      fixture.opsFile,
+      `export NAS_TEST_OUTPUT='literal $(false)'; unset NAS_TEST_UNSET\n`,
+    );
+    const result = await launch(fixture, ["--export"], {
+      NAS_DIRENV_ENABLED: "false",
+      NAS_TEST_UNSET: "before",
+      NAS_PRIVATE_SECRET: "never-print-this",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("NAS_TEST_OUTPUT");
+    expect(result.stdout).toContain("unset NAS_TEST_UNSET");
+    expect(result.stdout).not.toContain("NAS_PRIVATE_SECRET");
+    const proc = Bun.spawn(
+      ["bash", "-c", `${result.stdout}\nprintf '%s' "$NAS_TEST_OUTPUT"`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toBe("literal $(false)");
+  });
+});

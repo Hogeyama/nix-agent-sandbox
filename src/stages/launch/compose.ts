@@ -74,7 +74,10 @@ export function compileCompose(
     image: escapeComposeValue(container.image),
     container_name: escapeComposeValue(containerName),
     working_dir: escapeComposeValue(container.workDir),
-    command: ["/usr/local/bin/nas-devcontainer-idle"],
+    command: [
+      "/usr/local/bin/nas-devcontainer-idle",
+      ...container.command.extraArgs.map(escapeComposeValue),
+    ],
     restart: "no",
     logging: { driver: "none" },
     volumes: container.mounts.map((mount) => ({
