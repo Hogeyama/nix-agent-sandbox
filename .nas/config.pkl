@@ -366,6 +366,12 @@ profiles {
     agentArgs = new Listing { "remote" }
   }
 
+  ["claude-acp"] = (anthropicPolicyProfile) {
+    mode = "acp"
+    agentArgs = new Listing { }
+    guide { enable = false }
+  }
+
   ["codex"] = (baseProfile) {
     agent = "codex"
     agentArgs = new Listing { "--dangerously-bypass-approvals-and-sandbox" }
