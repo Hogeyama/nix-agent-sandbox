@@ -273,7 +273,7 @@ export function serveComposeSession(
     const uid = Number(request.container.env.static.NAS_UID);
     if (!Number.isSafeInteger(uid) || uid <= 0)
       return yield* Effect.fail(new Error("invalid non-root readiness UID"));
-    const user = request.container.env.static.NAS_HOST_USER?.trim() || "nas";
+    const user = request.container.env.static.NAS_USER?.trim() || "nas";
     yield* ops.probeUser(
       ownedId,
       uid,

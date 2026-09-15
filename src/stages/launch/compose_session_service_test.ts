@@ -143,6 +143,12 @@ interface FakeOptions {
 
 function fake(options: FakeOptions = {}) {
   const events: string[] = [];
+  const userProbes: Array<{
+    id: string;
+    uid: number;
+    home: string;
+    workspace: string;
+  }> = [];
   const phases: Array<{
     phase: string;
     diagnostic: string | null;
@@ -196,7 +202,10 @@ function fake(options: FakeOptions = {}) {
         }
         return Effect.succeed(options.cleanupInspection ?? inspection());
       },
-      probeUser: () => step("probe-user", "readiness"),
+      probeUser: (id, uid, home, workspace) =>
+        Effect.sync(() => {
+          userProbes.push({ id, uid, home, workspace });
+        }).pipe(Effect.andThen(step("probe-user", "readiness"))),
       probeNetworkBroker: () => {
         networkProbes++;
         if (options.failAt === "broker")
@@ -218,7 +227,7 @@ function fake(options: FakeOptions = {}) {
       remove: () => step("remove-container", "remove"),
     }),
   );
-  return { events, phases, layer };
+  return { events, phases, userProbes, layer };
 }
 
 async function run(options: FakeOptions = {}) {
@@ -261,6 +270,14 @@ test("serve keeps the scope alive and tears the owned generation down before bro
     diagnostic: null,
     containerId: null,
   });
+  expect(result.userProbes).toEqual([
+    {
+      id: "container-1",
+      uid: 1000,
+      home: "/home/tester",
+      workspace: "/work",
+    },
+  ]);
 });
 
 for (const failAt of [
