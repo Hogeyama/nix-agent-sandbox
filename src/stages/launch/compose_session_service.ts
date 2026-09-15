@@ -6,6 +6,7 @@ import type {
   DevcontainerSessionRecord,
 } from "../../domain/devcontainer.ts";
 import {
+  pathsOverlap,
   readDevcontainerSession,
   requireHostUid,
   resolveDevcontainerRuntimePaths,
@@ -120,6 +121,10 @@ function describeCause(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+function pathContains(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(`${parent}/`);
+}
+
 export function validateComposeSessionRequest(
   request: ComposeSessionRequest,
 ): void {
@@ -158,15 +163,26 @@ export function validateComposeSessionRequest(
     },
   ];
   for (const required of requiredMounts) {
+    const matches = request.container.mounts.filter(
+      (mount) =>
+        mount.source === required.source &&
+        mount.target === required.target &&
+        (mount.readOnly ?? false) === required.readOnly,
+    );
+    if (matches.length !== 1)
+      throw new Error(`required dedicated mount differs: ${required.target}`);
+  }
+  for (const mount of request.container.mounts) {
     if (
-      !request.container.mounts.some(
-        (mount) =>
+      pathsOverlap(mount.source, request.registration.stateRoot) &&
+      !requiredMounts.some(
+        (required) =>
           mount.source === required.source &&
           mount.target === required.target &&
           (mount.readOnly ?? false) === required.readOnly,
       )
     )
-      throw new Error(`required dedicated mount differs: ${required.target}`);
+      throw new Error("dedicated state mount is not a registered pair");
   }
   const workspaceMount = request.container.mounts.find(
     (mount) => mount.target === request.registration.workspace,
@@ -181,14 +197,32 @@ export function validateComposeSessionRequest(
     `${request.registration.workspace}/.nas`,
   ];
   for (const target of protectedTargets) {
+    const exactOverlays = request.container.mounts.filter(
+      (mount) => mount.target === target && mount.readOnly === true,
+    );
+    if (exactOverlays.length !== 1)
+      throw new Error(`read-only configuration overlay is missing: ${target}`);
+  }
+  const protectedMountTargets = [
+    ...protectedTargets,
+    ...requiredMounts.map((mount) => mount.target),
+  ];
+  for (const mount of request.container.mounts) {
     if (
-      !request.container.mounts.some(
-        (mount) =>
-          (mount.target === target || mount.target.startsWith(`${target}/`)) &&
-          mount.readOnly === true,
+      (mount.readOnly ?? false) === false &&
+      protectedMountTargets.some((target) =>
+        pathContains(target, mount.target),
+      ) &&
+      !requiredMounts.some(
+        (required) =>
+          mount.source === required.source &&
+          mount.target === required.target &&
+          (mount.readOnly ?? false) === required.readOnly,
       )
     )
-      throw new Error(`read-only configuration overlay is missing: ${target}`);
+      throw new Error(
+        `writable mount overrides a protected target: ${mount.target}`,
+      );
   }
   if (
     request.container.mounts.some(
