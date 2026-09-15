@@ -358,6 +358,14 @@ export async function spawnDetachedDevcontainerSupervisor(
       { stdin: "ignore", stdout: handle.fd, stderr: handle.fd, env },
     );
     child.unref();
+    const handoffDeadline = Date.now() + CONTROL_TIMEOUT_MS;
+    while (await lifetimeIsFree(host, registration.workspace)) {
+      if (Date.now() >= handoffDeadline)
+        throw new DevcontainerError(
+          "devcontainer supervisor did not claim its lifetime lock",
+        );
+      await Bun.sleep(POLL_MS);
+    }
   } finally {
     await handle.close();
   }
