@@ -67,6 +67,7 @@ setInterval(() => {}, 1000);
       ]),
     };
     const paths = resolveDevcontainerPaths(host, workspace);
+    const runtimePaths = resolveDevcontainerRuntimePaths(host, workspace);
     const registration: DevcontainerRegistration = {
       version: 1,
       workspaceId: path.basename(paths.registrationDir),
@@ -77,6 +78,10 @@ setInterval(() => {}, 1000);
       composePath: paths.composeFile,
       stateRoot: path.dirname(paths.claudeDir),
       command: [
+        "bash",
+        "-c",
+        'sleep 0.15; exec flock -x "$0" "$@"',
+        runtimePaths.lifetimeLock,
         process.execPath,
         "run",
         script,
@@ -89,9 +94,11 @@ setInterval(() => {}, 1000);
     const previous = process.env.NAS_SESSION_ID;
     process.env.NAS_SESSION_ID = "parent-session";
     try {
+      const spawnedAt = Date.now();
       await withDevcontainerOperationLock(host, workspace, () =>
         spawnDetachedDevcontainerSupervisor(host, registration, "dc_detached"),
       );
+      expect(Date.now() - spawnedAt).toBeGreaterThanOrEqual(100);
     } finally {
       if (previous === undefined) delete process.env.NAS_SESSION_ID;
       else process.env.NAS_SESSION_ID = previous;
@@ -114,10 +121,7 @@ setInterval(() => {}, 1000);
       "dc_detached",
     ]);
     process.kill(pid, 0);
-    const log = path.join(
-      resolveDevcontainerRuntimePaths(host, workspace).runtimeDir,
-      "dc_detached.log",
-    );
+    const log = path.join(runtimePaths.runtimeDir, "dc_detached.log");
     expect((await stat(log)).mode & 0o777).toBe(0o600);
   } finally {
     if (pid !== null) {
