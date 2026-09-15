@@ -15,6 +15,7 @@ import type { HostEnv } from "../../pipeline/types.ts";
 import {
   acquireDevcontainerLock,
   ensureProtectedDirectory,
+  readDevcontainerGlobalConfigSnapshot,
   readProtectedFile,
   resolveDevcontainerPaths,
   resolveDevcontainerRuntimePaths,
@@ -160,6 +161,17 @@ test("private reads reject a writable parent even when file mode is private", as
   } finally {
     await chmod(root, 0o700);
   }
+});
+
+test("global config snapshots follow a Home Manager style read-only symlink", async () => {
+  const { root } = await fixture();
+  const storeTarget = path.join(root, "nix-store-global.pkl");
+  const globalConfig = path.join(root, "global.pkl");
+  await writeFile(storeTarget, 'amends "Schema.pkl"\n', { mode: 0o444 });
+  await symlink(storeTarget, globalConfig);
+  expect(await readDevcontainerGlobalConfigSnapshot(globalConfig)).toBe(
+    'amends "Schema.pkl"\n',
+  );
 });
 
 test("IDE sessions reject root host identities", async () => {
