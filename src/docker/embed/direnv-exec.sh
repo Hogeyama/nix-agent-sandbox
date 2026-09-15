@@ -21,7 +21,34 @@ if [ "$execution_mode" = acp ]; then
 fi
 exec "$@"'
 
+nas_export_mode=false
+if [ "$#" = 1 ] && [ "$1" = --export ]; then
+  nas_export_mode=true
+  declare -A nas_before=()
+  while IFS= read -r nas_key; do
+    nas_before["$nas_key"]=${!nas_key}
+  done < <(compgen -e)
+fi
+
+nas_export_environment() {
+  local nas_key nas_code
+  if [ "${NAS_DIRENV_ENABLED:-false}" = true ]; then
+    nas_code=$(/usr/bin/direnv export bash) || return
+    eval "$nas_code"
+  fi
+  if [ -n "$ops_file" ]; then source "$ops_file"; fi
+  export PATH="${path_prefix}${PATH}"
+  while IFS= read -r nas_key; do
+    if [ -z "${nas_before[$nas_key]+x}" ] || [ "${nas_before[$nas_key]}" != "${!nas_key}" ]; then
+      printf 'export %s=%q\n' "$nas_key" "${!nas_key}"
+    fi
+    unset 'nas_before[$nas_key]'
+  done < <(compgen -e)
+  for nas_key in "${!nas_before[@]}"; do printf 'unset %s\n' "$nas_key"; done
+}
+
 if [ "${NAS_DIRENV_ENABLED:-false}" != true ]; then
+  if [ "$nas_export_mode" = true ]; then nas_export_environment; exit; fi
   exec "$real_bash" -c "$finish" nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" "$@"
 fi
 
@@ -60,6 +87,8 @@ if /usr/bin/jq -e '.state.foundRC != null' >/dev/null <<<"$status"; then
   /usr/local/libexec/nas-direnv-bootstrap \
     /usr/local/share/nas/direnv-lib.sh
 fi
+
+if [ "$nas_export_mode" = true ]; then nas_export_environment; exit; fi
 
 exec /usr/bin/direnv exec "$workspace" "$real_bash" -c "$finish" \
   nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" "$@"

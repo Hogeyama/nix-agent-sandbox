@@ -124,6 +124,10 @@ test.skipIf(
         },
       ],
       env: { static: { NAS_LITERAL_VALUE: literalValue }, dynamicOps: [] },
+      command: {
+        agentCommand: ["claude"],
+        extraArgs: ["", "two words", "$literal"],
+      },
       network: { mode: "network", name: networkName, alias: "agent" },
       labels: { "nas.managed": "true", "nas.session-id": unique },
     };
@@ -217,13 +221,23 @@ test.skipIf(
           docker.inspectLaunch(containerId),
         ).pipe(Effect.provide(DockerServiceLive)),
       );
+      expect(actual.config.command).toEqual([
+        "/usr/local/bin/nas-devcontainer-idle",
+        "",
+        "two words",
+        "$literal",
+      ]);
       expect(
         compareLaunchInspection(
           {
             containerId,
             container: plan,
             image,
-            command: compose.services.agent.command,
+            // Inspection compares Docker argv after Compose interpolation.
+            command: [
+              "/usr/local/bin/nas-devcontainer-idle",
+              ...plan.command.extraArgs,
+            ],
           },
           actual,
         ),

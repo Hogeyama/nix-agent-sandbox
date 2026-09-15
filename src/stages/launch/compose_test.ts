@@ -54,7 +54,12 @@ test("compileCompose: preserves launch fields in Compose-native structure", () =
         image: "nas-sandbox:$$tag",
         container_name: "nas-agent-sess_$$example",
         working_dir: "/work/project with spaces",
-        command: ["/usr/local/bin/nas-devcontainer-idle"],
+        command: [
+          "/usr/local/bin/nas-devcontainer-idle",
+          "",
+          "argument with spaces",
+          "$$HOME",
+        ],
         restart: "no",
         logging: { driver: "none" },
         volumes: [
