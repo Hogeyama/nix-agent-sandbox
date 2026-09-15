@@ -51,20 +51,23 @@ export function compileCompose(
     throw new Error("[nas] Compose launch cannot represent extraRunArgs");
   }
 
-  const environment: Record<string, string> = {};
-  for (const [key, value] of Object.entries(container.env.static)) {
-    environment[key] = escapeComposeValue(value);
-  }
+  const environmentEntries: Array<readonly [string, string]> = Object.entries(
+    container.env.static,
+  ).map(([key, value]) => [key, escapeComposeValue(value)]);
   if (container.env.dynamicOps.length > 0) {
-    environment.NAS_ENV_OPS = escapeComposeValue(
-      encodeDynamicEnvOps(container.env.dynamicOps),
-    );
+    environmentEntries.push([
+      "NAS_ENV_OPS",
+      escapeComposeValue(encodeDynamicEnvOps(container.env.dynamicOps)),
+    ]);
   }
+  const environment = Object.fromEntries(environmentEntries);
 
-  const labels: Record<string, string> = {};
-  for (const [key, value] of Object.entries(container.labels)) {
-    labels[key] = escapeComposeValue(value);
-  }
+  const labels = Object.fromEntries(
+    Object.entries(container.labels).map(([key, value]) => [
+      key,
+      escapeComposeValue(value),
+    ]),
+  );
 
   const alias = container.network.alias;
   const service: ComposeAgentService = {
