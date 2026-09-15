@@ -19,6 +19,18 @@ ENV LANG=en_US.UTF-8 \
 # Bun (local-proxy 実行用。Node.js より起動が高速)
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
+# Claude ACP adapter runtime. The independent lockfile keeps the adapter and
+# its transitive dependencies reproducible without changing nas dependencies.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && rm -rf /var/lib/apt/lists/*
+COPY claude-agent-acp-package.json /opt/claude-agent-acp/package.json
+COPY claude-agent-acp-package-lock.json /opt/claude-agent-acp/package-lock.json
+RUN cd /opt/claude-agent-acp \
+  && npm ci --omit=dev --ignore-scripts \
+  && node --version \
+  && npm cache clean --force
+
 # ubuntu イメージのデフォルト ubuntu ユーザー (UID 1000) を削除。
 # ホストユーザーが UID 1000 の場合に entrypoint でのユーザー作成と衝突するため。
 RUN userdel -r ubuntu 2>/dev/null && groupdel ubuntu 2>/dev/null || true

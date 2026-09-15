@@ -22,6 +22,7 @@ jobs:
         run: |
           nix develop -c bun run docs:check
           nix develop -c bun run docs:build
+          nix develop -c python3 docs-site/editorial/check-pkl.py
 
       - name: Type check
         run: nix develop -c bun run check

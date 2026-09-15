@@ -43,7 +43,7 @@ export function planLaunch(
 ): LaunchPlan {
   const containerName = containerNameForSession(input.sessionId);
   const container = buildLaunchContainerPlan(input, extraArgs);
-  const opts = compileLaunchOpts(container, containerName);
+  const opts = compileLaunchOpts(container, containerName, input.profile.mode);
 
   logInfo(`[nas] Launching container...`);
   logInfo(`[nas]   Image: ${opts.image}`);
@@ -84,6 +84,7 @@ function buildLaunchContainerPlan(
 export function compileLaunchOpts(
   plan: ContainerPlan,
   containerName: string,
+  mode?: "terminal" | "acp",
 ): LaunchOpts {
   // The agent TUI redraws constantly; capturing stdout/stderr via the
   // default journald driver dominates host I/O pressure. Nobody reads
@@ -124,7 +125,10 @@ export function compileLaunchOpts(
     envVars.NAS_ENV_OPS = encodeDynamicEnvOps(plan.env.dynamicOps);
   }
 
+  if (mode === "acp") envVars.NAS_EXECUTION_MODE = "acp";
+
   return {
+    ...(mode === "acp" ? { mode } : {}),
     image: plan.image,
     name: containerName,
     args,

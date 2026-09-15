@@ -248,6 +248,36 @@ test("computeEmbedHash includes the complete Docker build asset list", async () 
   expect(await computeEmbedHash()).toBe(expected);
 });
 
+test("embedded Claude ACP runtime is locked and installed with Node 22", async () => {
+  const group = EMBEDDED_BUILD_ASSET_GROUPS[0];
+  const packageJson = JSON.parse(
+    await readFile(
+      path.join(group.baseDir, "claude-agent-acp-package.json"),
+      "utf8",
+    ),
+  );
+  const packageLock = JSON.parse(
+    await readFile(
+      path.join(group.baseDir, "claude-agent-acp-package-lock.json"),
+      "utf8",
+    ),
+  );
+  const dockerfile = await readFile(
+    path.join(group.baseDir, "Dockerfile"),
+    "utf8",
+  );
+
+  expect(
+    packageJson.dependencies["@agentclientprotocol/claude-agent-acp"],
+  ).toEqual("0.77.0");
+  expect(
+    packageLock.packages["node_modules/@agentclientprotocol/claude-agent-acp"]
+      .version,
+  ).toEqual("0.77.0");
+  expect(dockerfile).toContain("setup_22.x");
+  expect(dockerfile).toContain("npm ci --omit=dev --ignore-scripts");
+});
+
 test("DockerBuildStage.run: rebuilds when image exists with stale embed hash", async () => {
   await assertLegacyEmbedHashTriggersRebuild(async (buildProbes) => {
     const buildImageCalls: DockerBuildImagePlan[] = [];

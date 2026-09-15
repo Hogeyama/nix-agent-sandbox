@@ -13,13 +13,16 @@ shift 3
 real_bash=${NAS_REAL_BASH:?NAS_REAL_BASH must be set}
 
 finish='set -euo pipefail
-ops_file=$1; path_prefix=$2; shift 2
+execution_mode=$1; ops_file=$2; path_prefix=$3; shift 3
 if [ -n "$ops_file" ]; then source "$ops_file"; fi
 export PATH="${path_prefix}${PATH}"
+if [ "$execution_mode" = acp ]; then
+  exec 0<&8 1>&9 8<&- 9>&-
+fi
 exec "$@"'
 
 if [ "${NAS_DIRENV_ENABLED:-false}" != true ]; then
-  exec "$real_bash" -c "$finish" nas-direnv "$ops_file" "$path_prefix" "$@"
+  exec "$real_bash" -c "$finish" nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" "$@"
 fi
 
 # direnv state inherited from the host describes a different environment and
@@ -59,4 +62,4 @@ if /usr/bin/jq -e '.state.foundRC != null' >/dev/null <<<"$status"; then
 fi
 
 exec /usr/bin/direnv exec "$workspace" "$real_bash" -c "$finish" \
-  nas-direnv "$ops_file" "$path_prefix" "$@"
+  nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" "$@"

@@ -41,6 +41,8 @@ import {
   dockerVolumeCreate,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import { preparationSignal } from "../lib/preparation_commands.ts";
+import { ownedCommand } from "./owned_command.ts";
 
 // Re-export so domain services depending on DockerService can import the
 // detail types from the same module without reaching into docker/client.ts.
@@ -55,6 +57,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 export interface DockerRunOpts {
+  readonly mode?: "terminal" | "acp";
   readonly image: string;
   readonly name?: string;
   readonly args: string[];
@@ -178,30 +181,47 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
   DockerService,
   DockerService.of({
     build: (contextDir, imageName, labels) =>
-      Effect.tryPromise({
-        try: () => dockerBuild(contextDir, imageName, labels),
-        catch: wrapError("docker build failed"),
-      }),
+      preparationSignal()
+        ? ownedCommand((signal) =>
+            dockerBuild(contextDir, imageName, labels, signal),
+          )
+        : Effect.tryPromise({
+            try: () => dockerBuild(contextDir, imageName, labels),
+            catch: wrapError("docker build failed"),
+          }),
 
-    runInteractive: (opts) =>
-      Effect.tryPromise({
-        try: () => {
-          const envVars = { ...opts.envVars };
-          if (envVars.NAS_LOG_LEVEL === "debug") {
-            envVars.NAS_DOCKER_RUN_STARTED_AT_US = `${Date.now()}000`;
-          }
-          return dockerRun({
-            image: opts.image,
-            args: opts.args,
-            envVars,
-            command: opts.command,
-            interactive: true,
-            name: opts.name,
-            labels: opts.labels,
-          });
-        },
-        catch: wrapError("docker run (interactive) failed"),
-      }),
+    runInteractive: (opts) => {
+      const run = (signal?: AbortSignal) => {
+        const envVars = { ...opts.envVars };
+        if (envVars.NAS_LOG_LEVEL === "debug") {
+          envVars.NAS_DOCKER_RUN_STARTED_AT_US = `${Date.now()}000`;
+        }
+        return dockerRun({ ...opts, envVars, interactive: true, signal });
+      };
+      if (opts.mode !== "acp")
+        return Effect.tryPromise({
+          try: () => run(),
+          catch: wrapError("docker run (interactive) failed"),
+        });
+      // Await transport teardown when interrupted before releasing outer Scope resources.
+      return Effect.async<void, Error>((resume) => {
+        const controller = new AbortController();
+        const running = run(controller.signal);
+        running.then(
+          () => resume(Effect.void),
+          (error) =>
+            resume(
+              Effect.fail(
+                error instanceof Error ? error : new Error(String(error)),
+              ),
+            ),
+        );
+        return Effect.promise(async () => {
+          controller.abort();
+          await running.catch(() => {});
+        });
+      });
+    },
 
     runDetached: (opts) =>
       Effect.tryPromise({
@@ -351,10 +371,12 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
       }),
 
     ensureImage: (tag) =>
-      Effect.tryPromise({
-        try: () => dockerEnsureImage(tag),
-        catch: wrapError("docker pull failed"),
-      }),
+      preparationSignal()
+        ? ownedCommand((signal) => dockerEnsureImage(tag, signal))
+        : Effect.tryPromise({
+            try: () => dockerEnsureImage(tag),
+            catch: wrapError("docker pull failed"),
+          }),
   }),
 );
 

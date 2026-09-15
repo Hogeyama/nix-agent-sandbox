@@ -1,3 +1,6 @@
+import { closeSync, openSync, writeSync } from "node:fs";
+import { Logger } from "effect";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 const LOG_PRIORITY: Record<LogLevel, number> = {
@@ -6,6 +9,56 @@ const LOG_PRIORITY: Record<LogLevel, number> = {
   warn: 30,
   error: 40,
 };
+
+let diagnosticStderr = false;
+let logFd: number | undefined;
+
+export function setDiagnosticStderr(enabled: boolean): void {
+  diagnosticStderr = enabled;
+}
+
+export function diagnosticsUseStderr(): boolean {
+  return diagnosticStderr;
+}
+
+/** Only nas diagnostic events reach this sink; child streams never do. */
+export function openDiagnosticLog(file: string): () => void {
+  const fd = openSync(file, "a", 0o600);
+  logFd = fd;
+  return () => {
+    if (logFd === fd) logFd = undefined;
+    closeSync(fd);
+  };
+}
+
+function emit(level: LogLevel, message: string): void {
+  if (!shouldLog(level)) return;
+  if (logFd !== undefined) {
+    writeSync(logFd, `${message}\n`);
+  } else if (diagnosticStderr || level === "error") {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
+}
+
+export const diagnosticLogger = Logger.replace(
+  Logger.defaultLogger,
+  Logger.make(({ logLevel, message }) => {
+    const level: LogLevel =
+      logLevel.ordinal >= 40000
+        ? "error"
+        : logLevel.ordinal >= 30000
+          ? "warn"
+          : logLevel.ordinal < 20000
+            ? "debug"
+            : "info";
+    emit(
+      level,
+      Array.isArray(message) ? message.map(String).join(" ") : String(message),
+    );
+  }),
+);
 
 let currentLogLevel: LogLevel = "info";
 
@@ -18,27 +71,19 @@ export function getLogLevel(): LogLevel {
 }
 
 export function logDebug(message: string): void {
-  if (shouldLog("debug")) {
-    console.log(message);
-  }
+  emit("debug", message);
 }
 
 export function logInfo(message: string): void {
-  if (shouldLog("info")) {
-    console.log(message);
-  }
+  emit("info", message);
 }
 
 export function logWarn(message: string): void {
-  if (shouldLog("warn")) {
-    console.log(message);
-  }
+  emit("warn", message);
 }
 
 export function logError(message: string): void {
-  if (shouldLog("error")) {
-    console.error(message);
-  }
+  emit("error", message);
 }
 
 function shouldLog(level: LogLevel): boolean {

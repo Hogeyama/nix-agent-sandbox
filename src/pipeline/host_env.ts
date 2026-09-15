@@ -13,6 +13,7 @@ import {
   resolveHostExecGatewayPath,
   resolveInterceptLibPath,
 } from "../hostexec/intercept_path.ts";
+import { runProbeCommand } from "../lib/preparation_commands.ts";
 import type { HostEnv, ProbeResults } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -116,12 +117,9 @@ function resolveAuditDirFromEnv(hostEnv: HostEnv): string {
 /** xdg-dbus-proxy バイナリの探索 (which コマンド) */
 async function probeXdgDbusProxy(): Promise<string | null> {
   try {
-    const proc = Bun.spawn(["which", "xdg-dbus-proxy"], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const binary = (await new Response(proc.stdout).text()).trim();
-    const code = await proc.exited;
+    const result = await runProbeCommand(["which", "xdg-dbus-proxy"]);
+    const binary = result.stdout.trim();
+    const code = result.exitCode;
     if (code !== 0) return null;
     return binary === "" ? null : binary;
   } catch {
@@ -144,12 +142,13 @@ function probeDbusSessionAddress(hostEnv: HostEnv): string | null {
 /** gpgconf --list-dir agent-socket でソケットパスを解決する */
 async function probeGpgAgentSocket(hostEnv: HostEnv): Promise<string | null> {
   try {
-    const proc = Bun.spawn(["gpgconf", "--list-dir", "agent-socket"], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const socketPath = (await new Response(proc.stdout).text()).trim();
-    const code = await proc.exited;
+    const result = await runProbeCommand([
+      "gpgconf",
+      "--list-dir",
+      "agent-socket",
+    ]);
+    const socketPath = result.stdout.trim();
+    const code = result.exitCode;
     if (code === 0) {
       if (socketPath) return socketPath;
     }

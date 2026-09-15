@@ -152,17 +152,18 @@ export class ConfigUntrustedError extends Error {
  *
  * - Bypassed entirely when NAS_CONFIG_TRUST_ALL=1.
  * - If already trusted, returns immediately.
- * - On an interactive TTY, prompts the user; approval records trust.
+ * - On an interactive TTY, prompts unless nonInteractive is requested.
  * - Otherwise throws ConfigUntrustedError.
  */
 export async function ensureConfigTrusted(
   nasDir: string,
   configPath: string,
+  options: { nonInteractive?: boolean } = {},
 ): Promise<void> {
   if (isTrustBypassed()) return;
   if (await isConfigTrusted(nasDir)) return;
 
-  if (process.stdin.isTTY && process.stdout.isTTY) {
+  if (!options.nonInteractive && process.stdin.isTTY && process.stdout.isTTY) {
     const ok = confirm(
       `Untrusted nas config: ${configPath}\n` +
         `It can run commands on your host, mount host paths, and change the\n` +
