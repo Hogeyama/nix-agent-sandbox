@@ -4,9 +4,9 @@
 
 **Goal:** Run Claude ACP inside nas with protocol-clean stdio and independent file diagnostics.
 
-**Architecture:** Add a profile execution mode while reusing Claude identity and sandbox stages. Provision the adapter in the image and isolate protocol I/O at process boundaries.
+**Architecture:** Add a profile execution mode while reusing Claude identity and sandbox stages. Run a user-provided adapter from the container PATH and isolate protocol I/O at process boundaries.
 
-**Tech Stack:** Bun, TypeScript, Effect, Pkl, Docker, Bash, Node.js >=22, claude-agent-acp 0.77.0.
+**Tech Stack:** Bun, TypeScript, Effect, Pkl, Docker, Bash; claude-agent-acp supplied by the user's environment.
 
 **Spec:** docs/superpowers/specs/2026-09-15-claude-acp-design.md
 
@@ -20,13 +20,13 @@
 - Docker unavailable means container E2E unverified, never a claimed pass. Unit tests must not reach live Docker.
 - Runtime tools may live outside the repo under /workspace/scratch/1f6ad94dcbe7/tooling; avoid committing generated local tooling or unrelated dependency changes.
 
-### Task 1: Profile contract and adapter provisioning
+### Task 1: Profile contract and adapter invocation
 
-Files: src/config/{Schema.pkl,types.ts,validate.ts}, src/agents/{types.ts,registry.ts,claude.ts}, src/stages/mount/stage.ts, src/docker/embed/Dockerfile and adapter package/lock assets, src/docker/client.ts asset list only, flake.nix asset installation; colocated tests.
+Files: src/config/{Schema.pkl,types.ts,validate.ts}, src/agents/{types.ts,registry.ts,claude.ts}, src/stages/mount/stage.ts; colocated tests.
 
 - [x] Add optional TypeScript mode with Pkl terminal default; reject unsupported agents and ACP-specific unsupported profile settings with actionable messages.
-- [x] Thread mode into pure agent configuration and reuse existing Claude mounts. Require an installed Claude binary in ACP; set `CLAUDE_CODE_EXECUTABLE` and invoke the image adapter by absolute path.
-- [x] Provision Node.js >=22 and pinned adapter plus package lock in Docker image. Set additional CA trust for Node. Include assets in development and Nix installation paths.
+- [x] Thread mode into pure agent configuration and reuse existing Claude mounts. Require an installed Claude binary in ACP; set `CLAUDE_CODE_EXECUTABLE` and invoke `claude-agent-acp` from the container PATH.
+- [x] Leave the adapter and its runtime to the user's environment (Nix devShell, direnv or mounts). Set additional CA trust for Node.
 - [x] Add focused config/agent tests, inspect resulting diff, commit with git-commit skill, report exact test evidence.
 
 ### Task 2: Protocol stdio and lifecycle, with independent diagnostics
