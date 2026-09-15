@@ -21,6 +21,8 @@ Usage:
   nas config migrate yml2pkl [--global] [--input <path>] [-f, --force]
   nas config migrate nix2pkl [--global] [--input <path>] [-f, --force]
   nas hook --kind start|attention|stop [--when path=value ...]
+  nas devcontainer init [--profile PROFILE] [--workspace DIR]
+  nas devcontainer up|status|down [--workspace DIR] [--json]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
@@ -33,6 +35,7 @@ Subcommands:
   audit     監査ログを表示する
   config    設定ファイルの管理 (init: 初期設定ファイルを生成, migrate yml2pkl: YAML→Pkl変換, migrate nix2pkl: Nix→Pkl変換)
   hook      Report a session event from an agent hook (internal use)
+  devcontainer  VS Code Dev Container の初期化・起動・状態確認・終了
 
 Options:
   (main command only — must appear before [profile-name])
@@ -112,6 +115,14 @@ Audit options:
   --json                JSON 形式で出力
   --audit-dir DIR       監査ログディレクトリを指定
 
+Dev Container options:
+  init [--profile PROFILE]  Generate the managed configuration (default: claude)
+  up                        Start or reuse the workspace session
+  status                    Show the live supervisor/container status
+  down                      Stop the owned session and container
+  --workspace DIR           Select a workspace (default: current directory)
+  --json                    Print up/status/down results as JSON
+
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
@@ -146,6 +157,10 @@ Examples:
   nas audit --session sess_abc --json    # JSON output for a session
   nas my-profile -b feature/login       # Create worktree from feature/login
   nas --worktree @                      # Use default profile, base current HEAD
+  nas devcontainer init --profile claude
+  nas devcontainer up
+  nas devcontainer status --json
+  nas devcontainer down
 
 Profile agent-args (in .nas/config.pkl):
   profiles {
