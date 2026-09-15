@@ -38,6 +38,9 @@ export function compareLaunchInspection(
   if (!orderedEqual(actual.config.command, expected.command)) {
     add("command differs");
   }
+  if (actual.config.workingDir !== expected.container.workDir) {
+    add("working directory differs");
+  }
 
   compareMounts(expected.container, actual, add);
   compareEnvironment(expected.container, actual, add);

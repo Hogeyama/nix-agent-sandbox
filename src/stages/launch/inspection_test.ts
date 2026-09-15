@@ -56,6 +56,7 @@ function matchingActual(): DockerLaunchInspection {
       user: "",
       entrypoint: ["/entrypoint.sh"],
       command: ["/usr/local/bin/nas-devcontainer-idle"],
+      workingDir: "/workspace",
     },
     mounts: [
       {
@@ -146,6 +147,14 @@ const driftCases: ReadonlyArray<{
       config: { ...actual.config, command: ["sleep", "infinity"] },
     }),
     diagnostic: "command differs",
+  },
+  {
+    name: "working directory replacement",
+    mutate: (actual) => ({
+      ...actual,
+      config: { ...actual.config, workingDir: "/tmp/replaced" },
+    }),
+    diagnostic: "working directory differs",
   },
   {
     name: "mount source replacement",

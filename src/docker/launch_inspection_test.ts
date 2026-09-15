@@ -21,6 +21,7 @@ function rawContainerInspection(): unknown {
         User: "",
         Entrypoint: ["/entrypoint.sh"],
         Cmd: ["/usr/local/bin/nas-devcontainer-idle"],
+        WorkingDir: "/workspace",
         Env: ["EMPTY=", `TOKEN=${secretSentinel}`],
         Labels: { "nas.managed": "true" },
       },
@@ -54,6 +55,7 @@ test("decodeDockerLaunchInspection: decodes the complete launch shape", () => {
       user: "",
       entrypoint: ["/entrypoint.sh"],
       command: ["/usr/local/bin/nas-devcontainer-idle"],
+      workingDir: "/workspace",
     },
     mounts: [
       {
@@ -85,6 +87,13 @@ const malformedCases: ReadonlyArray<{
       delete (root.Config as Record<string, unknown>).Env;
     },
     path: "Config.Env",
+  },
+  {
+    name: "missing working directory",
+    mutate: (root) => {
+      delete (root.Config as Record<string, unknown>).WorkingDir;
+    },
+    path: "Config.WorkingDir",
   },
   {
     name: "non-boolean mount mode",
@@ -186,6 +195,7 @@ test("DockerService Fake exposes launch container and image inspection", async (
       user: "",
       entrypoint: null,
       command: ["idle"],
+      workingDir: "/workspace",
     },
     mounts: [],
     environment: [],

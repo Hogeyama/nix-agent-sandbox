@@ -2,7 +2,7 @@
  * CLI エントリポイント
  */
 
-import { Cause, Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit } from "effect";
 import pkg from "../package.json";
 import { validateAcpInvocation } from "./cli/acp.ts";
 import {
@@ -60,77 +60,12 @@ import {
   setDiagnosticStderr,
   setLogLevel,
 } from "./log.ts";
+import { createCliPipelineBuilder } from "./pipeline/cli_builder.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
-import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
-import type { PipelineState } from "./pipeline/state.ts";
-import type { StageInput } from "./pipeline/types.ts";
-import { DockerServiceLive } from "./services/docker.ts";
-import { FsServiceLive } from "./services/fs.ts";
-import { ProcessServiceLive } from "./services/process.ts";
-import {
-  makeSecretResolverService,
-  SecretResolverService,
-} from "./services/secret_resolver.ts";
+import { createPipelineLiveLayer } from "./pipeline/live.ts";
 import { addRecentDir } from "./sessions/recent_dirs.ts";
-import {
-  createDbusProxyStage,
-  DbusProxyServiceLive,
-} from "./stages/dbus_proxy.ts";
-import { createDindStage, DindServiceLive } from "./stages/dind.ts";
-import { createDisplayStage, DisplayServiceLive } from "./stages/display.ts";
-import {
-  type BuildProbes,
-  createDockerBuildStage,
-  DockerBuildServiceLive,
-  resolveBuildProbes,
-} from "./stages/docker_build.ts";
-import { createGuideStage, GuideServiceLive } from "./stages/guide.ts";
-import {
-  createHostExecStage,
-  HostExecBrokerServiceLive,
-  HostExecSetupServiceLive,
-} from "./stages/hostexec.ts";
-import {
-  ContainerLaunchServiceLive,
-  createLaunchStage,
-} from "./stages/launch.ts";
-import {
-  createMaskFilterStage,
-  createMaskFsStage,
-  MaskFilterServiceLive,
-  MaskFsServiceLive,
-} from "./stages/maskfs.ts";
-import {
-  createMountStage,
-  type MountProbes,
-  MountSetupServiceLive,
-  resolveMountProbes,
-} from "./stages/mount.ts";
-import { createNixDetectStage } from "./stages/nix_detect.ts";
-import {
-  createObservabilityStage,
-  OtlpReceiverServiceLive,
-} from "./stages/observability.ts";
-import {
-  createPortBindStage,
-  PortBindServiceLive,
-} from "./stages/port_bind.ts";
-import {
-  CaServiceLive,
-  createProxyStage,
-  NetworkRuntimeServiceLive,
-  ProxyServiceLive,
-  SessionBrokerServiceLive,
-} from "./stages/proxy.ts";
-import {
-  createSessionStoreStage,
-  SessionStoreServiceLive,
-} from "./stages/session_store.ts";
-import {
-  createWorktreeStage,
-  GitWorktreeServiceLive,
-  PromptServiceLive,
-} from "./stages/worktree.ts";
+import { resolveBuildProbes } from "./stages/docker_build.ts";
+import { resolveMountProbes } from "./stages/mount.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const GIT_REVISION: string = process.env.NAS_GIT_REVISION ?? "dev";
@@ -415,49 +350,7 @@ async function runMain(
           `[nas] resolveBuildProbes done (${formatElapsed(phaseStart)})`,
         );
 
-        const primitiveLayer = Layer.mergeAll(
-          FsServiceLive,
-          ProcessServiceLive,
-        );
-        const secretResolverLayer = Layer.succeed(
-          SecretResolverService,
-          makeSecretResolverService(),
-        );
-        const hostServiceLayer = Layer.mergeAll(
-          FsServiceLive,
-          ProcessServiceLive,
-          secretResolverLayer,
-        );
-        const dockerLayer = DockerServiceLive;
-        const liveLayer = Layer.mergeAll(
-          ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
-          DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
-          DindServiceLive,
-          DisplayServiceLive.pipe(Layer.provide(primitiveLayer)),
-          DockerBuildServiceLive.pipe(
-            Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
-          ),
-          CaServiceLive.pipe(
-            Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
-          ),
-          ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
-          FsServiceLive,
-          GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
-          GuideServiceLive.pipe(Layer.provide(FsServiceLive)),
-          HostExecBrokerServiceLive,
-          HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-          MaskFilterServiceLive.pipe(Layer.provide(hostServiceLayer)),
-          MaskFsServiceLive.pipe(Layer.provide(hostServiceLayer)),
-          MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-          NetworkRuntimeServiceLive.pipe(Layer.provide(hostServiceLayer)),
-          OtlpReceiverServiceLive,
-          PortBindServiceLive.pipe(Layer.provide(dockerLayer)),
-          ProcessServiceLive,
-          DockerServiceLive,
-          PromptServiceLive,
-          SessionBrokerServiceLive,
-          SessionStoreServiceLive,
-        );
+        const liveLayer = createPipelineLiveLayer();
 
         // HostExec broker が nas hook を実行する際に参照する
         process.env.NAS_SESSION_ID = sessionId;
@@ -541,52 +434,8 @@ async function runMain(
   }
 }
 
+export { createCliPipelineBuilder } from "./pipeline/cli_builder.ts";
 export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
-
-export function createCliPipelineBuilder({
-  input,
-  buildProbes,
-  mountProbes,
-  agentExtraArgs,
-}: {
-  readonly input: StageInput;
-  readonly buildProbes: BuildProbes;
-  readonly mountProbes: MountProbes;
-  readonly agentExtraArgs: string[];
-}) {
-  return (
-    createPipelineBuilder<Pick<PipelineState, "workspace" | "container">>()
-      .add(createWorktreeStage(input))
-      .add(createSessionStoreStage(input))
-      .add(createDockerBuildStage(buildProbes))
-      .add(createNixDetectStage(input))
-      .add(createDbusProxyStage(input))
-      .add(createDisplayStage(input, mountProbes))
-      // MaskFsStage は MountStage が読む workspace.maskedRoot を確定させるため
-      // 必ず MountStage の直前に置く。
-      .add(createMaskFsStage(input, mountProbes))
-      .add(createMountStage(input, mountProbes))
-      .add(createMaskFilterStage(input))
-      .add(createHostExecStage(input))
-      .add(createGuideStage(input))
-      // ObservabilityStage materializes the observability slice and, when
-      // enabled, acquires the per-session OTLP receiver and injects the OTLP
-      // envs into the container slice. PortBindStage prepares the receiver
-      // forwarding after ProxyStage and DindStage.
-      .add(
-        createObservabilityStage({
-          config: input.config,
-          profile: input.profile,
-          profileName: input.profileName,
-          sessionId: input.sessionId,
-        }),
-      )
-      .add(createProxyStage(input))
-      .add(createDindStage(input))
-      .add(createPortBindStage(input))
-      .add(createLaunchStage(input, agentExtraArgs))
-  );
-}
 
 function randomHex(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));

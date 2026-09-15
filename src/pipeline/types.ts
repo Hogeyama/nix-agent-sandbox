@@ -15,7 +15,10 @@ import type {
   HostExecBrokerService,
   HostExecSetupService,
 } from "../stages/hostexec.ts";
-import type { ContainerLaunchService } from "../stages/launch.ts";
+import type {
+  ComposeSessionService,
+  ContainerLaunchService,
+} from "../stages/launch.ts";
 import type { MaskFilterService, MaskFsService } from "../stages/maskfs.ts";
 import type { MountSetupService } from "../stages/mount.ts";
 import type { OtlpReceiverService } from "../stages/observability.ts";
@@ -88,6 +91,7 @@ export type StageResult = Partial<PipelineState>;
 export type StageServices =
   | CaService
   | ContainerLaunchService
+  | ComposeSessionService
   | DbusProxyService
   | DindService
   | DisplayService
