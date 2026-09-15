@@ -106,6 +106,13 @@ test("mergeContainerPlan: extraRunArgs are appended", () => {
   expect(result.extraRunArgs).toEqual(["--shm-size", "2g", "--privileged"]);
 });
 
+test("mergeContainerPlan: shmSize is replaced only when specified", () => {
+  const base = makeBasePlan({ shmSize: "1g" });
+
+  expect(mergeContainerPlan(base, {}).shmSize).toBe("1g");
+  expect(mergeContainerPlan(base, { shmSize: "2g" }).shmSize).toBe("2g");
+});
+
 test("mergeContainerPlan: labels are key-merged (patch wins)", () => {
   const base = makeBasePlan({
     labels: { "nas.managed": "true", "nas.kind": "agent" },

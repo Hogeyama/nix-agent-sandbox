@@ -158,6 +158,7 @@ export function planMount(
   const args: string[] = [];
   const mounts: MountSpec[] = [];
   const extraRunArgs: string[] = [];
+  let shmSize: string | undefined;
   const envVars: Record<string, string> = {};
 
   const containerUser = resolveContainerUser(host.user);
@@ -472,7 +473,7 @@ export function planMount(
     envVars.DISPLAY = `:${display.displayNumber}`;
     envVars.XAUTHORITY = `${containerHome}/.Xauthority`;
     // playwright/chromium 等が /dev/shm を多用するため拡張
-    extraRunArgs.push("--shm-size", "2g");
+    shmSize = "2g";
   }
 
   // エージェント固有の設定
@@ -525,6 +526,7 @@ export function planMount(
         static: staticEnvVars,
         dynamicOps: dynamicEnvOps,
       },
+      ...(shmSize === undefined ? {} : { shmSize }),
       extraRunArgs,
       command: {
         agentCommand,
