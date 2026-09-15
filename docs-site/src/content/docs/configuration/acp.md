@@ -14,8 +14,9 @@ ACP 対応のエディターやクライアントから Claude を使う場合�
 ```sh
 cd /absolute/path/to/project
 nas config init
-nas config trust
 ```
+
+生成直後の設定は Claude API への通信を許可していません。[最初の作業のプロジェクト準備](/nix-agent-sandbox/getting-started/quick-start/#プロジェクトの準備)で Anthropic preset の範囲を確認し、下の ACP 用プロファイルにも同じ通信許可を含めます。
 
 ACP の標準入力はプロトコル専用です。設定の自動作成、移行、信頼確認が必要な状態ではクライアントから起動せず、表示されたコマンドをホストのターミナルで実行します。
 
@@ -38,6 +39,13 @@ profiles {
     agentArgs = new {}
     worktree = null
     guide { enable = false }
+    network {
+      scopes {
+        ["anthropic"] = (module.presets.anthropic.v1) {
+          fallback = "deny"
+        }
+      }
+    }
   }
 }
 ```
