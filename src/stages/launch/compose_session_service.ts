@@ -1,5 +1,10 @@
 import { connect } from "node:net";
 import { Cause, Context, Effect, Exit, Layer, Schedule } from "effect";
+import { runDockerCommand } from "../../docker/client.ts";
+import {
+  decodeDockerLaunchImage,
+  decodeDockerLaunchInspection,
+} from "../../docker/launch_inspection.ts";
 import { NAS_SESSION_ID_LABEL } from "../../docker/nas_resources.ts";
 import type {
   DevcontainerRegistration,
@@ -23,7 +28,6 @@ import type {
   DockerLaunchImage,
   DockerLaunchInspection,
 } from "../../services/docker.ts";
-import { DockerService } from "../../services/docker.ts";
 import { compileCompose, serializeCompose } from "./compose.ts";
 import { compareLaunchInspection } from "./inspection.ts";
 
@@ -466,45 +470,40 @@ function effectPromise<A>(
   });
 }
 
-async function runBounded(
-  argv: readonly string[],
-  timeoutMs = 10_000,
+async function runBoundedDocker(
+  args: readonly string[],
+  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<string> {
-  const child = Bun.spawn([...argv], { stdout: "pipe", stderr: "pipe" });
-  const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-  const abort = () => child.kill("SIGTERM");
-  signal?.addEventListener("abort", abort, { once: true });
-  try {
-    const [code, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    if (code !== 0) throw new Error(stderr.trim() || `command exited ${code}`);
-    return stdout;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
-  }
+  const result = await runDockerCommand(args, { timeoutMs, signal });
+  return Buffer.from(result.stdout).toString();
 }
 
 async function probeJsonSocket(
   socketPath: string,
   expectedType: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const socket = connect({ path: socketPath });
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("broker health probe timed out"));
-    }, 2_000);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
     let bytes = "";
     const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       socket.destroy();
       error ? reject(error) : resolve();
     };
+    const abort = () => finish(new Error("broker health probe aborted"));
+    timer = setTimeout(
+      () => finish(new Error("broker health probe timed out")),
+      2_000,
+    );
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
     socket.once("error", (error) => finish(error));
     socket.on("data", (chunk) => {
       bytes += chunk.toString("utf8");
@@ -525,11 +524,10 @@ async function probeJsonSocket(
 
 export function makeComposeSessionOpsLive(
   host: HostEnv,
-): Layer.Layer<ComposeSessionOps, never, DockerService> {
+): Layer.Layer<ComposeSessionOps> {
   return Layer.effect(
     ComposeSessionOps,
     Effect.gen(function* () {
-      const docker = yield* DockerService;
       const uid = requireHostUid(host);
       const networkRoot = resolveRuntimeSubdir(host, "network");
       const hostexecRoot = resolveRuntimeSubdir(host, "hostexec");
@@ -608,8 +606,8 @@ export function makeComposeSessionOpsLive(
           ),
         composeUp: (file) =>
           effectPromise("docker compose up", async (signal) => {
-            await runBounded(
-              ["docker", "compose", "-f", file, "up", "-d"],
+            await runBoundedDocker(
+              ["compose", "-f", file, "up", "-d"],
               30_000,
               signal,
             );
@@ -617,67 +615,102 @@ export function makeComposeSessionOpsLive(
         composeContainerId: (file) =>
           effectPromise("docker compose ps", async (signal) =>
             (
-              await runBounded(
-                ["docker", "compose", "-f", file, "ps", "-q", "agent"],
+              await runBoundedDocker(
+                ["compose", "-f", file, "ps", "-q", "agent"],
                 10_000,
                 signal,
               )
             ).trim(),
           ),
-        inspectImage: docker.inspectLaunchImage,
+        inspectImage: (reference) =>
+          effectPromise("docker launch image inspect", async (signal) => {
+            const json = await runBoundedDocker(
+              ["image", "inspect", reference],
+              10_000,
+              signal,
+            );
+            return decodeDockerLaunchImage(JSON.parse(json));
+          }),
         probeReadyMarker: (id) =>
-          docker.exec(id, ["test", "-f", READY_MARKER]).pipe(Effect.asVoid),
-        inspect: docker.inspectLaunch,
+          effectPromise("docker ready probe", async (signal) => {
+            await runBoundedDocker(
+              ["exec", id, "test", "-f", READY_MARKER],
+              10_000,
+              signal,
+            );
+          }),
+        inspect: (id) =>
+          effectPromise("docker launch inspect", async (signal) => {
+            const json = await runBoundedDocker(
+              ["inspect", id],
+              10_000,
+              signal,
+            );
+            return decodeDockerLaunchInspection(JSON.parse(json));
+          }),
         probeUser: (id, expectedUid, expectedHome, workspace) =>
-          docker
-            .exec(
-              id,
+          effectPromise("docker user probe", async (signal) => {
+            const out = await runBoundedDocker(
               [
+                "exec",
+                "-u",
+                String(expectedUid),
+                id,
                 "/usr/local/bin/nas-devcontainer-exec",
                 "/bin/sh",
                 "-c",
                 'printf \'%s\\n%s\\n%s\\n\' "$(id -u)" "$HOME" "$PWD"',
               ],
-              { user: String(expectedUid) },
+              10_000,
+              signal,
+            );
+            if (
+              out.trimEnd() !== `${expectedUid}\n${expectedHome}\n${workspace}`
             )
-            .pipe(
-              Effect.flatMap((out) =>
-                out.trimEnd() ===
-                `${expectedUid}\n${expectedHome}\n${workspace}`
-                  ? Effect.void
-                  : Effect.fail(
-                      new Error("non-root launcher readiness differs"),
-                    ),
-              ),
-            ),
+              throw new Error("non-root launcher readiness differs");
+          }),
         probeNetworkBroker: (sessionId) =>
-          effectPromise("network broker health", () =>
+          effectPromise("network broker health", (signal) =>
             probeJsonSocket(
               brokerSocketPath(pathSet(networkRoot), sessionId),
               "pending",
+              signal,
             ),
           ),
         probeHostExecBroker: (sessionId) =>
-          effectPromise("hostexec broker health", () =>
+          effectPromise("hostexec broker health", (signal) =>
             probeJsonSocket(
               hostExecBrokerSocketPath(pathSet(hostexecRoot), sessionId),
               "pending",
+              signal,
             ),
           ),
         probeContainerGateways: (id) =>
-          docker.exec(
-            id,
-            [
-              "/usr/local/bin/nas-devcontainer-exec",
-              "bun",
-              "-e",
-              "const proxy=new URL(process.env.http_proxy); const open=(o)=>new Promise((ok,no)=>{const t=setTimeout(()=>no(Error('timeout')),2000); Bun.connect({...o,socket:{open(s){clearTimeout(t);s.end();ok()},data(){},close(){},error(_,e){clearTimeout(t);no(e)}}}).catch(no)}); await open({hostname:proxy.hostname,port:Number(proxy.port)}); await open({unix:process.env.NAS_HOSTEXEC_SOCKET});",
-            ],
-            { user: String(uid) },
-          ),
+          effectPromise("docker gateway probe", async (signal) => {
+            await runBoundedDocker(
+              [
+                "exec",
+                "-u",
+                String(uid),
+                id,
+                "/usr/local/bin/nas-devcontainer-exec",
+                "bun",
+                "-e",
+                "const proxy=new URL(process.env.http_proxy); const open=(o)=>new Promise((ok,no)=>{const t=setTimeout(()=>no(Error('timeout')),2000); Bun.connect({...o,socket:{open(s){clearTimeout(t);s.end();ok()},data(){},close(){},error(_,e){clearTimeout(t);no(e)}}}).catch(no)}); await open({hostname:proxy.hostname,port:Number(proxy.port)}); await open({unix:process.env.NAS_HOSTEXEC_SOCKET});",
+              ],
+              10_000,
+              signal,
+            );
+          }),
         waitForMonitorTick: () => Effect.sleep(POLL_MS),
-        stop: (id) => docker.stop(id),
-        remove: (id) => docker.rm(id),
+        stop: (id) =>
+          effectPromise("docker stop", async (signal) => {
+            await runBoundedDocker(["stop", id], 15_000, signal);
+          }),
+        remove: (id) =>
+          effectPromise("docker rm", async (signal) => {
+            await runBoundedDocker(["rm", id], 10_000, signal);
+          }),
       });
     }),
   );
