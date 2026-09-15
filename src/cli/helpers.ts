@@ -3,14 +3,15 @@
  */
 
 import { InterruptedCommandError } from "../docker/client.ts";
-import type { LogLevel } from "../log.ts";
+import { ProtocolCommandError } from "../docker/protocol_command.ts";
+import { type LogLevel, logError } from "../log.ts";
 
 export function exitOnCliError(err: unknown): never {
   if (err instanceof InterruptedCommandError) {
     process.exit(err.exitCode);
   }
-  console.error(`[nas] Error: ${(err as Error).message}`);
-  process.exit(1);
+  logError(`[nas] Error: ${(err as Error).message}`);
+  process.exit(err instanceof ProtocolCommandError ? err.exitCode : 1);
 }
 
 export function removeFirstOccurrence(args: string[], value: string): string[] {

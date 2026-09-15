@@ -45,6 +45,8 @@ const GLOBAL_MODULE_URI = "modulepath:/global.pkl";
 export interface LoadConfigOptions {
   /** 開始ディレクトリ（デフォルト: process.cwd()） */
   startDir?: string;
+  /** Never read protocol stdin or perform implicit setup. */
+  nonInteractive?: boolean;
 }
 
 /** 設定ファイルを読み込んで検証済み Config を返す */
@@ -57,7 +59,7 @@ export async function loadConfig(
       : (startDirOrOpts ?? {});
 
   const startDir = opts.startDir ?? process.cwd();
-  const found = await resolveConfigFile(startDir);
+  const found = await resolveConfigFile(startDir, opts.nonInteractive);
 
   // Trust gate: a repo-local config can run host-side commands, mount host
   // paths, and alter the network allowlist. Refuse to evaluate it (which is
@@ -67,7 +69,7 @@ export async function loadConfig(
   await ensureConfigTrusted(found.nasDir, found.configPath);
 
   // Check for legacy global config before eval
-  await detectAndMigrateGlobalLegacy();
+  await detectAndMigrateGlobalLegacy(opts.nonInteractive);
 
   // Names the schema no longer has produce "Unresolved reference" from Pkl,
   // which says nothing about where the setting went. Scan the source first so
@@ -169,7 +171,10 @@ function referencesDefaultGlobal(uri: string, globalPath: string): boolean {
  * .nas/config.pkl を探し、見つからなければレガシー検出 or auto-init で解決する。
  * handleLegacyConfig は process.exit するため、戻り値は常に非 null。
  */
-async function resolveConfigFile(startDir: string): Promise<ConfigFileFound> {
+async function resolveConfigFile(
+  startDir: string,
+  nonInteractive = false,
+): Promise<ConfigFileFound> {
   const found = await findConfigFile(startDir);
   if (found) return found;
 
@@ -179,10 +184,10 @@ async function resolveConfigFile(startDir: string): Promise<ConfigFileFound> {
 
   if (legacyPath) {
     // handleLegacyConfig never returns (exits or throws)
-    await handleLegacyConfig(legacyPath, !!legacyNix);
+    await handleLegacyConfig(legacyPath, !!legacyNix, nonInteractive);
   }
 
-  if (process.env.NAS_NO_AUTO_INIT === "1") {
+  if (nonInteractive || process.env.NAS_NO_AUTO_INIT === "1") {
     throw new Error(
       `.nas/config.pkl not found. Run \`nas config init\` to create it.`,
     );
@@ -211,11 +216,12 @@ async function resolveConfigFile(startDir: string): Promise<ConfigFileFound> {
 async function handleLegacyConfig(
   legacyPath: string,
   isNix: boolean,
+  nonInteractive = false,
 ): Promise<never> {
   const migrateSub = isNix ? "nix2pkl" : "yml2pkl";
   const migrateCmd = `nas config migrate ${migrateSub}`;
 
-  if (!process.stdin.isTTY) {
+  if (nonInteractive || !process.stdin.isTTY) {
     throw new Error(
       `Found legacy config: ${legacyPath}\n` +
         `Run \`${migrateCmd}\` to migrate to .nas/config.pkl.`,
@@ -260,7 +266,9 @@ async function handleLegacyConfig(
  * グローバル設定ディレクトリにレガシー設定 (agent-sandbox.{nix,yml}) が
  * あるのに global.pkl が存在しない場合、移行を促す。
  */
-async function detectAndMigrateGlobalLegacy(): Promise<void> {
+async function detectAndMigrateGlobalLegacy(
+  nonInteractive = false,
+): Promise<void> {
   const globalDir = getGlobalConfigDir();
   const globalPkl = path.join(globalDir, "global.pkl");
 
@@ -293,7 +301,7 @@ async function detectAndMigrateGlobalLegacy(): Promise<void> {
   const migrateSub = isNix ? "nix2pkl" : "yml2pkl";
   const migrateCmd = `nas config migrate ${migrateSub} --global`;
 
-  if (!process.stdin.isTTY) {
+  if (nonInteractive || !process.stdin.isTTY) {
     console.error(
       `Found legacy global config: ${legacyPath}\n` +
         `Run \`${migrateCmd}\` to migrate to ${globalPkl}.`,

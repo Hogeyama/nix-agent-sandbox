@@ -4,6 +4,7 @@
 
 import { Cause, Effect, Exit, Layer } from "effect";
 import pkg from "../package.json";
+import { validateAcpInvocation } from "./cli/acp.ts";
 import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
@@ -19,6 +20,7 @@ import {
 } from "./cli/helpers.ts";
 import { runHookCommand } from "./cli/hook.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
+import { extractLogFile } from "./cli/log_file.ts";
 import { runNetworkCommand } from "./cli/network.ts";
 import { createCliInitialState } from "./cli/pipeline_state.ts";
 import { runRebuild } from "./cli/rebuild.ts";
@@ -27,6 +29,7 @@ import { runUiCommand } from "./cli/ui.ts";
 import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
+import { ProtocolCommandError } from "./docker/protocol_command.ts";
 import {
   dtachAttach,
   dtachIsAvailable,
@@ -41,7 +44,15 @@ import {
   shouldRecordInvocation,
 } from "./history/cli_lifecycle.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
-import { formatElapsed, logDebug, logWarn, setLogLevel } from "./log.ts";
+import {
+  diagnosticLogger,
+  formatElapsed,
+  logDebug,
+  logWarn,
+  openDiagnosticLog,
+  setDiagnosticStderr,
+  setLogLevel,
+} from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
 import type { PipelineState } from "./pipeline/state.ts";
@@ -119,7 +130,26 @@ const GIT_REVISION: string = process.env.NAS_GIT_REVISION ?? "dev";
 const VERSION: string = `${pkg.version}+${GIT_REVISION}`;
 
 export async function main(args: string[], entryMs?: number): Promise<void> {
+  let closeLog: (() => void) | undefined;
+  try {
+    const parsed = extractLogFile(args);
+    if (parsed.logFile) closeLog = openDiagnosticLog(parsed.logFile);
+    await runMain(parsed.args, entryMs, args);
+  } catch (error) {
+    exitOnCliError(error);
+  } finally {
+    closeLog?.();
+  }
+}
+
+async function runMain(
+  args: string[],
+  entryMs?: number,
+  originalArgs = args,
+): Promise<void> {
   const mainStart = performance.now();
+  const nonInteractive = !process.stdin.isTTY || !process.stdout.isTTY;
+  setDiagnosticStderr(nonInteractive);
   // `--` 以降は常にエージェントに渡す引数。profile 名の後ろも同様に agent 引数として扱う。
   const dashDashIdx = args.indexOf("--");
   const argsBeforeDashDash =
@@ -252,177 +282,212 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
 
   try {
     let phaseStart = performance.now();
-    const config = await loadConfig();
+    const config = await loadConfig({ nonInteractive });
     logDebug(`[nas] loadConfig done (${formatElapsed(phaseStart)})`);
     const { name, profile } = resolveProfile(config, profileName);
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
+    validateAcpInvocation(
+      effectiveProfile,
+      agentExtraArgs,
+      process.env,
+      !!process.stdin.isTTY,
+    );
+    const acp = effectiveProfile.mode === "acp";
+    setDiagnosticStderr(acp);
     const sessionId = process.env.NAS_SESSION_ID || `sess_${randomHex(6)}`;
 
     // session.multiplex かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
-    if (effectiveProfile.session.multiplex && !process.env.NAS_INSIDE_DTACH) {
-      await runInsideDtach(sessionId, effectiveProfile.session.detachKey, args);
+    if (
+      !acp &&
+      effectiveProfile.session.multiplex &&
+      !process.env.NAS_INSIDE_DTACH
+    ) {
+      await runInsideDtach(
+        sessionId,
+        effectiveProfile.session.detachKey,
+        originalArgs,
+      );
       logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
       return;
     }
 
-    // 起動 cwd を UI の "Recent directories" 用に記録（best-effort）
-    try {
-      await addRecentDir(process.cwd());
-    } catch {}
-
-    const imageName = "nas-sandbox";
-
-    // HostEnv 構築と probe 解決
-    // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
-    // propagate and abort the pipeline. This matches legacy stage behavior
-    // where the same I/O happens inside each stage's execute().
-    // NOTE: Probes are passed to StageInput and consumed by stages.
-    phaseStart = performance.now();
-    const hostEnv = buildHostEnv();
-    const probes = await resolveProbes(hostEnv);
-    logDebug(`[nas] resolveProbes done (${formatElapsed(phaseStart)})`);
-
-    // notify-send の存在チェック（必要な場合のみ）
-    {
-      const networkNotify = resolveNotifyBackend(
-        effectiveProfile.network.pendingNotify,
-      );
-      const hostexecNotify = resolveNotifyBackend(
-        effectiveProfile.hostexec?.prompt.notify ?? "auto",
-      );
-      if (networkNotify === "desktop" || hostexecNotify === "desktop") {
-        checkNotifySend();
-      }
+    const shutdown = new AbortController();
+    const interrupt = () => shutdown.abort();
+    if (acp) {
+      process.on("SIGINT", interrupt);
+      process.on("SIGTERM", interrupt);
     }
+    try {
+      // 起動 cwd を UI の "Recent directories" 用に記録（best-effort）
+      try {
+        await addRecentDir(process.cwd());
+      } catch {}
 
-    if (config.ui.enable) {
-      const uiDaemonStart = performance.now();
-      void ensureUiDaemon({
-        port: config.ui.port,
-        idleTimeout: config.ui.idleTimeout,
-      })
-        .then(() => {
-          logDebug(
-            `[nas] ensureUiDaemon done (${formatElapsed(uiDaemonStart)})`,
-          );
+      const imageName = "nas-sandbox";
+
+      // HostEnv 構築と probe 解決
+      // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
+      // propagate and abort the pipeline. This matches legacy stage behavior
+      // where the same I/O happens inside each stage's execute().
+      // NOTE: Probes are passed to StageInput and consumed by stages.
+      phaseStart = performance.now();
+      const hostEnv = buildHostEnv();
+      const probes = await resolveProbes(hostEnv);
+      logDebug(`[nas] resolveProbes done (${formatElapsed(phaseStart)})`);
+
+      // notify-send の存在チェック（必要な場合のみ）
+      {
+        const networkNotify = resolveNotifyBackend(
+          effectiveProfile.network.pendingNotify,
+        );
+        const hostexecNotify = resolveNotifyBackend(
+          effectiveProfile.hostexec?.prompt.notify ?? "auto",
+        );
+        if (networkNotify === "desktop" || hostexecNotify === "desktop") {
+          checkNotifySend();
+        }
+      }
+
+      if (config.ui.enable) {
+        const uiDaemonStart = performance.now();
+        void ensureUiDaemon({
+          port: config.ui.port,
+          idleTimeout: config.ui.idleTimeout,
         })
-        .catch((error) => {
-          logWarn(
-            `[nas] UI daemon failed to start: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          .then(() => {
+            logDebug(
+              `[nas] ensureUiDaemon done (${formatElapsed(uiDaemonStart)})`,
+            );
+          })
+          .catch((error) => {
+            logWarn(
+              `[nas] UI daemon failed to start: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+      }
+
+      // MountProbes を事前解決
+      phaseStart = performance.now();
+      const mountProbes = await resolveMountProbes(
+        hostEnv,
+        effectiveProfile,
+        process.cwd(),
+        probes.gpgAgentSocket,
+      );
+      logDebug(`[nas] resolveMountProbes done (${formatElapsed(phaseStart)})`);
+
+      // BuildProbes を事前解決
+      phaseStart = performance.now();
+      const buildProbes = await resolveBuildProbes(imageName);
+      logDebug(`[nas] resolveBuildProbes done (${formatElapsed(phaseStart)})`);
+
+      const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
+      const secretResolverLayer = Layer.succeed(
+        SecretResolverService,
+        makeSecretResolverService(),
+      );
+      const hostServiceLayer = Layer.mergeAll(
+        FsServiceLive,
+        ProcessServiceLive,
+        secretResolverLayer,
+      );
+      const dockerLayer = DockerServiceLive;
+      const liveLayer = Layer.mergeAll(
+        ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
+        DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
+        DindServiceLive,
+        DisplayServiceLive.pipe(Layer.provide(primitiveLayer)),
+        DockerBuildServiceLive.pipe(
+          Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
+        ),
+        CaServiceLive.pipe(
+          Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
+        ),
+        ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
+        FsServiceLive,
+        GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
+        GuideServiceLive.pipe(Layer.provide(FsServiceLive)),
+        HostExecBrokerServiceLive,
+        HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
+        MaskFilterServiceLive.pipe(Layer.provide(hostServiceLayer)),
+        MaskFsServiceLive.pipe(Layer.provide(hostServiceLayer)),
+        MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
+        NetworkRuntimeServiceLive.pipe(Layer.provide(hostServiceLayer)),
+        OtlpReceiverServiceLive,
+        PortBindServiceLive.pipe(Layer.provide(dockerLayer)),
+        ProcessServiceLive,
+        DockerServiceLive,
+        PromptServiceLive,
+        SessionBrokerServiceLive,
+        SessionStoreServiceLive,
+      );
+
+      // HostExec broker が nas hook を実行する際に参照する
+      process.env.NAS_SESSION_ID = sessionId;
+
+      // history.db: invocation 行を materialize。telemetry は agent をブロック
+      // しない原則のため、open/upsert 失敗は warn のみで CLI 続行 (db=null)。
+      // Terminal mode retains its existing signal behavior. ACP cancellation
+      // closes the pipeline Scope and records the invocation as interrupted.
+      const historyDb = shouldRecordInvocation(effectiveProfile, process.env)
+        ? recordInvocationStart({
+            sessionId,
+            profileName: name,
+            agent: effectiveProfile.agent,
+            worktreePath: process.cwd(),
+            retentionSeconds: config.observability.retention,
+          })
+        : null;
+
+      try {
+        const initialState = createCliInitialState(process.cwd(), imageName, {
+          NAS_LOG_LEVEL: logLevel,
+          NAS_SESSION_ID: sessionId,
         });
-    }
+        const builder = createCliPipelineBuilder({
+          input: {
+            config,
+            profile: effectiveProfile,
+            profileName: name,
+            sessionId,
+            sessionName,
+            host: hostEnv,
+            probes,
+          },
+          buildProbes,
+          mountProbes,
+          agentExtraArgs,
+        });
 
-    // MountProbes を事前解決
-    phaseStart = performance.now();
-    const mountProbes = await resolveMountProbes(
-      hostEnv,
-      effectiveProfile,
-      process.cwd(),
-      probes.gpgAgentSocket,
-    );
-    logDebug(`[nas] resolveMountProbes done (${formatElapsed(phaseStart)})`);
+        const exit = await Effect.runPromiseExit(
+          builder
+            .run(initialState)
+            .pipe(
+              Effect.scoped,
+              Effect.provide(liveLayer),
+              Effect.provide(diagnosticLogger),
+            ),
+          { signal: acp ? shutdown.signal : undefined },
+        );
 
-    // BuildProbes を事前解決
-    phaseStart = performance.now();
-    const buildProbes = await resolveBuildProbes(imageName);
-    logDebug(`[nas] resolveBuildProbes done (${formatElapsed(phaseStart)})`);
-
-    const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
-    const secretResolverLayer = Layer.succeed(
-      SecretResolverService,
-      makeSecretResolverService(),
-    );
-    const hostServiceLayer = Layer.mergeAll(
-      FsServiceLive,
-      ProcessServiceLive,
-      secretResolverLayer,
-    );
-    const dockerLayer = DockerServiceLive;
-    const liveLayer = Layer.mergeAll(
-      ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
-      DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
-      DindServiceLive,
-      DisplayServiceLive.pipe(Layer.provide(primitiveLayer)),
-      DockerBuildServiceLive.pipe(
-        Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
-      ),
-      CaServiceLive.pipe(
-        Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
-      ),
-      ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
-      FsServiceLive,
-      GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
-      GuideServiceLive.pipe(Layer.provide(FsServiceLive)),
-      HostExecBrokerServiceLive,
-      HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-      MaskFilterServiceLive.pipe(Layer.provide(hostServiceLayer)),
-      MaskFsServiceLive.pipe(Layer.provide(hostServiceLayer)),
-      MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-      NetworkRuntimeServiceLive.pipe(Layer.provide(hostServiceLayer)),
-      OtlpReceiverServiceLive,
-      PortBindServiceLive.pipe(Layer.provide(dockerLayer)),
-      ProcessServiceLive,
-      DockerServiceLive,
-      PromptServiceLive,
-      SessionBrokerServiceLive,
-      SessionStoreServiceLive,
-    );
-
-    // HostExec broker が nas hook を実行する際に参照する
-    process.env.NAS_SESSION_ID = sessionId;
-
-    // history.db: invocation 行を materialize。telemetry は agent をブロック
-    // しない原則のため、open/upsert 失敗は warn のみで CLI 続行 (db=null)。
-    // Gap: SIGINT / SIGTERM / uncaughtException はこの try/catch を経由せず
-    // プロセスを終了させるため、それらの経路では recordInvocationEnd が呼ばれず
-    // ended_at は NULL のまま残る。signal handler を足さない trade-off。
-    const historyDb = shouldRecordInvocation(effectiveProfile, process.env)
-      ? recordInvocationStart({
-          sessionId,
-          profileName: name,
-          agent: effectiveProfile.agent,
-          worktreePath: process.cwd(),
-          retentionSeconds: config.observability.retention,
-        })
-      : null;
-
-    try {
-      const initialState = createCliInitialState(process.cwd(), imageName, {
-        NAS_LOG_LEVEL: logLevel,
-        NAS_SESSION_ID: sessionId,
-      });
-      const builder = createCliPipelineBuilder({
-        input: {
-          config,
-          profile: effectiveProfile,
-          profileName: name,
-          sessionId,
-          sessionName,
-          host: hostEnv,
-          probes,
-        },
-        buildProbes,
-        mountProbes,
-        agentExtraArgs,
-      });
-
-      const exit = await Effect.runPromiseExit(
-        builder
-          .run(initialState)
-          .pipe(Effect.scoped, Effect.provide(liveLayer)),
-      );
-
-      if (Exit.isFailure(exit)) {
+        if (Exit.isFailure(exit)) {
+          recordInvocationEnd(historyDb, { sessionId, exitReason: "error" });
+          const error = shutdown.signal.aborted
+            ? new ProtocolCommandError("ACP launch interrupted", 130)
+            : Cause.squash(exit.cause);
+          exitOnCliError(error);
+        }
+        recordInvocationEnd(historyDb, { sessionId, exitReason: "ok" });
+        logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
+      } catch (err) {
         recordInvocationEnd(historyDb, { sessionId, exitReason: "error" });
-        const error = Cause.squash(exit.cause);
-        exitOnCliError(error);
+        throw err;
       }
-      recordInvocationEnd(historyDb, { sessionId, exitReason: "ok" });
-      logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
-    } catch (err) {
-      recordInvocationEnd(historyDb, { sessionId, exitReason: "error" });
-      throw err;
+    } finally {
+      if (acp) {
+        process.off("SIGINT", interrupt);
+        process.off("SIGTERM", interrupt);
+      }
     }
   } catch (err) {
     exitOnCliError(err);
