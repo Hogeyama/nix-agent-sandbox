@@ -41,6 +41,12 @@ import {
   dockerVolumeCreate,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import {
+  type DockerLaunchImage,
+  type DockerLaunchInspection,
+  dockerInspectLaunch,
+  dockerInspectLaunchImage,
+} from "../docker/launch_inspection.ts";
 import { preparationSignal } from "../lib/preparation_commands.ts";
 import { ownedCommand } from "./owned_command.ts";
 
@@ -51,6 +57,10 @@ export type {
   DockerNetworkDetails,
   DockerVolumeDetails,
 } from "../docker/client.ts";
+export type {
+  DockerLaunchImage,
+  DockerLaunchInspection,
+} from "../docker/launch_inspection.ts";
 
 // ---------------------------------------------------------------------------
 // Option types
@@ -159,6 +169,12 @@ export class DockerService extends Context.Tag("nas/DockerService")<
     readonly inspect: (
       name: string,
     ) => Effect.Effect<DockerContainerDetails, Error>;
+    readonly inspectLaunch: (
+      id: string,
+    ) => Effect.Effect<DockerLaunchInspection, Error>;
+    readonly inspectLaunchImage: (
+      reference: string,
+    ) => Effect.Effect<DockerLaunchImage, Error>;
     readonly listContainerNames: () => Effect.Effect<string[], Error>;
     readonly listNetworkNames: () => Effect.Effect<string[], Error>;
     readonly inspectNetwork: (
@@ -340,6 +356,18 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
         catch: wrapError("docker inspect failed"),
       }),
 
+    inspectLaunch: (id) =>
+      Effect.tryPromise({
+        try: () => dockerInspectLaunch(id),
+        catch: wrapError("docker launch inspect failed"),
+      }),
+
+    inspectLaunchImage: (reference) =>
+      Effect.tryPromise({
+        try: () => dockerInspectLaunchImage(reference),
+        catch: wrapError("docker launch image inspect failed"),
+      }),
+
     listContainerNames: () =>
       Effect.tryPromise({
         try: () => dockerListContainerNames(),
@@ -439,6 +467,12 @@ export interface DockerServiceFakeConfig {
   readonly inspect?: (
     name: string,
   ) => Effect.Effect<DockerContainerDetails, Error>;
+  readonly inspectLaunch?: (
+    id: string,
+  ) => Effect.Effect<DockerLaunchInspection, Error>;
+  readonly inspectLaunchImage?: (
+    reference: string,
+  ) => Effect.Effect<DockerLaunchImage, Error>;
   readonly listContainerNames?: () => Effect.Effect<string[], Error>;
   readonly listNetworkNames?: () => Effect.Effect<string[], Error>;
   readonly inspectNetwork?: (
@@ -492,6 +526,32 @@ export function makeDockerServiceFake(
             networkMode: "",
             startedAt: "",
           })),
+      inspectLaunch:
+        overrides.inspectLaunch ??
+        ((id) =>
+          Effect.succeed({
+            id,
+            imageId: "",
+            running: false,
+            config: {
+              image: "",
+              user: "",
+              entrypoint: null,
+              command: null,
+            },
+            mounts: [],
+            environment: [],
+            networkMode: "",
+            networks: [],
+            privileged: false,
+            capAdd: [],
+            capDrop: [],
+            securityOpt: [],
+            labels: {},
+          })),
+      inspectLaunchImage:
+        overrides.inspectLaunchImage ??
+        (() => Effect.succeed({ id: "", user: "", entrypoint: null })),
       listContainerNames:
         overrides.listContainerNames ?? (() => Effect.succeed([])),
       listNetworkNames:
