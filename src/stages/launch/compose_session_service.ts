@@ -1,5 +1,5 @@
 import { connect } from "node:net";
-import { Context, Effect, Exit, Layer, Schedule } from "effect";
+import { Cause, Context, Effect, Exit, Layer, Schedule } from "effect";
 import { NAS_SESSION_ID_LABEL } from "../../docker/nas_resources.ts";
 import type {
   DevcontainerRegistration,
@@ -295,7 +295,14 @@ export function serveComposeSession(
   const cleanup = (exit: Exit.Exit<void, Error>) =>
     Effect.gen(function* () {
       const ops = yield* ComposeSessionOps;
-      const original = Exit.isFailure(exit) ? describeCause(exit.cause) : null;
+      const normalReadyInterruption =
+        startupComplete &&
+        Exit.isFailure(exit) &&
+        Cause.isInterruptedOnly(exit.cause);
+      const original =
+        Exit.isFailure(exit) && !normalReadyInterruption
+          ? describeCause(exit.cause)
+          : null;
       const cleanupErrors: string[] = [];
       if (ownedId === null && composeAttempted) {
         const discovered = yield* Effect.exit(
