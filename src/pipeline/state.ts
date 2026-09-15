@@ -103,7 +103,8 @@ export type ObservabilityState =
 // ContainerPlan slice
 //
 // Full shape is defined here in C1.  ContainerPatch + mergeContainerPlan are
-// added in C2.  LaunchStage is the sole compiler of ContainerPlan → LaunchOpts.
+// added in C2. Launch compilers translate ContainerPlan to backend-specific
+// representations only after every stage has contributed its structured data.
 // ---------------------------------------------------------------------------
 
 /** A single bind-mount specification.
@@ -171,6 +172,7 @@ export interface ContainerPlan {
   readonly env: EnvPlan;
   readonly network?: NetworkAttachment;
   readonly extraHosts: readonly ExtraHost[];
+  readonly shmSize?: string;
   readonly extraRunArgs: readonly string[];
   readonly command: CommandSpec;
   readonly labels: Readonly<Record<string, string>>;

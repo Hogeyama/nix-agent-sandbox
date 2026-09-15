@@ -1441,6 +1441,24 @@ test("MountStage: minimal profile produces valid docker args", () => {
   expect("WORKSPACE" in plan.envVars).toEqual(true);
 });
 
+test("MountStage: display records shared memory size as structured state", () => {
+  const { input, mountProbes } = makeInput({
+    slices: {
+      display: {
+        enabled: true,
+        displayNumber: 42,
+        socketPath: "/run/nas/xpra/X42",
+        xauthorityPath: "/run/nas/xpra/Xauthority",
+      },
+    },
+  });
+
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.containerPatch.shmSize).toBe("2g");
+  expect(plan.containerPatch.extraRunArgs).not.toContain("--shm-size");
+});
+
 // ============================================================
 // run() with MountSetupService fake
 // ============================================================
