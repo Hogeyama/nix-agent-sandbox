@@ -108,6 +108,13 @@ async function executePreparationCommand(
     };
   } finally {
     signal?.removeEventListener("abort", abort);
+    // Inherited diagnostic FDs let the leader close while descendants still
+    // run. Finish cancelling the entire group before releasing ownership;
+    // leader close alone is not evidence that the group obeyed TERM.
+    if (signal?.aborted) {
+      kill("SIGKILL");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     if (timer) clearTimeout(timer);
   }
 }
