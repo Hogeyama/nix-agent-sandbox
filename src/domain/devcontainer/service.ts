@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { Cause, Context, Effect, Exit, Layer, Option } from "effect";
+import { getGlobalConfigDir } from "../../config/paths.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
@@ -181,6 +182,7 @@ export function makeDevcontainerServiceLive(
           const hostOnlyPaths = [
             yield* ops.canonicalSource(stateManagement),
             yield* ops.canonicalSource(runtimeManagement),
+            yield* ops.canonicalSource(getGlobalConfigDir()),
           ];
           return {
             home,

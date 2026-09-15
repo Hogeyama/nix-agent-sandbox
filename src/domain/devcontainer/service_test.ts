@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
+import { getGlobalConfigDir } from "../../config/paths.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { devcontainerProfile } from "./fixtures.ts";
 import { DevcontainerService, makeDevcontainerServiceLive } from "./service.ts";
@@ -94,6 +95,29 @@ async function fixture(
 }
 type ContextService =
   import("effect").Context.Tag.Service<DevcontainerStoreOps>;
+
+async function expectGlobalConfigOverlapsRejected(
+  f: Awaited<ReturnType<typeof fixture>>,
+) {
+  const globalConfigDir = getGlobalConfigDir();
+  const trustedFile = path.join(globalConfigDir, "trusted.json");
+  const alias = path.join(f.root, "global-config-alias");
+  await mkdir(globalConfigDir, { recursive: true });
+  await writeFile(trustedFile, "{}\n");
+  await symlink(globalConfigDir, alias);
+
+  for (const source of [path.dirname(globalConfigDir), trustedFile, alias]) {
+    f.inputs.profile.extraMounts.splice(0, Infinity, {
+      src: source,
+      dst: "/alias",
+      mode: "rw",
+    });
+    await expect(f.run((s) => s.init(f.workspace, "claude"))).rejects.toThrow(
+      "mount source exposes protected host path",
+    );
+    expect(await readdir(f.workspace)).toEqual([]);
+  }
+}
 
 test("init creates managed entry and dedicated state, then repeat init preserves authentication", async () => {
   const { workspace, host, run } = await fixture();
@@ -240,6 +264,34 @@ test("bare tilde mount resolves to the actual host HOME and is rejected", async 
     "mount source exposes host HOME",
   );
   expect(await readdir(f.workspace)).toEqual([]);
+});
+
+test("default global nas config rejects canonical aliases, parents, and children", async () => {
+  const f = await fixture();
+  const previousHome = process.env.HOME;
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  process.env.HOME = f.host.home;
+  delete process.env.XDG_CONFIG_HOME;
+  try {
+    await expectGlobalConfigOverlapsRejected(f);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+  }
+});
+
+test("XDG global nas config rejects canonical aliases, parents, and children", async () => {
+  const f = await fixture();
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = path.join(f.root, "xdg-config");
+  try {
+    await expectGlobalConfigOverlapsRejected(f);
+  } finally {
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+  }
 });
 
 test("init refuses unregistered dedicated state without adopting authentication", async () => {
