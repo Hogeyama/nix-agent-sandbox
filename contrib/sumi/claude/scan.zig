@@ -145,7 +145,7 @@ const Walk = struct {
         if (self.content_buffer) |buf| self.allocator.free(buf);
     }
 
-    fn holds(self: *Walk, reader: anytype) !bool {
+    fn streamHolds(self: *Walk, reader: anytype) !bool {
         if (self.scan_buffer == null) {
             self.max_len = mask.maxSecretLen(self.values);
             if (self.max_len == 0) return false;
@@ -167,7 +167,7 @@ const Walk = struct {
         defer handle.close();
         const stat = handle.stat() catch return self.findings.unknown(self.allocator, path);
         if (stat.kind != .file) return self.findings.keep(self.allocator, path);
-        const holds = self.holds(handle) catch |err| switch (err) {
+        const holds = self.streamHolds(handle) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return self.findings.unknown(self.allocator, path),
         };
@@ -625,15 +625,15 @@ test "walk reader: short reads and reused storage never join different files" {
     var walk = Walk{ .allocator = testing.allocator, .values = &.{ "", "split-value", "z" }, .secrets_path = "/secrets", .findings = &findings };
     defer walk.deinit();
     var first = ShortReader{ .bytes = "xxsplit-" };
-    try testing.expect(!try walk.holds(&first));
+    try testing.expect(!try walk.streamHolds(&first));
     var second = ShortReader{ .bytes = "value" };
-    try testing.expect(!try walk.holds(&second));
+    try testing.expect(!try walk.streamHolds(&second));
     var matched = ShortReader{ .bytes = "xxsplit-value" };
-    try testing.expect(try walk.holds(&matched));
+    try testing.expect(try walk.streamHolds(&matched));
     var after_match = ShortReader{ .bytes = "" };
-    try testing.expect(!try walk.holds(&after_match));
+    try testing.expect(!try walk.streamHolds(&after_match));
     var single = ShortReader{ .bytes = "xxz" };
-    try testing.expect(try walk.holds(&single));
+    try testing.expect(try walk.streamHolds(&single));
 }
 
 test "readerHolds: match spans the actual full-buffer read boundary" {
