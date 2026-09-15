@@ -6,9 +6,10 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { resolveAssetDir } from "../lib/asset.ts";
-import { diagnosticsUseStderr, logInfo } from "../log.ts";
+import { diagnosticsUseStderr, logError, logInfo } from "../log.ts";
 import type { DockerLabels } from "./nas_resources.ts";
 import { runProtocolCommand } from "./protocol_command.ts";
+import { containerRemovalWarning } from "./removal_outcome.ts";
 
 const EMBEDDED_ASSET_GROUPS = [
   {
@@ -186,7 +187,21 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
     } finally {
       // Killing the attached docker CLI does not reliably stop PID 1.
       // The session-owned container must be removed before pipeline resources.
-      if (opts.name) await $`docker rm -f ${opts.name}`.quiet().nothrow();
+      if (opts.name) {
+        let warning: string | undefined;
+        try {
+          const result = await $`docker rm -f ${opts.name}`.quiet().nothrow();
+          warning = containerRemovalWarning(opts.name, {
+            exitCode: result.exitCode,
+            stderr: result.stderr.toString(),
+          });
+        } catch (error) {
+          warning = containerRemovalWarning(opts.name, { error });
+        }
+        // A failed finalizer must be visible without replacing the payload's exit.
+        // logError always uses stderr or the explicitly selected diagnostic file.
+        if (warning) logError(warning);
+      }
     }
     return;
   }
