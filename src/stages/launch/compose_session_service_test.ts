@@ -92,6 +92,51 @@ test("request validation pins protection overlays and dedicated mounts", () => {
   expect(() => validateComposeSessionRequest(withControlSocket)).toThrow(
     "host-only control path",
   );
+
+  const withDescendantOverlay = {
+    ...request,
+    container: {
+      ...container,
+      mounts: container.mounts.map((mount) =>
+        mount.target === "/work/.devcontainer"
+          ? {
+              ...mount,
+              source: `${mount.source}/devcontainer.json`,
+              target: `${mount.target}/devcontainer.json`,
+            }
+          : mount,
+      ),
+    },
+  };
+  expect(() => validateComposeSessionRequest(withDescendantOverlay)).toThrow(
+    "read-only configuration overlay is missing",
+  );
+
+  const withStateAlias = {
+    ...request,
+    container: {
+      ...container,
+      mounts: [
+        ...container.mounts,
+        { source: registration.stateRoot, target: "/state-alias" },
+      ],
+    },
+  };
+  expect(() => validateComposeSessionRequest(withStateAlias)).toThrow(
+    "dedicated state mount is not a registered pair",
+  );
+
+  for (const extra of [
+    { source: "/tmp/replacement", target: "/work/.nas" },
+    { source: "/tmp/replacement", target: "/home/tester/.claude/hooks" },
+  ]) {
+    expect(() =>
+      validateComposeSessionRequest({
+        ...request,
+        container: { ...container, mounts: [...container.mounts, extra] },
+      }),
+    ).toThrow("writable mount overrides a protected target");
+  }
 });
 
 function inspection(id = "container-1"): DockerLaunchInspection {
