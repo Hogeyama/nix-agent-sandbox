@@ -45,6 +45,13 @@ The automated contract was not executed because the Dev Containers CLI and
 fixture image are absent. This is a capability skip, not evidence that the
 contract passes or fails. No CLI was installed and no host command was run.
 
+The automated test probes prerequisites in dependency order. When the Dev
+Containers CLI is unavailable, it records Docker, Compose, and the fixture
+image as `not probed` rather than unavailable and does not contact the Docker
+daemon. The capability table above records separate manual observations made
+during this research; those observations are not synthesized into the test's
+runtime predicates.
+
 VS Code customizations are declared in the generated fixture so that the same
 case can be inspected on a capable machine. Their application remains
 unverified. A successful `devcontainer up` does not prove that VS Code applied
