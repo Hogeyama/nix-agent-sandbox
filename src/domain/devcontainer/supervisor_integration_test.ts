@@ -93,10 +93,16 @@ setInterval(() => {}, 1000);
     };
     const previous = process.env.NAS_SESSION_ID;
     process.env.NAS_SESSION_ID = "parent-session";
+    const deadlineAt = Date.now() + 5_000;
     try {
       const spawnedAt = Date.now();
       await withDevcontainerOperationLock(host, workspace, () =>
-        spawnDetachedDevcontainerSupervisor(host, registration, "dc_detached"),
+        spawnDetachedDevcontainerSupervisor(
+          host,
+          registration,
+          "dc_detached",
+          deadlineAt,
+        ),
       );
       expect(Date.now() - spawnedAt).toBeGreaterThanOrEqual(100);
     } finally {
@@ -119,6 +125,8 @@ setInterval(() => {}, 1000);
       workspace,
       "--session",
       "dc_detached",
+      "--deadline-at",
+      String(deadlineAt),
     ]);
     process.kill(pid, 0);
     const log = path.join(runtimePaths.runtimeDir, "dc_detached.log");

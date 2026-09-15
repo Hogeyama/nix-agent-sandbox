@@ -116,6 +116,28 @@ test.each([
   }
 });
 
+test("supervisor passes the client's absolute startup deadline to runtime", async () => {
+  const f = await fixture();
+  const deadlineAt = Date.now() + 5_000;
+  const received: number[] = [];
+  try {
+    await serveDevcontainerSupervisor({
+      host: f.host,
+      workspace: f.workspace,
+      sessionId: f.session.sessionId,
+      deadlineAt,
+      verifyRegistration: async () => f.registration,
+      runRuntime: async (_registration, _signal, runtimeDeadlineAt) => {
+        received.push(runtimeDeadlineAt);
+        return { ok: true };
+      },
+    });
+    expect(received).toEqual([deadlineAt]);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("failure fencing preserves a stopped state and a newer generation", async () => {
   const f = await fixture();
   try {
@@ -293,13 +315,16 @@ test("control protocol rejects a stale session identity", async () => {
 test("up replaces a stale active record after proving its lifetime lock is free", async () => {
   const f = await fixture();
   let spawnedSession: string | null = null;
+  let spawnedDeadline = 0;
+  const startedAt = Date.now();
   try {
     const client = makeDevcontainerSupervisorClient(f.host, {
       startupTimeoutMs: 1_000,
       verify: async () => f.registration,
       cleanup: async () => {},
-      spawn: async (_host, _registration, sessionId) => {
+      spawn: async (_host, _registration, sessionId, deadlineAt) => {
         spawnedSession = sessionId;
+        spawnedDeadline = deadlineAt;
       },
       request: async (_registration, session) => {
         if (session.sessionId === f.session.sessionId)
@@ -310,6 +335,8 @@ test("up replaces a stale active record after proving its lifetime lock is free"
     });
     const status = await client.up(f.workspace);
     expect(spawnedSession).not.toBeNull();
+    expect(spawnedDeadline).toBeGreaterThan(startedAt);
+    expect(spawnedDeadline).toBeLessThanOrEqual(startedAt + 1_000);
     expect(status.sessionId).toBe(spawnedSession);
     expect(status.phase).toBe("ready");
   } finally {

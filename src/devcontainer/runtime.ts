@@ -38,6 +38,7 @@ export interface DevcontainerRuntimeOptions {
   readonly sessionId: string;
   readonly signal?: AbortSignal;
   readonly startupTimeoutMs?: number;
+  readonly startupDeadlineAt?: number;
   readonly host?: HostEnv;
 }
 
@@ -50,13 +51,15 @@ export interface DevcontainerRuntimeResult {
 export async function runDevcontainerSupervisorEntry(
   workspace: string,
   sessionId: string,
+  deadlineAt: number,
 ): Promise<void> {
   const host = buildHostEnv();
   await serveDevcontainerSupervisor({
     host,
     workspace,
     sessionId,
-    runRuntime: async (registration, signal) => {
+    deadlineAt,
+    runRuntime: async (registration, signal, startupDeadlineAt) => {
       const config = await loadConfig({ startDir: registration.workspace });
       const resolved = resolveProfile(config, registration.profileName);
       const result = await runDevcontainerRuntime({
@@ -65,6 +68,7 @@ export async function runDevcontainerSupervisorEntry(
         profile: resolved.profile,
         sessionId,
         signal,
+        startupDeadlineAt,
         host,
       });
       return Exit.isSuccess(result.exit)
@@ -88,7 +92,9 @@ export async function runDevcontainerSupervisorEntry(
 export async function runDevcontainerRuntime(
   options: DevcontainerRuntimeOptions,
 ): Promise<DevcontainerRuntimeResult> {
-  const deadlineAt = Date.now() + (options.startupTimeoutMs ?? 120_000);
+  const deadlineAt =
+    options.startupDeadlineAt ??
+    Date.now() + (options.startupTimeoutMs ?? 120_000);
   const host = options.host ?? buildHostEnv();
   const workspace = options.registration.workspace;
   const guard = createStartupGuard(deadlineAt, options.signal);

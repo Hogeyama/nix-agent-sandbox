@@ -72,14 +72,20 @@ export function parseDevcontainerArgs(
 export function parseDevcontainerSupervisorArgs(args: readonly string[]): {
   readonly workspace: string;
   readonly sessionId: string;
+  readonly deadlineAt: number;
 } {
   if (args[0] !== "_supervise")
     throw new Error("invalid internal devcontainer action");
   let workspace: string | null = null;
   let sessionId: string | null = null;
+  let deadlineAt: number | null = null;
   for (let index = 1; index < args.length; index++) {
     const flag = args[index];
-    if (flag !== "--workspace" && flag !== "--session")
+    if (
+      flag !== "--workspace" &&
+      flag !== "--session" &&
+      flag !== "--deadline-at"
+    )
       throw new Error(`unknown internal devcontainer option: ${flag}`);
     const value = args[++index];
     if (!value || value.startsWith("-"))
@@ -88,15 +94,21 @@ export function parseDevcontainerSupervisorArgs(args: readonly string[]): {
       if (workspace !== null)
         throw new Error("--workspace may only be specified once");
       workspace = value;
-    } else {
+    } else if (flag === "--session") {
       if (sessionId !== null)
         throw new Error("--session may only be specified once");
       sessionId = value;
+    } else {
+      if (deadlineAt !== null)
+        throw new Error("--deadline-at may only be specified once");
+      deadlineAt = Number(value);
+      if (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0)
+        throw new Error("--deadline-at requires a positive integer");
     }
   }
-  if (!workspace || !sessionId)
+  if (!workspace || !sessionId || deadlineAt === null)
     throw new Error(
-      "internal devcontainer supervisor requires workspace and session",
+      "internal devcontainer supervisor requires workspace, session, and deadline",
     );
-  return { workspace, sessionId };
+  return { workspace, sessionId, deadlineAt };
 }
