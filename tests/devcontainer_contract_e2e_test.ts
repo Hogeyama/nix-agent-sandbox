@@ -74,18 +74,25 @@ async function isFixtureImageAvailable(): Promise<boolean> {
 const devcontainerAvailable = await isDevcontainerAvailable();
 // A missing Dev Containers CLI already decides the skip. Avoid reaching the
 // Docker daemon for prerequisites that cannot make this test runnable.
-const dockerAvailable = devcontainerAvailable && (await isDockerAvailable());
-const composeAvailable = dockerAvailable && (await isComposeAvailable());
+const dockerAvailable: boolean | null = devcontainerAvailable
+  ? await isDockerAvailable()
+  : null;
+const composeAvailable: boolean | null =
+  dockerAvailable === true ? await isComposeAvailable() : null;
 const fixtureImageAvailable =
-  composeAvailable && (await isFixtureImageAvailable());
+  composeAvailable === true ? await isFixtureImageAvailable() : null;
 
 const unavailableCapabilities = [
   !devcontainerAvailable && "Dev Containers CLI",
-  devcontainerAvailable && !dockerAvailable && "Docker daemon",
-  dockerAvailable && !composeAvailable && "Docker Compose v2",
-  composeAvailable &&
-    !fixtureImageAvailable &&
-    `fixture image ${FIXTURE_IMAGE}`,
+  dockerAvailable === false && "Docker daemon",
+  composeAvailable === false && "Docker Compose v2",
+  fixtureImageAvailable === false && `fixture image ${FIXTURE_IMAGE}`,
+].filter((capability): capability is string => Boolean(capability));
+
+const unprobedCapabilities = [
+  dockerAvailable === null && "Docker daemon",
+  composeAvailable === null && "Docker Compose v2",
+  fixtureImageAvailable === null && `fixture image ${FIXTURE_IMAGE}`,
 ].filter((capability): capability is string => Boolean(capability));
 
 function requireSuccess(result: CommandResult, operation: string): void {
@@ -111,14 +118,21 @@ function parseDevcontainerResult(stdout: string): { containerId: string } {
 }
 
 test.skipIf(
-  !dockerAvailable ||
-    !composeAvailable ||
+  dockerAvailable !== true ||
+    composeAvailable !== true ||
     !devcontainerAvailable ||
-    !fixtureImageAvailable,
+    fixtureImageAvailable !== true,
 )(
   `initializeCommand starts the Compose service before attach and reuses it${
-    unavailableCapabilities.length > 0
-      ? ` (missing: ${unavailableCapabilities.join(", ")})`
+    unavailableCapabilities.length > 0 || unprobedCapabilities.length > 0
+      ? ` (${[
+          unavailableCapabilities.length > 0 &&
+            `missing: ${unavailableCapabilities.join(", ")}`,
+          unprobedCapabilities.length > 0 &&
+            `not probed: ${unprobedCapabilities.join(", ")}`,
+        ]
+          .filter(Boolean)
+          .join("; ")})`
       : ""
   }`,
   async () => {
