@@ -801,6 +801,111 @@ assert not failures, failures
 PY_SELF_OUTPUT
 check "scan refuses self-mutating secret holders and preserves clean or unchanged outputs" "0" "$?"
 
+# Settings and ownership must not overwrite one another through output aliases.
+python3 - "$sumi" "$work/output-alias-validation" <<'PY_OUTPUT_ALIASES'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+binary, base = sys.argv[1], Path(sys.argv[2])
+failures = []
+count = 0
+
+def snapshot(folder):
+    return {str(p.relative_to(folder)): (
+        os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else None,
+        p.lstat().st_mtime_ns, p.lstat().st_mode, p.lstat().st_dev, p.lstat().st_ino)
+        for p in [folder, *folder.rglob("*")]}
+
+def run_case(alias, behavior):
+    folder = base / (alias + "-" + behavior)
+    root = folder / "project"
+    root.mkdir(parents=True)
+    token = "DecoyOutputAlias9"
+    listed = folder / "secrets.txt"
+    listed.write_text(token + "\n")
+    settings = folder / "settings.json"
+    record = folder / "settings.sumi-scan.json"
+    data = {"credentialsFiles": []}
+    if behavior in ("both", "settings-only"):
+        holder = root / "config"
+        holder.write_text("password=" + token)
+        if behavior == "settings-only":
+            data["credentialsFiles"] = [str(holder)]
+            data["sandbox"] = {"credentials": {"files": [{"path": str(holder), "mode": "deny"}]}}
+    if behavior == "record-only":
+        data["credentialsFiles"] = [str(folder / "outside")] * 2
+    settings.write_text(json.dumps(data) + "\n \n")
+    if alias == "symlink":
+        record.symlink_to(settings)
+    else:
+        os.link(settings, record)
+    (folder / "settings.json.bak.existing").write_bytes(b"previous backup\n")
+    before = snapshot(folder)
+    result = subprocess.run([binary, "scan", "--agent", "claude",
+        "--secrets-file", str(listed), "--root", str(root),
+        "--settings", str(settings)], capture_output=True)
+    assert result.stdout == b"", "unexpected stdout"
+    assert token.encode() not in result.stderr, "diagnostic leaked a value"
+    if behavior == "unchanged":
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1, ("expected validation failure", result.returncode)
+        assert result.stderr == b"sumi: settings and scan record alias the same file or their identities could not be checked; scan cancelled\n", result.stderr
+    assert snapshot(folder) == before, "output bytes, aliases, names or mtimes changed"
+
+def run_absent_case(kind):
+    folder = base / kind
+    root = folder / "project"
+    root.mkdir(parents=True)
+    listed = folder / "secrets.txt"
+    listed.write_text("DecoyOutputAlias9\n")
+    holder = root / "config"
+    holder.write_text("password=DecoyOutputAlias9")
+    settings = folder / "settings.json"
+    record = folder / "settings.sumi-scan.json"
+    if kind == "both-dangling":
+        settings.symlink_to(folder / "missing-target")
+        record.symlink_to(folder / "missing-target")
+    elif kind == "record-dangling":
+        record.symlink_to(settings)
+    before = snapshot(folder)
+    result = subprocess.run([binary, "scan", "--agent", "claude",
+        "--secrets-file", str(listed), "--root", str(root),
+        "--settings", str(settings)], capture_output=True)
+    assert result.stdout == b"", "unexpected stdout"
+    if kind == "ordinary-absent":
+        assert result.returncode == 0, result.stderr
+        assert json.loads(settings.read_text())["sandbox"]["credentials"]["files"][0]["path"] == str(holder)
+        assert json.loads(record.read_text())["credentialsFiles"] == [str(holder)]
+    else:
+        assert result.returncode == 1, ("expected validation failure", result.returncode)
+        assert result.stderr == b"sumi: settings and scan record alias the same file or their identities could not be checked; scan cancelled\n", result.stderr
+        assert snapshot(folder) == before, "dangling output or target changed"
+
+for kind in ("both-dangling", "record-dangling", "ordinary-absent"):
+    try:
+        run_absent_case(kind)
+        count += 1
+    except AssertionError as error:
+        failures.append((kind, str(error)))
+
+for alias in ("symlink", "hardlink"):
+    for behavior in ("both", "settings-only", "record-only", "unchanged"):
+        try:
+            run_case(alias, behavior)
+            count += 1
+        except AssertionError as error:
+            failures.append((alias, behavior, str(error)))
+for failure in failures:
+    print("FAIL output-alias fixture:", failure)
+print(f"{count} output-alias validation fixtures passed, {len(failures)} failed")
+assert not failures, failures
+PY_OUTPUT_ALIASES
+check "scan refuses changing outputs that alias one another" "0" "$?"
+
 # --- argument errors ---------------------------------------------------------
 
 check_hook_usage() {
