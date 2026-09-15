@@ -1,0 +1,183 @@
+{
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+
+      "project.asahinet.com",
+
+      "api.github.com",
+      "github.com",
+
+      "api.openai.com:443",
+      "chatgpt.com:443",
+
+      "ci1.asahi-net.or.jp",
+
+      "statsig.anthropic.com",
+      "platform.claude.com",
+      "mcp-proxy.anthropic.com",
+      "code.claude.com",
+      "claude.ai",
+      "downloads.claude.ai",
+      "*.frame.claudeusercontent.com",
+
+      "*.api.openai.com",
+      "ab.chatgpt.com",
+      "developers.openai.com",
+
+      "storage.googleapis.com",
+
+      "docs.google.com",
+      "drive.google.com",
+      "drive.usercontent.google.com",
+      "*.googleusercontent.com",
+      "www.googleapis.com",
+      "docs.googleapis.com",
+      "sheets.googleapis.com",
+      "slides.googleapis.com",
+      "oauth2.googleapis.com",
+
+      "release-assets.githubusercontent.com",
+      "codeload.github.com",
+      "raw.githubusercontent.com",
+      "camo.githubusercontent.com",
+      "avatars.githubusercontent.com",
+
+      "api.githubcopilot.com",
+      "telemetry.individual.githubcopilot.com",
+      "api.individual.githubcopilot.com",
+      "telemetry.business.githubcopilot.com",
+      "api.business.githubcopilot.com",
+
+      "registry-1.docker.io",
+      "auth.docker.io",
+      "index.docker.io",
+      "hub.docker.com",
+      "www.docker.com",
+      "download.docker.com",
+      "production.cloudflare.docker.com",
+      "production.cloudfront.docker.com",
+
+      "*.gcr.io",
+      "ghcr.io",
+      "mcr.microsoft.com",
+      "*.data.mcr.microsoft.com",
+      "public.ecr.aws",
+
+      "cache.iog.io",
+      "cache.nixos.org",
+      "channels.nixos.org",
+      "releases.nixos.org",
+      "registry.npmjs.org",
+      "jsr.io",
+      "deno.land",
+      "index.crates.io",
+      "static.crates.io",
+      "proxy.golang.org",
+      "sum.golang.org",
+      "services.gradle.org",
+      "plugins.gradle.org",
+      "plugins-artifacts.gradle.org",
+      "downloads.gradle.org",
+      "repo.maven.apache.org",
+      "repo1.maven.org",
+      "api.foojay.io",
+      "cdn.azul.com",
+      "objects.githubusercontent.com",
+
+      "datatracker.ietf.org"
+    ],
+    "deniedDomains": [
+      "*:22",
+
+      "http-intake.logs.us5.datadoghq.com",
+      "copilot-telemetry.githubusercontent.com",
+      "exp.business.githubcopilot.com",
+
+      "www.google.com",
+      "mtalk.google.com",
+      "clients2.google.com",
+      "accounts.google.com",
+      "android.clients.google.com",
+      "safebrowsingohttpgateway.googleapis.com",
+      "content-autofill.googleapis.com",
+      "update.googleapis.com",
+      "clientservices.googleapis.com",
+      "redirector.gvt1.com",
+      "www.gstatic.com"
+    ],
+    "deniedDomainReasons": {
+      "*:22": "nas は HTTP(S) 以外の TCP を通さない。git は HTTPS リモートを使う"
+    },
+    "deniedResolvedAddresses": [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "100.64.0.0/10",
+      "fc00::/7"
+    ],
+    "allowAllUnixSockets": true,
+    "tlsTerminate": {
+      "excludeDomains": [
+        "api.anthropic.com",
+        "api.openai.com",
+        "chatgpt.com",
+        "services.gradle.org",
+        "plugins.gradle.org",
+        "plugins-artifacts.gradle.org",
+        "downloads.gradle.org",
+        "repo.maven.apache.org",
+        "repo1.maven.org",
+        "api.foojay.io",
+        "cdn.azul.com",
+        "objects.githubusercontent.com"
+      ]
+    }
+  },
+  "filesystem": {
+    "denyRead": [
+      "~/.ssh",
+      "~/.gnupg/private-keys-v1.d",
+      "~/.config/gh",
+      "~/.password-store",
+      "~/.config/nas",
+      "~/.local/share/nas",
+      "~/.aws",
+      "~/.config/gcloud",
+      "~/.netrc",
+      "~/.docker",
+      "~/.kube"
+    ],
+    "allowWrite": [
+      ".",
+      "~/repo",
+      "~/.claude",
+      "~/.claude.json",
+      "~/.m2",
+      "~/.gradle.for-agents",
+      "~/.cache",
+      "~/.npm",
+      "~/.bun",
+      "/tmp"
+    ],
+    "denyWrite": [],
+    "allowGitConfig": true
+  },
+  "credentials": {
+    "envVars": [
+      {
+        "name": "GITHUB_TOKEN",
+        "mode": "mask",
+        "injectHosts": ["api.github.com", "github.com"]
+      },
+      {
+        "name": "REDMINE_API_KEY",
+        "mode": "mask",
+        "injectHosts": ["project.asahinet.com"]
+      }
+    ]
+  },
+  "git": {
+    "safeDirectories": ["*"]
+  }
+}

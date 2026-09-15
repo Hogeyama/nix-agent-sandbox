@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# srt サンドボックスの中で実行する検査。値は出さず、可否と HTTP ステータスだけを出す。
+show() { printf '%-34s %s\n' "$1" "$2"; }
+code() { curl -sS -o /dev/null -m 20 -w '%{http_code}' "$@" 2>&1 | tail -c 40; }
+
+show "id" "$(id -u):$(id -g) $(id -un 2>/dev/null || echo '(no name)')"
+show "SANDBOX_RUNTIME" "${SANDBOX_RUNTIME:-unset}"
+show "TMPDIR" "${TMPDIR:-unset}"
+show "ls ~ (entries)" "$(ls -A ~ 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+show "ls /home" "$(ls /home 2>&1 | tr '\n' ' ')"
+show "ls /opt" "$(ls /opt 2>&1 | tr '\n' ' ' | cut -c1-80)"
+# denyRead のディレクトリは空の tmpfs になるので、成否ではなく中身の件数で見る。
+show "~/.ssh entries" "$(ls -A ~/.ssh 2>/dev/null | wc -l)"
+show "~/.config/gh entries" "$(ls -A ~/.config/gh 2>/dev/null | wc -l)"
+show "~/.password-store entries" "$(ls -A ~/.password-store 2>/dev/null | wc -l)"
+show "~/.gnupg entries" "$(ls -A ~/.gnupg 2>/dev/null | wc -l)"
+show "~/.gnupg/private-keys-v1.d entries" "$(ls -A ~/.gnupg/private-keys-v1.d 2>/dev/null | wc -l)"
+show "~/.config/nas entries" "$(ls -A ~/.config/nas 2>/dev/null | wc -l)"
+show "~/.claude readable" "$(ls ~/.claude >/dev/null 2>&1 && echo yes || echo NO)"
+show "~/.claude.json writable" "$( (: >> ~/.claude.json) 2>/dev/null && echo yes || echo NO)"
+show "~/.claude writable" "$(touch ~/.claude/.srt-probe 2>/dev/null && rm ~/.claude/.srt-probe && echo yes || echo NO)"
+show "~/.nix-profile/bin/bwrap" "$(ls ~/.nix-profile/bin/bwrap >/dev/null 2>&1 && echo yes || echo NO)"
+show "~/.local/bin/claude" "$(ls ~/.local/bin/claude >/dev/null 2>&1 && echo yes || echo NO)"
+show "~/.config/git readable" "$(ls ~/.config/git >/dev/null 2>&1 && echo yes || echo NO)"
+show "cwd writable" "$(touch .srt-probe-w 2>/dev/null && rm .srt-probe-w && echo yes || echo NO)"
+show ".git/config writable" "$( (: >> .git/config) 2>/dev/null && echo yes || echo no)"
+show "/tmp writable" "$(touch /tmp/.srt-probe-w 2>/dev/null && rm /tmp/.srt-probe-w && echo yes || echo NO)"
+show "git status" "$(git status --porcelain=v1 >/dev/null 2>&1 && echo ok || echo FAIL)"
+show "GET api.anthropic.com" "$(code https://api.anthropic.com/)"
+show "GET raw.githubusercontent.com" "$(code https://raw.githubusercontent.com/)"
+show "GET github.com" "$(code https://github.com/)"
+show "GET api.github.com" "$(code https://api.github.com/)"
+show "GET project.asahinet.com" "$(code https://project.asahinet.com/)"
+show "GET example.com (unlisted)" "$(code https://example.com/)"
+show "GET datadog (denied)" "$(code https://http-intake.logs.us5.datadoghq.com/)"
+show "CONNECT github.com:22" "$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -p -x "$https_proxy" telnet://github.com:22 2>&1 | tail -c 60)"
+show "CONNECT github.com:443" "$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -p -x "$https_proxy" telnet://github.com:443 2>&1 | tail -c 60)"
+show "nix store ping" "$(nix store ping >/dev/null 2>&1 && echo ok || echo FAIL)"
+show "docker version" "$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo FAIL)"
+show "gpg-connect-agent" "$(gpg-connect-agent /bye >/dev/null 2>&1 && echo ok || echo FAIL)"
+show "GITHUB_TOKEN prefix" "$(printf '%s' "${GITHUB_TOKEN:-unset}" | cut -c1-8)"
+show "REDMINE_API_KEY prefix" "$(printf '%s' "${REDMINE_API_KEY:-unset}" | cut -c1-8)"
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  show "gh api user" "$(gh api user -q .login >/dev/null 2>&1 && echo ok || echo FAIL)"
+  show "redmine users/current.json" "$(code -H "X-Redmine-API-Key: $REDMINE_API_KEY" https://project.asahinet.com/users/current.json)"
+fi
