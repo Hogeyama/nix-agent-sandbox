@@ -221,6 +221,7 @@ async function runMain(
         await runDevcontainerSupervisorEntry(
           internal.workspace,
           internal.sessionId,
+          internal.deadlineAt,
         );
       } else {
         await runDevcontainerCommand(devcontainerArgs);

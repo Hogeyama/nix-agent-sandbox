@@ -49,9 +49,22 @@ test("internal supervisor parser accepts only its exact argv", () => {
       "/work",
       "--session",
       "dc_123",
+      "--deadline-at",
+      "123456",
     ]),
-  ).toEqual({ workspace: "/work", sessionId: "dc_123" });
+  ).toEqual({ workspace: "/work", sessionId: "dc_123", deadlineAt: 123456 });
   expect(() =>
     parseDevcontainerSupervisorArgs(["_supervise", "--workspace", "/work"]),
-  ).toThrow("requires workspace and session");
+  ).toThrow("requires workspace, session, and deadline");
+  expect(() =>
+    parseDevcontainerSupervisorArgs([
+      "_supervise",
+      "--workspace",
+      "/work",
+      "--session",
+      "dc_123",
+      "--deadline-at",
+      "later",
+    ]),
+  ).toThrow("positive integer");
 });

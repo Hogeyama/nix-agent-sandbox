@@ -331,6 +331,7 @@ export async function spawnDetachedDevcontainerSupervisor(
   host: HostEnv,
   registration: DevcontainerRegistration,
   sessionId: string,
+  deadlineAt: number,
 ): Promise<void> {
   const uid = requireHostUid(host);
   const runtime = resolveDevcontainerRuntimePaths(host, registration.workspace);
@@ -354,11 +355,16 @@ export async function spawnDetachedDevcontainerSupervisor(
         registration.workspace,
         "--session",
         sessionId,
+        "--deadline-at",
+        String(deadlineAt),
       ],
       { stdin: "ignore", stdout: handle.fd, stderr: handle.fd, env },
     );
     child.unref();
-    const handoffDeadline = Date.now() + CONTROL_TIMEOUT_MS;
+    const handoffDeadline = Math.min(
+      deadlineAt,
+      Date.now() + CONTROL_TIMEOUT_MS,
+    );
     while (await lifetimeIsFree(host, registration.workspace)) {
       if (Date.now() >= handoffDeadline)
         throw new DevcontainerError(
@@ -576,7 +582,7 @@ export function makeDevcontainerSupervisorClient(
           );
           await writeDevcontainerSession(host, workspace, next);
           try {
-            await spawn(host, registration, next.sessionId);
+            await spawn(host, registration, next.sessionId, deadlineAt);
           } catch (error) {
             const failed = {
               ...next,
@@ -775,9 +781,11 @@ export interface ServeDevcontainerSupervisorOptions {
   readonly host: HostEnv;
   readonly workspace: string;
   readonly sessionId: string;
+  readonly deadlineAt?: number;
   readonly runRuntime: (
     registration: DevcontainerRegistration,
     signal: AbortSignal,
+    deadlineAt: number,
   ) => Promise<DevcontainerRuntimeOutcome>;
   /** Test seam for the registration gate; production always uses the domain verifier. */
   readonly verifyRegistration?: (
@@ -790,6 +798,7 @@ export async function serveDevcontainerSupervisor(
   options: ServeDevcontainerSupervisorOptions,
 ): Promise<void> {
   const { host, sessionId } = options;
+  const deadlineAt = options.deadlineAt ?? Date.now() + STARTUP_TIMEOUT_MS;
   const uid = requireHostUid(host);
   const workspace = await canonicalizeWorkspace(options.workspace, uid);
   const runtime = resolveDevcontainerRuntimePaths(host, workspace);
@@ -860,6 +869,7 @@ export async function serveDevcontainerSupervisor(
         const outcome = await options.runRuntime(
           ownedRegistration,
           controller.signal,
+          deadlineAt,
         );
         if (!outcome.ok)
           throw new DevcontainerError(
