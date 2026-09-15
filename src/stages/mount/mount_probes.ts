@@ -15,6 +15,10 @@ import type {
   Profile,
 } from "../../config/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
+import {
+  preparationSignal,
+  runProbeCommand,
+} from "../../lib/preparation_commands.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 // ---------------------------------------------------------------------------
 // Types — pre-resolved I/O results
@@ -125,6 +129,7 @@ export async function resolveMountProbes(
     : null;
 
   // エージェント probe
+  preparationSignal()?.throwIfAborted();
   const agentProbes = resolveAgentProbes(profile.agent, home);
 
   // Nix 関連
@@ -166,6 +171,7 @@ export async function resolveMountProbes(
     : false;
 
   // 追加マウントの解決
+  preparationSignal()?.throwIfAborted();
   const resolvedExtraMounts = await resolveExtraMounts(
     profile.extraMounts,
     workDir,
@@ -173,15 +179,19 @@ export async function resolveMountProbes(
   );
 
   // 環境変数エントリの解決 (valCmd / keyCmd の実行)
+  preparationSignal()?.throwIfAborted();
   const resolvedEnvEntries = await resolveEnvEntries(profile.env);
 
   // git worktree 検出: ワークスペースが worktree 内にある場合、本体リポジトリルートを取得
+  preparationSignal()?.throwIfAborted();
   const gitWorktreeMainRoot = await resolveGitWorktreeMainRoot(workDir);
 
   // .agent-sandbox.{yml,nix} の列挙（後で RO bind mount 対象にする）
+  preparationSignal()?.throwIfAborted();
   const localConfigPaths = await resolveLocalConfigPaths(workDir);
 
   // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
+  preparationSignal()?.throwIfAborted();
   const [xpraBinPath, xauthBinPath, takenX11Displays, x11UnixDirReadOnly] =
     await Promise.all([
       resolveBinaryPath("xpra"),
@@ -254,12 +264,9 @@ async function resolveLocalConfigPaths(workDir: string): Promise<string[]> {
 /** PATH から任意のバイナリを which 相当で解決する */
 async function resolveBinaryPath(binary: string): Promise<string | null> {
   try {
-    const proc = Bun.spawn(["which", binary], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const out = (await new Response(proc.stdout).text()).trim();
-    const code = await proc.exited;
+    const result = await runProbeCommand(["which", binary]);
+    const out = result.stdout.trim();
+    const code = result.exitCode;
     if (code !== 0) return null;
     return out === "" ? null : out;
   } catch {
@@ -423,12 +430,9 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 async function resolveRealPath(targetPath: string): Promise<string | null> {
   try {
-    const proc = Bun.spawn(["readlink", "-f", targetPath], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const resolved = (await new Response(proc.stdout).text()).trim();
-    const code = await proc.exited;
+    const result = await runProbeCommand(["readlink", "-f", targetPath]);
+    const resolved = result.stdout.trim();
+    const code = result.exitCode;
     if (code === 0) {
       if (resolved) return resolved;
     }
@@ -463,14 +467,13 @@ async function resolveGitWorktreeMainRoot(
   workDir: string,
 ): Promise<string | null> {
   try {
-    const proc = Bun.spawn(
-      ["git", "-C", workDir, "rev-parse", "--git-common-dir", "--git-dir"],
-      { stdout: "pipe", stderr: "ignore" },
-    );
-
-    const [output, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      proc.exited,
+    const { stdout: output, exitCode: code } = await runProbeCommand([
+      "git",
+      "-C",
+      workDir,
+      "rev-parse",
+      "--git-common-dir",
+      "--git-dir",
     ]);
 
     if (code !== 0) return null;
@@ -493,15 +496,11 @@ async function runCommandForEnv(
   command: string,
   sourceName: string,
 ): Promise<string> {
-  const proc = Bun.spawn(["sh", "-c", command], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdoutText, stderrText] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const code = await proc.exited;
+  const {
+    stdout: stdoutText,
+    stderr: stderrText,
+    exitCode: code,
+  } = await runProbeCommand(["sh", "-c", command], false);
   if (code !== 0) {
     throw new Error(
       `[nas] Failed to execute ${sourceName}: ${

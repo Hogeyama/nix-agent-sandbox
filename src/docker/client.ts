@@ -6,7 +6,12 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
 import { resolveAssetDir } from "../lib/asset.ts";
+import {
+  preparationSignal,
+  runPreparationCommand,
+} from "../lib/preparation_commands.ts";
 import { diagnosticsUseStderr, logError, logInfo } from "../log.ts";
+import { takeAcpStreams } from "./acp_connection.ts";
 import type { DockerLabels } from "./nas_resources.ts";
 import { runProtocolCommand } from "./protocol_command.ts";
 import { containerRemovalWarning } from "./removal_outcome.ts";
@@ -115,6 +120,15 @@ export async function getImageLabel(
   tag: string,
   label: string,
 ): Promise<string | null> {
+  if (preparationSignal()) {
+    const result = await runPreparationCommand("docker", [
+      "inspect",
+      "--format",
+      `{{index .Config.Labels "${label}"}}`,
+      tag,
+    ]);
+    return result.exitCode === 0 ? result.stdout.trim() || null : null;
+  }
   try {
     const result =
       await $`docker inspect --format ${`{{index .Config.Labels "${label}"}}`} ${tag}`.quiet();
@@ -130,6 +144,7 @@ export async function dockerBuild(
   contextDir: string,
   tag: string,
   labels?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<void> {
   const labelArgs: string[] = [];
   if (labels) {
@@ -138,6 +153,16 @@ export async function dockerBuild(
     }
   }
   logInfo(`$ docker build ${labelArgs.join(" ")} -t ${tag} ${contextDir}`);
+  if (preparationSignal()) {
+    const result = await runPreparationCommand(
+      "docker",
+      ["build", ...labelArgs, "-t", tag, contextDir],
+      { diagnostic: true, signal },
+    );
+    if (result.exitCode !== 0)
+      throw new Error(`docker build exited with code ${result.exitCode}`);
+    return;
+  }
   await runInteractiveCommand(
     "docker",
     ["build", ...labelArgs, "-t", tag, contextDir],
@@ -183,7 +208,10 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
 
   if (opts.mode === "acp") {
     try {
-      await runProtocolCommand(args[0], args.slice(1), { signal: opts.signal });
+      await runProtocolCommand(args[0], args.slice(1), {
+        signal: opts.signal,
+        ...takeAcpStreams(),
+      });
     } finally {
       // Killing the attached docker CLI does not reliably stop PID 1.
       // The session-owned container must be removed before pipeline resources.
@@ -281,7 +309,19 @@ export async function dockerRemoveImage(
 }
 
 /** docker image を pull する */
-export async function dockerPull(tag: string): Promise<void> {
+export async function dockerPull(
+  tag: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (preparationSignal()) {
+    const result = await runPreparationCommand("docker", ["pull", tag], {
+      diagnostic: true,
+      signal,
+    });
+    if (result.exitCode !== 0)
+      throw new Error(`docker pull exited with code ${result.exitCode}`);
+    return;
+  }
   await runInteractiveCommand("docker", ["pull", tag], {
     stdin: "null",
     diagnostic: true,
@@ -289,15 +329,30 @@ export async function dockerPull(tag: string): Promise<void> {
 }
 
 /** ローカルになければ pull する */
-export async function dockerEnsureImage(tag: string): Promise<boolean> {
-  if (await dockerImageExists(tag)) return false;
+export async function dockerEnsureImage(
+  tag: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (await dockerImageExists(tag, signal)) return false;
   logInfo(`[nas] Pulling image ${tag} ...`);
-  await dockerPull(tag);
+  await dockerPull(tag, signal);
   return true;
 }
 
 /** docker image が存在するか確認 */
-export async function dockerImageExists(tag: string): Promise<boolean> {
+export async function dockerImageExists(
+  tag: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (preparationSignal()) {
+    return (
+      (
+        await runPreparationCommand("docker", ["image", "inspect", tag], {
+          signal,
+        })
+      ).exitCode === 0
+    );
+  }
   try {
     await $`docker image inspect ${tag}`.quiet();
     return true;

@@ -41,6 +41,8 @@ import {
   dockerVolumeCreate,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import { preparationSignal } from "../lib/preparation_commands.ts";
+import { ownedCommand } from "./owned_command.ts";
 
 // Re-export so domain services depending on DockerService can import the
 // detail types from the same module without reaching into docker/client.ts.
@@ -179,10 +181,14 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
   DockerService,
   DockerService.of({
     build: (contextDir, imageName, labels) =>
-      Effect.tryPromise({
-        try: () => dockerBuild(contextDir, imageName, labels),
-        catch: wrapError("docker build failed"),
-      }),
+      preparationSignal()
+        ? ownedCommand((signal) =>
+            dockerBuild(contextDir, imageName, labels, signal),
+          )
+        : Effect.tryPromise({
+            try: () => dockerBuild(contextDir, imageName, labels),
+            catch: wrapError("docker build failed"),
+          }),
 
     runInteractive: (opts) => {
       const run = (signal?: AbortSignal) => {
@@ -365,10 +371,12 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
       }),
 
     ensureImage: (tag) =>
-      Effect.tryPromise({
-        try: () => dockerEnsureImage(tag),
-        catch: wrapError("docker pull failed"),
-      }),
+      preparationSignal()
+        ? ownedCommand((signal) => dockerEnsureImage(tag, signal))
+        : Effect.tryPromise({
+            try: () => dockerEnsureImage(tag),
+            catch: wrapError("docker pull failed"),
+          }),
   }),
 );
 

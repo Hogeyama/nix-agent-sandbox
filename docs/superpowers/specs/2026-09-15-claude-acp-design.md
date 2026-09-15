@@ -21,7 +21,7 @@ ACP クライアントが `nas claude-acp` を子プロセスとして起動し�
 5. profile.agentArgs と CLI のエージェント追加引数は ACP では拒否する。guide.enable も、現在の --add-dir に依存するため案内付きで拒否する。設定は ACP クライアントと Claude settings で指定する。
 6. ホストに導入済みの Claude native バイナリが必要。既存の認証・履歴マウントを利用し、初回ログインはホスト側で行う。ACP 起動中のインストーラ fallback は使わない。
 7. adapter は `@agentclientprotocol/claude-agent-acp` 0.77.0、Node.js 22 以上をベースイメージに導入する。依存は lockfile で固定する。既存マウントに対する `CLAUDE_CODE_EXECUTABLE` を指定し、nas proxy CA を Node に信頼させる。既存のプロキシ境界は変更しない。
-8. stdin EOF と SIGINT/SIGTERM、および出力先の切断で Docker と子プロセスを終了し、既存 pipeline Scope の cleanup を走らせる。通常の非ゼロ終了を成功として隠さない。
+8. stdin EOF と SIGINT/SIGTERM、および出力先の切断で Docker と子プロセスを終了し、既存 pipeline Scope の cleanup を走らせる。準備中も接続を監視し、切断後は adapter を起動しない。adapter への引き渡し前の入力はメモリ上で合計 1 MiB まで保持し、超過時は診断付きで起動を中止する。この上限は引き渡し後のメッセージには適用しない。通常の非ゼロ終了を成功として隠さない。
 9. nas は ACP を独自 UI として実装せず、adapter のメッセージを渡す。クライアントのファイル API や MCP、認証 command がホストで実行される可能性は調査し、sandbox の保証範囲を明記する。コンテナ内実行が保証されない経路を無条件に安全とは説明しない。
 
 ## アーキテクチャと変更範囲
