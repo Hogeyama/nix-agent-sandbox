@@ -249,9 +249,12 @@ interface OwnedInspection {
   readonly labels: Record<string, string>;
 }
 
-async function inspectContainer(id: string): Promise<OwnedInspection | null> {
+async function inspectContainer(
+  id: string,
+  run: typeof runDockerCommand = runDockerCommand,
+): Promise<OwnedInspection | null> {
   try {
-    const result = await runDockerCommand(["inspect", id], {
+    const result = await run(["inspect", id], {
       timeoutMs: 10_000,
     });
     const parsed = (
@@ -273,11 +276,7 @@ async function inspectContainer(id: string): Promise<OwnedInspection | null> {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (
-      message.includes("No such object") ||
-      message.includes("No such container")
-    )
-      return null;
+    if (/no such (?:object|container)/i.test(message)) return null;
     throw error;
   }
 }
@@ -314,16 +313,17 @@ export async function inspectOwnedDevcontainer(
 export async function cleanupOwnedDevcontainer(
   registration: DevcontainerRegistration,
   session: DevcontainerSessionRecord,
+  run: typeof runDockerCommand = runDockerCommand,
 ): Promise<void> {
   if (!session.containerId) return;
-  const inspection = await inspectContainer(session.containerId);
+  const inspection = await inspectContainer(session.containerId, run);
   if (!inspection) return;
   assertOwned(registration, session, inspection);
   if (inspection.running)
-    await runDockerCommand(["stop", session.containerId], {
+    await run(["stop", session.containerId], {
       timeoutMs: 15_000,
     });
-  await runDockerCommand(["rm", session.containerId], { timeoutMs: 10_000 });
+  await run(["rm", session.containerId], { timeoutMs: 10_000 });
 }
 
 /** Spawn through setsid using the registration's argv, with a private per-generation log. */
