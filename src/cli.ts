@@ -18,6 +18,8 @@ import { runAuditCommand } from "./cli/audit.ts";
 import { runConfigCommand } from "./cli/config.ts";
 import { runContainerCommand } from "./cli/container.ts";
 import { extractControlOptions } from "./cli/control_options.ts";
+import { runDevcontainerCommand } from "./cli/devcontainer.ts";
+import { parseDevcontainerSupervisorArgs } from "./cli/devcontainer_args.ts";
 import {
   exitOnCliError,
   findFirstNonFlagArg,
@@ -35,6 +37,7 @@ import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
 import { writeSessionIdFile } from "./cli/write_session_id.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
+import { runDevcontainerSupervisorEntry } from "./devcontainer/runtime.ts";
 import { AcpConnection } from "./docker/acp_connection.ts";
 import { ProtocolCommandError } from "./docker/protocol_command.ts";
 import {
@@ -120,7 +123,8 @@ async function runMain(
     subcommand === "ui" ||
     subcommand === "audit" ||
     subcommand === "hook" ||
-    subcommand === "config"
+    subcommand === "config" ||
+    subcommand === "devcontainer"
   ) {
     if (
       argsBeforeDashDash.includes("--help") ||
@@ -203,6 +207,26 @@ async function runMain(
       await runConfigCommand(
         removeFirstOccurrence(argsBeforeDashDash, "config"),
       );
+    } catch (err) {
+      exitOnCliError(err);
+    }
+    return;
+  }
+
+  if (subcommand === "devcontainer") {
+    const devcontainerArgs = removeFirstOccurrence(args, "devcontainer").filter(
+      (arg) => !["-q", "--quiet", "-v", "--verbose"].includes(arg),
+    );
+    try {
+      if (devcontainerArgs[0] === "_supervise") {
+        const internal = parseDevcontainerSupervisorArgs(devcontainerArgs);
+        await runDevcontainerSupervisorEntry(
+          internal.workspace,
+          internal.sessionId,
+        );
+      } else {
+        await runDevcontainerCommand(devcontainerArgs);
+      }
     } catch (err) {
       exitOnCliError(err);
     }

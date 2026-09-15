@@ -36,6 +36,18 @@ export {
   writeDevcontainerSession,
   writeProtectedFile,
 } from "./devcontainer/store.ts";
+export {
+  cleanupOwnedDevcontainer,
+  type DevcontainerRuntimeOutcome,
+  type DevcontainerSupervisorOptions,
+  inspectOwnedDevcontainer,
+  makeDevcontainerSupervisorClient,
+  markSupervisorFailure,
+  requestDevcontainerControl,
+  type ServeDevcontainerSupervisorOptions,
+  serveDevcontainerSupervisor,
+  spawnDetachedDevcontainerSupervisor,
+} from "./devcontainer/supervisor.ts";
 export type {
   DevcontainerMountPolicy,
   DevcontainerPaths,

@@ -1,11 +1,13 @@
 import * as path from "node:path";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { createCliInitialState } from "../cli/pipeline_state.ts";
+import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { Config, Profile } from "../config/types.ts";
 import type { DevcontainerRegistration } from "../domain/devcontainer.ts";
 import {
   pathsOverlap,
   resolveDevcontainerPaths,
+  serveDevcontainerSupervisor,
 } from "../domain/devcontainer.ts";
 import { checkNotifySend, resolveNotifyBackend } from "../lib/notify_utils.ts";
 import { resolveRuntimeSubdir } from "../lib/runtime_dir.ts";
@@ -42,6 +44,37 @@ export interface DevcontainerRuntimeOptions {
 export interface DevcontainerRuntimeResult {
   readonly exit: Exit.Exit<void, Error>;
   readonly containerName: string | null;
+}
+
+/** Application dispatch for the private detached `_supervise` CLI entry. */
+export async function runDevcontainerSupervisorEntry(
+  workspace: string,
+  sessionId: string,
+): Promise<void> {
+  const host = buildHostEnv();
+  await serveDevcontainerSupervisor({
+    host,
+    workspace,
+    sessionId,
+    runRuntime: async (registration, signal) => {
+      const config = await loadConfig({ startDir: registration.workspace });
+      const resolved = resolveProfile(config, registration.profileName);
+      const result = await runDevcontainerRuntime({
+        registration,
+        config,
+        profile: resolved.profile,
+        sessionId,
+        signal,
+        host,
+      });
+      return Exit.isSuccess(result.exit)
+        ? { ok: true }
+        : {
+            ok: false,
+            diagnostic: `devcontainer runtime failed: ${Cause.pretty(result.exit.cause).split("\n", 1)[0]}`,
+          };
+    },
+  });
 }
 
 /**
