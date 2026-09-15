@@ -6,6 +6,7 @@ import {
   formatRequestBodyAuditStatus,
   HOSTEXEC_DENY_LABEL,
   hostExecApprovalEffect,
+  hostExecCommand,
   hostExecMatchDetails,
   hostExecScopeLabel,
   networkApprovalEffect,
@@ -225,7 +226,7 @@ describe("hostexec approval views", () => {
     );
   });
 
-  test("shows every broker-reported condition that defines a match", () => {
+  test("shows the remaining match conditions without repeating the command", () => {
     expect(
       hostExecMatchDetails({
         ruleId: capability.ruleId,
@@ -234,7 +235,6 @@ describe("hostexec approval views", () => {
       }),
     ).toEqual([
       { label: "Rule", value: "git.push" },
-      { label: "Command", value: '"git" "push" "origin" "main"' },
       { label: "Working directory", value: "/workspace" },
       {
         label: "Environment bindings",
@@ -256,7 +256,6 @@ describe("hostexec approval views", () => {
       },
     });
 
-    expect(details).toContainEqual({ label: "Command", value: "none" });
     expect(details).toContainEqual({
       label: "Environment bindings",
       value: "none",
@@ -268,19 +267,21 @@ describe("hostexec approval views", () => {
   });
 
   test("JSON-quotes empty and special-character command arguments", () => {
-    const details = hostExecMatchDetails({
-      ruleId: capability.ruleId,
-      cwd: capability.normalizedCwd,
+    const command = hostExecCommand({
+      command: "display fallback",
       capability: {
         ...capability,
         normalizedArgv: ["", 'a"b', "line\nbreak", "\\"],
       },
     });
 
-    expect(details).toContainEqual({
-      label: "Command",
-      value: '"" "a\\"b" "line\\nbreak" "\\\\"',
-    });
+    expect(command).toBe('"" "a\\"b" "line\\nbreak" "\\\\"');
+  });
+
+  test("keeps the command visible for an older payload", () => {
+    expect(hostExecCommand({ command: "git push", capability: null })).toBe(
+      "git push",
+    );
   });
 
   test.each([
@@ -307,7 +308,6 @@ describe("hostexec approval views", () => {
       hostExecMatchDetails({ ruleId: null, cwd: null, capability: null }),
     ).toEqual([
       { label: "Rule", value: "not reported" },
-      { label: "Command", value: "not reported" },
       { label: "Working directory", value: "not reported" },
       { label: "Environment bindings", value: "not reported" },
       { label: "Inherited environment", value: "not reported" },

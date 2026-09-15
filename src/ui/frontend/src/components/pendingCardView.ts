@@ -41,8 +41,21 @@ export function hostExecApprovalEffect(scope: HostExecApprovalScope): string {
     : "Approves all requests waiting on these exact conditions and remembers them for future requests in this session.";
 }
 
+/** Keep argument boundaries visible in the card's single command display. */
+export function hostExecCommand(row: {
+  command: string;
+  capability: HostExecCapabilityLike | null;
+}): string {
+  return row.capability
+    ? listOrNone(
+        row.capability.normalizedArgv.map((arg) => JSON.stringify(arg)),
+        " ",
+      )
+    : row.command;
+}
+
 /**
- * Show the broker-owned, safe identity metadata defining a hostexec match.
+ * Show the remaining match conditions alongside the card's command.
  * Older brokers did not send the snapshot, so missing fields remain explicit
  * rather than being reconstructed from a potentially different local state.
  */
@@ -50,12 +63,6 @@ export function hostExecMatchDetails(
   row: HostExecMatchMetadata,
 ): HostExecMatchDetail[] {
   const capability = row.capability;
-  const command = capability
-    ? listOrNone(
-        capability.normalizedArgv.map((arg) => JSON.stringify(arg)),
-        " ",
-      )
-    : "not reported";
   const bindings = capability
     ? listOrNone(
         capability.envBindings.map(
@@ -72,7 +79,6 @@ export function hostExecMatchDetails(
       label: "Rule",
       value: row.ruleId ?? capability?.ruleId ?? "not reported",
     },
-    { label: "Command", value: command },
     {
       label: "Working directory",
       value: row.cwd ?? capability?.normalizedCwd ?? "not reported",

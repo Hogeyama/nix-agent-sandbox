@@ -20,9 +20,9 @@ test.skipIf(!chromiumAvailable)(
         <aside class="pane pane-right" style="width: 240px; height: 900px">
           <div class="content">
             <article class="card">
+              <p class="card-req"><span class="verb">run</span>"git" "push" "origin" "feature/very-long-branch-name-that-must-wrap"</p>
               <dl class="hostexec-match">
                 <div class="hostexec-match-row"><dt>Rule</dt><dd>repository.git.push.with-a-very-long-rule-identifier</dd></div>
-                <div class="hostexec-match-row"><dt>Command</dt><dd>"git" "push" "origin" "feature/very-long-branch-name-that-must-wrap"</dd></div>
                 <div class="hostexec-match-row"><dt>Working directory</dt><dd>/home/developer/workspaces/a-very-long-project-directory/checkout</dd></div>
                 <div class="hostexec-match-row"><dt>Environment bindings</dt><dd>GITHUB_TOKEN_WITH_A_VERY_LONG_NAME ← secret:github-token-with-a-very-long-source-name</dd></div>
                 <div class="hostexec-match-row"><dt>Inherited environment</dt><dd>unsafe-inherit-all; SSH_AUTH_SOCK_WITH_A_LONG_NAME, GIT_CONFIG_GLOBAL</dd></div>

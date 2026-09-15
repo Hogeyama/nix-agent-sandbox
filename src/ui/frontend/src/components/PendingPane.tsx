@@ -16,6 +16,7 @@ import {
   formatRequestBodyAuditStatus,
   HOSTEXEC_DENY_LABEL,
   hostExecApprovalEffect,
+  hostExecCommand,
   hostExecMatchDetails,
   hostExecScopeLabel,
   networkApprovalEffect,
@@ -437,7 +438,7 @@ export function PendingPane(props: Props) {
                   </div>
                   <p class="card-req">
                     <span class="verb">run</span>
-                    {row.command}
+                    {hostExecCommand(row)}
                   </p>
                   <Show when={row.integrityChanged}>
                     <p class="card-warning">
