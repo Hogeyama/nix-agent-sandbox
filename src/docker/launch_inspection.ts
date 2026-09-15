@@ -22,6 +22,7 @@ export interface DockerLaunchInspection {
     readonly user: string;
     readonly entrypoint: readonly string[] | null;
     readonly command: readonly string[] | null;
+    readonly workingDir: string;
   };
   readonly mounts: readonly DockerLaunchMount[];
   readonly environment: readonly string[];
@@ -78,6 +79,7 @@ export function decodeDockerLaunchInspection(
         "Config.Entrypoint",
       ),
       command: requiredNullableStringArray(config, "Cmd", "Config.Cmd"),
+      workingDir: requiredString(config, "WorkingDir", "Config.WorkingDir"),
     },
     mounts,
     environment: requiredStringArray(config, "Env", "Config.Env"),

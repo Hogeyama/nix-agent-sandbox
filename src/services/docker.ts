@@ -538,6 +538,7 @@ export function makeDockerServiceFake(
               user: "",
               entrypoint: null,
               command: null,
+              workingDir: "",
             },
             mounts: [],
             environment: [],

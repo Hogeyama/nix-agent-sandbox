@@ -29,6 +29,7 @@ export {
   readDevcontainerRegistration,
   readDevcontainerSession,
   readProtectedFile,
+  requireHostUid,
   resolveDevcontainerPaths,
   resolveDevcontainerRuntimePaths,
   withDevcontainerOperationLock,

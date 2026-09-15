@@ -10,6 +10,23 @@ export {
   serializeCompose,
 } from "./launch/compose.ts";
 export {
+  ComposeSessionOps,
+  type ComposeSessionRequest,
+  ComposeSessionService,
+  type ComposeSessionServiceApi,
+  type ComposeSessionServiceFakeConfig,
+  completeComposeSession,
+  makeComposeSessionOpsLive,
+  makeComposeSessionServiceFake,
+  makeComposeSessionServiceLive,
+  serveComposeSession,
+} from "./launch/compose_session_service.ts";
+export {
+  type ComposeStageOptions,
+  createComposeStage,
+  finalizeDevcontainerPlan,
+} from "./launch/compose_stage.ts";
+export {
   ContainerLaunchService,
   type ContainerLaunchServiceFakeConfig,
   ContainerLaunchServiceLive,
