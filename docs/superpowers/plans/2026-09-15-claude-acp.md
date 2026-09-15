@@ -24,26 +24,26 @@
 
 Files: src/config/{Schema.pkl,types.ts,validate.ts}, src/agents/{types.ts,registry.ts,claude.ts}, src/stages/mount/stage.ts, src/docker/embed/Dockerfile and adapter package/lock assets, src/docker/client.ts asset list only, flake.nix asset installation; colocated tests.
 
-- [ ] Add optional TypeScript mode with Pkl terminal default; reject unsupported agents and ACP-specific unsupported profile settings with actionable messages.
-- [ ] Thread mode into pure agent configuration and reuse existing Claude mounts. Require an installed Claude binary in ACP; set `CLAUDE_CODE_EXECUTABLE` and invoke the image adapter by absolute path.
-- [ ] Provision Node.js >=22 and pinned adapter plus package lock in Docker image. Set additional CA trust for Node. Include assets in development and Nix installation paths.
-- [ ] Add focused config/agent tests, inspect resulting diff, commit with git-commit skill, report exact test evidence.
+- [x] Add optional TypeScript mode with Pkl terminal default; reject unsupported agents and ACP-specific unsupported profile settings with actionable messages.
+- [x] Thread mode into pure agent configuration and reuse existing Claude mounts. Require an installed Claude binary in ACP; set `CLAUDE_CODE_EXECUTABLE` and invoke the image adapter by absolute path.
+- [x] Provision Node.js >=22 and pinned adapter plus package lock in Docker image. Set additional CA trust for Node. Include assets in development and Nix installation paths.
+- [x] Add focused config/agent tests, inspect resulting diff, commit with git-commit skill, report exact test evidence.
 
 ### Task 2: Protocol stdio and lifecycle, with independent diagnostics
 
 Files: src/cli.ts and focused CLI helpers/tests, src/log.ts and tests, src/services/docker.ts, src/docker/client.ts, src/stages/launch/*, src/docker/embed/{entrypoint.sh,direnv-exec.sh}, configuration loading paths if needed, usage documentation.
 
-- [ ] Parse `--log-file` before profile and before `--`; open host file with 0600/append, fail on open errors, send only nas diagnostic events to file. Keep data outputs separate.
-- [ ] Guarantee bootstrap, logs, process helpers, Effect logger and shutdown cannot pollute ACP stdout. Route bootstrap child output to stderr while forwarding only adapter protocol to stdout.
-- [ ] Guarantee nas prompts do not consume protocol stdin; reject ACP dtach invocation and CLI agent args; bypass inherited multiplex; explicit no-TTY Docker launch.
-- [ ] Propagate mode through launch options and control EOF, SIGINT/SIGTERM, output disconnect, nonzero exits and cleanup. Do not change terminal behavior incidentally.
-- [ ] Exercise protocol/log separation and lifecycle using fake processes and shell fixtures; test prelaunch errors and optional log file failure. Commit and report.
+- [x] Parse `--log-file` before profile and before `--`; open host file with 0600/append, fail on open errors, send only nas diagnostic events to file. Keep data outputs separate.
+- [x] Guarantee bootstrap, logs, process helpers, Effect logger and shutdown cannot pollute ACP stdout. Route bootstrap child output to stderr while forwarding only adapter protocol to stdout.
+- [x] Guarantee nas prompts do not consume protocol stdin; reject ACP dtach invocation and CLI agent args; bypass inherited multiplex; explicit no-TTY Docker launch.
+- [x] Propagate mode through launch options and control EOF, SIGINT/SIGTERM, output disconnect, nonzero exits and cleanup. Do not change terminal behavior incidentally.
+- [x] Exercise protocol/log separation and lifecycle using fake processes and shell fixtures; test prelaunch errors and optional log file failure. Commit and report.
 
 ### Task 3: User documentation and full validation
 
 Files: README.md and docs-site docs as appropriate (read docs-site/AGENTS.md); focused test fixes only if required by verification.
 
-- [ ] Document profile inheritance, editor command/args/cwd, initial host login, unsupported settings, rebuilding existing images, log file usage and client/MCP trust boundary.
-- [ ] Run repository fmt, lint, check, unit sequence and record results/limitations. If feasible, exercise installed adapter initialize without credentials, with exact runtime/package versions.
+- [x] Document profile inheritance, editor command/args/cwd, initial host login, unsupported settings, rebuilding existing images, log file usage and client/MCP trust boundary.
+- [x] Run repository fmt, lint, check, unit sequence and record results/limitations. If feasible, exercise installed adapter initialize without credentials, with exact runtime/package versions.
 - [ ] Task review and final whole-change review; fix concrete findings in individual commits and re-review.
 - [ ] Leave a reviewable feature branch and create draft GitHub PR if connector permits. Do not merge.

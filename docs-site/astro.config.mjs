@@ -110,6 +110,10 @@ export default defineConfig({
               slug: "configuration/profiles",
             },
             {
+              label: "ACP クライアントとの接続",
+              slug: "configuration/acp",
+            },
+            {
               label: "外部への通信許可",
               slug: "configuration/network",
             },

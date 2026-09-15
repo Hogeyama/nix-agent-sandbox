@@ -15,7 +15,7 @@ ACP クライアントが `nas claude-acp` を子プロセスとして起動し�
 ## ACP の契約
 
 1. stdout は ACP のみに使用する。nas の診断、設定読み込み、Docker build/pull、entrypoint と direnv の初期化出力は stderr。stdout を quiet 設定やファイルログ設定に依存させない。
-2. stdin は ACP 専用で、nas の設定移行・プロファイル選択・worktree 確認には使わない。非対話起動で前準備が必要な場合は具体的な案内で失敗する。
+2. stdin は ACP 専用で、ACP クライアントが pipe で接続する。terminal stdin は拒否する。nas の設定移行・プロファイル選択・worktree 確認には使わず、非対話起動で前準備が必要な場合は具体的な案内で失敗する。
 3. ACP では TTY を強制的に無効化し Docker `-i` で起動する。継承した session.multiplex は利用せず、NAS_INSIDE_DTACH からの起動は拒否する。
 4. 初期版は起動 cwd のワークスペースのみ。自動 worktree は拒否し、既存の worktree で nas 自体を起動することは可能。マウント先は現在と同じ絶対パスを維持する。
 5. profile.agentArgs と CLI のエージェント追加引数は ACP では拒否する。guide.enable も、現在の --add-dir に依存するため案内付きで拒否する。設定は ACP クライアントと Claude settings で指定する。
