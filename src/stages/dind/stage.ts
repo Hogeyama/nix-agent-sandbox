@@ -23,7 +23,10 @@ import {
   DIND_ROOTLESS_SOCKET_PATH,
   SHARED_TMP_MOUNT_PATH,
 } from "../../docker/dind.ts";
-import { containerNameForSession } from "../../docker/nas_resources.ts";
+import {
+  containerNameForSession,
+  sessionDockerResources,
+} from "../../docker/nas_resources.ts";
 import { REGISTRY_CACHE_VOLUME } from "../../docker/registry_mirror.ts";
 import { logInfo } from "../../log.ts";
 import { LOCAL_PROXY_PORT } from "../../network/ports.ts";
@@ -136,10 +139,11 @@ export function planDind(
   // same sidecar/volume name -- Docker then rejects the second `docker run
   // --name` outright, and both sessions would contend for one shared tmp
   // volume. Use the session id untruncated, matching `containerNameForSession`.
-  const containerName = `nas-dind-${input.sessionId}`;
-  const dindDataVolume = `nas-dind-data-${input.sessionId}`;
-  const sharedTmpVolume = `nas-dind-tmp-${input.sessionId}`;
-  const registryMirrorName = `nas-registry-mirror-${input.sessionId.replaceAll("_", "-")}`;
+  const resources = sessionDockerResources(input.sessionId);
+  const containerName = resources.dindContainer;
+  const dindDataVolume = resources.dindDataVolume;
+  const sharedTmpVolume = resources.dindTmpVolume;
+  const registryMirrorName = resources.registryMirrorContainer;
   const registryCacheVolume =
     options.registryCacheVolume ?? REGISTRY_CACHE_VOLUME;
   const disablePullCache = options.disablePullCache ?? false;

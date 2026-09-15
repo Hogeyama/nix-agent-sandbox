@@ -21,6 +21,36 @@ export function containerNameForSession(sessionId: string): string {
   return `nas-agent-${sessionId}`;
 }
 
+/** The mitmproxy container shared by every session network. */
+export const NAS_SHARED_PROXY_CONTAINER = "nas-proxy-shared";
+
+/** Docker resources owned by a single session. */
+export interface SessionDockerResources {
+  readonly agentContainer: string;
+  readonly dindContainer: string;
+  readonly registryMirrorContainer: string;
+  readonly dindDataVolume: string;
+  readonly dindTmpVolume: string;
+  readonly sessionNetwork: string;
+}
+
+/**
+ * Names of the Docker resources a session creates. Creation and out-of-process
+ * cleanup both derive names here, so a reaper cannot drift from the stages.
+ */
+export function sessionDockerResources(
+  sessionId: string,
+): SessionDockerResources {
+  return {
+    agentContainer: containerNameForSession(sessionId),
+    dindContainer: `nas-dind-${sessionId}`,
+    registryMirrorContainer: `nas-registry-mirror-${sessionId.replaceAll("_", "-")}`,
+    dindDataVolume: `nas-dind-data-${sessionId}`,
+    dindTmpVolume: `nas-dind-tmp-${sessionId}`,
+    sessionNetwork: `nas-session-net-${sessionId}`,
+  };
+}
+
 export type DockerLabels = Record<string, string>;
 
 export function isNasManagedLabel(labels: DockerLabels): boolean {

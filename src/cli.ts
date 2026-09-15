@@ -6,6 +6,11 @@ import { Cause, Effect, Exit, Layer } from "effect";
 import pkg from "../package.json";
 import { validateAcpInvocation } from "./cli/acp.ts";
 import {
+  ACP_REAPER_SUBCOMMAND,
+  runAcpReaperCommand,
+  spawnAcpSessionReaper,
+} from "./cli/acp_reaper.ts";
+import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
 } from "./cli/args.ts";
@@ -249,6 +254,13 @@ async function runMain(
     return;
   }
 
+  if (subcommand === ACP_REAPER_SUBCOMMAND) {
+    await runAcpReaperCommand(
+      removeFirstOccurrence(argsBeforeDashDash, ACP_REAPER_SUBCOMMAND),
+    );
+    return;
+  }
+
   if (subcommand === "config") {
     try {
       await runConfigCommand(
@@ -315,6 +327,9 @@ async function runMain(
       logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
       return;
     }
+
+    // ACP clients may SIGKILL nas, which skips every Scope finalizer.
+    if (acp) spawnAcpSessionReaper(sessionId);
 
     const connection = acp ? new AcpConnection() : undefined;
     const shutdown = connection?.controller ?? new AbortController();

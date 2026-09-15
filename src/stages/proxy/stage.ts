@@ -15,6 +15,10 @@ import type {
   RequestBodyAuditConfig,
   SecretConfig,
 } from "../../config/types.ts";
+import {
+  NAS_SHARED_PROXY_CONTAINER,
+  sessionDockerResources,
+} from "../../docker/nas_resources.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { formatElapsed, logDebug } from "../../log.ts";
 import {
@@ -51,7 +55,7 @@ import {
 } from "./session_broker_service.ts";
 
 const PROXY_IMAGE = "mitmproxy/mitmproxy:11";
-const PROXY_CONTAINER_NAME = "nas-proxy-shared";
+const PROXY_CONTAINER_NAME = NAS_SHARED_PROXY_CONTAINER;
 const PROXY_ALIAS = "nas-proxy";
 const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
@@ -136,7 +140,9 @@ export function planProxy(
   const runtimePaths = buildNetworkRuntimePaths(input.host);
   const brokerSocket = brokerSocketPath(runtimePaths, input.sessionId);
   const token = generateSessionToken();
-  const sessionNetworkName = `nas-session-net-${input.sessionId}`;
+  const sessionNetworkName = sessionDockerResources(
+    input.sessionId,
+  ).sessionNetwork;
 
   const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
