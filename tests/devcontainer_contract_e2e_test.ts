@@ -158,6 +158,10 @@ test.skipIf(
             services: {
               agent: {
                 image: FIXTURE_IMAGE,
+                labels: {
+                  "devcontainer.local_folder": workspace,
+                  "devcontainer.config_file": configPath,
+                },
                 command: ["/bin/sh", "-c", "while :; do sleep 3600; done"],
                 working_dir: workspace,
                 volumes: [`${workspace}:${workspace}`],

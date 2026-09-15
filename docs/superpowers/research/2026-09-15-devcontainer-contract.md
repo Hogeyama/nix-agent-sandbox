@@ -39,7 +39,7 @@ Commands were run inside the nas sandbox in the assigned worktree.
 | VS Code CLI | `command -v code`; `code --version` | Not found |
 | Contract fixture image | `docker image ls` | Not present |
 
-## Result and remaining validation
+## NAS result
 
 The automated contract was not executed because the Dev Containers CLI and
 fixture image are absent. This is a capability skip, not evidence that the
@@ -59,10 +59,28 @@ unverified. A successful `devcontainer up` does not prove that VS Code applied
 that already existed before attach. That requires opening the fixture with VS
 Code Dev Containers and checking the remote extension and setting state.
 
-Until those checks run on a machine with the required tools and fixture, the
-automatic startup and attach path remains experimentally unconfirmed. This
-capability gap does not block implementation work that is independent of the
-attach contract.
+## Host follow-up
+
+The host follow-up used the installed Dev Containers specification CLI 0.89.0
+with Docker 29.6.2 and Docker Compose 5.1.4. The host VS Code installation is
+1.119.0, and the isolated test profile contains Dev Containers 0.469.0 and
+Claude Code 2.1.272. The Compose service fixture now carries the standard
+identity labels `devcontainer.local_folder` and `devcontainer.config_file`.
+
+Before those labels were present, both `devcontainer up` calls succeeded but
+`devcontainer exec` failed with `Dev container not found`. Inspection of the
+bundled CLI showed that its lookup path (`dg()`) requires those labels to find
+the existing service. With only the two labels added, the focused host
+contract passed all nine assertions in 12.29 seconds: the initializer marker,
+both `up` results, the Compose service ID, and the `uid=1000`/
+`HOME=/home/nas-test` identity all matched.
+
+This confirms the automated startup, reuse, and CLI exec contract on the host.
+It does not confirm that VS Code applied the declared remote extension and
+setting customizations to an already running service. No GUI attach has been
+performed. SSH and GPG forwarding also remain unverified; source inspection
+found no `forwardSSHAgent` flag, and the extension can create forwarding based
+on the host environment.
 
 An open [VS Code Remote issue](https://github.com/microsoft/vscode-remote-release/issues/11413)
 reports that setting `remoteEnv.SSH_AUTH_SOCK` to an empty value does not remove
