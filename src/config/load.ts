@@ -66,7 +66,9 @@ export async function loadConfig(
   // itself a code-execution surface via pkl `read(...)`) unless its exact
   // contents have been trusted. Auto-init records trust for nas's own
   // template, so a freshly initialized config passes here.
-  await ensureConfigTrusted(found.nasDir, found.configPath);
+  await ensureConfigTrusted(found.nasDir, found.configPath, {
+    nonInteractive: opts.nonInteractive,
+  });
 
   // Check for legacy global config before eval
   await detectAndMigrateGlobalLegacy(opts.nonInteractive);
