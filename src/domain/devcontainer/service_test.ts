@@ -228,6 +228,20 @@ test("simultaneous init serializes and rejects unsafe explicit git credential sh
   expect(await readdir(unsafe.workspace)).toEqual([]);
 });
 
+test("bare tilde mount resolves to the actual host HOME and is rejected", async () => {
+  const f = await fixture();
+  f.inputs.profile.extraMounts.push({
+    src: "~",
+    dst: "/alias",
+    mode: "rw",
+  });
+
+  await expect(f.run((s) => s.init(f.workspace, "claude"))).rejects.toThrow(
+    "mount source exposes host HOME",
+  );
+  expect(await readdir(f.workspace)).toEqual([]);
+});
+
 test("init refuses unregistered dedicated state without adopting authentication", async () => {
   const f = await fixture();
   const paths = resolveDevcontainerPaths(f.host, f.workspace);
