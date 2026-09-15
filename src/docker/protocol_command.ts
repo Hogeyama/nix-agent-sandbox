@@ -34,9 +34,17 @@ export async function runProtocolCommand(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let streamError: Error | undefined;
+  const eofSignals = new Set<NodeJS.Signals>();
   const signalGroup = (signal: NodeJS.Signals) => {
     try {
-      if (child.pid) process.kill(-child.pid, signal);
+      if (child.pid) {
+        // A descendant can keep stdout open after the payload has already died.
+        // Signalling that remaining group must not reclassify the payload crash.
+        const payloadRunning =
+          child.exitCode === null && child.signalCode === null;
+        process.kill(-child.pid, signal);
+        if (reason === "eof" && payloadRunning) eofSignals.add(signal);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
@@ -98,8 +106,10 @@ export async function runProtocolCommand(
         `ACP output disconnected${streamError ? `: ${streamError.message}` : ""}`,
         1,
       );
-    // EOF is a normal client shutdown, including an adapter that needed termination.
-    if (reason === "eof" && result.signal) return;
+    // Accept only the termination signal this transport sent for EOF. A crash
+    // or external kill during the grace period is still a payload failure.
+    if (reason === "eof" && result.signal && eofSignals.has(result.signal))
+      return;
     if (result.code !== 0)
       throw new ProtocolCommandError(
         `${command} exited with ${result.signal ?? `code ${result.code}`}`,

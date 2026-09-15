@@ -79,3 +79,43 @@ test("closed protocol output terminates the payload", async () => {
   output.destroy();
   await expect(running).rejects.toThrow("disconnected");
 });
+
+for (const signal of ["TERM", "KILL"] as const) {
+  test(`EOF does not hide payload SIG${signal} before transport termination`, async () => {
+    const { output } = sink();
+    await expect(
+      runProtocolCommand("bash", ["-c", `cat >/dev/null; kill -${signal} $$`], {
+        input: Readable.from([]),
+        output,
+      }),
+    ).rejects.toThrow(`SIG${signal}`);
+  });
+}
+
+test("EOF does not hide a different fatal signal triggered by TERM", async () => {
+  const { output } = sink();
+  await expect(
+    runProtocolCommand(
+      "bash",
+      ["-c", "trap 'kill -KILL $$' TERM; cat >/dev/null; while :; do :; done"],
+      {
+        input: Readable.from([]),
+        output,
+        graceMs: 100,
+      },
+    ),
+  ).rejects.toThrow("SIGKILL");
+});
+
+test("transport-issued EOF TERM is a normal shutdown", async () => {
+  const { output } = sink();
+  await runProtocolCommand(
+    "bash",
+    ["-c", "cat >/dev/null; while :; do :; done"],
+    {
+      input: Readable.from([]),
+      output,
+      graceMs: 40,
+    },
+  );
+});
