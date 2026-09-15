@@ -65,6 +65,29 @@ const request: ComposeSessionRequest = {
   container,
 };
 
+test("IDE launch uses host Claude authentication and history", () => {
+  const hostHome = "/host/tester";
+  const shared = {
+    ...request,
+    container: {
+      ...container,
+      mounts: container.mounts.map((mount) => ({
+        ...mount,
+        source:
+          mount.target === "/home/tester/.claude"
+            ? `${hostHome}/.claude`
+            : mount.target === "/home/tester/.claude.json"
+              ? `${hostHome}/.claude.json`
+              : mount.source,
+      })),
+    },
+  };
+  expect(() => validateComposeSessionRequest(shared, hostHome)).not.toThrow();
+  expect(() => validateComposeSessionRequest(request, hostHome)).toThrow(
+    "required dedicated mount differs",
+  );
+});
+
 test("request validation pins protection overlays and dedicated mounts", () => {
   expect(() => validateComposeSessionRequest(request)).not.toThrow();
   const withoutOverlay = {
