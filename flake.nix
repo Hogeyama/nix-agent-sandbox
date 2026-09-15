@@ -83,7 +83,7 @@
           pname = "hostexec-intercept";
           version = "0.1.0";
           src = ./src/hostexec/intercept;
-          nativeBuildInputs = [ zig ];
+          nativeBuildInputs = [ zig pkgs.removeReferencesTo ];
           dontConfigure = true;
           dontFixup = true;
           doCheck = true;
@@ -109,6 +109,10 @@
             cp zig-out/lib/libhostexec_intercept.so $out/lib/hostexec_intercept.so
             cp zig-out/bin/nas-hostexec-client $out/bin/
             cp zig-out/bin/nas-hostexec-gateway $out/bin/
+            # dontFixup で strip しないため、debug info に zig 標準ライブラリの
+            # store path が残る。放置すると zig + llvm (~900MiB) が nas の
+            # runtime closure に入るので参照だけ消す。
+            remove-references-to -t ${zig} $out/lib/* $out/bin/*
           '';
         };
 
@@ -154,7 +158,7 @@
             ];
           };
           sourceRoot = "source/mask-filter";
-          nativeBuildInputs = [ zig ];
+          nativeBuildInputs = [ zig pkgs.removeReferencesTo ];
           dontConfigure = true;
           dontFixup = true;
           doCheck = true;
@@ -171,6 +175,8 @@
           installPhase = ''
             mkdir -p $out/bin
             cp zig-out/bin/nas-mask-filter $out/bin/
+            # hostexecIntercept と同じ理由で zig への参照を消す。
+            remove-references-to -t ${zig} $out/bin/*
           '';
         };
 
