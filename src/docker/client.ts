@@ -64,6 +64,18 @@ export interface InteractiveCommandOptions {
   signalTrap?: SignalTrap;
 }
 
+export interface DockerCommandOptions {
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+  /** @internal Allows unit tests to substitute a short-lived fake process. */
+  readonly executable?: string;
+}
+
+export interface DockerCommandResult {
+  readonly stdout: Uint8Array;
+  readonly stderr: Uint8Array;
+}
+
 const defaultSignalTrap: SignalTrap = {
   add(signal, handler) {
     process.on(signal, handler);
@@ -121,6 +133,7 @@ export async function computeEmbedHash(): Promise<string> {
 export async function getImageLabel(
   tag: string,
   label: string,
+  options?: DockerCommandOptions,
 ): Promise<string | null> {
   if (preparationSignal()) {
     const result = await runPreparationCommand("docker", [
@@ -132,11 +145,14 @@ export async function getImageLabel(
     return result.exitCode === 0 ? result.stdout.trim() || null : null;
   }
   try {
-    const result =
-      await $`docker inspect --format ${`{{index .Config.Labels "${label}"}}`} ${tag}`.quiet();
-    const value = result.stdout.toString().trim();
+    const format = `{{index .Config.Labels "${label}"}}`;
+    const result = options
+      ? await runDockerCommand(["inspect", "--format", format, tag], options)
+      : await $`docker inspect --format ${format} ${tag}`.quiet();
+    const value = Buffer.from(result.stdout).toString().trim();
     return value || null;
-  } catch {
+  } catch (error) {
+    if (options && isBoundedCommandFailure(error)) throw error;
     return null;
   }
 }
@@ -335,7 +351,7 @@ export async function dockerEnsureImage(
   tag: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  if (await dockerImageExists(tag, signal)) return false;
+  if (await dockerImageExists(tag, signal && { signal })) return false;
   logInfo(`[nas] Pulling image ${tag} ...`);
   await dockerPull(tag, signal);
   return true;
@@ -344,23 +360,110 @@ export async function dockerEnsureImage(
 /** docker image が存在するか確認 */
 export async function dockerImageExists(
   tag: string,
-  signal?: AbortSignal,
+  options?: DockerCommandOptions,
 ): Promise<boolean> {
   if (preparationSignal()) {
     return (
       (
         await runPreparationCommand("docker", ["image", "inspect", tag], {
-          signal,
+          signal: options?.signal,
         })
       ).exitCode === 0
     );
   }
   try {
-    await $`docker image inspect ${tag}`.quiet();
+    if (options) await runDockerCommand(["image", "inspect", tag], options);
+    else await $`docker image inspect ${tag}`.quiet();
     return true;
-  } catch {
+  } catch (error) {
+    if (options && isBoundedCommandFailure(error)) throw error;
     return false;
   }
+}
+
+function isBoundedCommandFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.includes("timed out") || error.message.includes("aborted"))
+  );
+}
+
+export async function runDockerCommand(
+  args: readonly string[],
+  options: DockerCommandOptions = {},
+): Promise<DockerCommandResult> {
+  const child = Bun.spawn([options.executable ?? "docker", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdoutReader = child.stdout.getReader();
+  const stderrReader = child.stderr.getReader();
+  const cancelOutput = () => {
+    void stdoutReader.cancel();
+    void stderrReader.cancel();
+  };
+  let timedOut = false;
+  let aborted = false;
+  let abortKill: ReturnType<typeof setTimeout> | undefined;
+  const abort = () => {
+    aborted = true;
+    child.kill("SIGTERM");
+    abortKill = setTimeout(() => {
+      child.kill("SIGKILL");
+      cancelOutput();
+    }, 250);
+  };
+  const timeout =
+    options.timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+          cancelOutput();
+        }, options.timeoutMs);
+  if (options.signal?.aborted) abort();
+  else options.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      readAll(stdoutReader),
+      readAll(stderrReader),
+    ]);
+    if (aborted) throw new Error("docker command aborted");
+    if (timedOut)
+      throw new Error(
+        `docker command timed out after ${options.timeoutMs ?? 0}ms`,
+      );
+    if (code !== 0)
+      throw new Error(
+        formatDockerCommandFailure([...args], code, stdout, stderr),
+      );
+    return { stdout, stderr };
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (abortKill !== undefined) clearTimeout(abortKill);
+    options.signal?.removeEventListener("abort", abort);
+  }
+}
+
+async function readAll(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    length += value.byteLength;
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 /** docker network を作成 */

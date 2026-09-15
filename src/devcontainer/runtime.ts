@@ -13,7 +13,6 @@ import { createPreparationPipelineBuilder } from "../pipeline/cli_builder.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import { createPipelineLiveLayer } from "../pipeline/live.ts";
 import type { HostEnv } from "../pipeline/types.ts";
-import { DockerServiceLive } from "../services/docker.ts";
 import { resolveBuildProbes } from "../stages/docker_build.ts";
 import {
   ComposeSessionOps,
@@ -59,31 +58,55 @@ export async function runDevcontainerRuntime(
   const deadlineAt = Date.now() + (options.startupTimeoutMs ?? 120_000);
   const host = options.host ?? buildHostEnv();
   const workspace = options.registration.workspace;
-  const probes = await resolveProbes(host);
-  const mountProbes = await resolveMountProbes(
-    host,
-    options.profile,
-    workspace,
-    probes.gpgAgentSocket,
-  );
-  const gitMetadataPaths = await resolveDevcontainerGitMetadata(workspace);
-  validateOriginalMountRoots(host, options.registration, gitMetadataPaths);
-  const buildProbes = await resolveBuildProbes("nas-sandbox");
+  const guard = createStartupGuard(deadlineAt, options.signal);
+  const { probes, mountProbes, gitMetadataPaths, buildProbes } =
+    await (async () => {
+      try {
+        const probes = await guard.wait(resolveProbes(host));
+        const mountProbes = await guard.wait(
+          resolveMountProbes(
+            host,
+            options.profile,
+            workspace,
+            probes.gpgAgentSocket,
+          ),
+        );
+        const gitMetadataPaths = await guard.wait(
+          resolveDevcontainerGitMetadata(workspace),
+        );
+        validateOriginalMountRoots(
+          host,
+          options.registration,
+          gitMetadataPaths,
+        );
+        const buildProbes = await guard.wait(
+          resolveBuildProbes("nas-sandbox", {
+            timeoutMs: Math.max(1, deadlineAt - Date.now()),
+            signal: guard.signal,
+          }),
+        );
 
-  const networkNotify = resolveNotifyBackend(
-    options.profile.network.pendingNotify,
-  );
-  const hostexecNotify = resolveNotifyBackend(
-    options.profile.hostexec?.prompt.notify ?? "auto",
-  );
-  if (networkNotify === "desktop" || hostexecNotify === "desktop")
-    checkNotifySend();
-  if (options.config.ui.enable) {
-    await ensureUiDaemon({
-      port: options.config.ui.port,
-      idleTimeout: options.config.ui.idleTimeout,
-    });
-  }
+        const networkNotify = resolveNotifyBackend(
+          options.profile.network.pendingNotify,
+        );
+        const hostexecNotify = resolveNotifyBackend(
+          options.profile.hostexec?.prompt.notify ?? "auto",
+        );
+        if (networkNotify === "desktop" || hostexecNotify === "desktop")
+          checkNotifySend();
+        if (options.config.ui.enable) {
+          await guard.wait(
+            ensureUiDaemon({
+              port: options.config.ui.port,
+              idleTimeout: options.config.ui.idleTimeout,
+            }),
+          );
+        }
+        return { probes, mountProbes, gitMetadataPaths, buildProbes };
+      } finally {
+        guard.close();
+      }
+    })();
   process.env.NAS_SESSION_ID = options.sessionId;
 
   const input = {
@@ -95,7 +118,7 @@ export async function runDevcontainerRuntime(
     probes,
   };
   const paths = resolveDevcontainerPaths(host, workspace);
-  const builder = createPreparationPipelineBuilder({
+  const preparationBuilder = createPreparationPipelineBuilder({
     input,
     buildProbes,
     mountProbes,
@@ -105,11 +128,12 @@ export async function runDevcontainerRuntime(
       vscodeDir: paths.vscodeDir,
       gitMetadataPaths,
     },
-  }).add(createComposeStage(input, { registration: options.registration }));
+  });
+  const composeStage = createComposeStage(input, {
+    registration: options.registration,
+  });
 
-  const opsLayer = makeComposeSessionOpsLive(host).pipe(
-    Layer.provide(DockerServiceLive),
-  );
+  const opsLayer = makeComposeSessionOpsLive(host);
   let request: ComposeSessionRequest | null = null;
   let containerName: string | null = null;
   const program = Effect.gen(function* () {
@@ -129,13 +153,19 @@ export async function runDevcontainerRuntime(
         },
       }),
     );
-    yield* builder
+    const prepared = yield* preparationBuilder
       .run(
         createCliInitialState(workspace, "nas-sandbox", {
           NAS_SESSION_ID: options.sessionId,
         }),
       )
-      .pipe(Effect.provide(composeLayer));
+      .pipe(
+        Effect.timeoutFail({
+          duration: Math.max(0, deadlineAt - Date.now()),
+          onTimeout: () => new Error("devcontainer startup deadline exceeded"),
+        }),
+      );
+    yield* composeStage.run(prepared).pipe(Effect.provide(composeLayer));
   }).pipe(
     Effect.scoped,
     Effect.provide(Layer.merge(createPipelineLiveLayer(), opsLayer)),
@@ -149,6 +179,60 @@ export async function runDevcontainerRuntime(
     ? Exit.succeed(undefined)
     : Exit.fail(new Error(Cause.pretty(exit.cause)));
   return { exit: normalized, containerName };
+}
+
+function createStartupGuard(deadlineAt: number, external?: AbortSignal) {
+  const controller = new AbortController();
+  const abortFromCaller = () =>
+    controller.abort(new Error("devcontainer startup aborted"));
+  if (external?.aborted) abortFromCaller();
+  else external?.addEventListener("abort", abortFromCaller, { once: true });
+  const remaining = deadlineAt - Date.now();
+  const timer =
+    remaining <= 0
+      ? undefined
+      : setTimeout(
+          () =>
+            controller.abort(
+              new Error("devcontainer startup deadline exceeded"),
+            ),
+          remaining,
+        );
+  if (remaining <= 0)
+    controller.abort(new Error("devcontainer startup deadline exceeded"));
+
+  const wait = <T>(promise: Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const aborted = () =>
+        reject(
+          controller.signal.reason instanceof Error
+            ? controller.signal.reason
+            : new Error("devcontainer startup aborted"),
+        );
+      if (controller.signal.aborted) {
+        aborted();
+        return;
+      }
+      controller.signal.addEventListener("abort", aborted, { once: true });
+      promise.then(
+        (value) => {
+          controller.signal.removeEventListener("abort", aborted);
+          resolve(value);
+        },
+        (error) => {
+          controller.signal.removeEventListener("abort", aborted);
+          reject(error);
+        },
+      );
+    });
+  return {
+    signal: controller.signal,
+    wait,
+    close: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      external?.removeEventListener("abort", abortFromCaller);
+    },
+  };
 }
 
 function validateOriginalMountRoots(
