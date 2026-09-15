@@ -57,6 +57,11 @@ pub fn readerHolds(allocator: std.mem.Allocator, reader: anytype, values: []cons
     if (max_len == 0) return false;
     const buf = try allocator.alloc(u8, CHUNK + max_len);
     defer allocator.free(buf);
+    return readerHoldsBuffer(reader, values, buf, max_len);
+}
+
+fn readerHoldsBuffer(reader: anytype, values: []const []const u8, buf: []u8, max_len: usize) !bool {
+    if (max_len == 0) return false;
     var keep: usize = 0;
     while (true) {
         const n = try reader.read(buf[keep..]);
@@ -132,6 +137,22 @@ const Walk = struct {
     secrets_path: []const u8,
     findings: *Findings,
     content_buffer: ?[]u8 = null,
+    scan_buffer: ?[]u8 = null,
+    max_len: usize = 0,
+
+    fn deinit(self: *Walk) void {
+        if (self.scan_buffer) |buf| self.allocator.free(buf);
+        if (self.content_buffer) |buf| self.allocator.free(buf);
+    }
+
+    fn streamHolds(self: *Walk, reader: anytype) !bool {
+        if (self.scan_buffer == null) {
+            self.max_len = mask.maxSecretLen(self.values);
+            if (self.max_len == 0) return false;
+            self.scan_buffer = try self.allocator.alloc(u8, CHUNK + self.max_len);
+        }
+        return readerHoldsBuffer(reader, self.values, self.scan_buffer.?, self.max_len);
+    }
 
     fn file(self: *Walk, path: []const u8) !void {
         if (std.mem.eql(u8, path, self.secrets_path)) {
@@ -146,7 +167,7 @@ const Walk = struct {
         defer handle.close();
         const stat = handle.stat() catch return self.findings.unknown(self.allocator, path);
         if (stat.kind != .file) return self.findings.keep(self.allocator, path);
-        const holds = readerHolds(self.allocator, handle, self.values) catch |err| switch (err) {
+        const holds = self.streamHolds(handle) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return self.findings.unknown(self.allocator, path),
         };
@@ -280,6 +301,15 @@ const Reconciled = struct { events: std.ArrayList(Event) = .empty, failed: bool 
 fn reconcile(allocator: std.mem.Allocator, settings: *std.json.Value, record: *std.json.Value, root: []const u8, findings: Findings) !Reconciled {
     const current = try validateSettings(allocator, settings.*);
     const previous = try ownedPaths(allocator, record.*);
+    // Most scanned files are clean and have never appeared in settings. Index
+    // paths once so those files do not each walk every configured credential,
+    // ownership entry and denyRead rule. Keep the full conflict logic below for
+    // every relevant path, including duplicate and user-owned entries.
+    var relevant = std.StringHashMap(void).init(allocator);
+    defer relevant.deinit();
+    for (current.files) |entry| try relevant.put(jsonio.getString(entry, "path").?, {});
+    for (previous) |path| try relevant.put(path, {});
+    for (current.deny) |path| try relevant.put(path, {});
     var files = std.json.Array.init(allocator);
     try files.appendSlice(current.files);
     var owned: std.ArrayList([]const u8) = .empty;
@@ -287,6 +317,7 @@ fn reconcile(allocator: std.mem.Allocator, settings: *std.json.Value, record: *s
     var result = Reconciled{};
     for (findings.files.items) |finding| {
         const path = finding.path;
+        if (finding.outcome == .clean and !relevant.contains(path)) continue;
         if (!underRoot(path, root) or findings.isPreserved(path)) continue;
         var count: usize = 0;
         var index: usize = 0;
@@ -474,12 +505,22 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     const record_before = try jsonio.stringifyPretty(allocator, record.value);
     var findings = Findings{};
     var walk = Walk{ .allocator = allocator, .values = values, .secrets_path = secrets_path, .findings = &findings };
+    defer walk.deinit();
     try walk.dir(root);
-    for (previous) |path| {
-        const seen = for (findings.files.items) |finding| {
-            if (std.mem.eql(u8, path, finding.path)) break true;
-        } else false;
-        if (!seen) try confirmUnseen(&walk, root, path);
+    if (previous.len != 0) {
+        // Index only owned paths, not every file in a potentially huge tree.
+        var seen = std.StringHashMap(bool).init(allocator);
+        defer seen.deinit();
+        for (previous) |path| try seen.put(path, false);
+        for (findings.files.items) |finding| {
+            if (seen.getPtr(finding.path)) |visited| visited.* = true;
+        }
+        for (previous) |path| {
+            if (seen.get(path).?) continue;
+            const before = findings.files.items.len;
+            try confirmUnseen(&walk, root, path);
+            if (findings.files.items.len != before) seen.getPtr(path).?.* = true;
+        }
     }
     std.mem.sort(Finding, findings.files.items, {}, findingLessThan);
     const result = try reconcile(allocator, &parsed.value, &record.value, root, findings);
@@ -568,6 +609,62 @@ test "readerHolds: finds a value split across chunk boundaries" {
     @memset(data, 'x');
     var clean = std.io.fixedBufferStream(data);
     try testing.expect(!try readerHolds(testing.allocator, clean.reader(), &values));
+}
+
+test "walk reader: short reads and reused storage never join different files" {
+    const ShortReader = struct {
+        bytes: []const u8,
+        fn read(self: *@This(), buf: []u8) !usize {
+            const n = @min(@min(buf.len, self.bytes.len), 3);
+            @memcpy(buf[0..n], self.bytes[0..n]);
+            self.bytes = self.bytes[n..];
+            return n;
+        }
+    };
+    var findings = Findings{};
+    var walk = Walk{ .allocator = testing.allocator, .values = &.{ "", "split-value", "z" }, .secrets_path = "/secrets", .findings = &findings };
+    defer walk.deinit();
+    var first = ShortReader{ .bytes = "xxsplit-" };
+    try testing.expect(!try walk.streamHolds(&first));
+    var second = ShortReader{ .bytes = "value" };
+    try testing.expect(!try walk.streamHolds(&second));
+    var matched = ShortReader{ .bytes = "xxsplit-value" };
+    try testing.expect(try walk.streamHolds(&matched));
+    var after_match = ShortReader{ .bytes = "" };
+    try testing.expect(!try walk.streamHolds(&after_match));
+    var single = ShortReader{ .bytes = "xxz" };
+    try testing.expect(try walk.streamHolds(&single));
+}
+
+test "readerHolds: match spans the actual full-buffer read boundary" {
+    const values = [_][]const u8{"split-value"};
+    const boundary = CHUNK + values[0].len;
+    const data = try testing.allocator.alloc(u8, boundary * 2);
+    defer testing.allocator.free(data);
+    for (1..values[0].len) |split| {
+        @memset(data, 'x');
+        @memcpy(data[boundary - split ..][0..values[0].len], values[0]);
+        var stream = std.io.fixedBufferStream(data);
+        try testing.expect(try readerHolds(testing.allocator, stream.reader(), &values));
+    }
+}
+
+test "reconcile: unrelated clean paths do not hide clean-path conflicts" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var settings = try jsonio.parse(a,
+        \\{"sandbox":{"filesystem":{"denyRead":["/p/denied"]},"credentials":{"files":[{"path":"/p/manual"}]}}}
+    );
+    var record = try jsonio.parse(a, "{\"credentialsFiles\":[\"/p/missing\"]}");
+    var findings = Findings{};
+    for ([_][]const u8{ "/p/unrelated", "/p/denied", "/p/manual", "/p/missing" }) |path| try findings.add(a, path, .clean);
+    const result = try reconcile(a, &settings.value, &record.value, "/p", findings);
+    try testing.expectEqual(@as(usize, 3), result.events.items.len);
+    try testing.expectEqualStrings("denyread-conflict", result.events.items[0].reason.?);
+    try testing.expectEqualStrings("existing-entry", result.events.items[1].reason.?);
+    try testing.expect(result.events.items[2].action == .unmask);
+    try testing.expectEqual(@as(usize, 0), (try ownedPaths(a, record.value)).len);
 }
 
 test "hasGlobBytes and sidecarPath" {
@@ -740,6 +837,7 @@ test "walk and reconcile never serialize secrets.load expansions" {
     const values = try secrets.load(a, secret_path);
     var findings = Findings{};
     var walk = Walk{ .allocator = a, .values = values, .secrets_path = secret_path, .findings = &findings };
+    defer walk.deinit();
     try walk.file(path);
     try testing.expect(findings.files.items[0].outcome == .masked);
     var settings = try jsonio.parse(a, "{}");
