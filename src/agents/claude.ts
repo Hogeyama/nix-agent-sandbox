@@ -2,10 +2,14 @@
  * Claude Code エージェント対応
  */
 
-import type { AgentConfigResult } from "./types.ts";
+import type { AgentConfigResult, AgentMode } from "./types.ts";
 
 const DEFAULT_CONTAINER_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/** Resolved from the container PATH; users provide the adapter and its runtime. */
+export const CLAUDE_AGENT_ACP_COMMAND = "claude-agent-acp";
+export const NAS_PROXY_CA_CERT_PATH =
+  "/usr/local/share/ca-certificates/nas-proxy.crt";
 
 // ---------------------------------------------------------------------------
 // Probe types & resolver (side-effectful)
@@ -33,6 +37,7 @@ export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
 
 /** configureClaude の入力 */
 export interface ClaudeConfigInput {
+  readonly mode?: AgentMode;
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: ClaudeProbes;
@@ -47,6 +52,7 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
   const args = [...priorDockerArgs];
   const envVars = { ...priorEnvVars };
   const containerLocalBin = `${containerHome}/.local/bin`;
+  const mode = input.mode ?? "terminal";
 
   envVars.PATH = `${containerLocalBin}:${
     envVars.PATH ?? DEFAULT_CONTAINER_PATH
@@ -65,6 +71,21 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
   // claude バイナリのマウント (実体パスを解決してマウント)
   if (probes.claudeBinPath) {
     args.push("-v", `${probes.claudeBinPath}:${containerLocalBin}/claude:ro`);
+  }
+
+  if (mode === "acp") {
+    if (!probes.claudeBinPath) {
+      throw new Error(
+        "[nas] ACP mode requires Claude Code installed on the host; install and log in to Claude on the host before starting nas",
+      );
+    }
+    envVars.CLAUDE_CODE_EXECUTABLE = `${containerLocalBin}/claude`;
+    envVars.NODE_EXTRA_CA_CERTS = NAS_PROXY_CA_CERT_PATH;
+    return {
+      dockerArgs: [...args],
+      envVars,
+      agentCommand: [CLAUDE_AGENT_ACP_COMMAND],
+    };
   }
 
   const agentCommand: string[] = probes.claudeBinPath

@@ -30,6 +30,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
   switch (input.agent) {
     case "claude":
       return configureClaude({
+        mode: input.mode,
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectClaudeProbes(input.probes),
@@ -37,6 +38,9 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         priorEnvVars: input.priorEnvVars,
       });
     case "copilot":
+      if (input.mode !== "terminal") {
+        throw new Error('ACP mode currently supports only agent "claude"');
+      }
       return configureCopilot({
         containerHome: input.containerHome,
         hostHome: input.hostHome,
@@ -45,6 +49,9 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         priorEnvVars: input.priorEnvVars,
       });
     case "codex":
+      if (input.mode !== "terminal") {
+        throw new Error('ACP mode currently supports only agent "claude"');
+      }
       return configureCodex({
         containerHome: input.containerHome,
         hostHome: input.hostHome,
