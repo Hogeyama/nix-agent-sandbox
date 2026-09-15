@@ -310,7 +310,13 @@ export function serveComposeSession(
         }
       }
       if (ownedId !== null) {
-        yield* ops.publishPhase(request, "stopping", ownedId, original);
+        const stoppingPublished = yield* Effect.exit(
+          ops.publishPhase(request, "stopping", ownedId, original),
+        );
+        if (Exit.isFailure(stoppingPublished))
+          cleanupErrors.push(
+            `stopping state publish failed: ${describeCause(stoppingPublished.cause)}`,
+          );
         const current = yield* Effect.exit(ops.inspect(ownedId));
         if (Exit.isFailure(current)) {
           cleanupErrors.push(
