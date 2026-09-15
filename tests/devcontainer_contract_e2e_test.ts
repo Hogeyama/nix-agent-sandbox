@@ -131,6 +131,8 @@ test.skipIf(
     const markerPath = path.join(devcontainerDir, "initialized-container-id");
     const configPath = path.join(devcontainerDir, "devcontainer.json");
     const projectName = `nas-contract-${crypto.randomUUID()}`;
+    let composeCleanupRequired = false;
+    let testFailure: unknown;
 
     try {
       await mkdir(devcontainerDir, { recursive: true });
@@ -201,6 +203,7 @@ docker compose --project-name "$project_name" --file "$compose_path" ps -q agent
         configPath,
       ];
 
+      composeCleanupRequired = true;
       const firstUp = await run(["devcontainer", "up", ...devcontainerArgs]);
       requireSuccess(firstUp, "first devcontainer up");
       const attachedContainerId = parseDevcontainerResult(
@@ -246,21 +249,54 @@ docker compose --project-name "$project_name" --file "$compose_path" ps -q agent
       expect(attachedContainerId).toBe(createdContainerId);
       expect(secondAttachContainerId).toBe(createdContainerId);
       expect(remoteIdentity).toEqual({ uid: 1000, home: "/home/nas-test" });
-    } finally {
-      await run([
-        "docker",
-        "compose",
-        "--project-name",
-        projectName,
-        "--file",
-        composePath,
-        "down",
-        "--volumes",
-        "--remove-orphans",
-      ]).catch(() => undefined);
-      await rm(workspace, { recursive: true, force: true }).catch(
-        () => undefined,
+    } catch (error) {
+      testFailure = error;
+    }
+
+    const cleanupFailures: unknown[] = [];
+    if (composeCleanupRequired) {
+      try {
+        const down = await run([
+          "docker",
+          "compose",
+          "--project-name",
+          projectName,
+          "--file",
+          composePath,
+          "down",
+          "--volumes",
+          "--remove-orphans",
+        ]);
+        if (down.exitCode !== 0) {
+          throw new Error(
+            `docker compose down failed\nstdout:\n${down.stdout}\nstderr:\n${down.stderr}`,
+          );
+        }
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+
+    if (cleanupFailures.length === 0) {
+      try {
+        await rm(workspace, { recursive: true, force: true });
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+
+    if (cleanupFailures.length > 0) {
+      const failures =
+        testFailure === undefined
+          ? cleanupFailures
+          : [testFailure, ...cleanupFailures];
+      throw new AggregateError(
+        failures,
+        `Dev Containers contract cleanup failed; temporary workspace retained at ${workspace}`,
       );
+    }
+    if (testFailure !== undefined) {
+      throw testFailure;
     }
   },
   120_000,
