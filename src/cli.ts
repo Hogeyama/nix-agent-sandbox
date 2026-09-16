@@ -17,6 +17,7 @@ import {
 import { runAuditCommand } from "./cli/audit.ts";
 import { runConfigCommand } from "./cli/config.ts";
 import { runContainerCommand } from "./cli/container.ts";
+import { extractControlOptions } from "./cli/control_options.ts";
 import {
   exitOnCliError,
   findFirstNonFlagArg,
@@ -25,7 +26,6 @@ import {
 } from "./cli/helpers.ts";
 import { runHookCommand } from "./cli/hook.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
-import { extractLogFile } from "./cli/log_file.ts";
 import { runNetworkCommand } from "./cli/network.ts";
 import { createCliInitialState } from "./cli/pipeline_state.ts";
 import { runRebuild } from "./cli/rebuild.ts";
@@ -33,6 +33,7 @@ import { runSessionCommand } from "./cli/session.ts";
 import { runUiCommand } from "./cli/ui.ts";
 import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
+import { writeSessionIdFile } from "./cli/write_session_id.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import { AcpConnection } from "./docker/acp_connection.ts";
 import { ProtocolCommandError } from "./docker/protocol_command.ts";
@@ -139,9 +140,9 @@ const VERSION: string = `${pkg.version}+${GIT_REVISION}`;
 export async function main(args: string[], entryMs?: number): Promise<void> {
   let closeLog: (() => void) | undefined;
   try {
-    const parsed = extractLogFile(args);
+    const parsed = extractControlOptions(args);
     if (parsed.logFile) closeLog = openDiagnosticLog(parsed.logFile);
-    await runMain(parsed.args, entryMs, args);
+    await runMain(parsed.args, entryMs, args, parsed.writeSessionId);
   } catch (error) {
     exitOnCliError(error);
   } finally {
@@ -153,6 +154,7 @@ async function runMain(
   args: string[],
   entryMs?: number,
   originalArgs = args,
+  writeSessionId?: string,
 ): Promise<void> {
   const mainStart = performance.now();
   const nonInteractive = !process.stdin.isTTY || !process.stdout.isTTY;
@@ -312,6 +314,10 @@ async function runMain(
     const acp = effectiveProfile.mode === "acp";
     setDiagnosticStderr(acp);
     const sessionId = process.env.NAS_SESSION_ID || `sess_${randomHex(6)}`;
+    // 起動した側がセッションを名指しできるようにする。`nas <domain> watch
+    // --session` や `approve` に渡す値で、stdout がプロトコル専用になる ACP
+    // ではこれが唯一の入手経路になる。
+    if (writeSessionId) await writeSessionIdFile(writeSessionId, sessionId);
 
     // session.multiplex かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
     if (
