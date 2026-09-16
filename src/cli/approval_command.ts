@@ -5,8 +5,10 @@
 import type { ReviewItem } from "../fzf_review.ts";
 import { runFzfReview } from "../fzf_review.ts";
 import {
+  isOwnerPipe,
   runApprovalWatch,
   sleepAbortable,
+  stopOnOwnerExit,
   structuredOf,
 } from "./approval_watch.ts";
 import {
@@ -102,6 +104,10 @@ export async function handleApprovalSubcommand(
     process.once("SIGTERM", stop);
     // 読み口が閉じたら止まる。EPIPE を警告として流し続けない。
     process.stdout.once("error", stop);
+    const releaseOwner =
+      deps.signal === undefined && isOwnerPipe(0)
+        ? stopOnOwnerExit(process.stdin, stop)
+        : undefined;
     if (deps.signal) {
       if (deps.signal.aborted) stop();
       else deps.signal.addEventListener("abort", stop, { once: true });
@@ -131,6 +137,7 @@ export async function handleApprovalSubcommand(
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
       process.stdout.off("error", stop);
+      releaseOwner?.();
       deps.signal?.removeEventListener("abort", stop);
     }
     return true;

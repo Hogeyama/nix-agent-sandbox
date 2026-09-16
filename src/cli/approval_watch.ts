@@ -5,6 +5,8 @@
  * 引数で受け取るため、実時間とファイルシステムなしで両方を検証できる。
  */
 
+import { fstatSync } from "node:fs";
+import type { Readable } from "node:stream";
 import type { PendingItem } from "./approval_command.ts";
 
 /** 購読が流す 1 行。 */
@@ -106,6 +108,47 @@ export function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
     const timer = setTimeout(done, ms);
     signal.addEventListener("abort", done, { once: true });
   });
+}
+
+/**
+ * その fd が親プロセスの握るパイプかを判定する。
+ *
+ * TTY も /dev/null も通常ファイルも FIFO ではない。この判別により、端末から
+ * 起動した watch や `< /dev/null` で起動した watch が、終端を即座に観測して
+ * 起動直後に終了してしまうことを避ける。
+ */
+export function isOwnerPipe(fd: number): boolean {
+  try {
+    return fstatSync(fd).isFIFO();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 親が握るパイプの終端で停止させ、解除関数を返す。
+ *
+ * クライアントが SIGKILL された場合、stdout の EPIPE は書き込みが起きて初めて
+ * 観測される。承認が発生しなければ書き込みも起きないため、EPIPE だけに頼ると
+ * 孤児が 1 秒間隔のポーリングを無期限に続ける。親は書き込まないので、終端を
+ * 観測するためだけに読み捨てる。
+ */
+export function stopOnOwnerExit(stdin: Readable, stop: () => void): () => void {
+  if (stdin.readableEnded || stdin.destroyed) {
+    stop();
+    return () => {};
+  }
+  const onClosed = () => stop();
+  stdin.once("end", onClosed);
+  stdin.once("close", onClosed);
+  stdin.once("error", onClosed);
+  stdin.resume();
+  return () => {
+    stdin.off("end", onClosed);
+    stdin.off("close", onClosed);
+    stdin.off("error", onClosed);
+    stdin.pause();
+  };
 }
 
 /**

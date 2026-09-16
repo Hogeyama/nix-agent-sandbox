@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import {
   type HostExecRuntimePaths,
@@ -12,8 +13,11 @@ import {
 import type { PendingItem } from "./approval_command.ts";
 import {
   diffPending,
+  isOwnerPipe,
   type PendingSnapshotEntry,
   runApprovalWatch,
+  sleepAbortable,
+  stopOnOwnerExit,
   type WatchDeps,
 } from "./approval_watch.ts";
 
@@ -227,6 +231,99 @@ test("runApprovalWatch returns without polling when already aborted", async () =
   await runApprovalWatch("hostexec", undefined, h.deps);
 
   expect(h.lines).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// 停止経路
+// ---------------------------------------------------------------------------
+
+test("sleepAbortable returns immediately when the signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const started = Date.now();
+
+  await sleepAbortable(60_000, controller.signal);
+
+  expect(Date.now() - started).toBeLessThan(1_000);
+});
+
+test("sleepAbortable returns as soon as the signal aborts", async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+  const waiting = sleepAbortable(60_000, controller.signal);
+  controller.abort();
+
+  await waiting;
+
+  expect(Date.now() - started).toBeLessThan(1_000);
+  // タイマーを残すとプロセスが終わらない。abort 時に解除できていることを、
+  // 同じ signal でもう一度待って即座に返ることで確かめる。
+  await sleepAbortable(60_000, controller.signal);
+});
+
+test("sleepAbortable waits out the timer when nothing aborts", async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+
+  await sleepAbortable(20, controller.signal);
+
+  expect(Date.now() - started).toBeGreaterThanOrEqual(15);
+});
+
+/** PassThrough の終端は非同期に伝わる。読み切るまで待つ。 */
+function drained(stream: PassThrough): Promise<void> {
+  return new Promise((resolve) => {
+    stream.once("end", () => resolve());
+    stream.resume();
+  });
+}
+
+test("stopOnOwnerExit stops when the owner's pipe reaches EOF", async () => {
+  const stdin = new PassThrough();
+  let stopped = false;
+
+  stopOnOwnerExit(stdin, () => {
+    stopped = true;
+  });
+  expect(stopped).toBe(false);
+
+  stdin.end();
+  await drained(stdin);
+
+  expect(stopped).toBe(true);
+});
+
+test("stopOnOwnerExit stops at once when the pipe already ended", async () => {
+  const stdin = new PassThrough();
+  stdin.end();
+  await drained(stdin);
+  let stopped = false;
+
+  stopOnOwnerExit(stdin, () => {
+    stopped = true;
+  });
+
+  expect(stopped).toBe(true);
+});
+
+test("stopOnOwnerExit releases its listeners", async () => {
+  const stdin = new PassThrough();
+  let stops = 0;
+
+  const release = stopOnOwnerExit(stdin, () => {
+    stops += 1;
+  });
+  release();
+  stdin.end();
+  await drained(stdin);
+
+  expect(stops).toBe(0);
+});
+
+test("isOwnerPipe rejects a terminal, a regular file and a bad descriptor", () => {
+  // テストランナー下の fd 0 が何であれ、FIFO 判定は真偽値を返して落ちない。
+  expect(typeof isOwnerPipe(0)).toBe("boolean");
+  expect(isOwnerPipe(-1)).toBe(false);
 });
 
 // ---------------------------------------------------------------------------
