@@ -11,6 +11,7 @@ import {
   type ApprovalAdapter,
   handleApprovalSubcommand,
   type PendingItem,
+  watchSessionFilter,
 } from "./approval_command.ts";
 
 interface DecisionCall {
@@ -204,6 +205,136 @@ test("review: prints empty message and returns true when no pending items", asyn
   expect(handled).toEqual(true);
   expect(calls).toEqual([]);
   expect(stdoutLines).toEqual(["[nas] No pending test-domain approvals."]);
+});
+
+// ---------------------------------------------------------------------------
+// watch
+// ---------------------------------------------------------------------------
+
+test("watch: writes the structured payload and stops on the caller's signal", async () => {
+  const controller = new AbortController();
+  const written: string[] = [];
+
+  const adapter: ApprovalAdapter = {
+    domain: "hostexec",
+    scopeOptions: ["once", "capability"],
+    async listPending() {
+      // 1 ティックで止める。実時間の待機を挟まずに配線だけを確かめる。
+      controller.abort();
+      return [
+        {
+          sessionId: "sess_a",
+          requestId: "req_1",
+          displayLine: "",
+          structured: { sessionId: "sess_a", requestId: "req_1" },
+        },
+      ];
+    },
+    async sendDecision() {},
+  };
+
+  const handled = await handleApprovalSubcommand(adapter, "watch", ["watch"], {
+    signal: controller.signal,
+    write: (line) => {
+      written.push(line);
+    },
+  });
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(written).toEqual([
+    '{"event":"added","domain":"hostexec","entry":{"sessionId":"sess_a","requestId":"req_1"}}\n',
+  ]);
+});
+
+test("watch: writes to stdout by default and leaves no listeners behind", async () => {
+  const controller = new AbortController();
+  const before = {
+    sigint: process.listenerCount("SIGINT"),
+    sigterm: process.listenerCount("SIGTERM"),
+    stdoutError: process.stdout.listenerCount("error"),
+  };
+  const written: string[] = [];
+  const realWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    written.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+
+  const adapter: ApprovalAdapter = {
+    domain: "hostexec",
+    scopeOptions: [],
+    async listPending() {
+      controller.abort();
+      return [{ sessionId: "sess_a", requestId: "req_1", displayLine: "" }];
+    },
+    async sendDecision() {},
+  };
+
+  try {
+    await handleApprovalSubcommand(adapter, "watch", ["watch"], {
+      signal: controller.signal,
+    });
+  } finally {
+    process.stdout.write = realWrite;
+  }
+  restoreLog();
+
+  expect(written).toEqual([
+    '{"event":"added","domain":"hostexec","entry":{"sessionId":"sess_a","requestId":"req_1"}}\n',
+  ]);
+  // 呼び出しごとに登録したリスナーが残ると、長寿命プロセスで積み上がる。
+  expect(process.listenerCount("SIGINT")).toEqual(before.sigint);
+  expect(process.listenerCount("SIGTERM")).toEqual(before.sigterm);
+  expect(process.stdout.listenerCount("error")).toEqual(before.stdoutError);
+});
+
+test("watch: --session without a usable value fails instead of widening", () => {
+  expect(watchSessionFilter(["watch"])).toBeUndefined();
+  expect(watchSessionFilter(["watch", "--session", "sess_a"])).toEqual(
+    "sess_a",
+  );
+  expect(() => watchSessionFilter(["watch", "--session"])).toThrow(
+    "--session requires a session id",
+  );
+  expect(() =>
+    watchSessionFilter(["watch", "--session", "--format", "json"]),
+  ).toThrow("--session requires a session id");
+});
+
+test("watch: --session limits the stream to one session", async () => {
+  const controller = new AbortController();
+  const written: string[] = [];
+
+  const adapter: ApprovalAdapter = {
+    domain: "network",
+    scopeOptions: [],
+    async listPending() {
+      controller.abort();
+      return [
+        { sessionId: "sess_a", requestId: "req_1", displayLine: "" },
+        { sessionId: "sess_b", requestId: "req_2", displayLine: "" },
+      ];
+    },
+    async sendDecision() {},
+  };
+
+  await handleApprovalSubcommand(
+    adapter,
+    "watch",
+    ["watch", "--session", "sess_b"],
+    {
+      signal: controller.signal,
+      write: (line) => {
+        written.push(line);
+      },
+    },
+  );
+  restoreLog();
+
+  expect(written).toEqual([
+    '{"event":"added","domain":"network","entry":{"sessionId":"sess_b","requestId":"req_2"}}\n',
+  ]);
 });
 
 // ---------------------------------------------------------------------------

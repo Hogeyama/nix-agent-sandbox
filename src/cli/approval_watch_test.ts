@@ -1,4 +1,14 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
+import {
+  type HostExecRuntimePaths,
+  resolveHostExecRuntimePaths,
+  writeHostExecPendingEntry,
+  writeHostExecSessionRegistry,
+} from "../hostexec/registry.ts";
 import type { PendingItem } from "./approval_command.ts";
 import {
   diffPending,
@@ -217,4 +227,118 @@ test("runApprovalWatch returns without polling when already aborted", async () =
   await runApprovalWatch("hostexec", undefined, h.deps);
 
   expect(h.lines).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// 実 runtime dir を相手にした 1 往復。spec の「runtime dir が存在しない状態での
+// 起動を正常系として扱う」は listPending 側の ENOENT 耐性に依存しており、
+// 依存先が変わったら壊れる。
+// ---------------------------------------------------------------------------
+
+/** 一度きりのポーリングで止める deps を組む。 */
+function singleTick(
+  paths: HostExecRuntimePaths,
+  lines: string[],
+  warnings: string[],
+): WatchDeps {
+  const controller = new AbortController();
+  const client = makeHostExecApprovalClient();
+  return {
+    listPending: async () => {
+      controller.abort();
+      const entries = await client.listPending(paths);
+      return entries.map((entry) => ({
+        sessionId: entry.sessionId,
+        requestId: entry.requestId,
+        displayLine: "",
+        structured: { sessionId: entry.sessionId, requestId: entry.requestId },
+      }));
+    },
+    write: (line) => {
+      lines.push(line);
+    },
+    warn: (message) => {
+      warnings.push(message);
+    },
+    sleep: async () => {},
+    signal: controller.signal,
+  };
+}
+
+test("runApprovalWatch over a real runtime dir tolerates a missing tree", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-watch-"));
+  try {
+    // resolveHostExecRuntimePaths はディレクトリを作るので、存在しない状態を
+    // 作るには paths を直接組む。
+    const absent = path.join(root, "absent");
+    const paths: HostExecRuntimePaths = {
+      runtimeDir: absent,
+      sessionsDir: path.join(absent, "sessions"),
+      pendingDir: path.join(absent, "pending"),
+      brokersDir: path.join(absent, "brokers"),
+      wrappersDir: path.join(absent, "wrappers"),
+    };
+    const lines: string[] = [];
+    const warnings: string[] = [];
+
+    await runApprovalWatch(
+      "hostexec",
+      undefined,
+      singleTick(paths, lines, warnings),
+    );
+
+    expect(lines).toEqual([]);
+    expect(warnings).toEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("runApprovalWatch over a real runtime dir reports a written entry", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-watch-"));
+  try {
+    const paths = await resolveHostExecRuntimePaths(root);
+    // listPending は gc を挟み、生きた pid と実在する broker socket の両方を
+    // 備えないセッションの pending を掃除する。どちらも用意しないと、書いた
+    // 直後のエントリが消える。
+    const brokerSocket = path.join(paths.brokersDir, "sess_a1", "sock");
+    await mkdir(path.dirname(brokerSocket), { recursive: true });
+    await writeFile(brokerSocket, "");
+    await writeHostExecSessionRegistry(paths, {
+      version: 1,
+      sessionId: "sess_a1",
+      brokerSocket,
+      profileName: "test",
+      createdAt: "2026-09-16T04:12:00.000Z",
+      pid: process.pid,
+    });
+    await writeHostExecPendingEntry(paths, {
+      version: 1,
+      sessionId: "sess_a1",
+      requestId: "req_1",
+      approvalKey: "gcloud",
+      ruleId: "gcloud",
+      argv0: "gcloud",
+      args: [],
+      cwd: root,
+      state: "pending",
+      createdAt: "2026-09-16T04:12:03.114Z",
+      updatedAt: "2026-09-16T04:12:03.114Z",
+    });
+    const lines: string[] = [];
+    const warnings: string[] = [];
+
+    await runApprovalWatch(
+      "hostexec",
+      undefined,
+      singleTick(paths, lines, warnings),
+    );
+
+    expect(warnings).toEqual([]);
+    expect(lines).toEqual([
+      '{"event":"added","domain":"hostexec","entry":{"sessionId":"sess_a1","requestId":"req_1"}}\n',
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  }
 });

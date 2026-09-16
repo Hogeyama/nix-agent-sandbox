@@ -560,7 +560,7 @@ export async function runNetworkCommand(
 
     console.error(`[nas] Unknown network subcommand: ${sub}`);
     console.error(
-      "  Usage: nas network [pending|approve|deny|review|gc|bind|unbind|forward|unforward] [--scope ...]",
+      "  Usage: nas network [pending|approve|deny|review|watch|gc|bind|unbind|forward|unforward] [--scope ...]",
     );
     process.exit(1);
   } catch (err) {
