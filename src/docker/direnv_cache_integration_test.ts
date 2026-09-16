@@ -134,6 +134,11 @@ esac
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       NAS_DIRENV_ENABLED: "true",
       NAS_REAL_BASH: "/bin/bash",
+      // ランチャーはこの値で分岐し、acp なら fd 8/9 を差し替える。ここを
+      // 固定しないと、開発者のセッションが acp で立ち上がっていたときだけ
+      // 全ケースが "Bad file descriptor" で落ちる。テストが見たいのは
+      // ランチャーの振る舞いであって、テストを回した環境ではない。
+      NAS_EXECUTION_MODE: "terminal",
       DIRENV_LOG_FORMAT: "%s",
       FAKE_NIX_EVALUATIONS: evaluations,
       FAKE_NIX_STORE: fakeStore,
