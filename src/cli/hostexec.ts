@@ -6,13 +6,56 @@ import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { buildArgsString, matchRule } from "../hostexec/match.ts";
-import { resolveHostExecRuntimePaths } from "../hostexec/registry.ts";
-import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
+import {
+  readHostExecSessionRegistry,
+  resolveHostExecRuntimePaths,
+} from "../hostexec/registry.ts";
+import type { HostExecPendingEntry } from "../hostexec/types.ts";
+import type {
+  ApprovalAdapter,
+  DecisionMessage,
+  PendingItem,
+} from "./approval_command.ts";
 import { handleApprovalSubcommand } from "./approval_command.ts";
-import { getFlagValue, removeFirstOccurrence } from "./helpers.ts";
+import {
+  findFirstNonFlagArg,
+  getFlagValue,
+  removeFirstOccurrence,
+} from "./helpers.ts";
+
+/**
+ * pending エントリを CLI の表示・出力形へ整える。
+ *
+ * `structured` は `pending --format json` と `watch` の両方が返す payload で、
+ * network 側と同じフィールドを揃える必要があるため純粋関数に切り出している。
+ *
+ * @internal 併置のテストファイルのために export している。
+ */
+export function toHostExecPendingItem(
+  entry: HostExecPendingEntry,
+): PendingItem {
+  const argv = [entry.argv0, ...entry.args].join(" ");
+  return {
+    sessionId: entry.sessionId,
+    requestId: entry.requestId,
+    displayLine: `${entry.sessionId} ${entry.requestId} ${entry.ruleId} ${entry.cwd} ${argv}${
+      entry.integrityChanged ? " [CHANGED-SINCE-START]" : ""
+    }`,
+    structured: {
+      sessionId: entry.sessionId,
+      requestId: entry.requestId,
+      ruleId: entry.ruleId,
+      cwd: entry.cwd,
+      argv0: entry.argv0,
+      args: entry.args,
+      createdAt: entry.createdAt,
+    },
+  };
+}
 
 export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
-  const sub = nasArgs.find((arg) => !arg.startsWith("-"));
+  // フラグの値をサブコマンド名と取り違えないよう、network と同じ判定を使う。
+  const sub = findFirstNonFlagArg(nasArgs);
   const runtimeDir = getFlagValue(nasArgs, "--runtime-dir");
 
   try {
@@ -29,24 +72,10 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
       scopeOptions: ["once", "capability"],
       async listPending() {
         const items = await client.listPending(paths);
-        return items.map((item) => {
-          const argv = [item.argv0, ...item.args].join(" ");
-          return {
-            sessionId: item.sessionId,
-            requestId: item.requestId,
-            displayLine: `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}${
-              item.integrityChanged ? " [CHANGED-SINCE-START]" : ""
-            }`,
-            structured: {
-              sessionId: item.sessionId,
-              requestId: item.requestId,
-              ruleId: item.ruleId,
-              cwd: item.cwd,
-              argv0: item.argv0,
-              args: item.args,
-            },
-          };
-        });
+        return items.map(toHostExecPendingItem);
+      },
+      async sessionAlive(sessionId: string) {
+        return (await readHostExecSessionRegistry(paths, sessionId)) !== null;
       },
       async sendDecision(
         sessionId: string,
@@ -71,7 +100,7 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
 
     console.error(`[nas] Unknown hostexec subcommand: ${sub}`);
     console.error(
-      "  Usage: nas hostexec [pending|approve|deny|review|test] [--scope ...]",
+      "  Usage: nas hostexec [pending|approve|deny|review|watch|test] [--scope ...]",
     );
     process.exit(1);
   } catch (err) {

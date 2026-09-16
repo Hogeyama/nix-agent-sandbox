@@ -30,6 +30,7 @@ import {
 import { APPROVAL_SCOPES, type ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
+  readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
@@ -537,6 +538,9 @@ export async function runNetworkCommand(
           };
         });
       },
+      async sessionAlive(sessionId: string) {
+        return (await readSessionRegistry(paths, sessionId)) !== null;
+      },
       async sendDecision(
         sessionId: string,
         requestId: string,
@@ -560,7 +564,7 @@ export async function runNetworkCommand(
 
     console.error(`[nas] Unknown network subcommand: ${sub}`);
     console.error(
-      "  Usage: nas network [pending|approve|deny|review|gc|bind|unbind|forward|unforward] [--scope ...]",
+      "  Usage: nas network [pending|approve|deny|review|watch|gc|bind|unbind|forward|unforward] [--scope ...]",
     );
     process.exit(1);
   } catch (err) {

@@ -11,8 +11,8 @@ Usage:
   nas worktree [list|clean] [options]
   nas container [list|clean]
   nas session [list|attach <session-id>]
-  nas network [pending|approve|deny|review|gc|bind|unbind|forward|unforward]
-  nas hostexec [pending|approve|deny|review|test] [options]
+  nas network [pending|approve|deny|review|watch|gc|bind|unbind|forward|unforward]
+  nas hostexec [pending|approve|deny|review|watch|test] [options]
   nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
   nas config init
@@ -40,6 +40,8 @@ Options:
   -V, --version   Show version
   -q, --quiet     Suppress info logs
   --log-file <path>   Append nas diagnostics to a host file (before profile)
+  --write-session-id <path>
+                      Write the session id to a host file (before profile)
   -v, --verbose   Show debug logs (stage timing, etc.)
   -b, --worktree <branch>  Create a git worktree for this session and base it on <branch>.
                            Use @ or HEAD for the current HEAD.
@@ -76,6 +78,7 @@ Network options:
   approve         承認する
   deny            拒否する
   review          fzf で対話的に承認/拒否する
+  watch           承認要求の発生と消滅を JSON Lines で流し続ける
   gc              stale runtime state を掃除する
   bind <session-id> -L <host-port>:<container-port>
                   ホストで待ち受け、コンテナへ転送する
@@ -96,14 +99,18 @@ Network options:
   --remote-forward -R の長い形式
   --runtime-dir DIR
                   bind/unbind/forward/unforward では ports runtime root、それ以外では network runtime root
-  --format json   bind/forward の一覧を JSON 形式で表示
+  --format json   pending および bind/forward の一覧を JSON 形式で表示
+  --session ID    watch の対象セッションを 1 つに限定する
 
 HostExec options:
   pending         保留中の hostexec 承認要求を表示
   approve         承認する
   deny            拒否する
   review          fzf で対話的に承認/拒否する
+  watch           承認要求の発生と消滅を JSON Lines で流し続ける
   test            ルールマッチングをテストする
+  --format json   pending の一覧を JSON 形式で表示
+  --session ID    watch の対象セッションを 1 つに限定する
 
 Audit options:
   --since YYYY-MM-DD    指定日以降のログを表示（デフォルト: 今日）
@@ -136,6 +143,9 @@ Examples:
   nas network forward <session>          # Pick from the ports the host is listening on
   nas network unforward <session>:5432   # Legacy Remote removal syntax
   nas hostexec pending                   # Show pending hostexec approvals
+  nas hostexec watch                     # Stream approval arrivals as JSON Lines
+  nas hostexec watch --session sess_a1b2 # Stream one session only
+  nas --write-session-id /tmp/id claude  # Record this session's id for --session
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches
