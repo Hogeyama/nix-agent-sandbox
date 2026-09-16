@@ -133,6 +133,59 @@ async function launch(
   return { exitCode, stdout, stderr };
 }
 
+/**
+ * acp の約束どおり fd 8/9 を開いた親から、ランチャーを起動する。
+ *
+ * acp モードのコンテナでは、fd 0/1 はクライアントとの JSON-RPC ストリーム
+ * そのものである。`embed/entrypoint.sh` はそれを最初に `exec 8<&0 9>&1` で
+ * 8 と 9 へ退避し、続けて `exec </dev/null >&2` で 0/1 を潰す。狙いは、
+ * 起動処理 (entrypoint 本体・direnv の bootstrap・hook) が何か出力しても
+ * プロトコルを壊さず、クライアントの stdin も読めない状態にすることである。
+ * 8 と 9 という番号自体に意味は無く、entrypoint とランチャーの間だけで
+ * 通じる取り決めである。
+ *
+ * ストリームを本来の持ち主 — エージェント本体 — へ返すのは、この鎖の最後に
+ * 来るランチャーだけであり、それがここで検査する分岐にあたる。したがって
+ * 8/9 を開いた親から起動しない限り分岐は実行できない (fd が無ければ
+ * `exec 0<&8` が失敗するだけで、差し替えの結果は観測できない)。
+ * `bash -c` を噛ませているのは Bun.spawn が 2 番より大きい fd を渡せない
+ * ためである。
+ */
+async function launchWithAcpFds(
+  fixture: Fixture,
+  command: string[],
+  fd8: string,
+  fd9: string,
+  envOverrides: Record<string, string> = {},
+) {
+  const proc = Bun.spawn(
+    [
+      "bash",
+      "-c",
+      'exec 8<"$1" 9>"$2"; shift 2; exec bash "$@"',
+      "nas-direnv-test",
+      fd8,
+      fd9,
+      fixture.launcher,
+      fixture.workspace,
+      fixture.opsFile,
+      "",
+      ...command,
+    ],
+    {
+      env: { ...fixture.env, ...envOverrides, NAS_EXECUTION_MODE: "acp" },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
 test("disabled mode launches the payload without invoking direnv", async () => {
   await withFixture(async (fixture) => {
     const result = await launch(
@@ -377,5 +430,81 @@ test("approval dependencies ignore workspace commands in PATH", async () => {
     expect(result.stderr).toContain("direnv status failed");
     expect(await readFile(fixture.callsFile, "utf8")).toBe("status\n");
     expect(await Bun.file(hostileMarker).exists()).toBe(false);
+  });
+});
+
+// ランチャーが起動した時点の fd 1 は entrypoint が向けた stderr であり、
+// クライアントへの JSON-RPC ストリームは fd 9 の側にある。エージェントは
+// そのストリームで喋るので、分岐は 8/9 を 0/1 へ戻してからペイロードを
+// 起動しなければならない。
+test("acp mode hands the payload the stdio saved on fds 8 and 9", async () => {
+  await withFixture(async (fixture) => {
+    const fd8 = path.join(fixture.root, "acp-stdin");
+    const fd9 = path.join(fixture.root, "acp-stdout");
+    await writeFile(fd8, "from-fd-8");
+    await writeFile(fd9, "");
+
+    const result = await launchWithAcpFds(
+      fixture,
+      ["/bin/bash", "-c", "printf 'stdin=%s' \"$(cat)\""],
+      fd8,
+      fd9,
+    );
+
+    expect(result.exitCode).toBe(0);
+    // 本来の stdout — ランチャーを起動したパイプ — には何も出さない。
+    expect(result.stdout).toBe("");
+    expect(await readFile(fd9, "utf8")).toBe("stdin=from-fd-8");
+  });
+});
+
+// 退避用の複製をペイロードへ残すと、エージェントが起こす子プロセスが
+// クライアントとのストリームを 0/1 とは別の口から掴めてしまう。分岐は
+// 0/1 へ戻したあとで 8/9 を閉じる。
+test("acp mode closes the saved descriptors before the payload runs", async () => {
+  await withFixture(async (fixture) => {
+    const fd8 = path.join(fixture.root, "acp-stdin");
+    const fd9 = path.join(fixture.root, "acp-stdout");
+    await writeFile(fd8, "");
+    await writeFile(fd9, "");
+
+    const result = await launchWithAcpFds(
+      fixture,
+      [
+        "/bin/bash",
+        "-c",
+        'for fd in 8 9; do if [ -e "/dev/fd/$fd" ]; then printf "%s:open " "$fd"; else printf "%s:closed " "$fd"; fi; done',
+      ],
+      fd8,
+      fd9,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(await readFile(fd9, "utf8")).toBe("8:closed 9:closed ");
+  });
+});
+
+// direnv が無効でも、entrypoint は同じように 0/1 を潰している。復帰は
+// `finish` という 1 つの文字列に書かれていて、ランチャーはそれを有効時と
+// 無効時の 2 か所から起動する。片方だけ直った状態を通さない。
+test("acp mode redirects the payload with direnv disabled too", async () => {
+  await withFixture(async (fixture) => {
+    const fd8 = path.join(fixture.root, "acp-stdin");
+    const fd9 = path.join(fixture.root, "acp-stdout");
+    await writeFile(fd8, "");
+    await writeFile(fd9, "");
+
+    const result = await launchWithAcpFds(
+      fixture,
+      ["/bin/bash", "-c", "printf disabled-ran"],
+      fd8,
+      fd9,
+      { NAS_DIRENV_ENABLED: "false", FAKE_STATUS_FAIL: "true" },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(await readFile(fd9, "utf8")).toBe("disabled-ran");
+    expect(await Bun.file(fixture.callsFile).exists()).toBe(false);
   });
 });
