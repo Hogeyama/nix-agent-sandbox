@@ -459,6 +459,7 @@ profiles {
       expect(Object.keys(scope?.rules ?? {})).toEqual([
         "messages",
         "bootstrap",
+        "telemetry",
         "company-bootstrap",
       ]);
       expect(scope?.fallback).toEqual("review");

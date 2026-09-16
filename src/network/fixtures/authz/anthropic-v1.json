@@ -254,6 +254,28 @@
                 "trailingDoubleStar": false
               },
               {
+                "source": "/api/oauth/usage",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["oauth"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["usage"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
                 "source": "/mcp-registry/v0/servers",
                 "segments": [
                   {
@@ -328,6 +350,59 @@
               "onViolation": "deny"
             }
           ],
+          "limits": {
+            "maxBodyBytes": 33554432,
+            "maxDepth": 64,
+            "maxNodes": 200000,
+            "maxSelectorExpansions": 1000000
+          },
+          "secrets": {
+            "*": "mask"
+          },
+          "inject": [],
+          "audit": "always"
+        },
+        {
+          "id": "anthropic.telemetry",
+          "key": "telemetry",
+          "precedes": [],
+          "match": {
+            "methods": ["POST"],
+            "paths": [
+              {
+                "source": "/api/event_logging/v2/batch",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["event_logging"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v2"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["batch"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              }
+            ],
+            "bodyFormat": "json",
+            "equals": {},
+            "oneOf": {}
+          },
+          "onMatch": "allow",
+          "onIndeterminate": "deny",
+          "expect": [],
           "limits": {
             "maxBodyBytes": 33554432,
             "maxDepth": 64,

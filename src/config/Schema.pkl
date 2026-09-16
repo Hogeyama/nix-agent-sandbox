@@ -576,6 +576,7 @@ class AnthropicPresets {
             "/api/claude_code_penguin_mode"
             "/api/claude_code/policy_limits"
             "/api/claude_code/settings"
+            "/api/oauth/usage"
             "/mcp-registry/v0/servers"
             "/v1/code/triggers"
             "/v1/mcp_servers"
@@ -583,6 +584,21 @@ class AnthropicPresets {
         }
         onMatch = "allow"
         expect { new EmptyBody {} }
+      }
+
+      // fire-and-forget のイベントログ送信。宛先は messages と同じ Anthropic の
+      // 信頼境界であり、ボディはバイト単位の秘密マスクを通る。ボディの形は
+      // 公開仕様が無いので JSON として解析できること以上は要求しない。拒否すると
+      // クライアント側のリトライが残るだけなので、fallback の review に落とさず
+      // 明示的に通す。
+      ["telemetry"] {
+        match {
+          methods { "POST" }
+          paths { "/api/event_logging/v2/batch" }
+          body { format = "json" }
+        }
+        onMatch = "allow"
+        onIndeterminate = "deny"
       }
     }
   }
