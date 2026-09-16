@@ -431,6 +431,8 @@ profiles {
     agent = "claude"
     network {
       scopes {
+        // 比較の基準となる、手を加えていないプリセット。
+        ["plain"] = module.presets.anthropic.v1
         // ゲートウェイ経由でも、ホストマッチングを緩めずに宛先だけ差し替える。
         ["gw"] = (module.presets.anthropic.v1) {
           targets = new Listing { "gateway.example.com" }
@@ -451,15 +453,17 @@ profiles {
     try {
       await setupNasDir(tmpDir, configPkl);
       const config = await loadConfig({ startDir: tmpDir });
+      const plain = config.profiles.dev.network.scopes.plain;
       const scope = config.profiles.dev.network.scopes.gw;
 
       expect(scope?.targets).toEqual(["gateway.example.com"]);
       // preset のルールは残り、追加したルールが末尾に来る。「プリセットより
       // 前に置く」という手順が要らないのは終端 deny が fallback になったため。
+      // プリセットの中身には依存しないので、ルールを増減しても書き換えない。
+      const presetRuleKeys = Object.keys(plain?.rules ?? {});
+      expect(presetRuleKeys.length).toBeGreaterThan(0);
       expect(Object.keys(scope?.rules ?? {})).toEqual([
-        "messages",
-        "bootstrap",
-        "telemetry",
+        ...presetRuleKeys,
         "company-bootstrap",
       ]);
       expect(scope?.fallback).toEqual("review");
