@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import type { PendingItem } from "./approval_command.ts";
-import { diffPending, type PendingSnapshotEntry } from "./approval_watch.ts";
+import {
+  diffPending,
+  type PendingSnapshotEntry,
+  runApprovalWatch,
+  type WatchDeps,
+} from "./approval_watch.ts";
 
 function item(
   sessionId: string,
@@ -108,4 +113,108 @@ test("diffPending distinguishes the same requestId across sessions", () => {
   ]);
 
   expect(nextState.size).toBe(2);
+});
+
+interface Harness {
+  readonly lines: string[];
+  readonly warnings: string[];
+  readonly deps: WatchDeps;
+  readonly controller: AbortController;
+}
+
+/** ティックごとの listPending 結果を順に返し、尽きたら停止させる。 */
+function harness(ticks: Array<PendingItem[] | Error>): Harness {
+  const controller = new AbortController();
+  const lines: string[] = [];
+  const warnings: string[] = [];
+  let index = 0;
+  const deps: WatchDeps = {
+    listPending: async () => {
+      const tick = ticks[index];
+      index += 1;
+      if (index >= ticks.length) controller.abort();
+      if (tick instanceof Error) throw tick;
+      return tick;
+    },
+    write: (line) => {
+      lines.push(line);
+    },
+    warn: (message) => {
+      warnings.push(message);
+    },
+    sleep: async () => {},
+    signal: controller.signal,
+  };
+  return { lines, warnings, deps, controller };
+}
+
+test("runApprovalWatch writes one JSON line per event", async () => {
+  const h = harness([
+    [item("sess_a", "req_1", { sessionId: "sess_a", requestId: "req_1" })],
+    [],
+  ]);
+
+  await runApprovalWatch("hostexec", undefined, h.deps);
+
+  expect(h.lines).toEqual([
+    '{"event":"added","domain":"hostexec","entry":{"sessionId":"sess_a","requestId":"req_1"}}\n',
+    '{"event":"removed","domain":"hostexec","sessionId":"sess_a","requestId":"req_1"}\n',
+  ]);
+});
+
+test("runApprovalWatch keeps polling after a failed tick", async () => {
+  const h = harness([
+    new Error("runtime dir vanished"),
+    [item("sess_a", "req_1", { sessionId: "sess_a", requestId: "req_1" })],
+  ]);
+
+  await runApprovalWatch("network", undefined, h.deps);
+
+  expect(h.warnings).toEqual(["[nas] network watch: runtime dir vanished"]);
+  expect(h.lines).toHaveLength(1);
+});
+
+test("runApprovalWatch reports a rejection that is not an Error", async () => {
+  const controller = new AbortController();
+  const warnings: string[] = [];
+
+  await runApprovalWatch("hostexec", undefined, {
+    listPending: async () => {
+      controller.abort();
+      // Error 以外で reject される経路を再現する。
+      throw "broker socket refused";
+    },
+    write: () => {},
+    warn: (message) => {
+      warnings.push(message);
+    },
+    sleep: async () => {},
+    signal: controller.signal,
+  });
+
+  expect(warnings).toEqual(["[nas] hostexec watch: broker socket refused"]);
+});
+
+test("runApprovalWatch applies the session filter", async () => {
+  const h = harness([
+    [
+      item("sess_a", "req_1", { sessionId: "sess_a", requestId: "req_1" }),
+      item("sess_b", "req_2", { sessionId: "sess_b", requestId: "req_2" }),
+    ],
+  ]);
+
+  await runApprovalWatch("hostexec", "sess_b", h.deps);
+
+  expect(h.lines).toEqual([
+    '{"event":"added","domain":"hostexec","entry":{"sessionId":"sess_b","requestId":"req_2"}}\n',
+  ]);
+});
+
+test("runApprovalWatch returns without polling when already aborted", async () => {
+  const h = harness([[item("sess_a", "req_1")]]);
+  h.controller.abort();
+
+  await runApprovalWatch("hostexec", undefined, h.deps);
+
+  expect(h.lines).toEqual([]);
 });
