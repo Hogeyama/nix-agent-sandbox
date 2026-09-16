@@ -224,6 +224,86 @@ test("runApprovalWatch applies the session filter", async () => {
   ]);
 });
 
+test("runApprovalWatch stops once the named session disappears", async () => {
+  const controller = new AbortController();
+  const lines: string[] = [];
+  const alive = [true, true, false];
+  let tick = 0;
+  let polls = 0;
+
+  await runApprovalWatch("hostexec", "sess_b", {
+    listPending: async () => {
+      polls += 1;
+      // セッション消滅で抜けられなかったときに、テストを回し続けない。
+      if (polls > 5) controller.abort();
+      return polls === 1
+        ? [item("sess_b", "req_1", { sessionId: "sess_b", requestId: "req_1" })]
+        : [];
+    },
+    write: (line) => {
+      lines.push(line);
+    },
+    warn: () => {},
+    sleep: async () => {},
+    signal: controller.signal,
+    sessionAlive: async () => {
+      const value = alive[tick] ?? false;
+      tick += 1;
+      return value;
+    },
+  });
+
+  // 消えた保留の removed を出し切ってから終わる。
+  expect(lines).toEqual([
+    '{"event":"added","domain":"hostexec","entry":{"sessionId":"sess_b","requestId":"req_1"}}\n',
+    '{"event":"removed","domain":"hostexec","sessionId":"sess_b","requestId":"req_1"}\n',
+  ]);
+  expect(controller.signal.aborted).toBe(false);
+});
+
+test("runApprovalWatch keeps waiting for a session it has never seen", async () => {
+  const controller = new AbortController();
+  let polls = 0;
+
+  await runApprovalWatch("hostexec", "sess_late", {
+    listPending: async () => {
+      polls += 1;
+      // 起動直後はまだ登録されていない。ここで終了してはいけない。
+      if (polls >= 3) controller.abort();
+      return [];
+    },
+    write: () => {},
+    warn: () => {},
+    sleep: async () => {},
+    signal: controller.signal,
+    sessionAlive: async () => false,
+  });
+
+  expect(polls).toBe(3);
+});
+
+test("runApprovalWatch ignores session liveness without a session filter", async () => {
+  const controller = new AbortController();
+  let checks = 0;
+
+  await runApprovalWatch("hostexec", undefined, {
+    listPending: async () => {
+      controller.abort();
+      return [];
+    },
+    write: () => {},
+    warn: () => {},
+    sleep: async () => {},
+    signal: controller.signal,
+    sessionAlive: async () => {
+      checks += 1;
+      return false;
+    },
+  });
+
+  expect(checks).toBe(0);
+});
+
 test("runApprovalWatch returns without polling when already aborted", async () => {
   const h = harness([[item("sess_a", "req_1")]]);
   h.controller.abort();

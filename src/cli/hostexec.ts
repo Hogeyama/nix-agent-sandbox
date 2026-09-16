@@ -6,7 +6,10 @@ import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { buildArgsString, matchRule } from "../hostexec/match.ts";
-import { resolveHostExecRuntimePaths } from "../hostexec/registry.ts";
+import {
+  readHostExecSessionRegistry,
+  resolveHostExecRuntimePaths,
+} from "../hostexec/registry.ts";
 import type { HostExecPendingEntry } from "../hostexec/types.ts";
 import type {
   ApprovalAdapter,
@@ -70,6 +73,9 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
       async listPending() {
         const items = await client.listPending(paths);
         return items.map(toHostExecPendingItem);
+      },
+      async sessionAlive(sessionId: string) {
+        return (await readHostExecSessionRegistry(paths, sessionId)) !== null;
       },
       async sendDecision(
         sessionId: string,

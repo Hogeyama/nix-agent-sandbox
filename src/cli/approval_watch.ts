@@ -94,6 +94,8 @@ export interface WatchDeps {
   readonly warn: (message: string) => void;
   readonly sleep: (ms: number) => Promise<void>;
   readonly signal: AbortSignal;
+  /** 名指ししたセッションがまだ生きているか。セッション指定時のみ問われる。 */
+  readonly sessionAlive?: (sessionId: string) => Promise<boolean>;
 }
 
 /** 中断されたら待たずに返る。終了要求から実際の停止までを間隔分待たせない。 */
@@ -163,6 +165,9 @@ export async function runApprovalWatch(
   deps: WatchDeps,
 ): Promise<void> {
   let state = new Map<string, PendingSnapshotEntry>();
+  // 一度も見えていないセッションでは終了しない。`--write-session-id` で得た id
+  // で購読を始めると、セッションが登録される前に最初のポーリングが走る。
+  let sessionSeen = false;
 
   while (!deps.signal.aborted) {
     // 書き出しは try の外に置く。出力先の失敗をポーリング失敗として報告すると
@@ -185,8 +190,31 @@ export async function runApprovalWatch(
       deps.write(`${JSON.stringify(event)}\n`);
     }
 
+    // 名指ししたセッションが終わった購読は、もう何も流さない。消えた保留の
+    // removed を出し切った後に抜ける。
+    if (sessionFilter !== undefined && deps.sessionAlive !== undefined) {
+      const alive = await checkSessionAlive(deps, sessionFilter);
+      if (alive === true) sessionSeen = true;
+      else if (alive === false && sessionSeen) break;
+    }
+
     if (deps.signal.aborted) break;
     await deps.sleep(WATCH_INTERVAL_MS);
+  }
+}
+
+/**
+ * 生存判定の失敗で購読を切らない。判断できなければ undefined を返し、呼び出し
+ * 側は前の判断を保つ。一時的な読み取りエラーで終了すると、承認を取りこぼす。
+ */
+async function checkSessionAlive(
+  deps: WatchDeps,
+  sessionId: string,
+): Promise<boolean | undefined> {
+  try {
+    return await deps.sessionAlive?.(sessionId);
+  } catch {
+    return undefined;
   }
 }
 

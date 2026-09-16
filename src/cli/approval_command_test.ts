@@ -33,6 +33,9 @@ function makeAdapter(pending: PendingItem[] = []): {
     async listPending() {
       return pending;
     },
+    async sessionAlive() {
+      return true;
+    },
     async sendDecision(sessionId, requestId, message) {
       calls.push({ sessionId, requestId, message });
     },
@@ -230,6 +233,9 @@ test("watch: writes the structured payload and stops on the caller's signal", as
         },
       ];
     },
+    async sessionAlive() {
+      return true;
+    },
     async sendDecision() {},
   };
 
@@ -267,6 +273,9 @@ test("watch: writes to stdout by default and leaves no listeners behind", async 
     async listPending() {
       controller.abort();
       return [{ sessionId: "sess_a", requestId: "req_1", displayLine: "" }];
+    },
+    async sessionAlive() {
+      return true;
     },
     async sendDecision() {},
   };
@@ -315,6 +324,9 @@ test("watch: --session limits the stream to one session", async () => {
         { sessionId: "sess_a", requestId: "req_1", displayLine: "" },
         { sessionId: "sess_b", requestId: "req_2", displayLine: "" },
       ];
+    },
+    async sessionAlive() {
+      return true;
     },
     async sendDecision() {},
   };

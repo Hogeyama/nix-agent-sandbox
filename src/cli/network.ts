@@ -30,6 +30,7 @@ import {
 import { APPROVAL_SCOPES, type ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
+  readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
@@ -536,6 +537,9 @@ export async function runNetworkCommand(
             },
           };
         });
+      },
+      async sessionAlive(sessionId: string) {
+        return (await readSessionRegistry(paths, sessionId)) !== null;
       },
       async sendDecision(
         sessionId: string,

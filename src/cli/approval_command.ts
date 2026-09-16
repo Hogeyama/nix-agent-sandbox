@@ -45,6 +45,8 @@ export interface ApprovalAdapter {
   ): Promise<void>;
   /** fzf review で表示するスコープ選択肢 */
   scopeOptions: string[];
+  /** そのセッションがまだ生きているか。watch のセッション指定でのみ使う。 */
+  sessionAlive(sessionId: string): Promise<boolean>;
 }
 
 /**
@@ -132,6 +134,7 @@ export async function handleApprovalSubcommand(
         },
         sleep: (ms) => sleepAbortable(ms, controller.signal),
         signal: controller.signal,
+        sessionAlive: (id) => adapter.sessionAlive(id),
       });
     } finally {
       process.off("SIGINT", stop);
