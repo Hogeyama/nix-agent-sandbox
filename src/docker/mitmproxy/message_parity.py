@@ -16,7 +16,7 @@ import nas_addon
 
 _FIXTURE = (
     pathlib.Path(__file__).resolve().parents[2]
-    / "network" / "fixtures" / "authz" / "anthropic-v1.json"
+    / "network" / "fixtures" / "authz" / "resolved-document.json"
 )
 
 

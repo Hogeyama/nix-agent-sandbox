@@ -5,7 +5,7 @@
  * 仕様の側と突き合わせること。値は仕様の Pkl をそのまま写している。
  */
 
-import anthropicFixture from "../fixtures/authz/anthropic-v1.json";
+import addonDocument from "../fixtures/authz/resolved-document.json";
 import type { AuthzConfig, Expect } from "./config.ts";
 
 /** 要件 1: GraphQL の読み取りだけ自動許可する。 */
@@ -93,8 +93,8 @@ export function githubPathsExample(): AuthzConfig {
   };
 }
 
-/** 許容タグは Schema.pkl から生成された fixture を参照する。 */
-const contentGuard = anthropicFixture.scopes
+/** 許容タグは addon テスト用の解決済みドキュメントから引く。 */
+const contentGuard = addonDocument.scopes
   .flatMap((scope) => scope.rules)
   .find((rule) => rule.id === "anthropic.messages")
   ?.expect.find(

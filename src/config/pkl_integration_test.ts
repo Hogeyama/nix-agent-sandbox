@@ -9,7 +9,6 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { generateAnthropicV1Fixture } from "../../scripts/gen_authz_fixture.ts";
 import { resolveAsset } from "../lib/asset.ts";
 import { loadConfig } from "./load.ts";
 import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
@@ -470,27 +469,6 @@ profiles {
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
-  },
-);
-
-/**
- * fixture の権威は Schema.pkl の `presets.anthropic.v1` にある。生成器と同じ
- * 経路 (pkl 評価 → loadConfig → resolveAuthzConfig) を通した結果がコミット
- * 済みの fixture と一致することを固定し、pkl 側だけ変えて fixture を更新し
- * 忘れる乖離を落とす。ずれたら `bun run scripts/gen_authz_fixture.ts`。
- */
-test.skipIf(!hasPkl)(
-  "pkl: the anthropic preset matches the committed cross-language fixture",
-  async () => {
-    const generated = await generateAnthropicV1Fixture();
-    const committed = JSON.parse(
-      await readFile(
-        new URL("../network/fixtures/authz/anthropic-v1.json", import.meta.url),
-        "utf8",
-      ),
-    );
-
-    expect(generated).toEqual(committed);
   },
 );
 

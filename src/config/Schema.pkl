@@ -568,18 +568,28 @@ class AnthropicPresets {
       // リクエストはこのルールに引き受けられず fallback に落ちるので、監査には
       // 「bootstrap ルールの EmptyBody 違反」ではなく「fallback で deny」としか
       // 残らない。
+      //
+      // org ID を含むパスは `*` で 1 セグメントだけ開ける。値は利用者ごとに
+      // 違うので、capture の制約に列挙すると誰か 1 人の org ID を配布物へ
+      // 焼き込むことになる。
       ["bootstrap"] {
         match {
           methods { "GET" }
           paths {
             "/api/claude_cli/bootstrap"
+            "/api/claude_code_grove"
             "/api/claude_code_penguin_mode"
             "/api/claude_code/policy_limits"
             "/api/claude_code/settings"
+            "/api/oauth/account/settings"
+            "/api/oauth/organizations/*/referral/eligibility"
+            "/api/oauth/profile"
             "/api/oauth/usage"
+            "/api/organizations/*/model_selector/cc"
             "/mcp-registry/v0/servers"
             "/v1/code/triggers"
             "/v1/mcp_servers"
+            "/v1/ultrareview/quota"
           }
         }
         onMatch = "allow"
@@ -595,6 +605,21 @@ class AnthropicPresets {
         match {
           methods { "POST" }
           paths { "/api/event_logging/v2/batch" }
+          body { format = "json" }
+        }
+        onMatch = "allow"
+        onIndeterminate = "deny"
+      }
+
+      // GrowthBook の remote eval。Claude Code はこれで機能フラグを引き、答えが
+      // クライアントの挙動を決めるので、telemetry と違って落とすと動作が変わる。
+      // ボディは評価対象の attribute で、公開仕様が無いので JSON として解析できる
+      // こと以上は要求しない。SDK キーは配布物に焼かれていて版ごとに変わりうる
+      // ので、セグメントを `*` で開ける。
+      ["feature-flags"] {
+        match {
+          methods { "POST" }
+          paths { "/api/eval/*" }
           body { format = "json" }
         }
         onMatch = "allow"

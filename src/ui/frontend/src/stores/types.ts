@@ -194,6 +194,10 @@ export type AuditLogEntryLike = {
   scope?: string | null;
   target?: string | null;
   command?: string | null;
+  /** HTTP method of the audited request (network rows). */
+  method?: string | null;
+  /** Masked request path of the audited request (network rows). */
+  path?: string | null;
   bodyDiagnostic?: BodyDiagnostic | null;
   requestBodyAuditStatus?: RequestBodyAuditStatus | null;
 };

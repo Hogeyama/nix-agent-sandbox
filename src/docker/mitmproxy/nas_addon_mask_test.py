@@ -29,7 +29,7 @@ _FIXTURE_PATH = (
     / "network"
     / "fixtures"
     / "authz"
-    / "anthropic-v1.json"
+    / "resolved-document.json"
 )
 
 

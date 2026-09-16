@@ -192,6 +192,24 @@
                 "trailingDoubleStar": false
               },
               {
+                "source": "/api/claude_code_grove",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["claude_code_grove"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
                 "source": "/api/claude_code_penguin_mode",
                 "segments": [
                   {
@@ -254,6 +272,87 @@
                 "trailingDoubleStar": false
               },
               {
+                "source": "/api/oauth/account/settings",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["oauth"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["account"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["settings"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/api/oauth/organizations/*/referral/eligibility",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["oauth"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["organizations"]
+                  },
+                  {
+                    "kind": "all"
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["referral"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["eligibility"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/api/oauth/profile",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["oauth"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["profile"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
                 "source": "/api/oauth/usage",
                 "segments": [
                   {
@@ -271,6 +370,35 @@
                   {
                     "kind": "finite",
                     "values": ["usage"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/api/organizations/*/model_selector/cc",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["organizations"]
+                  },
+                  {
+                    "kind": "all"
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["model_selector"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["cc"]
                   }
                 ],
                 "trailingDoubleStar": false
@@ -336,6 +464,28 @@
                   }
                 ],
                 "trailingDoubleStar": false
+              },
+              {
+                "source": "/v1/ultrareview/quota",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v1"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["ultrareview"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["quota"]
+                  }
+                ],
+                "trailingDoubleStar": false
               }
             ],
             "bodyFormat": null,
@@ -391,6 +541,54 @@
                   {
                     "kind": "finite",
                     "values": ["batch"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              }
+            ],
+            "bodyFormat": "json",
+            "equals": {},
+            "oneOf": {}
+          },
+          "onMatch": "allow",
+          "onIndeterminate": "deny",
+          "expect": [],
+          "limits": {
+            "maxBodyBytes": 33554432,
+            "maxDepth": 64,
+            "maxNodes": 200000,
+            "maxSelectorExpansions": 1000000
+          },
+          "secrets": {
+            "*": "mask"
+          },
+          "inject": [],
+          "audit": "always"
+        },
+        {
+          "id": "anthropic.feature-flags",
+          "key": "feature-flags",
+          "precedes": [],
+          "match": {
+            "methods": ["POST"],
+            "paths": [
+              {
+                "source": "/api/eval/*",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["eval"]
+                  },
+                  {
+                    "kind": "all"
                   }
                 ],
                 "trailingDoubleStar": false

@@ -642,7 +642,7 @@ export class SessionBroker {
     const denyReason = denyReasonForTarget(message.target);
     if (denyReason) {
       await this.recordAudit(
-        message.requestId,
+        message,
         "deny",
         denyReason,
         targetStr,
@@ -669,7 +669,7 @@ export class SessionBroker {
     if (decided.action === "deny") {
       if (shouldAudit) {
         await this.recordAudit(
-          message.requestId,
+          message,
           "deny",
           decided.reason,
           targetStr,
@@ -689,7 +689,7 @@ export class SessionBroker {
       if (shouldAudit) {
         const headerNames = decision.injectHeaders?.map((h) => h.name);
         await this.recordAudit(
-          message.requestId,
+          message,
           "allow",
           decided.reason,
           targetStr,
@@ -713,7 +713,7 @@ export class SessionBroker {
     if (identityKeys.some((key) => this.denied.has(key))) {
       if (shouldAudit) {
         await this.recordAudit(
-          message.requestId,
+          message,
           "deny",
           "denied-by-user",
           targetStr,
@@ -734,7 +734,7 @@ export class SessionBroker {
       const headerNames = decision.injectHeaders?.map((h) => h.name);
       if (shouldAudit) {
         await this.recordAudit(
-          message.requestId,
+          message,
           "allow",
           "approved",
           targetStr,
@@ -756,7 +756,7 @@ export class SessionBroker {
     if (this.negativeCache.get(groupKey) !== undefined) {
       if (shouldAudit) {
         await this.recordAudit(
-          message.requestId,
+          message,
           "deny",
           "recent-deny",
           targetStr,
@@ -984,7 +984,7 @@ export class SessionBroker {
       this.requestBodyAudit.enable
     ) {
       await this.recordAudit(
-        requestId,
+        request,
         outcome,
         baseDecision.reason,
         targetKey(request.target),
@@ -1062,7 +1062,7 @@ export class SessionBroker {
         this.requestBodyAudit.enable
       ) {
         await this.recordAudit(
-          requestId,
+          request,
           outcome,
           baseDecision.reason,
           targetKey(request.target),
@@ -1222,14 +1222,28 @@ export class SessionBroker {
       reason,
       phase: "request-policy",
       ruleId: message.ruleId,
+      method: message.method,
+      path: this.maskedReviewContext(message.reviewContext)?.path,
       target,
       violations: this.maskedFindings(findings).map(toAuditViolation),
     };
     await appendAuditLog(entry, this.auditDir);
   }
 
+  /**
+   * 認可の帰結を記録する。
+   *
+   * メソッドとパスを載せるのは、ルール ID だけでは「何を許したのか」を答え
+   * られないからである。fallback で通った帰結が持つ ID は `<スコープ>.$fallback`
+   * であり、宣言されたパターンを持たないので `route` も空になる。それだけの
+   * 行からは「api.anthropic.com への何かが承認された」以上のことが読めず、
+   * 承認を後から読む人がまさに知りたい一点が落ちる。
+   *
+   * パスはカードに出したものと同じ — レジストリの全ての値で伏せた — 文字列を
+   * 使う。判定とマッチングは伏せる前の値の上で既に終わっている。
+   */
   private async recordAudit(
-    requestId: string,
+    request: AuthorizeRequest,
     decision: "allow" | "deny",
     reason: string,
     target: string,
@@ -1244,11 +1258,13 @@ export class SessionBroker {
       timestamp: new Date().toISOString(),
       domain: "network",
       sessionId: this.sessionId,
-      requestId,
+      requestId: request.requestId,
       decision,
       reason,
       phase: "authorization",
       ruleId,
+      method: request.method,
+      path: this.maskedReviewContext(request.reviewContext)?.path,
       target,
       injectedHeaders,
       bodyDiagnostic,

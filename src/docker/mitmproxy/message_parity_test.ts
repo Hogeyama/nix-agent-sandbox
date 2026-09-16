@@ -100,7 +100,7 @@ async function shippedDocument(): Promise<ResolvedDocument> {
   return JSON.parse(
     await readFile(
       new URL(
-        "../../network/fixtures/authz/anthropic-v1.json",
+        "../../network/fixtures/authz/resolved-document.json",
         import.meta.url,
       ),
       "utf8",

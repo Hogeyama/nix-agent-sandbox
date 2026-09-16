@@ -610,14 +610,17 @@ async function waitForContainerLog(
 }
 
 /**
- * addon が読む解決済みドキュメントと、broker が権威として使うルールは
- * **同一の出荷物**でなければならない。片方だけを手書きすると、両者が
- * 食い違ったまま緑になり、ちょうどこのタスクが塞いだ穴 (broker が承認した
- * のとは別のポリシーが走る) を検出できなくなる。
+ * addon が読むドキュメントと broker が握るルールは**同一の1本**でなければ
+ * ならない。片方だけを手書きすると、両者が食い違ったまま緑になり、ちょうど
+ * このタスクが塞いだ穴 (broker が承認したのとは別のポリシーが走る) を検出
+ * できなくなる。中身が何であるかは問わない。詳細は fixture の README。
  */
 const RESOLVED_DOCUMENT = JSON.parse(
   readFileSync(
-    new URL("../../network/fixtures/authz/anthropic-v1.json", import.meta.url),
+    new URL(
+      "../../network/fixtures/authz/resolved-document.json",
+      import.meta.url,
+    ),
     "utf8",
   ),
 ) as ResolvedDocument;
@@ -860,7 +863,7 @@ test("setupAddonFixture cleans partial state when setup fails after broker start
   }
 });
 
-test("setupAddonFixture installs the shipped resolved document", async () => {
+test("setupAddonFixture installs the shared resolved document", async () => {
   const fixture = await setupAddonFixture("nas-addon-review-rule-");
   try {
     const document = await Bun.file(

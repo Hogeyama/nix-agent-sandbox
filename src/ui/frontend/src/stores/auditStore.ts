@@ -34,6 +34,8 @@ export type AuditLogEntryRow = {
   scope: string | null;
   target: string | null;
   command: string | null;
+  method: string | null;
+  path: string | null;
   bodyDiagnostic?: BodyDiagnostic | null;
   requestBodyAuditStatus?: RequestBodyAuditStatus | null;
 };
@@ -61,6 +63,8 @@ export function normalizeAuditEntries(
     scope: it.scope ?? null,
     target: it.target ?? null,
     command: it.command ?? null,
+    method: it.method ?? null,
+    path: it.path ?? null,
     bodyDiagnostic: it.bodyDiagnostic ?? null,
     requestBodyAuditStatus: it.requestBodyAuditStatus ?? null,
   }));
