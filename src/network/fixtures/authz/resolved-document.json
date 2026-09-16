@@ -464,6 +464,28 @@
                   }
                 ],
                 "trailingDoubleStar": false
+              },
+              {
+                "source": "/v1/ultrareview/quota",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v1"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["ultrareview"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["quota"]
+                  }
+                ],
+                "trailingDoubleStar": false
               }
             ],
             "bodyFormat": null,
