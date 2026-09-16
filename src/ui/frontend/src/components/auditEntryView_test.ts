@@ -64,6 +64,8 @@ describe("summaryFor", () => {
   function makeRow(
     target: string | null = null,
     command: string | null = null,
+    method: string | null = null,
+    requestPath: string | null = null,
   ) {
     return {
       id: "x",
@@ -76,6 +78,8 @@ describe("summaryFor", () => {
       scope: null,
       target,
       command,
+      method,
+      path: requestPath,
     };
   }
 
@@ -91,5 +95,21 @@ describe("summaryFor", () => {
 
   test("falls back to empty string when both target and command are null", () => {
     expect(summaryFor(makeRow(null, null))).toBe("");
+  });
+
+  // ホストだけの行では、fallback で通った帰結について「どのエンドポイントを
+  // 開けたのか」が読めない。記録されているなら出す。
+  test("network rows name the endpoint when the daemon recorded one", () => {
+    expect(
+      summaryFor(
+        makeRow("api.anthropic.com:443", null, "GET", "/api/oauth/profile"),
+      ),
+    ).toBe("api.anthropic.com:443 GET /api/oauth/profile");
+  });
+
+  test("network rows without a path read as before", () => {
+    expect(summaryFor(makeRow("api.anthropic.com:443", null, "CONNECT"))).toBe(
+      "api.anthropic.com:443",
+    );
   });
 });

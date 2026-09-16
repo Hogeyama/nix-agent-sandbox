@@ -46,6 +46,26 @@ test("formatAuditEntries preserves authorization entry formatting", () => {
   ]);
 });
 
+// fallback で通った行はルール ID に宣言されたパターンを持たないので、パスを
+// 出さないとホスト名しか残らない。承認を読み返す人が知りたいのはそこである。
+test("formatAuditEntries names the endpoint an authorization entry decided on", () => {
+  const entry = makeEntry({
+    reason: "approved-by-user",
+    method: "GET",
+    path: "/api/oauth/profile",
+  });
+
+  expect(formatAuditEntries([entry])).toEqual([
+    "2026-07-23T00:00:00.000Z sess-1 network allow approved-by-user api.anthropic.com:443 GET /api/oauth/profile",
+  ]);
+});
+
+test("formatAuditEntries leaves pathless authorization entries unchanged", () => {
+  expect(formatAuditEntries([makeEntry({ method: "CONNECT" })])).toEqual([
+    "2026-07-23T00:00:00.000Z sess-1 network allow review-rule api.anthropic.com:443",
+  ]);
+});
+
 test("formatAuditEntries returns no lines for empty input", () => {
   expect(formatAuditEntries([])).toEqual([]);
 });

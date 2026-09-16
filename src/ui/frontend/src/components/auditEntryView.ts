@@ -35,7 +35,15 @@ export function formatAuditEntry(
  * Compose the row's summary cell. Network rows carry `target`, hostexec
  * rows carry `command`; the empty string is a safe fallback when both
  * are absent (the daemon is supposed to populate one or the other).
+ *
+ * A network row also names the endpoint when the daemon recorded one. The
+ * host alone cannot answer "what did I approve?" for a decision that came
+ * from a scope fallback, which is the row a reader comes back to. Rows with
+ * no path (CONNECT, and anything written before the daemon recorded it) read
+ * as before.
  */
 export function summaryFor(row: AuditLogEntryRow): string {
-  return row.target ?? row.command ?? "";
+  const base = row.target ?? row.command ?? "";
+  if (row.domain !== "network" || !row.path) return base;
+  return [base, row.method, row.path].filter(Boolean).join(" ");
 }

@@ -61,6 +61,17 @@ export interface AuditLogEntry {
   method?: string;
   /** HTTP route for a request-policy outcome. */
   route?: string;
+  /**
+   * The request path the decision was made about, masked with every value in
+   * the session's secret registry (the same string the approval card showed).
+   *
+   * `route` names the patterns a rule declared, which a fallback decision does
+   * not have: without this field an approved fallback leaves nothing behind but
+   * the host, so nobody can tell afterwards which endpoint was allowed — the
+   * one question a reader of an approval has. Absent for requests that carry no
+   * path (CONNECT), and for entries written before this field existed.
+   */
+  path?: string;
   /** Kind of request policy that processed the request. */
   requestPolicyKind?: RequestPolicyKind;
   /** Result produced by the request policy. */

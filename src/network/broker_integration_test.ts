@@ -56,6 +56,51 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
   }
 });
 
+// fallback で通った帰結のルール ID は `<スコープ>.$fallback` であり、宣言された
+// パスパターンを持たない。行にパスが無ければ、後から読む人には「そのホストへの
+// 何かが承認された」としか残らない。
+test("SessionBroker: audit names the endpoint and masks it like the card", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    document: documentWithScopes({
+      example: { targets: ["example.com"], fallback: "allow" },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+    secretValues: { token: ["s3cr3t"] },
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const request = authorize("sess_test", "req_1", "example.com", 443);
+    const response = await sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...request,
+      method: "GET",
+      requestKind: "forward",
+      reviewContext: {
+        path: "/api/oauth/profile?token=s3cr3t",
+        contentType: null,
+        bodySize: 0,
+      },
+    });
+    expect(response.decision).toEqual("allow");
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].method).toEqual("GET");
+    expect(logs[0].path).toEqual("/api/oauth/profile?token=****");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: raw-body audit survives normal audit off with metadata only", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-body-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-body-audit-"));

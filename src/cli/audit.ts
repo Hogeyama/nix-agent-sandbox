@@ -98,8 +98,20 @@ export function formatAuditEntries(entries: AuditLogEntry[]): string[] {
   return lines;
 }
 
+/**
+ * 認可の 1 行。network の行はホストのあとにメソッドとパスを足す。
+ *
+ * ホストだけの行は、fallback で通った帰結について「api.anthropic.com への
+ * 何かが承認された」としか言えない。承認を読み返す人が知りたいのは、どの
+ * エンドポイントを開けたのかである。パスを持たないリクエスト (CONNECT) と、
+ * この欄より前に書かれた行では、これまでどおりホストで終わる。
+ */
 function formatEntry(entry: AuditLogEntry): string {
   const target =
     entry.domain === "network" ? (entry.target ?? "") : (entry.command ?? "");
-  return `${entry.timestamp} ${entry.sessionId} ${entry.domain} ${entry.decision} ${entry.reason} ${target}`;
+  const request =
+    entry.domain === "network" && entry.path !== undefined
+      ? ` ${entry.method ?? ""} ${entry.path}`
+      : "";
+  return `${entry.timestamp} ${entry.sessionId} ${entry.domain} ${entry.decision} ${entry.reason} ${target}${request}`;
 }

@@ -86,6 +86,7 @@ function openDatabase(dir: string): Database {
         rule_id          TEXT,
         method           TEXT,
         route            TEXT,
+        path             TEXT,
         request_policy_kind   TEXT,
         request_policy_result TEXT,
         scope            TEXT,
@@ -120,6 +121,7 @@ function openDatabase(dir: string): Database {
     addColumnIfMissing(db, "rule_id TEXT");
     addColumnIfMissing(db, "method TEXT");
     addColumnIfMissing(db, "route TEXT");
+    addColumnIfMissing(db, "path TEXT");
     addColumnIfMissing(db, "request_policy_kind TEXT");
     addColumnIfMissing(db, "request_policy_result TEXT");
     addColumnIfMissing(db, "violations TEXT");
@@ -171,12 +173,12 @@ export async function appendAuditLog(
   db.prepare(
     `INSERT OR REPLACE INTO audit_log
        (id, timestamp, domain, session_id, request_id,
-        decision, reason, phase, rule_id, method, route,
+        decision, reason, phase, rule_id, method, route, path,
         request_policy_kind, request_policy_result,
         scope, target, command, injected_headers, violations, body_diagnostic,
         body_audit_status)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -189,6 +191,7 @@ export async function appendAuditLog(
     entry.ruleId ?? null,
     entry.method ?? null,
     entry.route ?? null,
+    entry.path ?? null,
     entry.requestPolicyKind ?? null,
     entry.requestPolicyResult ?? null,
     entry.scope ?? null,
@@ -532,7 +535,7 @@ export async function queryAuditLogs(
   const limit = normaliseLimit(filter.limit);
   const direction = limit === null ? "ASC" : "DESC";
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
-                      decision, reason, phase, rule_id, method, route,
+                      decision, reason, phase, rule_id, method, route, path,
                       request_policy_kind, request_policy_result,
                       scope, target, command, injected_headers, violations,
                       body_diagnostic, body_audit_status
@@ -559,6 +562,7 @@ interface AuditLogRow {
   rule_id: string | null;
   method: string | null;
   route: string | null;
+  path: string | null;
   request_policy_kind: string | null;
   request_policy_result: string | null;
   scope: string | null;
@@ -585,6 +589,7 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
   if (row.rule_id !== null) entry.ruleId = row.rule_id;
   if (row.method !== null) entry.method = row.method;
   if (row.route !== null) entry.route = row.route;
+  if (row.path !== null) entry.path = row.path;
   if (row.request_policy_kind !== null) {
     entry.requestPolicyKind = row.request_policy_kind as RequestPolicyKind;
   }
