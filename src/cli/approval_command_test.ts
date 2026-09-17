@@ -388,6 +388,9 @@ test("sessionFilterArg: --session without a usable value fails instead of wideni
   expect(() =>
     sessionFilterArg(["watch", "--session", "--format", "json"]),
   ).toThrow("--session requires a session id");
+  expect(() => sessionFilterArg(["watch", "--session", ""])).toThrow(
+    "--session requires a session id",
+  );
 });
 
 test("watch: --session limits the stream to one session", async () => {

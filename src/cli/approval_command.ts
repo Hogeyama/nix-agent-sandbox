@@ -62,7 +62,7 @@ export function sessionFilterArg(nasArgs: string[]): string | undefined {
   const index = nasArgs.indexOf("--session");
   if (index === -1) return undefined;
   const value = nasArgs[index + 1];
-  if (value === undefined || value.startsWith("-"))
+  if (value === undefined || value === "" || value.startsWith("-"))
     throw new Error("--session requires a session id");
   return value;
 }
