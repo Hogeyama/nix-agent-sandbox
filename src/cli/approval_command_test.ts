@@ -11,7 +11,7 @@ import {
   type ApprovalAdapter,
   handleApprovalSubcommand,
   type PendingItem,
-  watchSessionFilter,
+  sessionFilterArg,
 } from "./approval_command.ts";
 
 interface DecisionCall {
@@ -298,16 +298,14 @@ test("watch: writes to stdout by default and leaves no listeners behind", async 
   expect(process.stdout.listenerCount("error")).toEqual(before.stdoutError);
 });
 
-test("watch: --session without a usable value fails instead of widening", () => {
-  expect(watchSessionFilter(["watch"])).toBeUndefined();
-  expect(watchSessionFilter(["watch", "--session", "sess_a"])).toEqual(
-    "sess_a",
-  );
-  expect(() => watchSessionFilter(["watch", "--session"])).toThrow(
+test("sessionFilterArg: --session without a usable value fails instead of widening", () => {
+  expect(sessionFilterArg(["watch"])).toBeUndefined();
+  expect(sessionFilterArg(["watch", "--session", "sess_a"])).toEqual("sess_a");
+  expect(() => sessionFilterArg(["watch", "--session"])).toThrow(
     "--session requires a session id",
   );
   expect(() =>
-    watchSessionFilter(["watch", "--session", "--format", "json"]),
+    sessionFilterArg(["watch", "--session", "--format", "json"]),
   ).toThrow("--session requires a session id");
 });
 

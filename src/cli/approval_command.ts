@@ -52,12 +52,13 @@ export interface ApprovalAdapter {
 /**
  * `--session` の値を取り出す。欠けていれば失敗させる。
  *
- * 値を黙って無視すると症状が watch の存在意義と正面から衝突する。値の無い
- * `--session` は全セッション購読へ広がり、`--session --format json` のように
- * 次のフラグを拾えば一致するセッションが無いまま無音で待ち続ける。どちらも
- * 「承認待ちに気づけない」状態そのものである。
+ * 値を黙って無視すると、絞ったつもりの全セッションが対象になる。値の無い
+ * `--session` も、`--session --format json` のように次のフラグを拾った場合も
+ * 同じ結果になる。pending / review では利用者が気づかないまま無関係な
+ * セッションの承認を操作しうる。watch では一致するセッションが無いまま
+ * 無音で待ち続けることになり、「承認待ちに気づけない」状態そのものになる。
  */
-export function watchSessionFilter(nasArgs: string[]): string | undefined {
+export function sessionFilterArg(nasArgs: string[]): string | undefined {
   const index = nasArgs.indexOf("--session");
   if (index === -1) return undefined;
   const value = nasArgs[index + 1];
@@ -99,7 +100,7 @@ export async function handleApprovalSubcommand(
   }
 
   if (sub === "watch") {
-    const sessionFilter = watchSessionFilter(nasArgs);
+    const sessionFilter = sessionFilterArg(nasArgs);
     const controller = new AbortController();
     const stop = () => controller.abort();
     process.once("SIGINT", stop);
