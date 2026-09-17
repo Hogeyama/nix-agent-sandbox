@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { $ } from "bun";
 import { resolveAssetDir } from "../lib/asset.ts";
 import {
+  type PreparationCommandResult,
   preparationSignal,
   runPreparationCommand,
 } from "../lib/preparation_commands.ts";
@@ -23,6 +24,10 @@ const EMBEDDED_ASSET_GROUPS = [
       "Dockerfile",
       "entrypoint.sh",
       "direnv-exec.sh",
+      "devcontainer-env.sh",
+      "devcontainer-exec.sh",
+      "devcontainer-idle.sh",
+      "devcontainer-claude.sh",
       "direnv-bootstrap.sh",
       "direnv-lib.sh",
       "nix-direnv.sh",
@@ -58,6 +63,18 @@ export interface InteractiveCommandOptions {
   errorLabel?: string;
   diagnostic?: boolean;
   signalTrap?: SignalTrap;
+}
+
+export interface DockerCommandOptions {
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+  /** @internal Allows unit tests to substitute a short-lived fake process. */
+  readonly executable?: string;
+}
+
+export interface DockerCommandResult {
+  readonly stdout: string;
+  readonly stderr: string;
 }
 
 const defaultSignalTrap: SignalTrap = {
@@ -117,6 +134,7 @@ export async function computeEmbedHash(): Promise<string> {
 export async function getImageLabel(
   tag: string,
   label: string,
+  options?: DockerCommandOptions,
 ): Promise<string | null> {
   if (preparationSignal()) {
     const result = await runPreparationCommand("docker", [
@@ -128,11 +146,14 @@ export async function getImageLabel(
     return result.exitCode === 0 ? result.stdout.trim() || null : null;
   }
   try {
-    const result =
-      await $`docker inspect --format ${`{{index .Config.Labels "${label}"}}`} ${tag}`.quiet();
+    const format = `{{index .Config.Labels "${label}"}}`;
+    const result = options
+      ? await runDockerCommand(["inspect", "--format", format, tag], options)
+      : await $`docker inspect --format ${format} ${tag}`.quiet();
     const value = result.stdout.toString().trim();
     return value || null;
-  } catch {
+  } catch (error) {
+    if (options && isBoundedCommandFailure(error)) throw error;
     return null;
   }
 }
@@ -331,7 +352,7 @@ export async function dockerEnsureImage(
   tag: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  if (await dockerImageExists(tag, signal)) return false;
+  if (await dockerImageExists(tag, signal && { signal })) return false;
   logInfo(`[nas] Pulling image ${tag} ...`);
   await dockerPull(tag, signal);
   return true;
@@ -340,23 +361,69 @@ export async function dockerEnsureImage(
 /** docker image が存在するか確認 */
 export async function dockerImageExists(
   tag: string,
-  signal?: AbortSignal,
+  options?: DockerCommandOptions,
 ): Promise<boolean> {
   if (preparationSignal()) {
     return (
       (
         await runPreparationCommand("docker", ["image", "inspect", tag], {
-          signal,
+          signal: options?.signal,
         })
       ).exitCode === 0
     );
   }
   try {
-    await $`docker image inspect ${tag}`.quiet();
+    if (options) await runDockerCommand(["image", "inspect", tag], options);
+    else await $`docker image inspect ${tag}`.quiet();
     return true;
-  } catch {
+  } catch (error) {
+    if (options && isBoundedCommandFailure(error)) throw error;
     return false;
   }
+}
+
+function isBoundedCommandFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.includes("timed out") || error.message.includes("aborted"))
+  );
+}
+
+/** The deadline is an abort signal, so the preparation runner owns the kill. */
+export async function runDockerCommand(
+  args: readonly string[],
+  options: DockerCommandOptions = {},
+): Promise<DockerCommandResult> {
+  const deadline =
+    options.timeoutMs === undefined
+      ? undefined
+      : AbortSignal.timeout(options.timeoutMs);
+  const signals = [options.signal, deadline].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
+  let result: PreparationCommandResult;
+  try {
+    result = await runPreparationCommand(options.executable ?? "docker", args, {
+      signal,
+      graceMs: 250,
+    });
+  } catch (error) {
+    if (deadline?.aborted)
+      throw new Error(`docker command timed out after ${options.timeoutMs}ms`);
+    if (signal?.aborted) throw new Error("docker command aborted");
+    throw error;
+  }
+  if (result.exitCode !== 0)
+    throw new Error(
+      formatDockerCommandFailure(
+        [...args],
+        result.exitCode,
+        result.stdout,
+        result.stderr,
+      ),
+    );
+  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 /** docker network を作成 */
@@ -477,8 +544,8 @@ export async function dockerRunDetached(
     stderr: "pipe",
   });
   const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).arrayBuffer().then((b) => new Uint8Array(b)),
-    new Response(proc.stderr).arrayBuffer().then((b) => new Uint8Array(b)),
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
   ]);
   const code = await proc.exited;
   if (code !== 0) {
@@ -489,11 +556,11 @@ export async function dockerRunDetached(
 function formatDockerCommandFailure(
   args: string[],
   code: number,
-  stdout: Uint8Array,
-  stderr: Uint8Array,
+  stdout: string,
+  stderr: string,
 ): string {
-  const stdoutText = new TextDecoder().decode(stdout).trim();
-  const stderrText = new TextDecoder().decode(stderr).trim();
+  const stdoutText = stdout.trim();
+  const stderrText = stderr.trim();
   const lines = [`docker ${args.join(" ")} exited with code ${code}`];
   if (stderrText.length > 0) {
     lines.push(`stderr:\n${stderrText}`);
