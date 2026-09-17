@@ -29,20 +29,37 @@ export async function chmodIfSupported(
   }
 }
 
-export async function atomicWriteJson(
+/** Creates a missing parent directory but leaves an existing one's mode alone,
+ * because the parent may be a directory the user owns (a workspace subdir). */
+export async function atomicWriteFile(
   filePath: string,
-  value: unknown,
+  contents: string,
 ): Promise<void> {
   const dir = path.dirname(filePath);
-  await ensureDir(dir);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   const tempPath = path.join(
     dir,
     `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
   );
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  await writeFile(tempPath, contents, { mode: 0o600 });
   await rename(tempPath, filePath);
+}
+
+export async function atomicWriteJson(
+  filePath: string,
+  value: unknown,
+): Promise<void> {
+  await ensureDir(path.dirname(filePath));
+  await atomicWriteFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function readTextFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {

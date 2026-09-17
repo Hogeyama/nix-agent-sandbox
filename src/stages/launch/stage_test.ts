@@ -19,7 +19,35 @@ import {
   type LaunchOpts,
   makeContainerLaunchServiceFake,
 } from "./container_launch_service.ts";
+import { finalizeLaunchPlan } from "./plan.ts";
 import { compileLaunchOpts, createLaunchStage, planLaunch } from "./stage.ts";
+
+test("finalizeLaunchPlan: composes agent arguments and management labels", () => {
+  const { input, container } = createTestInput({
+    container: {
+      ...emptyContainerPlan("nas-sandbox", "/workspace"),
+      command: { agentCommand: ["claude"], extraArgs: ["--existing"] },
+      labels: { "existing.label": "kept" },
+    },
+  });
+  input.profile.agentArgs = ["--profile"];
+
+  const finalized = finalizeLaunchPlan({ ...input, container }, ["--cli"]);
+
+  expect(finalized.container.command).toEqual({
+    agentCommand: ["claude"],
+    extraArgs: ["--existing", "--profile", "--cli"],
+  });
+  expect(finalized.container.labels).toEqual({
+    "existing.label": "kept",
+    "nas.managed": "true",
+    "nas.kind": "agent",
+    "nas.pwd": "/workspace",
+    "nas.session_id": "sess_test123",
+  });
+  expect(container.command.extraArgs).toEqual(["--existing"]);
+  expect(finalized.containerName.startsWith("nas-agent-")).toBe(true);
+});
 
 test("planLaunch: produces correct plan with composed command", () => {
   const { input, container } = createTestInput({
@@ -311,6 +339,17 @@ test("compileLaunchOpts: extraRunArgs appended after network args", () => {
   const shmIdx = opts.args.indexOf("--shm-size");
   expect(shmIdx).toBeGreaterThan(networkIdx);
   expect(opts.args).toContain("--privileged");
+});
+
+test("compileLaunchOpts: structured shmSize preserves the Docker CLI encoding", () => {
+  const plan = makeBasePlan({
+    network: { mode: "network", name: "net1" },
+    shmSize: "2g",
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-3");
+
+  expect(opts.args.slice(-2)).toEqual(["--shm-size", "2g"]);
 });
 
 test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => {

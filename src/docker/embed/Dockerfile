@@ -25,6 +25,10 @@ RUN userdel -r ubuntu 2>/dev/null && groupdel ubuntu 2>/dev/null || true
 
 COPY entrypoint.sh /entrypoint.sh
 COPY direnv-exec.sh /usr/local/bin/nas-direnv-exec
+COPY devcontainer-env.sh /usr/local/lib/nas/devcontainer-env.sh
+COPY devcontainer-exec.sh /usr/local/bin/nas-devcontainer-exec
+COPY devcontainer-idle.sh /usr/local/bin/nas-devcontainer-idle
+COPY devcontainer-claude.sh /usr/local/bin/nas-devcontainer-claude
 COPY direnv-bootstrap.sh /usr/local/libexec/nas-direnv-bootstrap
 COPY direnv-lib.sh nix-direnv.sh /usr/local/share/nas/
 COPY nix-direnv.LICENSE /usr/local/share/licenses/nix-direnv/LICENSE
@@ -33,7 +37,8 @@ RUN printf '%s  %s\n' \
       '856e8d0b5247b9edc88d9377b8333a97a2363cc69abaa7760fb857609d597ebe' \
       '/usr/local/share/nas/nix-direnv.sh' | sha256sum -c - \
   && chmod +x /entrypoint.sh /usr/local/bin/nas-direnv-exec \
-    /usr/local/libexec/nas-direnv-bootstrap
+    /usr/local/bin/nas-devcontainer-exec /usr/local/bin/nas-devcontainer-idle \
+    /usr/local/bin/nas-devcontainer-claude /usr/local/libexec/nas-direnv-bootstrap
 
 # エージェントバイナリのマウント先
 RUN mkdir -p /usr/local/bin /home /nix

@@ -13,6 +13,7 @@ import type {
 import {
   isNasManagedNetwork,
   isNasManagedSidecar,
+  NAS_KIND_AGENT,
   NAS_KIND_DIND,
   NAS_KIND_DIND_DATA,
   NAS_KIND_DIND_NETWORK,
@@ -24,6 +25,7 @@ import {
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
+  NAS_SESSION_ID_LABEL,
 } from "./docker/nas_resources.ts";
 
 test("isNasManagedSidecar: nas-sandbox is not a managed sidecar", () => {
@@ -180,6 +182,55 @@ test("isUnusedNasSidecar: session network with active container keeps proxy aliv
       buildSidecarUsageIndex([proxy, userContainer]),
     ),
   ).toEqual(false);
+});
+
+test("isUnusedNasSidecar: active IDE agent labels keep its session proxy alive", () => {
+  const proxy: DockerContainerDetails = {
+    name: "nas-proxy-shared",
+    id: "proxy-id",
+    running: true,
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_PROXY,
+    },
+    networks: ["nas-session-ide"],
+    networkMode: "bridge",
+    startedAt: "2026-09-16T00:00:00Z",
+  };
+  const ide: DockerContainerDetails = {
+    name: "nas-devcontainer-agent",
+    id: "agent-id",
+    running: true,
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_AGENT,
+      [NAS_SESSION_ID_LABEL]: "dc_session",
+      "devcontainer.local_folder": "/work",
+      "devcontainer.config_file": "/work/.devcontainer/devcontainer.json",
+    },
+    networks: ["nas-session-ide"],
+    networkMode: "bridge",
+    startedAt: "2026-09-16T00:00:00Z",
+  };
+  const network: DockerNetworkDetails = {
+    name: "nas-session-ide",
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
+    },
+    containers: [proxy.name, ide.name],
+  };
+  expect(
+    isUnusedNasSidecar(
+      proxy,
+      new Map([
+        [proxy.name, proxy],
+        [ide.name, ide],
+      ]),
+      new Map([[network.name, network]]),
+      buildSidecarUsageIndex([proxy, ide]),
+    ),
+  ).toBe(false);
 });
 
 class FakeBackend implements ContainerCleanBackend {

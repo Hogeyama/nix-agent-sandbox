@@ -14,6 +14,9 @@ import * as path from "node:path";
 
 import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 
+// /bin/true does not exist outside FHS layouts (e.g. NixOS).
+const truePath = Bun.which("true") ?? "/bin/true";
+
 interface Fixture {
   launcher: string;
   root: string;
@@ -60,6 +63,9 @@ case "$1" in
   exec)
     shift 2
     exec "$@"
+    ;;
+  export)
+    printf '%s\\n' "\${FAKE_EXPORT_CODE:-}"
     ;;
   *) exit 99 ;;
 esac
@@ -300,13 +306,13 @@ test("no-RC and unapproved paths do not install the direnv library", async () =>
       fixture.env.XDG_CONFIG_HOME,
       "direnv/lib/nas-nix-direnv.sh",
     );
-    const noRc = await launch(fixture, ["/bin/true"]);
+    const noRc = await launch(fixture, [truePath]);
     expect(noRc.exitCode).toBe(0);
     expect(await Bun.file(installed).exists()).toBe(false);
 
     const rc = path.join(fixture.workspace, ".envrc");
     await writeFile(rc, "export SHOULD_NOT_RUN=yes\n");
-    const unapproved = await launch(fixture, ["/bin/true"], {
+    const unapproved = await launch(fixture, [truePath], {
       FAKE_STATUS_JSON: JSON.stringify({
         state: { foundRC: { path: rc, allowed: -1 } },
       }),
@@ -421,7 +427,7 @@ test("approval dependencies ignore workspace commands in PATH", async () => {
         { mode: 0o755 },
       );
     }
-    const result = await launch(fixture, ["/bin/true"], {
+    const result = await launch(fixture, [truePath], {
       PATH: `${hostileBin}:${fixture.env.PATH}`,
       FAKE_STATUS_FAIL: "true",
       SPOOF_MARKER: hostileMarker,
@@ -506,5 +512,44 @@ test("acp mode redirects the payload with direnv disabled too", async () => {
     expect(result.stdout).toBe("");
     expect(await readFile(fd9, "utf8")).toBe("disabled-ran");
     expect(await Bun.file(fixture.callsFile).exists()).toBe(false);
+  });
+});
+
+test("environment output mode emits only changed exports and no inherited secret", async () => {
+  await withFixture(async (fixture) => {
+    await writeFile(
+      fixture.opsFile,
+      `export NAS_TEST_OUTPUT='literal $(false)'; unset NAS_TEST_UNSET\n`,
+    );
+    const result = await launch(fixture, ["--export"], {
+      NAS_DIRENV_ENABLED: "false",
+      NAS_TEST_UNSET: "before",
+      NAS_PRIVATE_SECRET: "never-print-this",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("NAS_TEST_OUTPUT");
+    expect(result.stdout).toContain("unset NAS_TEST_UNSET");
+    expect(result.stdout).not.toContain("NAS_PRIVATE_SECRET");
+    const proc = Bun.spawn(
+      ["bash", "-c", `${result.stdout}\nprintf '%s' "$NAS_TEST_OUTPUT"`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(await proc.exited).toBe(0);
+    expect(await new Response(proc.stdout).text()).toBe("literal $(false)");
+  });
+});
+
+test("environment output mode does not replay the launcher's working directory", async () => {
+  await withFixture(async (fixture) => {
+    // The direnv-enabled branch cds into the workspace between the two
+    // snapshots, so PWD and OLDPWD differ across the diff. Replaying them
+    // would tell a consumer with another cwd that it is in the workspace.
+    const result = await launch(fixture, ["--export"], {
+      NAS_DIRENV_ENABLED: "true",
+      FAKE_EXPORT_CODE: "export NAS_TEST_FROM_DIRENV=1",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("NAS_TEST_FROM_DIRENV");
+    expect(result.stdout).not.toContain("PWD");
   });
 });

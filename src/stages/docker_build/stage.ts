@@ -8,6 +8,7 @@
 import { Effect, type Scope } from "effect";
 import {
   computeEmbedHash,
+  type DockerCommandOptions,
   dockerImageExists,
   getImageLabel,
 } from "../../docker/client.ts";
@@ -39,6 +40,10 @@ export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
       "Dockerfile",
       "entrypoint.sh",
       "direnv-exec.sh",
+      "devcontainer-env.sh",
+      "devcontainer-exec.sh",
+      "devcontainer-idle.sh",
+      "devcontainer-claude.sh",
       "direnv-bootstrap.sh",
       "direnv-lib.sh",
       "nix-direnv.sh",
@@ -66,15 +71,16 @@ export const EMBED_HASH_LABEL = "nas.embed-hash";
  */
 export async function resolveBuildProbes(
   imageName: string,
+  options?: DockerCommandOptions,
 ): Promise<BuildProbes> {
   const [imageExists, currentEmbedHash] = await Promise.all([
-    dockerImageExists(imageName),
+    dockerImageExists(imageName, options),
     computeEmbedHash(),
   ]);
 
   let imageEmbedHash: string | null = null;
   if (imageExists) {
-    imageEmbedHash = await getImageLabel(imageName, EMBED_HASH_LABEL);
+    imageEmbedHash = await getImageLabel(imageName, EMBED_HASH_LABEL, options);
   }
 
   return { imageName, imageExists, currentEmbedHash, imageEmbedHash };

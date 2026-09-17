@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { shellEscape } from "../dtach/client.ts";
+
 // Exercise the actual entrypoint descriptor setup and direnv finish program.
 // The direnv fixture models its syscall.Exec handoff (preserves inherited FDs).
 test("entrypoint and direnv setup cannot consume or print protocol bytes", async () => {
@@ -17,6 +19,12 @@ test("entrypoint and direnv setup cannot consume or print protocol bytes", async
       await readFile(new URL("./embed/direnv-exec.sh", import.meta.url), "utf8")
     )
       .replaceAll("/usr/bin/direnv", join(dir, "direnv"))
+      // The launcher hardcodes image paths; relocate jq the same way the
+      // direnv_exec fixture does, since /usr/bin/jq need not exist.
+      .replaceAll(
+        "/usr/bin/jq",
+        shellEscape([Bun.which("jq") ?? "/usr/bin/jq"]),
+      )
       .replaceAll(
         "/usr/local/libexec/nas-direnv-bootstrap",
         join(dir, "bootstrap"),
@@ -33,7 +41,7 @@ test("entrypoint and direnv setup cannot consume or print protocol bytes", async
       { mode: 0o700 },
     );
     await writeFile(join(dir, "ops"), "echo dynamic-env-setup\n");
-    const program = `${entry.split("NAS_SHELL_MODE=false")[0]}\necho entrypoint-setup\nread -r ignored && exit 92\nexec /bin/bash "$1" "$2" "$3" "" /bin/cat\n`;
+    const program = `${entry.split("NAS_SHELL_MODE=false")[0]}\necho entrypoint-setup\nread -r ignored && exit 92\nexec /bin/bash "$1" "$2" "$3" "" ${shellEscape([Bun.which("cat") ?? "/bin/cat"])}\n`;
     const child = spawn(
       "bash",
       ["-c", program, "fixture", join(dir, "runner"), dir, join(dir, "ops")],
