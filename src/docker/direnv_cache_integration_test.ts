@@ -17,6 +17,21 @@ const direnv = Bun.which("direnv");
 const jq = Bun.which("jq");
 const integrationAvailable = direnv !== null && jq !== null;
 
+// A PATH that proves Nix is unnecessary must still provide the base tools the
+// bootstrap and direnv call (mkdir, cmp, mktemp, ...). "/usr/bin:/bin" is not
+// that on NixOS, where /bin holds only bash and sh, so anchor the minimal PATH
+// at the directories that actually contain those tools.
+const minimalPath = [
+  ...new Set(
+    ["mkdir", "cmp", "mktemp"]
+      .map((tool) => Bun.which(tool))
+      .filter((toolPath): toolPath is string => toolPath !== null)
+      .map((toolPath) => path.dirname(toolPath)),
+  ),
+  "/usr/bin",
+  "/bin",
+].join(":");
+
 interface CacheFixture {
   root: string;
   workspace: string;
@@ -276,7 +291,7 @@ test.skipIf(!integrationAvailable)(
       await approve(fixture);
 
       const result = await launch(fixture, {
-        env: { PATH: "/usr/bin:/bin" },
+        env: { PATH: minimalPath },
         command: ["/bin/bash", "-c", 'printf %s "$NAS_PLAIN_RC"'],
       });
       expect(result.exitCode).toBe(0);

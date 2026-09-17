@@ -14,6 +14,9 @@ import * as path from "node:path";
 
 import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 
+// /bin/true does not exist outside FHS layouts (e.g. NixOS).
+const truePath = Bun.which("true") ?? "/bin/true";
+
 interface Fixture {
   launcher: string;
   root: string;
@@ -303,13 +306,13 @@ test("no-RC and unapproved paths do not install the direnv library", async () =>
       fixture.env.XDG_CONFIG_HOME,
       "direnv/lib/nas-nix-direnv.sh",
     );
-    const noRc = await launch(fixture, ["/bin/true"]);
+    const noRc = await launch(fixture, [truePath]);
     expect(noRc.exitCode).toBe(0);
     expect(await Bun.file(installed).exists()).toBe(false);
 
     const rc = path.join(fixture.workspace, ".envrc");
     await writeFile(rc, "export SHOULD_NOT_RUN=yes\n");
-    const unapproved = await launch(fixture, ["/bin/true"], {
+    const unapproved = await launch(fixture, [truePath], {
       FAKE_STATUS_JSON: JSON.stringify({
         state: { foundRC: { path: rc, allowed: -1 } },
       }),
@@ -424,7 +427,7 @@ test("approval dependencies ignore workspace commands in PATH", async () => {
         { mode: 0o755 },
       );
     }
-    const result = await launch(fixture, ["/bin/true"], {
+    const result = await launch(fixture, [truePath], {
       PATH: `${hostileBin}:${fixture.env.PATH}`,
       FAKE_STATUS_FAIL: "true",
       SPOOF_MARKER: hostileMarker,
