@@ -321,3 +321,27 @@ async function computeLegacyEmbedHashWithoutLocalProxy(): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Buffer.from(new Uint8Array(hash)).toString("hex");
 }
+
+test("Dev Container launcher assets are materialized and participate in image identity", async () => {
+  const assets = EMBEDDED_BUILD_ASSET_GROUPS[0];
+  for (const file of [
+    "devcontainer-env.sh",
+    "devcontainer-exec.sh",
+    "devcontainer-idle.sh",
+    "devcontainer-claude.sh",
+  ]) {
+    expect(assets.files).toContain(file);
+  }
+  const hash = await computeEmbedHash();
+  const parts: string[] = [];
+  for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+    for (const file of group.files)
+      parts.push(
+        (await readFile(path.join(group.baseDir, file), "utf8")) +
+          (file === "devcontainer-env.sh" ? "\n# changed" : ""),
+      );
+  }
+  expect(
+    new Bun.CryptoHasher("sha256").update(parts.join("\n")).digest("hex"),
+  ).not.toBe(hash);
+});
