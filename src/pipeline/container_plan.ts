@@ -23,7 +23,7 @@ import type {
  * Merge semantics (applied by mergeContainerPlan):
  *   - mounts, env.dynamicOps, extraRunArgs, extraHosts → append
  *   - env.static, labels                               → key-merge (patch wins)
- *   - network, command, image, workDir                 → replace (undefined = keep base)
+ *   - network, command, image, workDir, shmSize        → replace (undefined = keep base)
  */
 export interface ContainerPatch {
   readonly image?: string;
@@ -35,6 +35,7 @@ export interface ContainerPatch {
   };
   readonly network?: NetworkAttachment;
   readonly extraHosts?: readonly ExtraHost[];
+  readonly shmSize?: string;
   readonly extraRunArgs?: readonly string[];
   readonly command?: CommandSpec;
   readonly labels?: Readonly<Record<string, string>>;
@@ -96,6 +97,11 @@ export function mergeContainerPlan(
       patch.extraHosts !== undefined
         ? [...base.extraHosts, ...patch.extraHosts]
         : base.extraHosts,
+    ...(patch.shmSize !== undefined
+      ? { shmSize: patch.shmSize }
+      : base.shmSize !== undefined
+        ? { shmSize: base.shmSize }
+        : {}),
     extraRunArgs:
       patch.extraRunArgs !== undefined
         ? [...base.extraRunArgs, ...patch.extraRunArgs]
