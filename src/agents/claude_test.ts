@@ -63,3 +63,42 @@ test("configureClaude: absent mode preserves terminal behavior", () => {
   expect(result.agentCommand).toEqual(["claude"]);
   expect(result.envVars.CLAUDE_CODE_EXECUTABLE).toBeUndefined();
 });
+
+const input = {
+  containerHome: "/home/nas",
+  hostHome: "/host/home",
+  probes: {
+    claudeDirExists: true,
+    claudeJsonExists: true,
+    claudeBinPath: "/host/claude",
+  },
+  priorDockerArgs: [],
+  priorEnvVars: {},
+};
+test("dedicated state preserves structured paths and excludes host authentication and executable", () => {
+  const result = configureClaude({
+    ...input,
+    claudeState: {
+      claudeDir: "/state:$x/claude",
+      claudeJson: "/state:$x/claude.json",
+    },
+  });
+  expect(result.mounts).toEqual([
+    { source: "/state:$x/claude", target: "/home/nas/.claude" },
+    { source: "/state:$x/claude.json", target: "/home/nas/.claude.json" },
+  ]);
+  expect(result.dockerArgs).toEqual([]);
+  expect(result.agentCommand).toEqual(["claude"]);
+});
+test("normal Claude CLI retains host mounts and executable", () => {
+  const result = configureClaude(input);
+  expect(result.dockerArgs).toEqual([
+    "-v",
+    "/host/home/.claude:/home/nas/.claude",
+    "-v",
+    "/host/home/.claude.json:/home/nas/.claude.json",
+    "-v",
+    "/host/claude:/home/nas/.local/bin/claude:ro",
+  ]);
+  expect(result.agentCommand).toEqual(["claude"]);
+});

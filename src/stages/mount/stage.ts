@@ -9,6 +9,10 @@
 import * as path from "node:path";
 import { Effect } from "effect";
 import { configureAgent } from "../../agents/registry.ts";
+import type {
+  AgentConfigResult,
+  ClaudeStatePaths,
+} from "../../agents/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
 import {
@@ -50,6 +54,13 @@ const DEFAULT_CONTAINER_USER = "nas";
 // MountPlan — pure data description returned by planMount()
 // ---------------------------------------------------------------------------
 
+export interface DevcontainerMountInput extends ClaudeStatePaths {
+  readonly vscodeDir: string;
+  /** Canonical Git metadata roots resolved before the pipeline; validate the
+   * assembled mounts with the Dev Container host-path policy before launch. */
+  readonly gitMetadataPaths: readonly string[];
+}
+
 export interface MountPlanDirectory {
   readonly path: string;
   readonly mode: number;
@@ -77,6 +88,7 @@ type MountStageInput = StageInput & MountStageState;
 export function createMountStage(
   shared: StageInput,
   mountProbes: MountProbes,
+  devcontainer?: DevcontainerMountInput,
 ): Stage<
   "workspace" | "nix" | "dbus" | "display" | "container",
   { container: ContainerPlan },
@@ -92,7 +104,7 @@ export function createMountStage(
         ...shared,
         ...input,
       };
-      const plan = planMount(stageInput, mountProbes);
+      const plan = planMount(stageInput, mountProbes, devcontainer);
       const workspace = resolveWorkspace(input);
       const container = mergeContainerPlan(
         resolveContainerBase(input, workspace),
@@ -132,6 +144,7 @@ export function resolveWorkspaceMountSource(
 export function planMount(
   input: MountStageInput,
   probes: MountProbes,
+  devcontainer?: DevcontainerMountInput,
 ): MountPlan {
   const { host, profile } = input;
   const workspace = resolveWorkspace(input);
@@ -158,6 +171,7 @@ export function planMount(
   const args: string[] = [];
   const mounts: MountSpec[] = [];
   const extraRunArgs: string[] = [];
+  let shmSize: string | undefined;
   const envVars: Record<string, string> = {};
 
   const containerUser = resolveContainerUser(host.user);
@@ -167,13 +181,49 @@ export function planMount(
   // NAS_LOG_LEVEL is set in initialPrior.envVars by cli.ts
 
   // ワークスペースマウント
-  // git worktree 内の場合は本体リポジトリルートをマウントソースに広げる
+  // 通常 CLI の git worktree は本体リポジトリルートまで共有する。
+  // IDE は同じ MaskFs ビューから workspace と必要な Git metadata だけを共有する。
   // maskfs 有効時はバインドソースだけマスク済みビューに差し替える
   // (コンテナ内パスは実パスのまま維持する)
   const mountSource = resolveWorkspaceMountSource(workspace, probes);
-  const bindSource = workspace.maskedRoot ?? mountSource;
+  const ideSource = (target: string): string => {
+    if (!workspace.maskedRoot) return target;
+    if (!isPathWithin(target, mountSource)) {
+      throw new Error(
+        "[nas] IDE with active MaskFs requires the worktree and Git metadata beneath the repository root; use a worktree beneath the repository root",
+      );
+    }
+    return path.join(workspace.maskedRoot, path.relative(mountSource, target));
+  };
+  const bindSource = devcontainer
+    ? ideSource(path.resolve(workspace.workDir))
+    : (workspace.maskedRoot ?? mountSource);
   const containerWorkDir = path.resolve(workspace.workDir);
-  addMount(args, mounts, bindSource, mountSource);
+  addMount(
+    args,
+    mounts,
+    bindSource,
+    devcontainer ? containerWorkDir : mountSource,
+  );
+  if (devcontainer) {
+    for (const metadata of devcontainer.gitMetadataPaths) {
+      if (!isPathWithin(metadata, containerWorkDir))
+        addMount(args, mounts, ideSource(metadata), metadata);
+    }
+    addMount(
+      args,
+      mounts,
+      devcontainer.vscodeDir,
+      `${containerHome}/.vscode-server`,
+    );
+    addMount(
+      args,
+      mounts,
+      ideSource(`${containerWorkDir}/.devcontainer`),
+      `${containerWorkDir}/.devcontainer`,
+      true,
+    );
+  }
   args.push("-w", containerWorkDir);
   envVars.WORKSPACE = containerWorkDir;
 
@@ -183,11 +233,17 @@ export function planMount(
   // Linux では unlink/rename/open(O_WRONLY) 全てが EBUSY/EROFS で拒否される。
   // これにより次回起動時に nas が信頼して読み込む設定（特に hostexec.rules）の
   // 改ざんを防ぐ。
-  // maskfs 有効時もソースは実パスのまま: config.pkl は secrets に
+  // 通常 CLI は maskfs 有効時もソースは実パスのまま: config.pkl は secrets に
   // リテラルを書けない設計のため秘密値を含まず、trust 済み実体を RO で
   // 見せることが改ざん防止として優先される。
+  // IDE は .nas 全体を RO にし、有効なマスク済みビューも維持する。
   for (const configPath of probes.localConfigPaths) {
-    if (isPathWithin(configPath, mountSource)) {
+    if (devcontainer) {
+      if (isPathWithin(configPath, containerWorkDir)) {
+        const configDir = path.dirname(configPath);
+        addMount(args, mounts, ideSource(configDir), configDir, true);
+      }
+    } else if (isPathWithin(configPath, mountSource)) {
       addMount(args, mounts, configPath, configPath, true);
     }
   }
@@ -249,7 +305,7 @@ export function planMount(
   }
 
   // git 設定マウント
-  if (probes.gitConfigExists) {
+  if (!devcontainer && probes.gitConfigExists) {
     addMount(
       args,
       mounts,
@@ -407,7 +463,7 @@ export function planMount(
     envVars.DISPLAY = `:${display.displayNumber}`;
     envVars.XAUTHORITY = `${containerHome}/.Xauthority`;
     // playwright/chromium 等が /dev/shm を多用するため拡張
-    extraRunArgs.push("--shm-size", "2g");
+    shmSize = "2g";
   }
 
   // エージェント固有の設定
@@ -416,11 +472,7 @@ export function planMount(
   const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
   let agentCommand: readonly string[] = resolvePriorAgentCommand(input);
 
-  const applyAgentResult = (agentResult: {
-    dockerArgs: string[];
-    envVars: Record<string, string>;
-    agentCommand: string[];
-  }) => {
+  const applyAgentResult = (agentResult: AgentConfigResult) => {
     const agentArgs = agentResult.dockerArgs.slice(priorDockerArgs.length);
     const agentEnv: Record<string, string> = {};
     for (const [k, v] of Object.entries(agentResult.envVars)) {
@@ -430,12 +482,14 @@ export function planMount(
     }
     args.push(...agentArgs);
     appendStructuredArgs(agentArgs, mounts, extraRunArgs);
+    mounts.push(...(agentResult.mounts ?? []));
     Object.assign(envVars, agentEnv);
     agentCommand = agentResult.agentCommand;
   };
 
   applyAgentResult(
     configureAgent({
+      claudeState: devcontainer,
       agent: profile.agent,
       mode: profile.mode ?? "terminal",
       containerHome,
@@ -460,6 +514,7 @@ export function planMount(
         static: staticEnvVars,
         dynamicOps: dynamicEnvOps,
       },
+      ...(shmSize === undefined ? {} : { shmSize }),
       extraRunArgs,
       command: {
         agentCommand,

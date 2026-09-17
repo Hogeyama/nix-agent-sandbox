@@ -2,7 +2,11 @@
  * Claude Code エージェント対応
  */
 
-import type { AgentConfigResult, AgentMode } from "./types.ts";
+import type {
+  AgentConfigResult,
+  AgentMode,
+  ClaudeStatePaths,
+} from "./types.ts";
 
 const DEFAULT_CONTAINER_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -38,6 +42,7 @@ export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
 /** configureClaude の入力 */
 export interface ClaudeConfigInput {
   readonly mode?: AgentMode;
+  readonly claudeState?: ClaudeStatePaths;
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: ClaudeProbes;
@@ -57,6 +62,24 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
   envVars.PATH = `${containerLocalBin}:${
     envVars.PATH ?? DEFAULT_CONTAINER_PATH
   }`;
+
+  if (input.claudeState) {
+    return {
+      dockerArgs: args,
+      envVars,
+      agentCommand: ["claude"],
+      mounts: [
+        {
+          source: input.claudeState.claudeDir,
+          target: `${containerHome}/.claude`,
+        },
+        {
+          source: input.claudeState.claudeJson,
+          target: `${containerHome}/.claude.json`,
+        },
+      ],
+    };
+  }
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
   if (probes.claudeDirExists) {
