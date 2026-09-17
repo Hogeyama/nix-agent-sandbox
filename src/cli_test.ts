@@ -23,6 +23,7 @@ import {
   DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
 } from "./config/types.ts";
+import { createPreparationPipelineBuilder } from "./pipeline/cli_builder.ts";
 import type { PipelineState } from "./pipeline/state.ts";
 import type { HostEnv, ProbeResults } from "./pipeline/types.ts";
 import type { BuildProbes } from "./stages/docker_build.ts";
@@ -416,6 +417,30 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
     { name: "PortBindStage", needs: ["container", "observability"] },
     { name: "LaunchStage", needs: ["container"] },
   ]);
+});
+
+test("createPreparationPipelineBuilder stops immediately before launch", () => {
+  const builder = createPreparationPipelineBuilder({
+    input: {
+      config: baseConfig,
+      profile: baseProfile,
+      profileName: "dev",
+      sessionId: "sess_test123",
+      host: baseHost,
+      probes: baseProbes,
+    },
+    buildProbes: {
+      imageName: "nas-sandbox",
+      imageExists: false,
+      currentEmbedHash: "embed-hash",
+      imageEmbedHash: null,
+    },
+    mountProbes: {} as MountProbes,
+  });
+  expect(builder.getStages().at(-1)?.name).toBe("PortBindStage");
+  expect(builder.getStages().map((stage) => stage.name)).not.toContain(
+    "LaunchStage",
+  );
 });
 
 test("planProxy: network proxy cannot be opted out", () => {
