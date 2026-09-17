@@ -22,9 +22,13 @@ function runNas(nasPath, args) {
 }
 
 // `nas <domain> watch --session <sid>` を spawn し、行区切りで onLine を呼ぶ。
+// stdin は pipe にする。watch は fd 0 が FIFO のときだけ stopOnOwnerExit を
+// 武装するので、"ignore" (/dev/null) だと extension host が SIGKILL で死んだ
+// 場合に孤児 watcher が無期限にポーリングし続ける。親は書き込まないので、
+// 親の死でパイプが閉じ、子は自走で停止する。
 function spawnNasWatch(nasPath, domain, sessionId, handlers) {
   const child = spawn(nasPath, [domain, "watch", "--session", sessionId], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   let buf = "";
   child.stdout.on("data", (d) => {
