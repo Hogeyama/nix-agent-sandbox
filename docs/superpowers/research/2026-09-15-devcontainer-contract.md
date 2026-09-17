@@ -41,9 +41,9 @@ Commands were run inside the nas sandbox in the assigned worktree.
 
 ## NAS result
 
-The automated contract was not executed because the Dev Containers CLI and
-fixture image are absent. This is a capability skip, not evidence that the
-contract passes or fails. No CLI was installed and no host command was run.
+The automated contract was not executed in the sandbox because the Dev
+Containers CLI and fixture image are absent there. This is a capability skip,
+not evidence that the contract passes or fails.
 
 The automated test probes prerequisites in dependency order. When the Dev
 Containers CLI is unavailable, it records Docker, Compose, and the fixture
@@ -59,24 +59,60 @@ unverified. A successful `devcontainer up` does not prove that VS Code applied
 that already existed before attach. That requires opening the fixture with VS
 Code Dev Containers and checking the remote extension and setting state.
 
+## Measured result (2026-09-17)
+
+`tests/devcontainer_contract_e2e_test.ts` was executed on the host and
+**passed**: 9 assertions in 12.1 seconds.
+
+| Environment | Version |
+| --- | --- |
+| Dev Containers CLI | 0.89.0 |
+| Docker | 29.6.2 |
+| Docker Compose | 5.1.4 |
+
+The fixture image was `nas-devcontainer-contract:latest` with the account
+`nas-test`, uid 1000, home `/home/nas-test`.
+
+Four behaviors are now settled:
+
+| Measured | Result |
+| --- | --- |
+| `initializeCommand` ordering | It runs before attach |
+| Attach to an existing Compose service | The client attaches and does not recreate the service |
+| A second `devcontainer up` | Reuses the same container; the call is idempotent |
+| Identity under `updateRemoteUserUID: false` | Enters as uid 1000 with `HOME=/home/nas-test` |
+
+These four are what the nas lifecycle may rely on. Everything else about the
+Dev Containers client remains unverified here.
+
+## Still unmeasured
+
+Neither of the following was exercised by the 2026-09-17 run. Do not record
+them as verified.
+
+1. `userEnvProbe: "loginInteractiveShell"`. The environment restoration path
+   (`devcontainer-env.sh` plus `/etc/profile.d/nas.sh`) depends entirely on
+   VS Code starting a login interactive bash. The fixture does not set this
+   option, so the dependency is assumed, not measured.
+2. `claudeCode.claudeProcessWrapper`. `devcontainer-claude.sh` assumes the real
+   binary arrives as `argv[1]` (`binary=$1`). How the Claude Code extension
+   actually invokes the wrapper requires a real VS Code installation with the
+   extension, which this run did not use.
+
 ## Host follow-up
 
-The host follow-up used the installed Dev Containers specification CLI 0.89.0
-with Docker 29.6.2 and Docker Compose 5.1.4. The host VS Code installation is
-1.119.0, and the isolated test profile contains Dev Containers 0.469.0 and
-Claude Code 2.1.272. The Compose service fixture now carries the standard
-identity labels `devcontainer.local_folder` and `devcontainer.config_file`.
+The host VS Code installation is 1.119.0, and the isolated test profile
+contains Dev Containers 0.469.0 and Claude Code 2.1.272. The Compose service
+fixture carries the standard identity labels `devcontainer.local_folder` and
+`devcontainer.config_file`.
 
 Before those labels were present, both `devcontainer up` calls succeeded but
 `devcontainer exec` failed with `Dev container not found`. Inspection of the
 bundled CLI showed that its lookup path (`dg()`) requires those labels to find
-the existing service. With only the two labels added, the focused host
-contract passed all nine assertions in 12.29 seconds: the initializer marker,
-both `up` results, the Compose service ID, and the `uid=1000`/
-`HOME=/home/nas-test` identity all matched.
+the existing service. Adding the two labels is what makes the run above pass.
 
-This confirms the automated startup, reuse, and CLI exec contract on the host.
-It does not confirm that VS Code applied the declared remote extension and
+The pass confirms the automated startup, reuse, and CLI exec contract on the
+host. It does not confirm that VS Code applied the declared remote extension and
 setting customizations to an already running service. No GUI attach has been
 performed. SSH and GPG forwarding also remain unverified; source inspection
 found no `forwardSSHAgent` flag, and the extension can create forwarding based
