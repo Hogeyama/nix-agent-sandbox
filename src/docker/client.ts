@@ -17,23 +17,35 @@ import type { DockerLabels } from "./nas_resources.ts";
 import { runProtocolCommand } from "./protocol_command.ts";
 import { containerRemovalWarning } from "./removal_outcome.ts";
 
+/**
+ * The files the sandbox image is built from.
+ *
+ * Every COPY source in the Dockerfile belongs here, because the hash of these
+ * files is the image's identity: one left out lets a stale image survive the
+ * change. One image serves every profile, so this list is not per-feature —
+ * a devcontainer script is part of the image a codex session runs too.
+ *
+ * @internal exported so the Dockerfile can be checked against it.
+ */
+export const EMBEDDED_ASSET_NAMES = [
+  "Dockerfile",
+  "entrypoint.sh",
+  "direnv-exec.sh",
+  "devcontainer-env.sh",
+  "devcontainer-exec.sh",
+  "devcontainer-idle.sh",
+  "devcontainer-claude.sh",
+  "direnv-bootstrap.sh",
+  "direnv-lib.sh",
+  "nix-direnv.sh",
+  "nix-direnv.LICENSE",
+  "local-proxy.mjs",
+] as const;
+
 const EMBEDDED_ASSET_GROUPS = [
   {
     baseDir: resolveAssetDir("docker/embed", import.meta.url, "./embed/"),
-    files: [
-      "Dockerfile",
-      "entrypoint.sh",
-      "direnv-exec.sh",
-      "devcontainer-env.sh",
-      "devcontainer-exec.sh",
-      "devcontainer-idle.sh",
-      "devcontainer-claude.sh",
-      "direnv-bootstrap.sh",
-      "direnv-lib.sh",
-      "nix-direnv.sh",
-      "nix-direnv.LICENSE",
-      "local-proxy.mjs",
-    ],
+    files: EMBEDDED_ASSET_NAMES,
   },
 ] as const;
 
@@ -122,7 +134,18 @@ export async function computeEmbedHash(): Promise<string> {
   const parts: string[] = [];
   for (const group of EMBEDDED_ASSET_GROUPS) {
     for (const name of group.files) {
-      parts.push(await readFile(path.join(group.baseDir, name), "utf8"));
+      const file = path.join(group.baseDir, name);
+      try {
+        parts.push(await readFile(file, "utf8"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        // Every profile computes this hash, so an asset the installation did
+        // not ship takes down sessions that have nothing to do with it. Say
+        // that the install is incomplete instead of surfacing a bare ENOENT.
+        throw new Error(
+          `[nas] embedded build asset is missing: ${file}\nThe installed asset directory is incomplete. Rebuild or reinstall nas (NAS_ASSET_DIR overrides the location).`,
+        );
+      }
     }
   }
   const data = new TextEncoder().encode(parts.join("\n"));
