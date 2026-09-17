@@ -59,6 +59,9 @@ class Profile {
   /// エージェントに渡す追加引数。
   agentArgs: Listing<String> = new {}
 
+  /// ホストのエージェント状態ディレクトリの扱い。
+  agentState: AgentStateConfig = new {}
+
   /// Worktree 設定。`null` で無効。
   worktree: WorktreeConfig? = null
 
@@ -90,6 +93,26 @@ class Profile {
 
   /// エージェント向けガイド設定
   guide: GuideConfig = new {}
+}
+
+/// ホストのエージェント状態ディレクトリ (`~/.claude`・`~/.codex`・`~/.copilot`) の扱い。
+class AgentStateConfig {
+  /// エージェントの設定ファイルを読み取り専用でマウントする。
+  ///
+  /// 認証情報とセッション履歴を持ち込むため状態ディレクトリ自体は書き込み可能で
+  /// 渡すしかないが、その中の設定ファイル (`~/.claude/settings.json` の hooks、
+  /// `~/.codex/config.toml` の hooks と MCP サーバ) はホストで同じエージェントを
+  /// 起動したときにホスト上でコマンドを実行させる設定である。コンテナ内の
+  /// エージェントに書き換えられると、ユーザが次にホストでエージェントを起動した
+  /// 瞬間にホストでの任意コード実行が成立する。
+  ///
+  /// 既定では実在する設定ファイルだけを RO の bind mount で上乗せする。
+  /// ワークスペース内の `.claude/settings.json` など、リポジトリ側の設定は
+  /// エージェントが編集する対象と同じツリーにあるため保護しない。
+  ///
+  /// `false` にするとコンテナ内から設定ファイルを書き換えられるようになる
+  /// 代わりに、この経路が開く。
+  protectSettings: Boolean = true
 }
 
 class WorktreeConfig {

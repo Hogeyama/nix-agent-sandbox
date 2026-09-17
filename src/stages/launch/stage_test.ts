@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import {
   type Config,
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -446,6 +447,7 @@ function createTestInput(overrides: { container?: ContainerPlan } = {}): {
   const profile: Profile = {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },

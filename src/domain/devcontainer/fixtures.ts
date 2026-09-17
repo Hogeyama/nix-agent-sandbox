@@ -5,6 +5,7 @@ export function devcontainerProfile(): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: defaults.DEFAULT_AGENT_STATE_CONFIG,
     nix: { enable: false, mountSocket: false },
     direnv: defaults.DEFAULT_DIRENV_CONFIG,
     docker: defaults.DEFAULT_DOCKER_CONFIG,

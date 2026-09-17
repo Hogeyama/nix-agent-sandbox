@@ -28,6 +28,11 @@ export interface AgentConfigInput {
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: AgentProbes;
+  /**
+   * エージェントの状態ディレクトリ配下の設定ファイルを RO で上乗せするか
+   * (`profile.agentState.protectSettings`)。see agents/settings_protection.ts
+   */
+  readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
 }

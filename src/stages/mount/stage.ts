@@ -495,6 +495,7 @@ export function planMount(
       containerHome,
       hostHome: host.home,
       probes: probes.agentProbes,
+      protectSettings: profile.agentState.protectSettings,
       priorDockerArgs,
       priorEnvVars,
     }),

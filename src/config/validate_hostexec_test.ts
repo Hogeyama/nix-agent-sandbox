@@ -9,6 +9,7 @@
 import { expect, test } from "bun:test";
 import type { Config, HostExecConfig, Profile } from "./types.ts";
 import {
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_DOCKER_CONFIG,
@@ -30,6 +31,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     direnv: { enable: false },
     nix: DEFAULT_NIX_CONFIG,

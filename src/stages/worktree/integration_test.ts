@@ -14,6 +14,7 @@ import { $ } from "bun";
 import { Effect, Exit, Layer, Scope } from "effect";
 import type { Config, Profile } from "../../config/types.ts";
 import {
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -121,6 +122,7 @@ function createTestProfile(base: string): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     worktree: { base, onCreate: "" },
     direnv: { enable: false },
     nix: { enable: "auto", mountSocket: true },

@@ -209,11 +209,25 @@ export const DEFAULT_GUIDE_CONFIG: GuideConfig = {
   enable: false,
 };
 
+/** ホストのエージェント状態ディレクトリ (`~/.claude` 等) の扱い */
+export interface AgentStateConfig {
+  /**
+   * 状態ディレクトリ配下の設定ファイルを RO の bind mount で上乗せする。
+   * see agents/settings_protection.ts
+   */
+  protectSettings: boolean;
+}
+
+export const DEFAULT_AGENT_STATE_CONFIG: AgentStateConfig = {
+  protectSettings: true,
+};
+
 /** プロファイル */
 export interface Profile {
   agent: AgentType;
   mode?: "terminal" | "acp";
   agentArgs: string[];
+  agentState: AgentStateConfig;
   worktree?: WorktreeConfig;
   session: SessionConfig;
   nix: NixConfig;

@@ -2,6 +2,11 @@
  * GitHub Copilot CLI エージェント対応
  */
 
+import {
+  COPILOT_SETTINGS_FILES,
+  existingSettingsFiles,
+  settingsMountArgs,
+} from "./settings_protection.ts";
 import type { AgentConfigResult } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -12,6 +17,13 @@ import type { AgentConfigResult } from "./types.ts";
 export interface CopilotProbes {
   readonly copilotBinPath: string | null;
   readonly copilotLegacyDirExists: boolean;
+  /**
+   * `~/.copilot` 配下に実在する設定ファイル (ディレクトリからの相対パス)。
+   *
+   * MCP サーバの起動コマンドを持つため、`protectSettings` が立っているときは
+   * RO で上乗せする。see settings_protection.ts
+   */
+  readonly copilotSettingsFiles: readonly string[];
 }
 
 /** ホスト環境を調べて CopilotProbes を返す (副作用あり) */
@@ -19,6 +31,10 @@ export function resolveCopilotProbes(hostHome: string): CopilotProbes {
   return {
     copilotBinPath: findBinaryResolved("copilot"),
     copilotLegacyDirExists: pathExistsSync(`${hostHome}/.copilot`),
+    copilotSettingsFiles: existingSettingsFiles(
+      `${hostHome}/.copilot`,
+      COPILOT_SETTINGS_FILES,
+    ),
   };
 }
 
@@ -31,6 +47,8 @@ export interface CopilotConfigInput {
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: CopilotProbes;
+  /** `~/.copilot` 配下の設定ファイルを RO で上乗せするか。 */
+  readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
 }
@@ -51,6 +69,13 @@ export function configureCopilot(input: CopilotConfigInput): AgentConfigResult {
   // ~/.copilot (legacy state dir) のマウント
   if (probes.copilotLegacyDirExists) {
     args.push("-v", `${hostHome}/.copilot:${containerHome}/.copilot`);
+    args.push(
+      ...settingsMountArgs(
+        `${hostHome}/.copilot`,
+        `${containerHome}/.copilot`,
+        input.protectSettings ? probes.copilotSettingsFiles : [],
+      ),
+    );
   }
 
   // copilot バイナリのマウント (実体パスを解決してマウント)

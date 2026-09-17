@@ -12,6 +12,7 @@ import { Effect, Exit, Scope } from "effect";
 import type { AgentProbes } from "../../agents/types.ts";
 import type { Config, Profile } from "../../config/types.ts";
 import {
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -56,6 +57,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },
@@ -98,6 +100,7 @@ const defaultClaudeProbes: AgentProbes = {
   claudeDirExists: false,
   claudeJsonExists: false,
   claudeBinPath: null,
+  claudeSettingsFiles: [],
 };
 
 function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
@@ -964,10 +967,45 @@ test("MountStage: claude agent sets agentCommand and PATH", () => {
   );
 });
 
+// agentState.protectSettings reaches the agent configurator through planMount;
+// without the wiring the state directory stays writable end to end.
+test("MountStage: agentState.protectSettings reaches the agent mounts", () => {
+  const agentProbes: AgentProbes = {
+    ...defaultClaudeProbes,
+    claudeDirExists: true,
+    claudeSettingsFiles: ["settings.json"],
+  };
+  const roMount = {
+    source: `${TEST_HOME}/.claude/settings.json`,
+    target: `${CONTAINER_HOME}/.claude/settings.json`,
+    readOnly: true,
+  };
+
+  const mountProbes = makeMountProbes({ agentProbes });
+  const protected_ = planMount(
+    makeInput({ profile: makeProfile({ agent: "claude" }), mountProbes }).input,
+    mountProbes,
+  );
+  expect(protected_.containerPatch.mounts).toContainEqual(roMount);
+
+  const unprotected = planMount(
+    makeInput({
+      profile: makeProfile({
+        agent: "claude",
+        agentState: { protectSettings: false },
+      }),
+      mountProbes,
+    }).input,
+    mountProbes,
+  );
+  expect(unprotected.containerPatch.mounts).not.toContainEqual(roMount);
+});
+
 test("MountStage: copilot agent sets agentCommand", () => {
   const copilotProbes: AgentProbes = {
     copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const profile = makeProfile({ agent: "copilot" });
   const mountProbes = makeMountProbes({ agentProbes: copilotProbes });
@@ -981,6 +1019,7 @@ test("MountStage: codex agent sets agentCommand", () => {
     codexDirExists: false,
     codexBinPath: "/usr/bin/codex",
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
   };
   const profile = makeProfile({ agent: "codex" });
   const mountProbes = makeMountProbes({ agentProbes: codexProbes });

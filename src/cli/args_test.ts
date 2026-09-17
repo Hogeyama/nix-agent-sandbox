@@ -9,6 +9,7 @@
 import { expect, test } from "bun:test";
 import type { Profile } from "../config/types.ts";
 import {
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -195,6 +196,7 @@ function baseProfile(): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     worktree: { base: "main", onCreate: "echo hi" },
     direnv: { enable: false },
     nix: { enable: "auto", mountSocket: true },

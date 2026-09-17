@@ -2,6 +2,12 @@
  * Claude Code エージェント対応
  */
 
+import {
+  CLAUDE_SETTINGS_FILES,
+  existingSettingsFiles,
+  settingsMountArgs,
+  settingsMountSpecs,
+} from "./settings_protection.ts";
 import type {
   AgentConfigResult,
   AgentMode,
@@ -24,6 +30,14 @@ export interface ClaudeProbes {
   readonly claudeDirExists: boolean;
   readonly claudeJsonExists: boolean;
   readonly claudeBinPath: string | null;
+  /**
+   * `~/.claude` 配下に実在する設定ファイル (ディレクトリからの相対パス)。
+   *
+   * hooks や statusLine としてホスト上でコマンドを実行させる設定を持つため、
+   * `protectSettings` が立っているときは RO で上乗せする。
+   * see settings_protection.ts
+   */
+  readonly claudeSettingsFiles: readonly string[];
 }
 
 /** ホスト環境を調べて ClaudeProbes を返す (副作用あり) */
@@ -32,6 +46,10 @@ export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
     claudeDirExists: dirExistsSync(`${hostHome}/.claude`),
     claudeJsonExists: fileExistsSync(`${hostHome}/.claude.json`),
     claudeBinPath: findBinaryResolved("claude"),
+    claudeSettingsFiles: existingSettingsFiles(
+      `${hostHome}/.claude`,
+      CLAUDE_SETTINGS_FILES,
+    ),
   };
 }
 
@@ -46,6 +64,8 @@ export interface ClaudeConfigInput {
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: ClaudeProbes;
+  /** `~/.claude` 配下の設定ファイルを RO で上乗せするか。 */
+  readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
 }
@@ -63,6 +83,13 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     envVars.PATH ?? DEFAULT_CONTAINER_PATH
   }`;
 
+  // probes は `${hostHome}/.claude` を見ており、claudeState.claudeDir も
+  // 同じホストディレクトリを指す (mount_probes の ensureDevcontainerClaudeState)。
+  // どちらの経路でも同じ相対パスを RO で上乗せできる。
+  const protectedSettings = input.protectSettings
+    ? probes.claudeSettingsFiles
+    : [];
+
   if (input.claudeState) {
     return {
       dockerArgs: args,
@@ -73,6 +100,11 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
           source: input.claudeState.claudeDir,
           target: `${containerHome}/.claude`,
         },
+        ...settingsMountSpecs(
+          input.claudeState.claudeDir,
+          `${containerHome}/.claude`,
+          protectedSettings,
+        ),
         {
           source: input.claudeState.claudeJson,
           target: `${containerHome}/.claude.json`,
@@ -84,6 +116,13 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
   if (probes.claudeDirExists) {
     args.push("-v", `${hostHome}/.claude:${containerHome}/.claude`);
+    args.push(
+      ...settingsMountArgs(
+        `${hostHome}/.claude`,
+        `${containerHome}/.claude`,
+        protectedSettings,
+      ),
+    );
   }
 
   // ~/.claude.json をマウント（設定）

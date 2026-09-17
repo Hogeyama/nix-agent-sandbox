@@ -96,7 +96,9 @@ test("configureAgent: dispatches claude configuration", () => {
       claudeDirExists: false,
       claudeJsonExists: false,
       claudeBinPath: "/usr/bin/claude",
+      claudeSettingsFiles: [],
     },
+    protectSettings: true,
     priorDockerArgs: ["--existing"],
     priorEnvVars: {},
   });
@@ -113,7 +115,9 @@ test("configureAgent: dispatches copilot configuration", () => {
     probes: {
       copilotBinPath: "/usr/bin/copilot",
       copilotLegacyDirExists: false,
+      copilotSettingsFiles: [],
     },
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -130,7 +134,9 @@ test("configureAgent: dispatches codex configuration", () => {
       codexDirExists: false,
       codexBinPath: "/usr/bin/codex",
       codexCodeModeHostBinPath: null,
+      codexSettingsFiles: [],
     },
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -182,11 +188,13 @@ test("configureClaude: sets PATH with .local/bin prepended", () => {
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome,
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -202,11 +210,13 @@ test("configureClaude: mounts ~/.claude when directory exists", () => {
     claudeDirExists: true,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome,
     hostHome,
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -220,11 +230,13 @@ test("configureClaude: does not mount ~/.claude when directory is absent", () =>
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome,
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -239,11 +251,13 @@ test("configureClaude: mounts ~/.claude.json when file exists", () => {
     claudeDirExists: false,
     claudeJsonExists: true,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome,
     hostHome,
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -257,11 +271,13 @@ test("configureClaude: does not mount ~/.claude.json when file is absent", () =>
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome,
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -275,11 +291,13 @@ test("configureClaude: mounts binary and uses ['claude'] when binary found", () 
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: "/usr/bin/claude",
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome,
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -295,11 +313,13 @@ test("configureClaude: uses install script when claude binary not found", () => 
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -319,11 +339,13 @@ test("configureClaude: bootstrap command forwards appended arguments to claude",
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -358,11 +380,13 @@ test("configureClaude: preserves existing dockerArgs", () => {
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: ["--existing", "arg"],
     priorEnvVars: {},
   });
@@ -375,11 +399,13 @@ test("configureClaude: preserves existing envVars", () => {
     claudeDirExists: false,
     claudeJsonExists: false,
     claudeBinPath: null,
+    claudeSettingsFiles: [],
   };
   const result = configureClaude({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: { EXISTING: "value" },
   });
@@ -402,6 +428,21 @@ test("resolveClaudeProbes: detects missing ~/.claude directory", async () => {
   await withTempHome((tmpHome) => {
     const probes = resolveClaudeProbes(tmpHome);
     expect(probes.claudeDirExists).toEqual(false);
+  });
+});
+
+test("resolveClaudeProbes: lists the settings files present in ~/.claude", async () => {
+  await withTempHome(async (tmpHome) => {
+    await mkdir(`${tmpHome}/.claude`, { recursive: true });
+    await writeFile(`${tmpHome}/.claude/settings.json`, "{}");
+    const probes = resolveClaudeProbes(tmpHome);
+    expect(probes.claudeSettingsFiles).toEqual(["settings.json"]);
+  });
+});
+
+test("resolveClaudeProbes: reports no settings files for a fresh home", async () => {
+  await withTempHome((tmpHome) => {
+    expect(resolveClaudeProbes(tmpHome).claudeSettingsFiles).toEqual([]);
   });
 });
 
@@ -435,11 +476,13 @@ test("configureCopilot: uses ['copilot'] when binary found", () => {
   const probes: CopilotProbes = {
     copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -454,11 +497,13 @@ test("configureCopilot: uses error command when copilot binary not found", () =>
   const probes: CopilotProbes = {
     copilotBinPath: null,
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -472,11 +517,13 @@ test("configureCopilot: does not mount copilot dir when absent", () => {
   const probes: CopilotProbes = {
     copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -490,11 +537,13 @@ test("configureCopilot: mounts ~/.copilot when legacy dir exists", () => {
   const probes: CopilotProbes = {
     copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: true,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -503,15 +552,54 @@ test("configureCopilot: mounts ~/.copilot when legacy dir exists", () => {
   );
 });
 
-test("configureCopilot: defaults REMOTE_CONTAINERS=true so /copy uses OSC52", () => {
+// `~/.copilot` holds no hook configuration — Copilot CLI reads hooks from the
+// repository's `.github/hooks/` — but its config files name MCP server
+// commands that the host copilot spawns.
+test("configureCopilot: re-mounts the ~/.copilot config files read-only", () => {
   const probes: CopilotProbes = {
-    copilotBinPath: "/usr/bin/copilot",
-    copilotLegacyDirExists: false,
+    copilotBinPath: null,
+    copilotLegacyDirExists: true,
+    copilotSettingsFiles: ["config.json", "mcp-config.json"],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.dockerArgs).toEqual([
+    "-v",
+    "/home/host/.copilot:/home/testuser/.copilot",
+    "-v",
+    "/home/host/.copilot/config.json:/home/testuser/.copilot/config.json:ro",
+    "-v",
+    "/home/host/.copilot/mcp-config.json:/home/testuser/.copilot/mcp-config.json:ro",
+  ]);
+});
+
+test("resolveCopilotProbes: lists the settings files present in ~/.copilot", async () => {
+  await withTempHome(async (tmpHome) => {
+    await mkdir(`${tmpHome}/.copilot`, { recursive: true });
+    await writeFile(`${tmpHome}/.copilot/mcp-config.json`, "{}");
+    expect(resolveCopilotProbes(tmpHome).copilotSettingsFiles).toEqual([
+      "mcp-config.json",
+    ]);
+  });
+});
+
+test("configureCopilot: defaults REMOTE_CONTAINERS=true so /copy uses OSC52", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: "/usr/bin/copilot",
+    copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -522,11 +610,13 @@ test("configureCopilot: keeps caller-supplied REMOTE_CONTAINERS value", () => {
   const probes: CopilotProbes = {
     copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: { REMOTE_CONTAINERS: "vscode" },
   });
@@ -537,11 +627,13 @@ test("configureCopilot: preserves existing dockerArgs and envVars", () => {
   const probes: CopilotProbes = {
     copilotBinPath: null,
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: ["--pre-existing"],
     priorEnvVars: { KEEP_ME: "yes" },
   });
@@ -553,11 +645,13 @@ test("configureCopilot: does not leak XDG env vars", () => {
   const probes: CopilotProbes = {
     copilotBinPath: null,
     copilotLegacyDirExists: false,
+    copilotSettingsFiles: [],
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -607,11 +701,13 @@ test("configureCodex: inherits the complete container environment when binary fo
     codexDirExists: false,
     codexBinPath: "/usr/bin/codex",
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -629,11 +725,13 @@ test("configureCodex: uses error command when codex binary not found", () => {
     codexDirExists: false,
     codexBinPath: null,
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -651,11 +749,13 @@ test("configureCodex: mounts ~/.codex when directory exists", () => {
     codexDirExists: true,
     codexBinPath: null,
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
   };
   const result = configureCodex({
     containerHome,
     hostHome,
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -663,16 +763,74 @@ test("configureCodex: mounts ~/.codex when directory exists", () => {
   expect(result.dockerArgs.includes(mountArg)).toEqual(true);
 });
 
-test("configureCodex: does not mount ~/.codex when directory is absent", () => {
+// `~/.codex/config.toml` carries hooks and MCP server commands that the host
+// codex runs, so it is re-mounted read-only over the writable state directory.
+test("configureCodex: re-mounts ~/.codex/config.toml read-only", () => {
   const probes: CodexProbes = {
-    codexDirExists: false,
+    codexDirExists: true,
     codexBinPath: null,
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: ["config.toml"],
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.dockerArgs).toEqual([
+    "-v",
+    "/home/host/.codex:/home/testuser/.codex",
+    "-v",
+    "/home/host/.codex/config.toml:/home/testuser/.codex/config.toml:ro",
+  ]);
+});
+
+test("configureCodex: protectSettings = false leaves config.toml writable", () => {
+  const probes: CodexProbes = {
+    codexDirExists: true,
+    codexBinPath: null,
+    codexCodeModeHostBinPath: null,
+    codexSettingsFiles: ["config.toml"],
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    protectSettings: false,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.dockerArgs).toEqual([
+    "-v",
+    "/home/host/.codex:/home/testuser/.codex",
+  ]);
+});
+
+test("resolveCodexProbes: lists the settings files present in ~/.codex", async () => {
+  await withTempHome(async (tmpHome) => {
+    await mkdir(`${tmpHome}/.codex`, { recursive: true });
+    await writeFile(`${tmpHome}/.codex/config.toml`, "");
+    expect(resolveCodexProbes(tmpHome).codexSettingsFiles).toEqual([
+      "config.toml",
+    ]);
+  });
+});
+
+test("configureCodex: does not mount ~/.codex when directory is absent", () => {
+  const probes: CodexProbes = {
+    codexDirExists: false,
+    codexBinPath: null,
+    codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -685,11 +843,13 @@ test("configureCodex: uses containerHome for codex mount path", () => {
     codexDirExists: true,
     codexBinPath: null,
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
   };
   const result = configureCodex({
     containerHome: "/home/custom",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -702,11 +862,13 @@ test("configureCodex: preserves existing dockerArgs and envVars", () => {
     codexDirExists: false,
     codexBinPath: null,
     codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: ["--pre-existing"],
     priorEnvVars: { KEEP_ME: "yes" },
   });
@@ -745,11 +907,13 @@ test("configureCodex: mounts detected code-mode host read-only", () => {
     codexDirExists: false,
     codexBinPath: "/opt/codex/bin/codex",
     codexCodeModeHostBinPath: "/opt/codex/bin/codex-code-mode-host",
+    codexSettingsFiles: [],
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
+    protectSettings: true,
     priorDockerArgs: ["--existing"],
     priorEnvVars: {},
   });

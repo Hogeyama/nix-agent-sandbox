@@ -21,6 +21,7 @@ import { Effect } from "effect";
 import type { Config, Profile } from "../../config/types.ts";
 import {
   type AgentType,
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -63,6 +64,7 @@ function makeProfile(agent: AgentType): Profile {
   return {
     agent,
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },

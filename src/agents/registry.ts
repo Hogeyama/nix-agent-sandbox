@@ -35,6 +35,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectClaudeProbes(input.probes),
+        protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
       });
@@ -46,6 +47,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectCopilotProbes(input.probes),
+        protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
       });
@@ -57,6 +59,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectCodexProbes(input.probes),
+        protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
       });

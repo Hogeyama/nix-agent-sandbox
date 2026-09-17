@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { Effect, Exit, Layer, Scope } from "effect";
 import {
   type Config,
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -36,6 +37,7 @@ function makeProfile(): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },

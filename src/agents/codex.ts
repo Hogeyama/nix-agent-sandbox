@@ -3,6 +3,11 @@
  */
 
 import path from "node:path";
+import {
+  CODEX_SETTINGS_FILES,
+  existingSettingsFiles,
+  settingsMountArgs,
+} from "./settings_protection.ts";
 import type { AgentConfigResult } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -14,6 +19,13 @@ export interface CodexProbes {
   readonly codexDirExists: boolean;
   readonly codexBinPath: string | null;
   readonly codexCodeModeHostBinPath: string | null;
+  /**
+   * `~/.codex` 配下に実在する設定ファイル (ディレクトリからの相対パス)。
+   *
+   * hooks と MCP サーバの起動コマンドを持つため、`protectSettings` が
+   * 立っているときは RO で上乗せする。see settings_protection.ts
+   */
+  readonly codexSettingsFiles: readonly string[];
 }
 
 /** ホスト環境を調べて CodexProbes を返す (副作用あり) */
@@ -22,6 +34,10 @@ export function resolveCodexProbes(hostHome: string): CodexProbes {
   return {
     codexDirExists: dirExistsSync(`${hostHome}/.codex`),
     codexBinPath,
+    codexSettingsFiles: existingSettingsFiles(
+      `${hostHome}/.codex`,
+      CODEX_SETTINGS_FILES,
+    ),
     codexCodeModeHostBinPath: findSiblingExecutableResolved(
       codexBinPath,
       "codex-code-mode-host",
@@ -38,6 +54,8 @@ export interface CodexConfigInput {
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: CodexProbes;
+  /** `~/.codex` 配下の設定ファイルを RO で上乗せするか。 */
+  readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
 }
@@ -52,6 +70,13 @@ export function configureCodex(input: CodexConfigInput): AgentConfigResult {
   // ~/.codex をマウント（認証情報・設定）
   if (probes.codexDirExists) {
     args.push("-v", `${hostHome}/.codex:${containerHome}/.codex`);
+    args.push(
+      ...settingsMountArgs(
+        `${hostHome}/.codex`,
+        `${containerHome}/.codex`,
+        input.protectSettings ? probes.codexSettingsFiles : [],
+      ),
+    );
   }
 
   // codex バイナリのマウント (実体パスを解決してマウント)

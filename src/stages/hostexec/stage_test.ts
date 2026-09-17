@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Cause, Effect, Exit, Option, Scope } from "effect";
 import type { Config, Profile } from "../../config/types.ts";
 import {
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
   DEFAULT_HOOK_CONFIG,
@@ -35,6 +36,7 @@ function makeProfile(): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },

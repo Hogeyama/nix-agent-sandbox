@@ -22,6 +22,7 @@ import { resolveAsset } from "../lib/asset.ts";
 import { loadConfig, resolveProfile } from "./load.ts";
 import {
   type Config,
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -933,6 +934,7 @@ test("resolveProfile: resolves by explicit name", () => {
       "default-profile": {
         agent: "claude",
         agentArgs: [],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
@@ -949,6 +951,7 @@ test("resolveProfile: resolves by explicit name", () => {
       "other-profile": {
         agent: "copilot",
         agentArgs: ["--yolo"],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: false, mountSocket: false },
         docker: { enable: false, shared: false },
@@ -980,6 +983,7 @@ test("resolveProfile: falls back to default profile", () => {
       "my-default": {
         agent: "claude",
         agentArgs: [],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
@@ -1009,6 +1013,7 @@ test("resolveProfile: auto-selects when only one profile and no default", () => 
       "only-one": {
         agent: "copilot",
         agentArgs: [],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: false, mountSocket: false },
         docker: { enable: false, shared: false },
@@ -1038,6 +1043,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       a: {
         agent: "claude",
         agentArgs: [],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },
@@ -1054,6 +1060,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       b: {
         agent: "copilot",
         agentArgs: [],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: false, mountSocket: false },
         docker: { enable: false, shared: false },
@@ -1083,6 +1090,7 @@ test("resolveProfile: throws for nonexistent profile name", () => {
       exists: {
         agent: "claude",
         agentArgs: [],
+        agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
         docker: { enable: false, shared: false },

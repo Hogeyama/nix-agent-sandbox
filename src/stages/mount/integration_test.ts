@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Config, Profile } from "../../config/types.ts";
 import {
+  DEFAULT_AGENT_STATE_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_GUIDE_CONFIG,
@@ -30,6 +31,7 @@ import { planMount, resolveMountProbes } from "../mount.ts";
 const baseProfile: Profile = {
   agent: "claude",
   agentArgs: [],
+  agentState: DEFAULT_AGENT_STATE_CONFIG,
   direnv: { enable: false },
   nix: { enable: false, mountSocket: false },
   docker: { enable: false, shared: false },

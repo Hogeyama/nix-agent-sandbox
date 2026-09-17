@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Agent settings**: mount the host agent settings files read-only over the writable state directory — `~/.claude/settings.json` and `settings.local.json`, `~/.codex/config.toml`, `~/.copilot/config.json` and `mcp-config.json`. They declare hooks and MCP servers that run on the host, so an agent that rewrote them got host code execution the next time the user started that agent outside the container. Set `agentState.protectSettings = false` to keep them writable. `~/.claude.json` is not covered: Claude rewrites it while running. See [the host credentials guide](docs-site/src/content/docs/configuration/authentication.md).
+
 - **Breaking — host credentials**: remove `gcloud.mountConfig`, `aws.mountConfig`, and `gpg.forwardAgent`. Each handed a whole credential store to the agent: the cloud config directories were bound read-write, and the forwarded gpg-agent socket signed and decrypted with every host key without a per-use prompt. Inject the credential where it is used — secrets with a network scope, or a hostexec rule for the CLI — or bind the single path you need through `extraMounts` with `mode = "ro"`. Configs that still set them fail to load, naming the replacement.
 - **sumi**: release and version sumi separately under `sumi-v*` tags, starting at `sumi-v0.1.0`; nas releases no longer attach sumi binaries. See the [sumi changelog](contrib/sumi/CHANGELOG.md).
 
