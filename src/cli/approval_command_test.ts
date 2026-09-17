@@ -11,7 +11,7 @@ import {
   type ApprovalAdapter,
   handleApprovalSubcommand,
   type PendingItem,
-  watchSessionFilter,
+  sessionFilterArg,
 } from "./approval_command.ts";
 
 interface DecisionCall {
@@ -128,6 +128,69 @@ test("pending: --format json emits structured data when available", async () => 
   ]);
 });
 
+test("pending: --session limits the listing to one session", async () => {
+  const { adapter } = makeAdapter([
+    { sessionId: "s1", requestId: "r1", displayLine: "one" },
+    { sessionId: "s2", requestId: "r2", displayLine: "two" },
+  ]);
+  const handled = await handleApprovalSubcommand(adapter, "pending", [
+    "pending",
+    "--session",
+    "s2",
+  ]);
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(stdoutLines).toEqual(["two"]);
+});
+
+test("pending: --session applies to --format json as well", async () => {
+  const { adapter } = makeAdapter([
+    {
+      sessionId: "s1",
+      requestId: "r1",
+      displayLine: "ignored",
+      structured: { sessionId: "s1", requestId: "r1" },
+    },
+    {
+      sessionId: "s2",
+      requestId: "r2",
+      displayLine: "ignored",
+      structured: { sessionId: "s2", requestId: "r2" },
+    },
+  ]);
+  const handled = await handleApprovalSubcommand(adapter, "pending", [
+    "pending",
+    "--format",
+    "json",
+    "--session",
+    "s2",
+  ]);
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(stdoutLines.length).toEqual(1);
+  expect(JSON.parse(stdoutLines[0])).toEqual([
+    { sessionId: "s2", requestId: "r2" },
+  ]);
+});
+
+test("pending: --session with no match names the session in the empty message", async () => {
+  const { adapter } = makeAdapter([
+    { sessionId: "s1", requestId: "r1", displayLine: "one" },
+  ]);
+  await handleApprovalSubcommand(adapter, "pending", [
+    "pending",
+    "--session",
+    "sess_typo",
+  ]);
+  restoreLog();
+
+  expect(stdoutLines).toEqual([
+    "[nas] No pending test-domain approvals for session sess_typo.",
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // approve
 // ---------------------------------------------------------------------------
@@ -208,6 +271,24 @@ test("review: prints empty message and returns true when no pending items", asyn
   expect(handled).toEqual(true);
   expect(calls).toEqual([]);
   expect(stdoutLines).toEqual(["[nas] No pending test-domain approvals."]);
+});
+
+test("review: --session with no match skips fzf and names the session", async () => {
+  const { adapter, calls } = makeAdapter([
+    { sessionId: "s1", requestId: "r1", displayLine: "one" },
+  ]);
+  const handled = await handleApprovalSubcommand(adapter, "review", [
+    "review",
+    "--session",
+    "s2",
+  ]);
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(calls).toEqual([]);
+  expect(stdoutLines).toEqual([
+    "[nas] No pending test-domain approvals for session s2.",
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -298,17 +379,18 @@ test("watch: writes to stdout by default and leaves no listeners behind", async 
   expect(process.stdout.listenerCount("error")).toEqual(before.stdoutError);
 });
 
-test("watch: --session without a usable value fails instead of widening", () => {
-  expect(watchSessionFilter(["watch"])).toBeUndefined();
-  expect(watchSessionFilter(["watch", "--session", "sess_a"])).toEqual(
-    "sess_a",
-  );
-  expect(() => watchSessionFilter(["watch", "--session"])).toThrow(
+test("sessionFilterArg: --session without a usable value fails instead of widening", () => {
+  expect(sessionFilterArg(["watch"])).toBeUndefined();
+  expect(sessionFilterArg(["watch", "--session", "sess_a"])).toEqual("sess_a");
+  expect(() => sessionFilterArg(["watch", "--session"])).toThrow(
     "--session requires a session id",
   );
   expect(() =>
-    watchSessionFilter(["watch", "--session", "--format", "json"]),
+    sessionFilterArg(["watch", "--session", "--format", "json"]),
   ).toThrow("--session requires a session id");
+  expect(() => sessionFilterArg(["watch", "--session", ""])).toThrow(
+    "--session requires a session id",
+  );
 });
 
 test("watch: --session limits the stream to one session", async () => {
