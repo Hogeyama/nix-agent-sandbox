@@ -1,0 +1,43 @@
+{
+  "name": "nas-approval",
+  "displayName": "nas approvals",
+  "description": "Surface nas devcontainer approval requests (hostexec/network) inside VS Code",
+  "version": "0.1.0",
+  "publisher": "nas",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nas-approval.review",
+        "title": "NAS: Review Pending Approvals"
+      },
+      {
+        "command": "nas-approval.refresh",
+        "title": "NAS: Refresh Approval Session"
+      }
+    ],
+    "configuration": {
+      "title": "nas approval",
+      "properties": {
+        "nas-approval.nasPath": {
+          "type": "string",
+          "default": "nas",
+          "description": "Path to the nas binary"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:package": "vsce package --no-dependencies"
+  }
+}
