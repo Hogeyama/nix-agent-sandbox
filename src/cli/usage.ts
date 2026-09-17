@@ -100,7 +100,7 @@ Network options:
   --runtime-dir DIR
                   bind/unbind/forward/unforward では ports runtime root、それ以外では network runtime root
   --format json   pending および bind/forward の一覧を JSON 形式で表示
-  --session ID    watch の対象セッションを 1 つに限定する
+  --session ID    pending/review/watch の対象セッションを 1 つに限定する
 
 HostExec options:
   pending         保留中の hostexec 承認要求を表示
@@ -110,7 +110,7 @@ HostExec options:
   watch           承認要求の発生と消滅を JSON Lines で流し続ける
   test            ルールマッチングをテストする
   --format json   pending の一覧を JSON 形式で表示
-  --session ID    watch の対象セッションを 1 つに限定する
+  --session ID    pending/review/watch の対象セッションを 1 つに限定する
 
 Audit options:
   --since YYYY-MM-DD    指定日以降のログを表示（デフォルト: 今日）
@@ -131,6 +131,7 @@ Examples:
   nas worktree clean                     # Remove all nas worktrees
   nas container clean                    # Remove unused nas sidecars
   nas network pending                    # Show pending approvals
+  nas network pending --session sess_a1b2 # Show one session's pending approvals
   nas network approve <session> <request> --scope host-port
   nas network bind <session> -L 8080:3000 # Listen on host port 8080 and forward to container port 3000
   nas network bind <session> -R 15432:5432 # Listen on container port 15432 and forward to host port 5432
@@ -145,6 +146,7 @@ Examples:
   nas hostexec pending                   # Show pending hostexec approvals
   nas hostexec watch                     # Stream approval arrivals as JSON Lines
   nas hostexec watch --session sess_a1b2 # Stream one session only
+  nas hostexec review --session sess_a1b2 # Review one session's approvals
   nas --write-session-id /tmp/id claude  # Record this session's id for --session
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
