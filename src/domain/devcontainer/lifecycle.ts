@@ -330,7 +330,11 @@ export function makeDevcontainerLifecycle(
             );
           return verified;
         }
-        if (current && active(current.phase) && current.containerId)
+        // A container ID that outlived its runtime means teardown never
+        // finished, whichever phase recorded it: a killed runtime leaves the
+        // record active, one whose compose down failed leaves it failed. Both
+        // leave a container this up would otherwise start a second one over.
+        if (current?.containerId)
           throw new DevcontainerError(
             "previous devcontainer cleanup is incomplete; run devcontainer down",
           );

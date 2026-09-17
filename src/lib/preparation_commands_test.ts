@@ -6,6 +6,7 @@ import { Effect, Exit } from "effect";
 import { ownedCommand } from "../services/owned_command.ts";
 import {
   runPreparationCommand,
+  runPreparationTeardown,
   withPreparationCommands,
 } from "./preparation_commands.ts";
 
@@ -78,6 +79,55 @@ wait`;
     }
   });
 }
+
+test("teardown still spawns after the signal that asked for it aborted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nas-prep-teardown-"));
+  const controller = new AbortController();
+  try {
+    const marker = join(dir, "down");
+    const result = await withPreparationCommands(
+      controller.signal,
+      async () => {
+        controller.abort(new Error("devcontainer stop requested"));
+        // The same abort is what cancels startup work, which is the point: the
+        // two phases must not share a signal.
+        await expect(
+          runPreparationCommand("bash", ["-c", "printf startup"]),
+        ).rejects.toThrow("devcontainer stop requested");
+        return await runPreparationTeardown(() =>
+          runPreparationCommand("bash", [
+            "-c",
+            'printf teardown > "$1"',
+            "teardown",
+            marker,
+          ]),
+        );
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await readFile(marker, "utf8")).toBe("teardown");
+  } finally {
+    controller.abort();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an unawaited teardown child is still reaped when the scope returns", async () => {
+  const controller = new AbortController();
+  let child: Promise<unknown> | undefined;
+  await withPreparationCommands(controller.signal, async () => {
+    controller.abort(new Error("devcontainer stop requested"));
+    await runPreparationTeardown(async () => {
+      child = runPreparationCommand("bash", ["-c", "sleep 30"], {
+        graceMs: 100,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+  });
+  // Escaping the shutdown signal must not mean escaping ownership: the scope
+  // would hang here on its own pending set if the owner abort missed the child.
+  await expect(child).rejects.toThrow();
+});
 
 test("completed preparation does not wait for the cancellation grace interval", async () => {
   const controller = new AbortController();

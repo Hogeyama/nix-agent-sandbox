@@ -1,11 +1,17 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Effect, Exit, Layer } from "effect";
 import { NAS_SESSION_ID_LABEL } from "../../docker/nas_resources.ts";
 import type { DevcontainerRegistration } from "../../domain/devcontainer.ts";
+import { withPreparationCommands } from "../../lib/preparation_commands.ts";
 import type { ContainerPlan } from "../../pipeline/state.ts";
+import type { HostEnv } from "../../pipeline/types.ts";
 import {
   ComposeSessionOps,
   type ComposeSessionRequest,
+  makeComposeSessionOpsLive,
   serveComposeSession,
 } from "./compose_session_service.ts";
 
@@ -191,6 +197,47 @@ test("a container that survives teardown is recorded as failed, not stopped", as
   // The ID stays so the next up sees the leftover container.
   expect(last?.[1]).toBe("container-1");
   expect(last?.[2]).toContain("docker daemon is gone");
+});
+
+test("live compose down runs even though shutdown aborted the scope signal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nas-compose-down-"));
+  const originalPath = process.env.PATH;
+  try {
+    const log = join(dir, "argv");
+    await writeFile(
+      join(dir, "docker"),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\n`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${dir}:${originalPath}`;
+    const host: HostEnv = {
+      home: dir,
+      user: "tester",
+      uid: 1000,
+      gid: 1000,
+      isWSL: false,
+      env: new Map(),
+    };
+    const down = Effect.gen(function* () {
+      const ops = yield* ComposeSessionOps;
+      yield* ops.composeDown("/state/compose.json");
+    }).pipe(Effect.provide(makeComposeSessionOpsLive(host)));
+
+    // The arrangement of the detached runtime: SIGTERM aborts the signal that
+    // both interrupts the session and runs its Effect finalizers.
+    const controller = new AbortController();
+    await withPreparationCommands(controller.signal, async () => {
+      controller.abort(new Error("devcontainer stop requested"));
+      await Effect.runPromise(down);
+    });
+
+    expect(await readFile(log, "utf8")).toContain(
+      "compose -f /state/compose.json down",
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("startup fails at the deadline instead of retrying the marker forever", async () => {

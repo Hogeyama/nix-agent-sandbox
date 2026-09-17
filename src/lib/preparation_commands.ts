@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 
 interface PreparationScope {
+  /** What children spawned in this phase inherit; teardown narrows it to `ownerSignal`. */
   signal: AbortSignal;
+  /** Aborted once the scope body has returned, never by the caller's signal. */
+  ownerSignal: AbortSignal;
   pending: Set<Promise<unknown>>;
 }
 const preparation = new AsyncLocalStorage<PreparationScope>();
@@ -20,6 +23,7 @@ export async function withPreparationCommands<T>(
   const owner = new AbortController();
   const scope: PreparationScope = {
     signal: AbortSignal.any([signal, owner.signal]),
+    ownerSignal: owner.signal,
     pending: new Set(),
   };
   return preparation.run(scope, async () => {
@@ -30,6 +34,25 @@ export async function withPreparationCommands<T>(
       await Promise.allSettled(scope.pending);
     }
   });
+}
+
+/**
+ * Runs compensating work that the signal which triggered it must not cancel.
+ *
+ * Shutdown arrives as one abort that both interrupts the work and asks for its
+ * teardown, so a finalizer spawning inside the startup phase would throw at
+ * `throwIfAborted` before it ever reached `docker`. Children spawned here
+ * inherit only the owner signal, which is aborted after the scope body has
+ * returned: teardown is still owned, joined, and reaped, but it is bounded by
+ * its own deadline instead of by the shutdown that called it. This mirrors
+ * Effect, whose finalizers are uninterruptible for the same reason.
+ */
+export async function runPreparationTeardown<T>(
+  run: () => Promise<T>,
+): Promise<T> {
+  const scope = preparation.getStore();
+  if (!scope) return run();
+  return preparation.run({ ...scope, signal: scope.ownerSignal }, run);
 }
 
 export interface PreparationCommandResult {
