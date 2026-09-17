@@ -1441,6 +1441,24 @@ test("MountStage: minimal profile produces valid docker args", () => {
   expect("WORKSPACE" in plan.envVars).toEqual(true);
 });
 
+test("MountStage: display records shared memory size as structured state", () => {
+  const { input, mountProbes } = makeInput({
+    slices: {
+      display: {
+        enabled: true,
+        displayNumber: 42,
+        socketPath: "/run/nas/xpra/X42",
+        xauthorityPath: "/run/nas/xpra/Xauthority",
+      },
+    },
+  });
+
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.containerPatch.shmSize).toBe("2g");
+  expect(plan.containerPatch.extraRunArgs).not.toContain("--shm-size");
+});
+
 // ============================================================
 // run() with MountSetupService fake
 // ============================================================
@@ -1708,3 +1726,82 @@ for (const value of ["~/../outside", "../outside"]) {
     expect(() => planMount(input, mountProbes)).toThrow("escapes");
   });
 }
+
+const ideMounts = {
+  claudeDir: "/state:$x/claude",
+  claudeJson: "/state:$x/claude.json",
+  vscodeDir: "/state:$x/vscode",
+  gitMetadataPaths: [] as string[],
+};
+test("IDE mounts dedicated state and managed config without automatic host git config", () => {
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitConfigExists: true }),
+  });
+  const plan = planMount(input, mountProbes, ideMounts);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: ideMounts.claudeDir,
+    target: `${CONTAINER_HOME}/.claude`,
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: ideMounts.vscodeDir,
+    target: `${CONTAINER_HOME}/.vscode-server`,
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: `${TEST_WORK_DIR}/.devcontainer`,
+    target: `${TEST_WORK_DIR}/.devcontainer`,
+    readOnly: true,
+  });
+  expect(
+    plan.containerPatch.mounts?.some(
+      (m) => m.source === `${TEST_HOME}/.config/git`,
+    ),
+  ).toBe(false);
+});
+test("IDE exposes only masked worktree and Git metadata subtrees", () => {
+  const workDir = "/repo/worktrees/one";
+  const { input, mountProbes } = makeInput({
+    slices: { workspace: { workDir, imageName: "nas", maskedRoot: "/masked" } },
+    mountProbes: makeMountProbes({
+      gitWorktreeMainRoot: "/repo",
+      localConfigPaths: [`${workDir}/.nas/config.pkl`],
+    }),
+  });
+  const plan = planMount(input, mountProbes, {
+    ...ideMounts,
+    gitMetadataPaths: ["/repo/.git"],
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/masked/worktrees/one",
+    target: workDir,
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/masked/.git",
+    target: "/repo/.git",
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/masked/worktrees/one/.nas",
+    target: `${workDir}/.nas`,
+    readOnly: true,
+  });
+  expect(plan.containerPatch.mounts?.some((m) => m.target === "/repo")).toBe(
+    false,
+  );
+});
+test("IDE refuses external worktree when the active mask view cannot cover it", () => {
+  const { input, mountProbes } = makeInput({
+    slices: {
+      workspace: {
+        workDir: "/external/one",
+        imageName: "nas",
+        maskedRoot: "/masked",
+      },
+    },
+    mountProbes: makeMountProbes({ gitWorktreeMainRoot: "/repo" }),
+  });
+  expect(() =>
+    planMount(input, mountProbes, {
+      ...ideMounts,
+      gitMetadataPaths: ["/repo/.git"],
+    }),
+  ).toThrow("beneath the repository root");
+});
