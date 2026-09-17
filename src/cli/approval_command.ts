@@ -67,6 +67,30 @@ export function sessionFilterArg(nasArgs: string[]): string | undefined {
   return value;
 }
 
+/** セッション id の完全一致で絞る。フィルタ未指定なら素通しする。 */
+function filterBySession(
+  items: PendingItem[],
+  sessionFilter: string | undefined,
+): PendingItem[] {
+  if (sessionFilter === undefined) return items;
+  return items.filter((item) => item.sessionId === sessionFilter);
+}
+
+/**
+ * 該当なしのときの文言を組み立てる。
+ *
+ * フィルタ指定時は id をそのまま出す。綴りを誤った id をただの 0 件として
+ * 表示すると、承認待ちが無いのか id が違うのかを利用者が区別できない。
+ */
+function emptyPendingMessage(
+  domain: string,
+  sessionFilter: string | undefined,
+): string {
+  return sessionFilter === undefined
+    ? `[nas] No pending ${domain} approvals.`
+    : `[nas] No pending ${domain} approvals for session ${sessionFilter}.`;
+}
+
 /** 呼び出し側が中断と出力先を持ち込むための引数。watch だけが参照する。 */
 export interface ApprovalSubcommandDeps {
   readonly signal?: AbortSignal;
@@ -84,13 +108,14 @@ export async function handleApprovalSubcommand(
   deps: ApprovalSubcommandDeps = {},
 ): Promise<boolean> {
   if (sub === "pending" || sub === undefined) {
-    const items = await adapter.listPending();
+    const sessionFilter = sessionFilterArg(nasArgs);
+    const items = filterBySession(await adapter.listPending(), sessionFilter);
     if (hasFormatJson(nasArgs)) {
       console.log(JSON.stringify(items.map(structuredOf)));
       return true;
     }
     if (items.length === 0) {
-      console.log(`[nas] No pending ${adapter.domain} approvals.`);
+      console.log(emptyPendingMessage(adapter.domain, sessionFilter));
       return true;
     }
     for (const item of items) {

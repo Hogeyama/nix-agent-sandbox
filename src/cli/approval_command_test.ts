@@ -128,6 +128,69 @@ test("pending: --format json emits structured data when available", async () => 
   ]);
 });
 
+test("pending: --session limits the listing to one session", async () => {
+  const { adapter } = makeAdapter([
+    { sessionId: "s1", requestId: "r1", displayLine: "one" },
+    { sessionId: "s2", requestId: "r2", displayLine: "two" },
+  ]);
+  const handled = await handleApprovalSubcommand(adapter, "pending", [
+    "pending",
+    "--session",
+    "s2",
+  ]);
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(stdoutLines).toEqual(["two"]);
+});
+
+test("pending: --session applies to --format json as well", async () => {
+  const { adapter } = makeAdapter([
+    {
+      sessionId: "s1",
+      requestId: "r1",
+      displayLine: "ignored",
+      structured: { sessionId: "s1", requestId: "r1" },
+    },
+    {
+      sessionId: "s2",
+      requestId: "r2",
+      displayLine: "ignored",
+      structured: { sessionId: "s2", requestId: "r2" },
+    },
+  ]);
+  const handled = await handleApprovalSubcommand(adapter, "pending", [
+    "pending",
+    "--format",
+    "json",
+    "--session",
+    "s2",
+  ]);
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(stdoutLines.length).toEqual(1);
+  expect(JSON.parse(stdoutLines[0])).toEqual([
+    { sessionId: "s2", requestId: "r2" },
+  ]);
+});
+
+test("pending: --session with no match names the session in the empty message", async () => {
+  const { adapter } = makeAdapter([
+    { sessionId: "s1", requestId: "r1", displayLine: "one" },
+  ]);
+  await handleApprovalSubcommand(adapter, "pending", [
+    "pending",
+    "--session",
+    "sess_typo",
+  ]);
+  restoreLog();
+
+  expect(stdoutLines).toEqual([
+    "[nas] No pending test-domain approvals for session sess_typo.",
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // approve
 // ---------------------------------------------------------------------------
