@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Breaking — host credentials**: remove `gcloud.mountConfig`, `aws.mountConfig`, and `gpg.forwardAgent`. Each handed a whole credential store to the agent: the cloud config directories were bound read-write, and the forwarded gpg-agent socket signed and decrypted with every host key without a per-use prompt. Inject the credential where it is used — secrets with a network scope, or a hostexec rule for the CLI — or bind the single path you need through `extraMounts` with `mode = "ro"`. Configs that still set them fail to load, naming the replacement.
 - **sumi**: release and version sumi separately under `sumi-v*` tags, starting at `sumi-v0.1.0`; nas releases no longer attach sumi binaries. See the [sumi changelog](contrib/sumi/CHANGELOG.md).
 
 ## [0.17.0] - 2026-09-14

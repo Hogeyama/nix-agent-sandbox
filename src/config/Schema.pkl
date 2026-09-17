@@ -66,9 +66,6 @@ class Profile {
   nix: NixConfig = new {}
   direnv: DirenvConfig = new {}
   docker: DockerConfig = new {}
-  gcloud: GcloudConfig = new {}
-  aws: AwsConfig = new {}
-  gpg: GpgConfig = new {}
   network: NetworkConfig = new {}
   dbus: DbusConfig = new {}
   display: DisplayConfig = new {}
@@ -147,21 +144,6 @@ class DockerConfig {
   /// エージェントは sidecar の network namespace に join するため、
   /// 複数セッションで sidecar を共有すると分離が失われる。
   shared: Boolean = false
-}
-
-class GcloudConfig {
-  /// gcloud 設定ディレクトリ (`~/.config/gcloud`) をマウントする。
-  mountConfig: Boolean = false
-}
-
-class AwsConfig {
-  /// AWS 設定ディレクトリ (`~/.aws`) をマウントする。
-  mountConfig: Boolean = false
-}
-
-class GpgConfig {
-  /// ホストの gpg-agent を転送する（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント）。
-  forwardAgent: Boolean = false
 }
 
 // ---------------------------------------------------------------------------

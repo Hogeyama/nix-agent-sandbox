@@ -16,9 +16,6 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     direnv: { enable: false },
     nix: { enable: "auto", mountSocket: true },
     docker: DEFAULT_DOCKER_CONFIG,
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     network: DEFAULT_NETWORK_CONFIG,
     dbus: {
       session: {

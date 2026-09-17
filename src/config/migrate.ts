@@ -14,7 +14,7 @@ import {
   initConfig,
 } from "./init.ts";
 import { getGlobalConfigDir } from "./paths.ts";
-import { normalizeLegacyNixPackages } from "./retired_nix.ts";
+import { normalizeRetiredSettings } from "./retired.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -27,11 +27,9 @@ const KEBAB_KEYS = new Set([
   "default-scope",
   "detach-key",
   "extra-mounts",
-  "forward-agent",
   "forward-ports",
   "idle-timeout",
   "inherit-env",
-  "mount-config",
   "mount-socket",
   "on-create",
   "source-address",
@@ -215,7 +213,7 @@ export function objectToPklSource(
   opts?: { amendsHeader?: string },
 ): string {
   const header = `amends "${escapeString(opts?.amendsHeader ?? "Schema.pkl")}"\n`;
-  const lines = objectToLines(normalizeLegacyNixPackages(obj), 0, "");
+  const lines = objectToLines(normalizeRetiredSettings(obj), 0, "");
   if (lines.length === 0) {
     return header;
   }

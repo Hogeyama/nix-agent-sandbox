@@ -33,9 +33,6 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       direnv: { enable: false },
       nix: { enable: false, mountSocket: false },
       docker: { enable: false, shared: false },
-      gcloud: { mountConfig: false },
-      aws: { mountConfig: false },
-      gpg: { forwardAgent: false },
       network: {
         scopes: {},
         fallback: "deny",
@@ -68,7 +65,6 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       hasHostNix: false,
       xdgDbusProxyPath: null,
       dbusSessionAddress: null,
-      gpgAgentSocket: null,
       auditDir: "/tmp/audit",
       hostexecInterceptLibPath: null,
       hostexecClientPath: null,

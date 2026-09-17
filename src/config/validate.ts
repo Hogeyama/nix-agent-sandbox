@@ -11,7 +11,11 @@ import { logWarn } from "../log.ts";
 import { validateAuthzConfig } from "../network/authz/validate.ts";
 import { LOCAL_PROXY_PORT } from "../network/ports.ts";
 import { normalizePortForwards } from "./port_forwards.ts";
-import { NIX_EXTRA_PACKAGES_MIGRATION } from "./retired_nix.ts";
+import {
+  CLOUD_CONFIG_MOUNT_MIGRATION,
+  GPG_FORWARD_AGENT_MIGRATION,
+  NIX_EXTRA_PACKAGES_MIGRATION,
+} from "./retired.ts";
 import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
 
 export class ConfigValidationError extends Error {
@@ -108,6 +112,16 @@ function validateProfile(name: string, profile: Profile): string[] {
   // --- nix.extraPackages の入力検証 ---
   if ("extraPackages" in profile.nix) {
     errors.push(`profile "${name}": ${NIX_EXTRA_PACKAGES_MIGRATION}`);
+  }
+
+  // --- 廃止した資格情報パススルーの入力検証 ---
+  // Schema から消えているので pkl eval を通った設定には現れない。素の JSON を
+  // そのまま validateConfig に渡す経路のために残す。
+  if ("gcloud" in profile || "aws" in profile) {
+    errors.push(`profile "${name}": ${CLOUD_CONFIG_MOUNT_MIGRATION}`);
+  }
+  if ("gpg" in profile) {
+    errors.push(`profile "${name}": ${GPG_FORWARD_AGENT_MIGRATION}`);
   }
 
   // --- display.size フォーマット検証 ---

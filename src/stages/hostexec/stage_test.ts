@@ -38,9 +38,6 @@ function makeProfile(): Profile {
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     display: DEFAULT_DISPLAY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     network: {
@@ -129,7 +126,6 @@ function makeSharedInput(
       hasHostNix: false,
       xdgDbusProxyPath: null,
       dbusSessionAddress: null,
-      gpgAgentSocket: null,
       auditDir: "/tmp/nas-test-audit",
       // Both clients present by default: the interesting cases are the two
       // tests that take one away.

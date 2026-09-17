@@ -21,7 +21,6 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 | 優先 | 項目 | 種別 | 工数 | 根拠 |
 |---|---|---|---|---|
-| **P0** | 危険な代替あり設定の削除（gcloud/aws `mountConfig`, gpg `forwardAgent`） | Sec | 小 | 型+mount+probe+Pkl から削除する |
 | **P0** | §3-A ドキュメント/スキルのドリフト | Docs | 小 | 現行実装に合わせて更新する |
 | **P1** | H2 認証情報ディレクトリ常時 RW → host persistence | Sec | 中〜大 | `~/.claude` 等 hook 書換で次回 host 起動時に RCE |
 | **P1** | コンテナ権限ハードニング（no-new-privileges/cap-drop） | Sec | 中 | `no-new-privileges` + `cap-drop ALL` を検証して追加する |
@@ -75,7 +74,7 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | HIGH DinD egress バイパス | ✅ 解決 | 実機で内側 egress 不通・pull は allowlist 下を確認 |
 | H5 DNS リバインディング SSRF | ✅ 解決 | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留め。SNI は論理ホスト名を維持 |
 | H6 IP リテラル拒否リストの穴 | ✅ 解決 | TS の構造的 IP パースと Python `ipaddress` を同一境界 corpus で parity 検証 |
-| 危険設定削除 (gcloud/aws/gpg) | ⬜ 残 **P0** | 型+mount+probe+Pkl から削除する |
+| 危険設定削除 (gcloud/aws/gpg) | ✅ 解決 | 型・mount 分岐・probe・Pkl schema から削除。旧設定は移行先を名指しして load 失敗 |
 | H2 認証情報ディレクトリ RW | ⬜ 残 **P1** | [検証] CONFIRMED。`~/.claude`/`~/.copilot`/`~/.codex` すべて `:ro` 無し |
 | コンテナ権限ハードニング | ⬜ 残 **P1** | `no-new-privileges` + `cap-drop ALL` の追加が必要 |
 | M9 argv0 表示/実行不一致 | ⬜ 残 **P1** | 承認表示と実行を同じ `capability.argv0` に統一する |
@@ -114,9 +113,13 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 - **2026-07-21 実行結果**: unit 2455 pass / 9 skip、broker integration 24 pass。実 mitmproxy integration は
   この検証環境で Docker が利用できず 1 skip（Docker 利用可能環境では guarded test を実行）。
 
-### 危険で他に代替のある設定を削除
-`GcloudConfig.mountConfig` / `AwsConfig.mountConfig` / `GpgConfig.forwardAgent` の
-型・デフォルト・mount 分岐・probe・Pkl schema から削除する。
+### 危険で他に代替のある設定を削除 — ✅ 解決
+
+`GcloudConfig` / `AwsConfig` / `GpgConfig` を、型・デフォルト・mount 分岐・probe・
+Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だった mount 分岐と
+一緒に消えている。旧設定を残した config は `retiredSourceErrors`（`src/config/retired.ts`）
+が pkl eval 前に捕まえ、移行先（secrets + network scope / hostexec / `extraMounts` の
+`mode = "ro"`）を名指しして停止する。
 
 ## P1 セキュリティ
 

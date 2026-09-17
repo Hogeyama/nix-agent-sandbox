@@ -403,12 +403,7 @@ async function runMain(
         // MountProbes を事前解決
         phaseStart = performance.now();
         const mountProbes = await prepare(() =>
-          resolveMountProbes(
-            hostEnv,
-            effectiveProfile,
-            process.cwd(),
-            probes.gpgAgentSocket,
-          ),
+          resolveMountProbes(hostEnv, effectiveProfile, process.cwd()),
         );
         logDebug(
           `[nas] resolveMountProbes done (${formatElapsed(phaseStart)})`,

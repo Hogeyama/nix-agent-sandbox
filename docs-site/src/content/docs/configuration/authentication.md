@@ -1,6 +1,6 @@
 ---
 title: ホストの認証情報の利用
-description: 秘密値の注入、クラウド設定の共有、GPG と Codex キーリングの選択
+description: 秘密値の注入、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
 ---
 
 認証が必要な作業では、エージェント自身に値を読ませる必要があるかを先に決めます。値を渡さずに済む API 呼び出しやホストコマンドは、その実行時にだけ注入できます。
@@ -9,8 +9,7 @@ description: 秘密値の注入、クラウド設定の共有、GPG と Codex �
 | --- | --- |
 | トークンを読ませず HTTP API を利用 | [許可した要求へのヘッダー注入](/nix-agent-sandbox/configuration/network/#認証ヘッダーと秘密値) |
 | トークンを読ませずビルドなどを実行 | [ホストコマンドへの注入](/nix-agent-sandbox/configuration/host-commands/#秘密値付きのビルド) |
-| ホストの gcloud・AWS 設定をそのまま利用 | [クラウドの認証設定](#クラウドの認証設定) |
-| ホストの GPG エージェントで署名・復号 | [GPG エージェント](#gpg-エージェント) |
+| ホストのクラウド CLI・GPG を利用 | [廃止した設定ディレクトリの共有](#廃止した設定ディレクトリの共有) |
 | キーリングに保存済みの Codex 認証を利用 | [Codex のキーリング](#codex-のキーリング) |
 
 ## 秘密値の取得元
@@ -38,20 +37,35 @@ lines は複数の値になるため、ヘッダー注入や単一値のホス�
 
 登録だけではファイル表示や出力はマスクされません。値を読ませないための設定は[ファイルの非公開・マスク](/nix-agent-sandbox/configuration/files/)にあります。
 
-## クラウドの認証設定
+## 廃止した設定ディレクトリの共有
 
-クラウド CLI がホストと同じ認証設定を使う必要がある場合は、使用するプロファイルで共有を有効にします。**設定ディレクトリを読み書き可能で渡すため、エージェントは認証情報を読み、ホスト側の設定を変更・削除できます。** 注入で足りる作業なら、その方法を先に検討してください。
+`gcloud.mountConfig`、`aws.mountConfig`、`gpg.forwardAgent` は廃止しました。設定を残したまま起動すると、移行先を示すエラーで停止します。
+
+いずれも資格情報の置き場ごとコンテナへ渡す設定でした。`~/.config/gcloud` と `~/.aws` は読み書き可能で渡っていたため、エージェントはそこにある全プロファイルを読めて、ホスト側の設定を書き換えられました。gpg-agent のソケットは、ホストが持つ鍵すべてでの署名・復号を、利用のたびの確認なしに許すものでした。いずれも、作業に必要な範囲をはるかに超えて渡しています。
+
+代わりに、必要な場所へ必要なものだけを渡します。
+
+| 必要な作業 | 移行先 |
+| --- | --- |
+| クラウド API の呼び出し | [許可した要求へのヘッダー注入](/nix-agent-sandbox/configuration/network/#認証ヘッダーと秘密値) |
+| クラウド CLI やビルドの実行 | [ホストコマンドへの移譲](/nix-agent-sandbox/configuration/host-commands/) |
+| コミットへの GPG 署名 | [ホストコマンドへの移譲](/nix-agent-sandbox/configuration/host-commands/) |
+
+署名をホストへ移譲する場合は、`gpg` の呼び出しのうち通す形を hostexec のルールで固定します。次は `git commit -S` が出す形だけを許す例です。
 
 ```pkl
-gcloud { mountConfig = true }
-aws { mountConfig = true }
+new {
+  id = "gpg-git-sign"
+  match {
+    argv0 = "gpg"
+    argRegex = "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$"
+  }
+  cwd { mode = "workspace-or-session-tmp" }
+  approval = "allow"
+}
 ```
 
-必要なサービスの行だけを追加します。共有先は gcloud の `~/.config/gcloud`、AWS の `~/.aws` です。再信頼して起動し、コンテナ内の CLI で意図したアカウントを利用できるか確認します。
-
-## GPG エージェント
-
-ホストの gpg-agent を使わせるには、対象プロファイルで `gpg.forwardAgent = true` を指定します。ソケットと関連設定を共有し、署名・復号が可能になります。公開鍵を読めるようにするだけの設定ではありません。
+移譲でも注入でも足りず、どうしてもホストのファイルが要る場合は、ディレクトリ全体ではなく必要なパスだけを [extraMounts](/nix-agent-sandbox/configuration/files/) で `mode = "ro"` を指定して渡してください。
 
 ## Codex のキーリング
 

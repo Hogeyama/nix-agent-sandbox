@@ -72,7 +72,7 @@ Nix なしの tarball 利用者も Docker/bwrap を選択できる。CI のビ�
 | proxy、認証・承認・監査、CA | 必須。許可外通信を許容する縮退はしない。 |
 | 追加シェル、dtach attach、list/stop/clean | 必須。backend を識別して処理する。 |
 | network bind/forward、OTLP | 必須。Unix socket 経路を使う。 |
-| xpra、dbus、gpg | 有効な設定を黙って無視しない。各機能のホスト受入試験合格までは起動前に非対応エラーとする。 |
+| xpra、dbus | 有効な設定を黙って無視しない。各機能のホスト受入試験合格までは起動前に非対応エラーとする。 |
 | Nix/devShell の自動構築 | 初期版非対応。`nix.enable = false` を要求し、Nix daemon は公開しない。plain direnv は隔離内で実行する。 |
 | DinD、任意 Docker イメージ・Docker 実行引数 | bwrap では非対応。起動前に該当項目と Docker 選択方法を示す。 |
 
@@ -203,7 +203,7 @@ CLI/UI の一覧では backend を表示し、追加シェル・停止・clean �
 | G4 transport | 許可 HTTP/CONNECT 成功、deny/失効拒否、直接 egress 不可、port relay 往復 | リリース不可。 |
 | G5 lifecycle | detach/attach、追加 shell、stop、owner SIGKILL と host 資産回収、bridge 強制終了後の recovery、PID 再利用、起動途中失敗 | リリース不可。 |
 | L1 ライセンス・配布 | 配布 inventory、表示、対応 source/build 情報とリンク条件の確認が完了 | 不足 component を含む release は公開しない。 |
-| G6 optional integrations | xpra/Chromium（seccomp を含む）、dbus、gpg を個別検証 | 未合格の有効設定は非対応エラー。 |
+| G6 optional integrations | xpra/Chromium（seccomp を含む）、dbus を個別検証 | 未合格の有効設定は非対応エラー。 |
 
 G0 は Nix/Docker を導入していない Ubuntu 24.04 ホストで実行する。G1–G5 は Ubuntu 24.04 と NixOS の非 root ホストで実行し、kernel/bwrap/AppArmor と任意の Nix 利用有無を記録する。NixOS は host ABI 互換性の追加検証であり、Nix 不在試験とは数えない。WSL は別の対応環境として同じ確認を追加するまで対応を主張しない。
 Docker 回帰試験も別に必要。sandbox 内の skip をホスト合格に数えない。

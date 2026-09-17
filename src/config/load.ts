@@ -27,7 +27,7 @@ import {
 } from "./migrate.ts";
 import { getGlobalConfigDir } from "./paths.ts";
 import { normalizePortForwards } from "./port_forwards.ts";
-import { retiredNixSourceErrors } from "./retired_nix.ts";
+import { retiredSourceErrors } from "./retired.ts";
 import { ensureConfigTrusted, recordConfigTrust } from "./trust.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
@@ -105,7 +105,7 @@ async function reportLegacyIdentifiers(configPath: string): Promise<void> {
     ...detectLegacyIdentifiers(source, path.basename(configPath)).map(
       (d) => d.message,
     ),
-    ...retiredNixSourceErrors(source, path.basename(configPath)),
+    ...retiredSourceErrors(source, path.basename(configPath)),
   ];
   if (diagnostics.length === 0) return;
   throw new Error(diagnostics.join("\n\n"));
@@ -141,7 +141,7 @@ async function legacyIdentifiersInGlobal(
   // どこを直せばいいのか分からない。
   return [
     ...detectLegacyIdentifiers(source, globalPath).map((d) => d.message),
-    ...retiredNixSourceErrors(source, globalPath),
+    ...retiredSourceErrors(source, globalPath),
   ];
 }
 

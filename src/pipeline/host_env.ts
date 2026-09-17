@@ -54,7 +54,6 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     auditDir,
     xdgDbusProxyPath,
     dbusSessionAddress,
-    gpgAgentSocket,
     hostexecInterceptLibPath,
     hostexecClientPath,
     hostexecGatewayPath,
@@ -63,7 +62,6 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     Promise.resolve(resolveAuditDirFromEnv(hostEnv)),
     probeXdgDbusProxy(),
     Promise.resolve(probeDbusSessionAddress(hostEnv)),
-    probeGpgAgentSocket(hostEnv),
     resolveInterceptLibPath(),
     resolveHostExecClientPath(),
     resolveHostExecGatewayPath(),
@@ -74,7 +72,6 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     auditDir,
     xdgDbusProxyPath,
     dbusSessionAddress,
-    gpgAgentSocket,
     hostexecInterceptLibPath,
     hostexecClientPath,
     hostexecGatewayPath,
@@ -137,37 +134,4 @@ async function probeXdgDbusProxy(): Promise<string | null> {
 function probeDbusSessionAddress(hostEnv: HostEnv): string | null {
   const addr = hostEnv.env.get("DBUS_SESSION_BUS_ADDRESS")?.trim();
   return addr && addr.length > 0 ? addr : null;
-}
-
-/** gpgconf --list-dir agent-socket でソケットパスを解決する */
-async function probeGpgAgentSocket(hostEnv: HostEnv): Promise<string | null> {
-  try {
-    const result = await runProbeCommand([
-      "gpgconf",
-      "--list-dir",
-      "agent-socket",
-    ]);
-    const socketPath = result.stdout.trim();
-    const code = result.exitCode;
-    if (code === 0) {
-      if (socketPath) return socketPath;
-    }
-  } catch {
-    // gpgconf not available
-  }
-
-  // フォールバック: /run/user/$UID/gnupg/S.gpg-agent
-  if (hostEnv.uid !== null) {
-    const runUserSocket = `/run/user/${hostEnv.uid}/gnupg/S.gpg-agent`;
-    try {
-      await stat(runUserSocket);
-      return runUserSocket;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw e;
-      }
-    }
-  }
-
-  return `${hostEnv.home}/.gnupg/S.gpg-agent`;
 }

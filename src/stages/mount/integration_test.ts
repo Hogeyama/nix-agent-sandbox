@@ -4,7 +4,6 @@ import {
   mkdtemp,
   realpath,
   rm,
-  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -34,9 +33,6 @@ const baseProfile: Profile = {
   direnv: { enable: false },
   nix: { enable: false, mountSocket: false },
   docker: { enable: false, shared: false },
-  gcloud: { mountConfig: false },
-  aws: { mountConfig: false },
-  gpg: { forwardAgent: false },
   session: DEFAULT_SESSION_CONFIG,
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
@@ -79,12 +75,7 @@ async function buildTestInput(
 }> {
   const hostEnv = buildHostEnv();
   const probes = await resolveProbes(hostEnv);
-  const mountProbes = await resolveMountProbes(
-    hostEnv,
-    profile,
-    workDir,
-    probes.gpgAgentSocket,
-  );
+  const mountProbes = await resolveMountProbes(hostEnv, profile, workDir);
 
   const slices: Pick<
     PipelineState,
@@ -222,40 +213,27 @@ test("MountStage: mounts DBus proxy runtime and injects session env", async () =
   }
 });
 
-test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    gpg: { forwardAgent: true },
-  };
-  const { input, mountProbes } = await buildTestInput(profile, process.cwd());
+// 単体テストは合成した probe に対する否定で、ホストに本物の ~/.gnupg や
+// ~/.aws があっても手が出ないことまでは言えない。ここは実ホストの probe を
+// 通した plan を見る。
+test("MountStage: host credential stores stay out of the plan on a real host", async () => {
+  const { input, mountProbes } = await buildTestInput(
+    baseProfile,
+    process.cwd(),
+  );
   const plan = planMount(input, mountProbes);
 
-  const home = process.env.HOME ?? "/root";
-  const containerHome = getContainerHome();
-
-  // Check pubring.kbx mount if file exists on host
-  const pubringExists = await stat(`${home}/.gnupg/pubring.kbx`).then(
-    () => true,
-    () => false,
-  );
-  if (pubringExists) {
-    const pubringMount = plan.dockerArgs.find((a) => a.includes("pubring.kbx"));
-    expect(pubringMount).toEqual(
-      `${home}/.gnupg/pubring.kbx:${containerHome}/.gnupg/pubring.kbx:ro`,
+  for (const credentialPath of [
+    ".gnupg",
+    ".aws",
+    ".config/gcloud",
+    "S.gpg-agent",
+  ]) {
+    expect(plan.dockerArgs.filter((a) => a.includes(credentialPath))).toEqual(
+      [],
     );
   }
-
-  // Check trustdb.gpg mount if file exists on host
-  const trustdbExists = await stat(`${home}/.gnupg/trustdb.gpg`).then(
-    () => true,
-    () => false,
-  );
-  if (trustdbExists) {
-    const trustdbMount = plan.dockerArgs.find((a) => a.includes("trustdb.gpg"));
-    expect(trustdbMount).toEqual(
-      `${home}/.gnupg/trustdb.gpg:${containerHome}/.gnupg/trustdb.gpg:ro`,
-    );
-  }
+  expect("GPG_AGENT_INFO" in plan.envVars).toEqual(false);
 });
 
 test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
@@ -298,7 +276,7 @@ test("MountStage: resolveMountProbes canonicalizes extra-mounts src through syml
       extraMounts: [{ src: link, dst: "/tmp/nas-evil", mode: "ro" }],
     };
     const hostEnv = buildHostEnv();
-    const probes = await resolveMountProbes(hostEnv, profile, tmp, null);
+    const probes = await resolveMountProbes(hostEnv, profile, tmp);
     expect(probes.resolvedExtraMounts.length).toEqual(1);
     const resolved = probes.resolvedExtraMounts[0];
     expect(resolved.srcExists).toEqual(true);
@@ -321,7 +299,7 @@ test("MountStage: unknown agent type throws in resolveMountProbes", async () => 
   };
   const hostEnv = buildHostEnv();
   await expect(
-    resolveMountProbes(hostEnv, profile, process.cwd(), null),
+    resolveMountProbes(hostEnv, profile, process.cwd()),
   ).rejects.toThrow("Unknown agent");
 });
 
@@ -341,27 +319,27 @@ for (const custom of [false, true]) {
       const dataDir = path.join(dataHome, "direnv");
       const enabled = { ...baseProfile, direnv: { enable: true } };
       expect(
-        (await resolveMountProbes(host, enabled, root, null)).direnvDataDir,
+        (await resolveMountProbes(host, enabled, root)).direnvDataDir,
       ).toBeNull();
       expect(await Bun.file(dataDir).exists()).toBe(false);
       await mkdir(dataDir, { recursive: true });
       expect(
-        (await resolveMountProbes(host, enabled, root, null)).direnvDataDir,
+        (await resolveMountProbes(host, enabled, root)).direnvDataDir,
       ).toBe(dataDir);
       expect(
-        (await resolveMountProbes(host, baseProfile, root, null)).direnvDataDir,
+        (await resolveMountProbes(host, baseProfile, root)).direnvDataDir,
       ).toBeNull();
       await rm(dataDir, { recursive: true });
       await writeFile(dataDir, "not a directory");
       expect(
-        (await resolveMountProbes(host, enabled, root, null)).direnvDataDir,
+        (await resolveMountProbes(host, enabled, root)).direnvDataDir,
       ).toBeNull();
       host.env.set("XDG_DATA_HOME", dataDir);
       await expect(
-        resolveMountProbes(host, enabled, root, null),
+        resolveMountProbes(host, enabled, root),
       ).rejects.toMatchObject({ code: "ENOTDIR" });
       expect(
-        (await resolveMountProbes(host, baseProfile, root, null)).direnvDataDir,
+        (await resolveMountProbes(host, baseProfile, root)).direnvDataDir,
       ).toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
