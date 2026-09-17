@@ -31,7 +31,12 @@ function client(calls: string[]): DevcontainerCommandClient {
   return {
     init: async (workspace, profile) => {
       calls.push(`init:${workspace}:${profile}`);
-      return registration;
+      return {
+        registration,
+        sharing: [
+          { topic: "direnv", detail: "does not evaluate the workspace .envrc" },
+        ],
+      };
     },
     up: async (workspace) => {
       calls.push(`up:${workspace}`);
@@ -58,7 +63,10 @@ test("CLI delegates init and renders the generated entry", async () => {
       client(calls),
     );
     expect(calls).toEqual(["init:/work:claude"]);
-    expect(log.mock.calls.flat().join("\n")).toContain(registration.configPath);
+    const printed = log.mock.calls.flat().join("\n");
+    expect(printed).toContain(registration.configPath);
+    // The IDE never shows the profile, so init is where it has to be said.
+    expect(printed).toContain("does not evaluate the workspace .envrc");
   } finally {
     log.mockRestore();
   }

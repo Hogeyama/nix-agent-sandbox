@@ -1,5 +1,6 @@
 import {
-  type DevcontainerRegistration,
+  type DevcontainerDisclosure,
+  type DevcontainerInitResult,
   type DevcontainerStatus,
   makeDevcontainerLifecycle,
 } from "../domain/devcontainer.ts";
@@ -8,7 +9,7 @@ import type { HostEnv } from "../pipeline/types.ts";
 import { parseDevcontainerArgs } from "./devcontainer_args.ts";
 
 export interface DevcontainerCommandClient {
-  init(workspace: string, profile: string): Promise<DevcontainerRegistration>;
+  init(workspace: string, profile: string): Promise<DevcontainerInitResult>;
   up(workspace: string): Promise<DevcontainerStatus>;
   down(workspace: string): Promise<DevcontainerStatus | null>;
   status(workspace: string): Promise<DevcontainerStatus | null>;
@@ -32,6 +33,19 @@ function printStatus(status: DevcontainerStatus | null): void {
   if (status.diagnostic) console.log(`  diagnostic: ${status.diagnostic}`);
 }
 
+/**
+ * Reopening a folder in a container is where this configuration takes effect,
+ * and nas is not on screen there. Say here what it will do.
+ */
+function printSharing(sharing: readonly DevcontainerDisclosure[]): void {
+  if (sharing.length === 0) return;
+  const width = Math.max(...sharing.map((entry) => entry.topic.length));
+  console.log("");
+  console.log("This Dev Container:");
+  for (const entry of sharing)
+    console.log(`  ${entry.topic.padEnd(width)}  ${entry.detail}`);
+}
+
 /** Parse, call the domain clients, and render the result. */
 export async function runDevcontainerCommand(
   args: readonly string[],
@@ -41,9 +55,13 @@ export async function runDevcontainerCommand(
   const command = parseDevcontainerArgs(args, cwd);
   const domain = client ?? makeClient(buildHostEnv());
   if (command.action === "init") {
-    const registration = await domain.init(command.workspace, command.profile);
+    const { registration, sharing } = await domain.init(
+      command.workspace,
+      command.profile,
+    );
     console.log(`Created ${registration.configPath}`);
     console.log(`Profile: ${registration.profileName}`);
+    printSharing(sharing);
     return;
   }
   const result = await domain[command.action](command.workspace);

@@ -8,6 +8,10 @@ import {
 } from "../../lib/fs_utils.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { renderDevcontainerConfig } from "./config.ts";
+import {
+  type DevcontainerInitResult,
+  describeDevcontainerSharing,
+} from "./disclosure.ts";
 import { validateDevcontainerProfile } from "./policy.ts";
 import {
   acquireDevcontainerLock,
@@ -199,7 +203,7 @@ export function makeDevcontainerLifecycle(
   const init = async (
     requested: string,
     profileName: string,
-  ): Promise<DevcontainerRegistration> => {
+  ): Promise<DevcontainerInitResult> => {
     requireHostUid(host);
     const workspace = await canonicalizeWorkspace(requested);
     return await withDevcontainerOperationLock(host, workspace, async () => {
@@ -263,7 +267,10 @@ export function makeDevcontainerLifecycle(
         else await atomicWriteFile(record.configPath, previousConfig);
         throw error;
       }
-      return record;
+      return {
+        registration: record,
+        sharing: describeDevcontainerSharing(inputs.profile),
+      };
     });
   };
 

@@ -1,5 +1,10 @@
 export { renderDevcontainerConfig } from "./devcontainer/config.ts";
 export {
+  type DevcontainerDisclosure,
+  type DevcontainerInitResult,
+  describeDevcontainerSharing,
+} from "./devcontainer/disclosure.ts";
+export {
   type DevcontainerLifecycleOptions,
   devcontainerRuntimeIsRunning,
   makeDevcontainerLifecycle,
