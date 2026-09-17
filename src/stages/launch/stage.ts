@@ -7,17 +7,7 @@
  */
 
 import { Effect } from "effect";
-import {
-  containerNameForSession,
-  NAS_KIND_AGENT,
-  NAS_KIND_LABEL,
-  NAS_MANAGED_LABEL,
-  NAS_MANAGED_VALUE,
-  NAS_PWD_LABEL,
-  NAS_SESSION_ID_LABEL,
-} from "../../docker/nas_resources.ts";
 import { logInfo } from "../../log.ts";
-import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import { encodeDynamicEnvOps } from "../../pipeline/env_ops.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { ContainerPlan, PipelineState } from "../../pipeline/state.ts";
@@ -26,6 +16,7 @@ import {
   ContainerLaunchService,
   type LaunchOpts,
 } from "./container_launch_service.ts";
+import { finalizeLaunchPlan } from "./plan.ts";
 
 // ---------------------------------------------------------------------------
 // LaunchPlan
@@ -39,10 +30,9 @@ export interface LaunchPlan {
 
 export function planLaunch(
   input: StageInput & Pick<PipelineState, "container">,
-  extraArgs: string[] = [],
+  extraArgs: readonly string[] = [],
 ): LaunchPlan {
-  const containerName = containerNameForSession(input.sessionId);
-  const container = buildLaunchContainerPlan(input, extraArgs);
+  const { containerName, container } = finalizeLaunchPlan(input, extraArgs);
   const opts = compileLaunchOpts(container, containerName, input.profile.mode);
 
   logInfo(`[nas] Launching container...`);
@@ -55,30 +45,6 @@ export function planLaunch(
     container,
     opts,
   };
-}
-
-function buildLaunchContainerPlan(
-  input: StageInput & Pick<PipelineState, "container">,
-  extraArgs: readonly string[],
-): ContainerPlan {
-  const base = input.container;
-
-  return mergeContainerPlan(base, {
-    command: {
-      agentCommand: [...base.command.agentCommand],
-      extraArgs: [
-        ...base.command.extraArgs,
-        ...input.profile.agentArgs,
-        ...extraArgs,
-      ],
-    },
-    labels: {
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_AGENT,
-      [NAS_PWD_LABEL]: base.workDir,
-      [NAS_SESSION_ID_LABEL]: input.sessionId,
-    },
-  });
 }
 
 export function compileLaunchOpts(
@@ -116,6 +82,10 @@ export function compileLaunchOpts(
     for (const entry of plan.extraHosts) {
       args.push(`--add-host=${entry.host}:${entry.ip}`);
     }
+  }
+
+  if (plan.shmSize !== undefined) {
+    args.push("--shm-size", plan.shmSize);
   }
 
   args.push(...plan.extraRunArgs);
