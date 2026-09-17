@@ -372,6 +372,29 @@ profiles {
     guide { enable = false }
   }
 
+  // VS Code Dev Container 用 (`nas devcontainer init --profile claude-devcontainer`)。
+  // nix と DinD は devcontainer では使えないので、それに依存する mount も外す
+  // (/nix が無いコンテナで ~/.nix-profile/bin を重ねても動かない)。
+  ["claude-devcontainer"] = (anthropicPolicyProfile) {
+    agentArgs = new Listing { "--dangerously-skip-permissions" }
+    nix {
+      enable = false
+      mountSocket = false
+    }
+    docker {
+      enable = false
+    }
+    extraMounts = new Listing<ExtraMountConfig> {
+      new { src = "~/.config/nvim"; dst = "~/.config/nvim"; mode = "ro" }
+      new { src = "~/.config/tmux"; dst = "~/.config/tmux"; mode = "ro" }
+      new { src = "~/.local/share/nvim"; dst = "~/.local/share/nvim"; mode = "ro" }
+      new { src = "~/.local/share/pnpm"; dst = "~/.local/share/pnpm"; mode = "ro" }
+      new { src = "~/.cache/.bun"; dst = "~/.cache/.bun"; mode = "ro" }
+      new { src = "~/.local/share/nas"; dst = "~/.local/share/nas"; mode = "rw" }
+      new { src = "/tmp"; dst = "/tmp"; mode = "rw" }
+    }
+  }
+
   ["codex"] = (baseProfile) {
     agent = "codex"
     agentArgs = new Listing { "--dangerously-bypass-approvals-and-sandbox" }
