@@ -61,6 +61,9 @@ case "$1" in
     shift 2
     exec "$@"
     ;;
+  export)
+    printf '%s\\n' "\${FAKE_EXPORT_CODE:-}"
+    ;;
   *) exit 99 ;;
 esac
 `,
@@ -530,5 +533,20 @@ test("environment output mode emits only changed exports and no inherited secret
     );
     expect(await proc.exited).toBe(0);
     expect(await new Response(proc.stdout).text()).toBe("literal $(false)");
+  });
+});
+
+test("environment output mode does not replay the launcher's working directory", async () => {
+  await withFixture(async (fixture) => {
+    // The direnv-enabled branch cds into the workspace between the two
+    // snapshots, so PWD and OLDPWD differ across the diff. Replaying them
+    // would tell a consumer with another cwd that it is in the workspace.
+    const result = await launch(fixture, ["--export"], {
+      NAS_DIRENV_ENABLED: "true",
+      FAKE_EXPORT_CODE: "export NAS_TEST_FROM_DIRENV=1",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("NAS_TEST_FROM_DIRENV");
+    expect(result.stdout).not.toContain("PWD");
   });
 });

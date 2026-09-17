@@ -32,7 +32,14 @@ nas_snapshot_env() {
   local nas_entry nas_key
   while IFS= read -r -d '' nas_entry; do
     nas_key=${nas_entry%%=*}
-    case "$nas_key" in "" | [0-9]* | *[!A-Za-z0-9_]*) continue ;; esac
+    # PWD and OLDPWD describe this process, not the environment it prepares.
+    # The diff below spans `cd -- "$workspace"`, so replaying them would tell a
+    # consumer whose real cwd is elsewhere that it is somewhere it is not.
+    # Bash re-derives its own, but anything reading $PWD from the environment
+    # believes what it is given.
+    case "$nas_key" in
+      "" | [0-9]* | *[!A-Za-z0-9_]* | PWD | OLDPWD) continue ;;
+    esac
     if [ -z "${nas_values[$nas_key]+x}" ]; then nas_order+=("$nas_key"); fi
     nas_values["$nas_key"]=${nas_entry#*=}
   done < <(/usr/bin/env -0)
