@@ -25,7 +25,7 @@ function activate(context) {
   statusBar.command = "nas-approval.review";
   context.subscriptions.push(statusBar, output);
 
-  // fsPath -> { sessionId, watchState, watchers, pollTimer, gaveUp }
+  // fsPath -> { sessionId, watchState, watchers, pollTimer, gaveUp, dead, resolving }
   const folders = new Map();
   let lastTotal = 0;
   const panel = null; // Task 5 で ApprovalsPanel に差し替わる
@@ -80,7 +80,7 @@ function activate(context) {
   };
 
   const schedulePoll = (fsPath, f) => {
-    if (f.pollTimer || f.gaveUp) return;
+    if (f.pollTimer || f.gaveUp || f.dead) return;
     f.pollTimer = setTimeout(() => {
       f.pollTimer = null;
       resolveSession(fsPath, f);
@@ -88,6 +88,7 @@ function activate(context) {
   };
 
   const startWatchers = (fsPath, f, sessionId) => {
+    if (f.dead) return;
     f.sessionId = sessionId;
     for (const domain of DOMAINS) {
       f.watchers.push(
@@ -101,6 +102,8 @@ function activate(context) {
           },
           onError: (msg) => output.appendLine(`[${domain}] ${msg.trimEnd()}`),
           onExit: () => {
+            // teardown 済み (rescan で除去 / dispose) なら再起動しない。
+            if (f.dead) return;
             // EOF はセッション終了。次のセッションを待つ。
             stopWatchers(f);
             refreshUi();
@@ -112,40 +115,46 @@ function activate(context) {
   };
 
   const resolveSession = async (fsPath, f) => {
-    let out;
+    if (f.dead || f.resolving) return;
+    f.resolving = true;
     try {
-      out = await runNas(nasPath(), [
-        "devcontainer",
-        "status",
-        "--workspace",
-        fsPath,
-        "--json",
-      ]);
-    } catch (err) {
-      if (err.code === "ENOENT") {
-        f.gaveUp = true; // nas 不在: この folder では諦める
+      let out;
+      try {
+        out = await runNas(nasPath(), [
+          "devcontainer",
+          "status",
+          "--workspace",
+          fsPath,
+          "--json",
+        ]);
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          f.gaveUp = true; // nas 不在: この folder では諦める
+          return;
+        }
+        output.appendLine(`status failed for ${fsPath}: ${err.message}`);
+        schedulePoll(fsPath, f);
         return;
       }
-      output.appendLine(`status failed for ${fsPath}: ${err.message}`);
-      schedulePoll(fsPath, f);
-      return;
+      let status;
+      try {
+        status = parseDevcontainerStatus(out);
+      } catch {
+        output.appendLine(`unparseable status for ${fsPath}`);
+        schedulePoll(fsPath, f);
+        return;
+      }
+      if (status === null) {
+        f.gaveUp = true; // nas 管理外の workspace: 以後ポーリングしない
+        return;
+      }
+      const sid = readySessionId(status);
+      if (sid) startWatchers(fsPath, f, sid);
+      else schedulePoll(fsPath, f);
+      refreshUi();
+    } finally {
+      f.resolving = false;
     }
-    let status;
-    try {
-      status = parseDevcontainerStatus(out);
-    } catch {
-      output.appendLine(`unparseable status for ${fsPath}`);
-      schedulePoll(fsPath, f);
-      return;
-    }
-    if (status === null) {
-      f.gaveUp = true; // nas 管理外の workspace: 以後ポーリングしない
-      return;
-    }
-    const sid = readySessionId(status);
-    if (sid) startWatchers(fsPath, f, sid);
-    else schedulePoll(fsPath, f);
-    refreshUi();
   };
 
   const rescan = () => {
@@ -160,6 +169,8 @@ function activate(context) {
           watchers: [],
           pollTimer: null,
           gaveUp: false,
+          dead: false,
+          resolving: false,
         });
       }
       const f = folders.get(fsPath);
@@ -167,6 +178,7 @@ function activate(context) {
     }
     for (const [fsPath, f] of folders) {
       if (!open.has(fsPath)) {
+        f.dead = true; // SIGTERM した子の close → onExit で再ポーリングしない
         if (f.pollTimer) clearTimeout(f.pollTimer);
         stopWatchers(f);
         folders.delete(fsPath);
@@ -196,6 +208,7 @@ function activate(context) {
     {
       dispose: () => {
         for (const f of folders.values()) {
+          f.dead = true;
           if (f.pollTimer) clearTimeout(f.pollTimer);
           stopWatchers(f);
         }

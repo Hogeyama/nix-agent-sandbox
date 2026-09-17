@@ -38,11 +38,18 @@ function spawnNasWatch(nasPath, domain, sessionId, handlers) {
     }
   });
   child.stderr.on("data", (d) => handlers.onError?.(String(d)));
+  // spawn 失敗時は error と close の両方が来るので onExit は一度だけにする。
+  let fired = false;
+  const fireExit = (code) => {
+    if (fired) return;
+    fired = true;
+    handlers.onExit?.(code);
+  };
   child.on("error", (err) => {
     handlers.onError?.(String(err));
-    handlers.onExit?.(-1);
+    fireExit(-1);
   });
-  child.on("close", (code) => handlers.onExit?.(code));
+  child.on("close", (code) => fireExit(code));
   return child;
 }
 
