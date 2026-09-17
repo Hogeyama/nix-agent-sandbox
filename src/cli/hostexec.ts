@@ -49,6 +49,15 @@ export function toHostExecPendingItem(
       argv0: entry.argv0,
       args: entry.args,
       createdAt: entry.createdAt,
+      ...(entry.integrityChanged !== undefined
+        ? { integrityChanged: entry.integrityChanged }
+        : {}),
+      ...(entry.defaultScope !== undefined
+        ? { defaultScope: entry.defaultScope }
+        : {}),
+      ...(entry.capability !== undefined
+        ? { capability: entry.capability }
+        : {}),
     },
   };
 }

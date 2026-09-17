@@ -44,3 +44,22 @@ test("toHostExecPendingItem marks an entry whose target changed since start", ()
     toHostExecPendingItem(entry({ integrityChanged: true })).displayLine,
   ).toEndWith(" [CHANGED-SINCE-START]");
 });
+
+test("toHostExecPendingItem carries capability metadata for card UIs", () => {
+  const capability = {
+    ruleId: "gcloud",
+    argv0: "gcloud",
+    normalizedArgv: ["gcloud", "auth", "print-access-token"],
+    normalizedCwd: "/home/u/proj",
+    envBindings: [{ key: "GCLOUD_TOKEN", source: "op://x/y" }],
+    inheritEnv: { mode: "minimal" as const, keys: ["HOME"] },
+  };
+  const item = toHostExecPendingItem(
+    entry({ integrityChanged: true, defaultScope: "capability", capability }),
+  );
+  expect(item.structured).toMatchObject({
+    integrityChanged: true,
+    defaultScope: "capability",
+    capability,
+  });
+});
