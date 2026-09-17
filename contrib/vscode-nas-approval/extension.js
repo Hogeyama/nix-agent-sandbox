@@ -7,6 +7,8 @@ const {
   pendingCount,
 } = require("./lib/watchState");
 const { cardViewModel } = require("./lib/cards");
+const { decisionArgv } = require("./lib/decision");
+const { ApprovalsPanel } = require("./lib/webview");
 
 const POLL_MS = 30_000;
 const DOMAINS = ["hostexec", "network"];
@@ -28,7 +30,7 @@ function activate(context) {
   // fsPath -> { sessionId, watchState, watchers, pollTimer, gaveUp, dead, resolving }
   const folders = new Map();
   let lastTotal = 0;
-  const panel = null; // Task 5 で ApprovalsPanel に差し替わる
+  let panel = null; // ApprovalsPanel.show() のシングルトン参照
 
   const collectCards = () => {
     const cards = [];
@@ -194,16 +196,20 @@ function activate(context) {
       for (const f of folders.values()) f.gaveUp = false;
       rescan();
     }),
-    // Task 5 で Webview パネルに差し替える仮実装。
     vscode.commands.registerCommand("nas-approval.review", () => {
       const cards = collectCards();
       if (cards.length === 0) {
         vscode.window.showInformationMessage("No pending nas approvals.");
         return;
       }
-      vscode.window.showInformationMessage(
-        `${cards.length} pending: ${cards.map((c) => c.title).join("; ")}`,
-      );
+      panel = ApprovalsPanel.show(context, {
+        getCards: collectCards,
+        onDecision: async (msg) => {
+          const argv = decisionArgv(msg); // 検証失敗は throw → カードにエラー表示
+          await runNas(nasPath(), argv);
+        },
+      });
+      panel.update(cards);
     }),
     {
       dispose: () => {
