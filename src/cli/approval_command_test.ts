@@ -273,6 +273,24 @@ test("review: prints empty message and returns true when no pending items", asyn
   expect(stdoutLines).toEqual(["[nas] No pending test-domain approvals."]);
 });
 
+test("review: --session with no match skips fzf and names the session", async () => {
+  const { adapter, calls } = makeAdapter([
+    { sessionId: "s1", requestId: "r1", displayLine: "one" },
+  ]);
+  const handled = await handleApprovalSubcommand(adapter, "review", [
+    "review",
+    "--session",
+    "s2",
+  ]);
+  restoreLog();
+
+  expect(handled).toEqual(true);
+  expect(calls).toEqual([]);
+  expect(stdoutLines).toEqual([
+    "[nas] No pending test-domain approvals for session s2.",
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // watch
 // ---------------------------------------------------------------------------

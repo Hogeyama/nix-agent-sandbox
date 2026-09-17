@@ -195,9 +195,10 @@ export async function handleApprovalSubcommand(
   }
 
   if (sub === "review") {
-    const items = await adapter.listPending();
+    const sessionFilter = sessionFilterArg(nasArgs);
+    const items = filterBySession(await adapter.listPending(), sessionFilter);
     if (items.length === 0) {
-      console.log(`[nas] No pending ${adapter.domain} approvals.`);
+      console.log(emptyPendingMessage(adapter.domain, sessionFilter));
       return true;
     }
     const reviewItems: ReviewItem[] = items.map((item) => ({
