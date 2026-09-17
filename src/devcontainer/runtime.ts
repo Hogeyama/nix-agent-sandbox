@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { createCliInitialState } from "../cli/pipeline_state.ts";
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { Config, Profile } from "../config/types.ts";
@@ -72,7 +72,7 @@ export async function runDevcontainerServeEntry(
         ? { ok: true }
         : {
             ok: false,
-            diagnostic: `devcontainer runtime failed: ${Cause.pretty(result.exit.cause).split("\n", 1)[0]}`,
+            diagnostic: `devcontainer runtime failed: ${describeExitFailure(result.exit.cause).split("\n", 1)[0]}`,
           };
     },
   });
@@ -213,8 +213,23 @@ export async function runDevcontainerRuntime(
   );
   const normalized: Exit.Exit<void, Error> = Exit.isSuccess(exit)
     ? Exit.succeed(undefined)
-    : Exit.fail(new Error(Cause.pretty(exit.cause)));
+    : Exit.fail(new Error(describeExitFailure(exit.cause)));
   return { exit: normalized, containerName };
+}
+
+/**
+ * A plain failure already carries its message. @internal exported for its test.
+ *
+ * `Cause.pretty` renders it as `Error: <message>`, so prettifying a cause that
+ * was itself built from a prettified one prefixes `Error:` once per layer and
+ * the diagnostic reaches the terminal as `Error: Error: ...`. Defects and
+ * interruptions have no such message and still need the rendering.
+ */
+export function describeExitFailure(cause: Cause.Cause<unknown>): string {
+  const failure = Cause.failureOption(cause);
+  if (Option.isNone(failure)) return Cause.pretty(cause);
+  const error = failure.value;
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createStartupGuard(deadlineAt: number, external?: AbortSignal) {
