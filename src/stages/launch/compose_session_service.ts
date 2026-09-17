@@ -10,6 +10,7 @@ import {
   writeDevcontainerSession,
 } from "../../domain/devcontainer.ts";
 import { atomicWriteFile } from "../../lib/fs_utils.ts";
+import { runPreparationTeardown } from "../../lib/preparation_commands.ts";
 import type { ContainerPlan } from "../../pipeline/state.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { compileCompose, serializeCompose } from "./compose.ts";
@@ -258,10 +259,14 @@ export function makeComposeSessionOpsLive(
             signal,
           );
         }),
+      // Teardown runs because the session was interrupted, so it must not
+      // inherit the interrupting signal; its 60s deadline is its only bound.
       composeDown: (file) =>
-        effectPromise("docker compose down", async () => {
-          await runBoundedDocker(["compose", "-f", file, "down"], 60_000);
-        }),
+        effectPromise("docker compose down", () =>
+          runPreparationTeardown(async () => {
+            await runBoundedDocker(["compose", "-f", file, "down"], 60_000);
+          }),
+        ),
     }),
   );
 }

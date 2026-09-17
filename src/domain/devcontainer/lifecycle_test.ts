@@ -239,6 +239,30 @@ test("status is null for an unregistered workspace", async () => {
   expect(await lifecycle.status(other)).toBeNull();
 });
 
+test("up refuses a failed session that still names a container", async () => {
+  const { host, workspace, registration } = await makeFixture();
+  await writeDevcontainerSession(host, workspace, {
+    version: 1,
+    workspaceId: registration.workspaceId,
+    sessionId: "sess-leaked",
+    containerId: "container-1",
+    phase: "failed",
+    pid: null,
+    diagnostic: "docker compose down: devcontainer stop requested",
+  });
+  const lifecycle = makeDevcontainerLifecycle(host, {
+    spawn: async () => {
+      throw new Error("up must not start a second container over the first");
+    },
+    docker: noDocker as never,
+    verifyRegistration: async () => registration,
+  });
+
+  await expect(lifecycle.up(workspace)).rejects.toThrow(
+    "cleanup is incomplete",
+  );
+});
+
 test("a ready session with no live runtime is reported as failed", async () => {
   const { host, workspace, registration } = await makeFixture();
   await writeDevcontainerSession(host, workspace, {
