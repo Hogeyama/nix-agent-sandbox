@@ -10,7 +10,7 @@ import {
   ensureDir,
   readTextFile,
 } from "../../lib/fs_utils.ts";
-import { resolveNasCommand } from "../../lib/notify_utils.ts";
+import { resolveStandaloneNasCommand } from "../../lib/notify_utils.ts";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import {
@@ -150,7 +150,7 @@ export async function loadDevcontainerInputs(
     );
   const config = await loadConfig({ startDir: workspace });
   const resolved = resolveProfile(config, profileName);
-  const { execPath, prefix } = resolveNasCommand();
+  const { execPath, prefix } = resolveStandaloneNasCommand();
   return {
     profile: resolved.profile,
     profileName: resolved.name,

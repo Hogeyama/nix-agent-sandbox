@@ -4,7 +4,7 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolveNasCommand } from "../lib/notify_utils.ts";
+import { resolveStandaloneNasCommand } from "../lib/notify_utils.ts";
 import { formatElapsed, logDebug, logInfo, logWarn } from "../log.ts";
 import {
   daemonLogPath,
@@ -151,7 +151,7 @@ async function startUiDaemon(
   port: number,
   idleTimeout?: number,
 ): Promise<void> {
-  const { execPath, prefix } = resolveNasCommand();
+  const { execPath, prefix } = resolveStandaloneNasCommand();
 
   const args = [...prefix, "ui", "--no-open", "--port", String(port)];
   if (idleTimeout !== undefined) {

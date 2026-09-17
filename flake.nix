@@ -255,7 +255,12 @@
           # Expose a stable absolute path to this wrapper so the UI
           # daemon can spawn new sessions after its originating session
           # cleaned up /tmp (where the inner binary would otherwise go).
-          export NAS_BIN_PATH="''${NAS_BIN_PATH:-$dir/share/nas/nas}"
+          # It names the wrapper, not the binary beside it: a caller that
+          # inherits nothing — a Dev Container's initializeCommand, run by
+          # the IDE — needs the entry point that sets the variables below,
+          # and re-entering through it is idempotent for the ones that do
+          # inherit them.
+          export NAS_BIN_PATH="''${NAS_BIN_PATH:-$dir/bin/nas}"
           export NAS_GIT_REVISION="${self.shortRev or self.dirtyShortRev or "unknown"}"
           # ネイティブ pkl を先頭に置く (loadPklConfig が PATH 経由で呼ぶ)
           export PATH="${pklNative}/bin:''${PATH}"

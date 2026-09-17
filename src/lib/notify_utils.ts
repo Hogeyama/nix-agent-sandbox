@@ -144,16 +144,50 @@ export function isWSL(): boolean {
 }
 
 /**
- * Resolve the nas command prefix (exec path + args for deno run if needed).
- * Used by CLI action notifications and daemon spawning.
+ * Resolve a command that re-enters nas for an immediate child process.
+ *
+ * The child inherits this process' environment — NAS_ASSET_DIR, the native
+ * pkl on PATH, and for the bundled build the LD_* that cleanup_env.so
+ * restores on self re-exec — so the binary inside the package is sufficient.
+ * NAS_BIN_PATH is deliberately not consulted: it names the package's
+ * self-contained entry point, which for the bundled build re-extracts the
+ * whole package to /tmp on every invocation. That price is only worth
+ * paying when the command has to stand alone; see
+ * resolveStandaloneNasCommand.
  */
-export function resolveNasCommand(): { execPath: string; prefix: string[] } {
-  const execPath = process.execPath;
+export function resolveNasCommand(execPath: string = process.execPath): {
+  execPath: string;
+  prefix: string[];
+} {
   const isCompiled = !path.basename(execPath).startsWith("bun");
   const prefix = isCompiled
     ? []
     : ["run", new URL("../../main.ts", import.meta.url).pathname];
   return { execPath, prefix };
+}
+
+/**
+ * Resolve a command that re-enters nas with none of this process'
+ * environment.
+ *
+ * `process.execPath` is the binary inside the package, not the entry point
+ * that prepares it: the packaged wrapper exports NAS_ASSET_DIR and puts the
+ * native pkl on PATH before exec'ing it. A Dev Container's initializeCommand
+ * is spawned by the IDE with none of it, so the recorded command has to
+ * stand on its own — NAS_BIN_PATH is the entry point the packaging names
+ * for that. The bundled build is another reason to prefer it even when the
+ * spawn is immediate: execPath sits under a /tmp extraction removed when
+ * this process exits, which a daemon meant to outlive its parent cannot
+ * rely on.
+ */
+export function resolveStandaloneNasCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+): { execPath: string; prefix: string[] } {
+  const packaged = env.NAS_BIN_PATH?.trim();
+  if (packaged && path.isAbsolute(packaged))
+    return { execPath: packaged, prefix: [] };
+  return resolveNasCommand(execPath);
 }
 
 export interface CliActionNotificationOptions {
