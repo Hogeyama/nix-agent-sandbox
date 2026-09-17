@@ -69,12 +69,12 @@ export function parseDevcontainerArgs(
   return { action: action as "up" | "down" | "status", workspace, json };
 }
 
-export function parseDevcontainerSupervisorArgs(args: readonly string[]): {
+export function parseDevcontainerServeArgs(args: readonly string[]): {
   readonly workspace: string;
   readonly sessionId: string;
   readonly deadlineAt: number;
 } {
-  if (args[0] !== "_supervise")
+  if (args[0] !== "_serve")
     throw new Error("invalid internal devcontainer action");
   let workspace: string | null = null;
   let sessionId: string | null = null;
@@ -108,7 +108,7 @@ export function parseDevcontainerSupervisorArgs(args: readonly string[]): {
   }
   if (!workspace || !sessionId || deadlineAt === null)
     throw new Error(
-      "internal devcontainer supervisor requires workspace, session, and deadline",
+      "internal devcontainer serve requires workspace, session, and deadline",
     );
   return { workspace, sessionId, deadlineAt };
 }

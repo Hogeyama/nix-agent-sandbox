@@ -15,7 +15,6 @@ export {
   ComposeSessionService,
   type ComposeSessionServiceApi,
   type ComposeSessionServiceFakeConfig,
-  completeComposeSession,
   makeComposeSessionOpsLive,
   makeComposeSessionServiceFake,
   makeComposeSessionServiceLive,
@@ -33,10 +32,6 @@ export {
   type LaunchOpts,
   makeContainerLaunchServiceFake,
 } from "./launch/container_launch_service.ts";
-export {
-  compareLaunchInspection,
-  type ExpectedLaunchInspection,
-} from "./launch/inspection.ts";
 export {
   type FinalizedLaunchPlan,
   finalizeLaunchPlan,

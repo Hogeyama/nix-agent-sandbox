@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   parseDevcontainerArgs,
-  parseDevcontainerSupervisorArgs,
+  parseDevcontainerServeArgs,
 } from "./devcontainer_args.ts";
 
 test("parses public actions with action-specific options", () => {
@@ -43,8 +43,8 @@ test("rejects missing values, unknown options, and multiple actions", () => {
 
 test("internal supervisor parser accepts only its exact argv", () => {
   expect(
-    parseDevcontainerSupervisorArgs([
-      "_supervise",
+    parseDevcontainerServeArgs([
+      "_serve",
       "--workspace",
       "/work",
       "--session",
@@ -54,11 +54,11 @@ test("internal supervisor parser accepts only its exact argv", () => {
     ]),
   ).toEqual({ workspace: "/work", sessionId: "dc_123", deadlineAt: 123456 });
   expect(() =>
-    parseDevcontainerSupervisorArgs(["_supervise", "--workspace", "/work"]),
+    parseDevcontainerServeArgs(["_serve", "--workspace", "/work"]),
   ).toThrow("requires workspace, session, and deadline");
   expect(() =>
-    parseDevcontainerSupervisorArgs([
-      "_supervise",
+    parseDevcontainerServeArgs([
+      "_serve",
       "--workspace",
       "/work",
       "--session",

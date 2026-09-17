@@ -1,8 +1,7 @@
 import {
   type DevcontainerRegistration,
   type DevcontainerStatus,
-  makeDevcontainerClient,
-  makeDevcontainerSupervisorClient,
+  makeDevcontainerLifecycle,
 } from "../domain/devcontainer.ts";
 import { buildHostEnv } from "../pipeline/host_env.ts";
 import type { HostEnv } from "../pipeline/types.ts";
@@ -16,14 +15,8 @@ export interface DevcontainerCommandClient {
 }
 
 function makeClient(host: HostEnv): DevcontainerCommandClient {
-  const registration = makeDevcontainerClient(host);
-  const supervisor = makeDevcontainerSupervisorClient(host);
-  return {
-    init: registration.init,
-    up: supervisor.up,
-    down: supervisor.down,
-    status: supervisor.status,
-  };
+  const { init, up, down, status } = makeDevcontainerLifecycle(host);
+  return { init, up, down, status };
 }
 
 function printStatus(status: DevcontainerStatus | null): void {

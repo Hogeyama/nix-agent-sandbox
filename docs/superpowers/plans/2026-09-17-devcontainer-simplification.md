@@ -90,6 +90,12 @@
 
 **代替:** `up` = Compose 生成 → `docker compose up -d`。`status` = `docker compose ps` の委譲。`down` = `docker compose down`。同時実行の排他は workspace ごとの flock 1 個（約 20 行）。
 
+**2026-09-17 の修正（実装時の判断）:** 分離プロセス自体は残す。上の「何を」のうち削除するのは、UDS のチャレンジレスポンス制御プロトコル、世代管理（`sameGeneration` / `waitForGeneration` / `recover` / `markSupervisorFailure`）、`up` の 2 回リトライループ、6 相の状態機械である。
+
+理由: 元 plan（`2026-09-15-devcontainer.md`）の Architecture は「独立した supervisor が**パイプラインの Effect Scope を保持し**」と書いており、分離プロセスの第一の役割はコンテナの監視ではなく、proxy / hostexec broker / maskfs / port_bind をコンテナと同じ寿命で生かすことだった。D3 の論拠（コンテナの寿命は Docker が持つ）は監視の不要性しか示しておらず、Scope 保持の必要性を否定しない。`initializeCommand` は完了を待つため前景で保持することもできない。
+
+したがって残すのは「`setsid` で分離して起動し、ready を待ち、停止時に signal で終了させる」部分だけで、約 150 行を見込む。D3 の削減量はその分目標を下回る。
+
 ### D4. 5 重の mount 検証 — 1,214 行
 
 **Files:** `src/domain/devcontainer/service.ts` (468), `service_test.ts` (375), `policy.ts` (89), `policy_test.ts` (103), `compose_session_service.ts` の `validateComposeSessionRequest` 部分、`src/devcontainer/runtime.ts` の `validateOriginalMountRoots`

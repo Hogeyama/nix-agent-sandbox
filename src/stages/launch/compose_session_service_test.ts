@@ -3,14 +3,10 @@ import { Effect, Exit, Layer } from "effect";
 import { NAS_SESSION_ID_LABEL } from "../../docker/nas_resources.ts";
 import type { DevcontainerRegistration } from "../../domain/devcontainer.ts";
 import type { ContainerPlan } from "../../pipeline/state.ts";
-import type { DockerLaunchInspection } from "../../services/docker.ts";
 import {
   ComposeSessionOps,
   type ComposeSessionRequest,
-  ComposeStopRequested,
-  completeComposeSession,
   serveComposeSession,
-  validateComposeSessionRequest,
 } from "./compose_session_service.ts";
 
 const registration: DevcontainerRegistration = {
@@ -36,11 +32,6 @@ const container: ContainerPlan = {
       readOnly: true,
     },
     { source: "/work/.nas", target: "/work/.nas", readOnly: true },
-    { source: "/state/workspace/claude", target: "/home/tester/.claude" },
-    {
-      source: "/state/workspace/claude.json",
-      target: "/home/tester/.claude.json",
-    },
     {
       source: "/state/workspace/vscode",
       target: "/home/tester/.vscode-server",
@@ -65,396 +56,133 @@ const request: ComposeSessionRequest = {
   container,
 };
 
-test("IDE launch uses host Claude authentication and history", () => {
-  const hostHome = "/host/tester";
-  const shared = {
-    ...request,
-    container: {
-      ...container,
-      mounts: container.mounts.map((mount) => ({
-        ...mount,
-        source:
-          mount.target === "/home/tester/.claude"
-            ? `${hostHome}/.claude`
-            : mount.target === "/home/tester/.claude.json"
-              ? `${hostHome}/.claude.json`
-              : mount.source,
-      })),
-    },
-  };
-  expect(() => validateComposeSessionRequest(shared, hostHome)).not.toThrow();
-  expect(() => validateComposeSessionRequest(request, hostHome)).toThrow(
-    "required dedicated mount differs",
-  );
-});
-
-test("request validation pins protection overlays and dedicated mounts", () => {
-  expect(() => validateComposeSessionRequest(request)).not.toThrow();
-  const withoutOverlay = {
-    ...request,
-    container: {
-      ...container,
-      mounts: container.mounts.filter(
-        (mount) => mount.target !== "/work/.devcontainer",
-      ),
-    },
-  };
-  expect(() => validateComposeSessionRequest(withoutOverlay)).toThrow(
-    "read-only configuration overlay is missing",
-  );
-  const withControlSocket = {
-    ...request,
-    container: {
-      ...container,
-      mounts: [
-        ...container.mounts,
-        { source: "/run/nas/hostexec/brokers/sess-1/sock", target: "/control" },
-      ],
-    },
-  };
-  expect(() => validateComposeSessionRequest(withControlSocket)).toThrow(
-    "host-only control path",
-  );
-
-  const withDescendantOverlay = {
-    ...request,
-    container: {
-      ...container,
-      mounts: container.mounts.map((mount) =>
-        mount.target === "/work/.devcontainer"
-          ? {
-              ...mount,
-              source: `${mount.source}/devcontainer.json`,
-              target: `${mount.target}/devcontainer.json`,
-            }
-          : mount,
-      ),
-    },
-  };
-  expect(() => validateComposeSessionRequest(withDescendantOverlay)).toThrow(
-    "read-only configuration overlay is missing",
-  );
-
-  const withStateAlias = {
-    ...request,
-    container: {
-      ...container,
-      mounts: [
-        ...container.mounts,
-        { source: registration.stateRoot, target: "/state-alias" },
-      ],
-    },
-  };
-  expect(() => validateComposeSessionRequest(withStateAlias)).toThrow(
-    "dedicated state mount is not a registered pair",
-  );
-
-  for (const extra of [
-    { source: "/tmp/replacement", target: "/work/.nas" },
-    { source: "/tmp/replacement", target: "/home/tester/.claude/hooks" },
-  ]) {
-    expect(() =>
-      validateComposeSessionRequest({
-        ...request,
-        container: { ...container, mounts: [...container.mounts, extra] },
-      }),
-    ).toThrow("writable mount overrides a protected target");
-  }
-});
-
-function inspection(id = "container-1"): DockerLaunchInspection {
-  return {
-    id,
-    imageId: "image-1",
-    running: true,
-    config: {
-      image: container.image,
-      user: "",
-      entrypoint: ["/entrypoint.sh"],
-      command: ["/usr/local/bin/nas-devcontainer-idle", "$literal"],
-      workingDir: container.workDir,
-    },
-    mounts: container.mounts.map((mount) => ({
-      type: "bind",
-      source: mount.source,
-      target: mount.target,
-      readOnly: mount.readOnly ?? false,
-    })),
-    environment: Object.entries(container.env.static).map(
-      ([k, v]) => `${k}=${v}`,
-    ),
-    networkMode: "nas-net",
-    networks: ["nas-net"],
-    privileged: false,
-    capAdd: [],
-    capDrop: [],
-    securityOpt: [],
-    labels: container.labels,
-  };
+interface Recorded {
+  readonly calls: string[];
+  readonly phases: Array<[string, string | null, string | null]>;
+  compose: string | null;
 }
 
-interface FakeOptions {
-  readonly failAt?:
-    | "validate"
-    | "start"
-    | "inspect"
-    | "readiness"
-    | "broker"
-    | "stopping-write"
-    | "stop"
-    | "remove";
-  readonly monitor?: "return" | "never" | "broker-failure";
-  readonly cleanupInspection?: DockerLaunchInspection;
-  readonly deadlineAt?: number;
-  readonly markerNever?: boolean;
-  readonly startNever?: boolean;
-}
-
-function fake(options: FakeOptions = {}) {
-  const events: string[] = [];
-  const userProbes: Array<{
-    id: string;
-    uid: number;
-    home: string;
-    workspace: string;
-  }> = [];
-  const phases: Array<{
-    phase: string;
-    diagnostic: string | null;
-    containerId: string | null;
-  }> = [];
-  let inspections = 0;
-  let networkProbes = 0;
-  const step = (name: string, failAt?: FakeOptions["failAt"]) => {
-    events.push(name);
-    return failAt !== undefined && options.failAt === failAt
-      ? Effect.fail(new Error(`${name} failure`))
-      : Effect.void;
-  };
-  const layer = Layer.succeed(
+function makeOps(
+  recorded: Recorded,
+  overrides: Partial<{
+    composeUp: Effect.Effect<void, Error>;
+    readyMarker: () => Effect.Effect<void, Error>;
+    containerId: string;
+  }> = {},
+) {
+  return Layer.succeed(
     ComposeSessionOps,
     ComposeSessionOps.of({
-      validate: () => step("validate", "validate"),
-      publishCompose: () => step("publish-compose"),
-      publishPhase: (_request, phase, containerId, diagnostic) =>
-        phase === "stopping" &&
-        containerId !== null &&
-        options.failAt === "stopping-write"
-          ? Effect.fail(new Error("state-write failure"))
-          : Effect.sync(() => {
-              phases.push({ phase, diagnostic, containerId });
-              if (phase === "ready") events.push("ready");
-            }),
-      finalizeStopped: () =>
+      publishCompose: (_path, bytes) =>
         Effect.sync(() => {
-          const current = phases.at(-1);
-          if (current?.phase === "stopping" && current.containerId === null)
-            events.push("stopped");
+          recorded.calls.push("publishCompose");
+          recorded.compose = bytes;
+        }),
+      publishPhase: (_request, phase, containerId, diagnostic) =>
+        Effect.sync(() => {
+          recorded.calls.push(`phase:${phase}`);
+          recorded.phases.push([phase, containerId, diagnostic]);
         }),
       composeUp: () =>
-        options.startNever
-          ? Effect.sync(() => events.push("start")).pipe(
-              Effect.andThen(Effect.never),
-            )
-          : step("start", "start"),
-      composeContainerId: () => Effect.succeed("container-1"),
-      inspectImage: () =>
-        Effect.succeed({
-          id: "image-1",
-          user: "",
-          entrypoint: ["/entrypoint.sh"],
+        Effect.sync(() => {
+          recorded.calls.push("composeUp");
+        }).pipe(Effect.andThen(overrides.composeUp ?? Effect.void)),
+      composeContainerId: () =>
+        Effect.sync(() => {
+          recorded.calls.push("composeContainerId");
+          return overrides.containerId ?? "container-1";
         }),
       probeReadyMarker: () =>
-        options.markerNever ? Effect.never : Effect.void,
-      inspect: () => {
-        inspections++;
-        if (inspections === 1) {
-          events.push("inspect");
-          if (options.failAt === "inspect")
-            return Effect.fail(new Error("inspect failure"));
-        }
-        return Effect.succeed(options.cleanupInspection ?? inspection());
-      },
-      probeUser: (id, uid, home, workspace) =>
         Effect.sync(() => {
-          userProbes.push({ id, uid, home, workspace });
-        }).pipe(Effect.andThen(step("probe-user", "readiness"))),
-      probeNetworkBroker: () => {
-        networkProbes++;
-        if (options.failAt === "broker")
-          return Effect.fail(new Error("broker failure"));
-        if (options.monitor === "broker-failure" && networkProbes > 1)
-          return Effect.fail(new Error("broker monitor failure"));
-        return Effect.void;
-      },
-      probeHostExecBroker: () => Effect.void,
-      probeContainerGateways: () => Effect.void,
-      waitForMonitorTick: () => {
-        if (options.monitor === "never") return Effect.never;
-        if (options.monitor === "broker-failure") return Effect.void;
-        return step("stop-request").pipe(
-          Effect.andThen(Effect.fail(new ComposeStopRequested())),
-        );
-      },
-      stop: () => step("stop-container", "stop"),
-      remove: () => step("remove-container", "remove"),
+          recorded.calls.push("probeReadyMarker");
+        }).pipe(Effect.andThen(overrides.readyMarker?.() ?? Effect.void)),
+      composeDown: () =>
+        Effect.sync(() => {
+          recorded.calls.push("composeDown");
+        }),
     }),
   );
-  return { events, phases, userProbes, layer };
 }
 
-async function run(options: FakeOptions = {}) {
-  const f = fake(options);
+function empty(): Recorded {
+  return { calls: [], phases: [], compose: null };
+}
+
+test("startup generates Compose, starts it, and checks the marker once", async () => {
+  const recorded = empty();
+  await Effect.runPromiseExit(
+    Effect.scoped(
+      serveComposeSession(request, Date.now() + 5_000).pipe(
+        Effect.provide(makeOps(recorded)),
+        Effect.timeout("200 millis"),
+      ),
+    ),
+  );
+
+  expect(recorded.calls.slice(0, 6)).toEqual([
+    "publishCompose",
+    "phase:starting",
+    "composeUp",
+    "composeContainerId",
+    "probeReadyMarker",
+    "phase:ready",
+  ]);
+  expect(recorded.calls.filter((c) => c === "probeReadyMarker")).toHaveLength(
+    1,
+  );
+  expect(recorded.compose).toContain("nas-agent-sess-1");
+});
+
+test("serve stays alive after ready so the pipeline scope is retained", async () => {
+  const recorded = empty();
   const exit = await Effect.runPromiseExit(
     Effect.scoped(
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() => completeComposeSession(request));
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => f.events.push("release-brokers")),
-        );
-        yield* serveComposeSession(
-          request,
-          options.deadlineAt ?? Date.now() + 5_000,
-        );
-      }),
-    ).pipe(Effect.provide(f.layer)),
+      serveComposeSession(request, Date.now() + 5_000).pipe(
+        Effect.provide(makeOps(recorded)),
+        Effect.timeout("200 millis"),
+      ),
+    ),
   );
-  return { ...f, exit };
-}
-
-test("serve keeps the scope alive and tears the owned generation down before brokers", async () => {
-  const result = await run();
-  expect(Exit.isSuccess(result.exit)).toBe(true);
-  expect(result.events).toEqual([
-    "validate",
-    "publish-compose",
-    "start",
-    "inspect",
-    "probe-user",
-    "ready",
-    "stop-request",
-    "stop-container",
-    "remove-container",
-    "release-brokers",
-    "stopped",
-  ]);
-  expect(result.phases.at(-1)).toEqual({
-    phase: "stopping",
-    diagnostic: null,
-    containerId: null,
-  });
-  expect(result.userProbes).toEqual([
-    {
-      id: "container-1",
-      uid: 1000,
-      home: "/home/tester",
-      workspace: "/work",
-    },
-  ]);
-});
-
-for (const failAt of [
-  "validate",
-  "start",
-  "inspect",
-  "readiness",
-  "broker",
-] as const) {
-  test(`serve records ${failAt} startup failure and still releases earlier resources`, async () => {
-    const result = await run({ failAt });
-    expect(Exit.isFailure(result.exit)).toBe(true);
-    expect(result.events).toContain("release-brokers");
-    expect(result.phases.some((phase) => phase.phase === "failed")).toBe(true);
-  });
-}
-
-test("startup deadline bounds readiness but excludes the ready lifetime", async () => {
-  const result = await run({ deadlineAt: Date.now() + 20, markerNever: true });
-  expect(Exit.isFailure(result.exit)).toBe(true);
-  expect(result.phases.at(-1)?.phase).toBe("failed");
-  expect(result.phases.at(-1)?.diagnostic).toContain(
-    "startup deadline exceeded",
-  );
-});
-
-test("startup timeout discovers and cleans a container created by Compose", async () => {
-  const result = await run({ deadlineAt: Date.now() + 20, startNever: true });
-  expect(Exit.isFailure(result.exit)).toBe(true);
-  expect(result.events).toContain("stop-container");
-  expect(result.events).toContain("remove-container");
-  expect(result.events).not.toContain("stopped");
-});
-
-test("broker failure after ready tears down the container", async () => {
-  const result = await run({ monitor: "broker-failure" });
-  expect(
-    result.phases.find((phase) => phase.phase === "failed")?.diagnostic,
-  ).toContain("broker monitor failure");
-  expect(result.events).toContain("remove-container");
-});
-
-test("cleanup failure is retained with the original monitor failure", async () => {
-  const result = await run({ monitor: "broker-failure", failAt: "stop" });
-  const diagnostic = result.phases.at(-1)?.diagnostic;
-  expect(diagnostic).toContain("broker monitor failure");
-  expect(diagnostic).toContain("stop failed");
-  expect(result.events).not.toContain("stopped");
-});
-
-test("stopping state write failure does not skip owned-container cleanup", async () => {
-  const result = await run({ failAt: "stopping-write" });
-  expect(result.events).toContain("stop-container");
-  expect(result.events).toContain("remove-container");
-  expect(result.events).toContain("release-brokers");
-  expect(result.phases.at(-1)?.phase).toBe("failed");
-  expect(result.phases.at(-1)?.diagnostic).toContain(
-    "stopping state publish failed",
-  );
-});
-
-test("replacement identity is never stopped or removed", async () => {
-  const result = await run({ cleanupInspection: inspection("replacement") });
-  expect(result.events).not.toContain("stop-container");
-  expect(result.events).not.toContain("remove-container");
-  expect(result.phases.at(-1)?.diagnostic).toContain("identity changed");
-});
-
-for (const failAt of ["stop", "remove"] as const) {
-  test(`${failAt} failure is retained while broker finalizers continue`, async () => {
-    const result = await run({ failAt });
-    expect(result.events).toContain("release-brokers");
-    expect(result.phases.at(-1)?.phase).toBe("failed");
-    expect(result.phases.at(-1)?.diagnostic).toContain(`${failAt} failed`);
-  });
-}
-
-test("AbortSignal interruption awaits scoped cleanup", async () => {
-  const f = fake({ monitor: "never" });
-  const controller = new AbortController();
-  const promise = Effect.runPromiseExit(
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() => completeComposeSession(request));
-        yield* serveComposeSession(request, Date.now() + 5_000);
-      }),
-    ).pipe(Effect.provide(f.layer)),
-    { signal: controller.signal },
-  );
-  while (!f.events.includes("ready")) await Bun.sleep(1);
-  controller.abort();
-  const exit = await promise;
   expect(Exit.isFailure(exit)).toBe(true);
-  expect(f.events).toContain("remove-container");
-  expect(f.events).toContain("stopped");
-  expect(f.phases.map(({ phase }) => phase)).toEqual([
-    "starting",
-    "ready",
-    "stopping",
-    "stopping",
-  ]);
-  expect(f.phases.at(-1)).toEqual({
-    phase: "stopping",
-    diagnostic: null,
-    containerId: null,
-  });
+  expect(recorded.calls.filter((c) => c === "composeUp")).toHaveLength(1);
+  // The timeout interrupts a ready session, so cleanup reports no failure.
+  expect(recorded.phases.at(-1)).toEqual(["stopped", null, null]);
+  expect(recorded.calls).toContain("composeDown");
+});
+
+test("a failed start tears the container down and publishes the diagnostic", async () => {
+  const recorded = empty();
+  const exit = await Effect.runPromiseExit(
+    Effect.scoped(
+      serveComposeSession(request, Date.now() + 5_000).pipe(
+        Effect.provide(
+          makeOps(recorded, {
+            composeUp: Effect.fail(new Error("compose refused")),
+          }),
+        ),
+      ),
+    ),
+  );
+  expect(Exit.isFailure(exit)).toBe(true);
+  expect(recorded.calls).toContain("composeDown");
+  const last = recorded.phases.at(-1);
+  expect(last?.[0]).toBe("failed");
+  expect(last?.[2]).toContain("compose refused");
+});
+
+test("startup fails at the deadline instead of retrying the marker forever", async () => {
+  const recorded = empty();
+  const exit = await Effect.runPromiseExit(
+    Effect.scoped(
+      serveComposeSession(request, Date.now() + 300).pipe(
+        Effect.provide(
+          makeOps(recorded, {
+            readyMarker: () => Effect.fail(new Error("not ready")),
+          }),
+        ),
+      ),
+    ),
+  );
+  expect(Exit.isFailure(exit)).toBe(true);
+  expect(recorded.phases.at(-1)?.[2]).toContain("startup deadline exceeded");
 });

@@ -5,12 +5,10 @@ import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { Config, Profile } from "../config/types.ts";
 import type { DevcontainerRegistration } from "../domain/devcontainer.ts";
 import {
-  pathsOverlap,
   resolveDevcontainerPaths,
-  serveDevcontainerSupervisor,
+  serveDevcontainerRuntime,
 } from "../domain/devcontainer.ts";
 import { checkNotifySend, resolveNotifyBackend } from "../lib/notify_utils.ts";
-import { resolveRuntimeSubdir } from "../lib/runtime_dir.ts";
 import { createPreparationPipelineBuilder } from "../pipeline/cli_builder.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import { createPipelineLiveLayer } from "../pipeline/live.ts";
@@ -18,9 +16,7 @@ import type { HostEnv } from "../pipeline/types.ts";
 import { resolveBuildProbes } from "../stages/docker_build.ts";
 import {
   ComposeSessionOps,
-  type ComposeSessionRequest,
   ComposeSessionService,
-  completeComposeSession,
   createComposeStage,
   makeComposeSessionOpsLive,
   serveComposeSession,
@@ -47,14 +43,14 @@ export interface DevcontainerRuntimeResult {
   readonly containerName: string | null;
 }
 
-/** Application dispatch for the private detached `_supervise` CLI entry. */
-export async function runDevcontainerSupervisorEntry(
+/** Application dispatch for the private detached `_serve` CLI entry. */
+export async function runDevcontainerServeEntry(
   workspace: string,
   sessionId: string,
   deadlineAt: number,
 ): Promise<void> {
   const host = buildHostEnv();
-  await serveDevcontainerSupervisor({
+  await serveDevcontainerRuntime({
     host,
     workspace,
     sessionId,
@@ -82,11 +78,11 @@ export async function runDevcontainerSupervisorEntry(
 }
 
 /**
- * Application boundary used by the detached supervisor.
+ * Application boundary used by the detached `_serve` process.
  *
  * It resolves host probes, supplies UI/notification support, runs one scoped
  * preparation pipeline, and keeps that scope alive through ComposeSessionService.
- * Passing the supervisor AbortSignal interrupts the Effect and waits for all
+ * Passing the caller's AbortSignal interrupts the Effect and waits for all
  * container and broker finalizers before this promise resolves.
  */
 export async function runDevcontainerRuntime(
@@ -112,11 +108,6 @@ export async function runDevcontainerRuntime(
         );
         const gitMetadataPaths = await guard.wait(
           resolveDevcontainerGitMetadata(workspace),
-        );
-        validateOriginalMountRoots(
-          host,
-          options.registration,
-          gitMetadataPaths,
         );
         const buildProbes = await guard.wait(
           resolveBuildProbes("nas-sandbox", {
@@ -173,18 +164,13 @@ export async function runDevcontainerRuntime(
   });
 
   const opsLayer = makeComposeSessionOpsLive(host);
-  let request: ComposeSessionRequest | null = null;
   let containerName: string | null = null;
   const program = Effect.gen(function* () {
     const ops = yield* ComposeSessionOps;
-    yield* Effect.addFinalizer(() =>
-      request === null ? Effect.void : completeComposeSession(request),
-    );
     const composeLayer = Layer.succeed(
       ComposeSessionService,
       ComposeSessionService.of({
         serve: (next) => {
-          request = next;
           containerName = next.containerName;
           return serveComposeSession(next, deadlineAt).pipe(
             Effect.provide(Layer.succeed(ComposeSessionOps, ops)),
@@ -272,35 +258,4 @@ function createStartupGuard(deadlineAt: number, external?: AbortSignal) {
       external?.removeEventListener("abort", abortFromCaller);
     },
   };
-}
-
-function validateOriginalMountRoots(
-  host: HostEnv,
-  registration: DevcontainerRegistration,
-  gitMetadataPaths: readonly string[],
-): void {
-  const protectedRoot = path.dirname(path.dirname(registration.stateRoot));
-  const protectedPaths = [
-    path.join(host.home, ".ssh"),
-    path.join(host.home, ".gnupg"),
-    path.join(host.home, ".aws"),
-    path.join(host.home, ".config", "gcloud"),
-    path.join(host.home, ".docker"),
-    "/var/run/docker.sock",
-    "/run/docker.sock",
-    protectedRoot,
-    resolveRuntimeSubdir(host, ""),
-  ];
-  for (const source of [registration.workspace, ...gitMetadataPaths]) {
-    if (source === host.home || source === path.dirname(host.home))
-      throw new Error("devcontainer workspace must not expose host HOME");
-    if (
-      protectedPaths.some((protectedPath) =>
-        pathsOverlap(source, protectedPath),
-      )
-    )
-      throw new Error(
-        "devcontainer mount source exposes a protected host path",
-      );
-  }
 }

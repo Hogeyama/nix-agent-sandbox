@@ -19,7 +19,7 @@ import { runConfigCommand } from "./cli/config.ts";
 import { runContainerCommand } from "./cli/container.ts";
 import { extractControlOptions } from "./cli/control_options.ts";
 import { runDevcontainerCommand } from "./cli/devcontainer.ts";
-import { parseDevcontainerSupervisorArgs } from "./cli/devcontainer_args.ts";
+import { parseDevcontainerServeArgs } from "./cli/devcontainer_args.ts";
 import {
   exitOnCliError,
   findFirstNonFlagArg,
@@ -37,7 +37,7 @@ import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
 import { writeSessionIdFile } from "./cli/write_session_id.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
-import { runDevcontainerSupervisorEntry } from "./devcontainer/runtime.ts";
+import { runDevcontainerServeEntry } from "./devcontainer/runtime.ts";
 import { AcpConnection } from "./docker/acp_connection.ts";
 import { ProtocolCommandError } from "./docker/protocol_command.ts";
 import {
@@ -218,9 +218,9 @@ async function runMain(
       (arg) => !["-q", "--quiet", "-v", "--verbose"].includes(arg),
     );
     try {
-      if (devcontainerArgs[0] === "_supervise") {
-        const internal = parseDevcontainerSupervisorArgs(devcontainerArgs);
-        await runDevcontainerSupervisorEntry(
+      if (devcontainerArgs[0] === "_serve") {
+        const internal = parseDevcontainerServeArgs(devcontainerArgs);
+        await runDevcontainerServeEntry(
           internal.workspace,
           internal.sessionId,
           internal.deadlineAt,

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { Profile } from "../../config/types.ts";
 import * as defaults from "../../config/types.ts";
 export type DevcontainerPhase =
-  | "preparing"
   | "starting"
   | "ready"
   | "stopping"
@@ -34,7 +33,8 @@ export interface DevcontainerSessionRecord {
   readonly sessionId: string;
   readonly containerId: string | null;
   readonly phase: DevcontainerPhase;
-  readonly controlSocket: string;
+  /** PID of the process holding the pipeline scope; null until it claims the session. */
+  readonly pid: number | null;
   readonly diagnostic: string | null;
 }
 export interface DevcontainerPaths {
@@ -42,15 +42,13 @@ export interface DevcontainerPaths {
   readonly registrationFile: string;
   readonly composeFile: string;
   readonly operationLock: string;
-  readonly claudeDir: string;
-  readonly claudeJson: string;
+  readonly stateRoot: string;
   readonly vscodeDir: string;
 }
 export interface DevcontainerRuntimePaths {
   readonly runtimeDir: string;
   readonly sessionFile: string;
   readonly lifetimeLock: string;
-  readonly controlSocket: string;
 }
 export class DevcontainerError extends Error {
   constructor(message: string) {
@@ -58,17 +56,6 @@ export class DevcontainerError extends Error {
     this.name = "DevcontainerError";
   }
 }
-export interface DevcontainerMountPolicy {
-  readonly home: string;
-  readonly hostOnlyPaths: readonly string[];
-  readonly credentialPaths: readonly string[];
-  readonly protectedTargets: readonly string[];
-  /** Protect every workspace state directory; exact dedicatedMounts are the only exceptions. */
-  readonly dedicatedStateRoot?: string;
-  /** Exact registered source/target pairs, never parent-directory exceptions. */
-  readonly dedicatedMounts: readonly { source: string; target: string }[];
-}
-
 export function projectDevcontainerStatus(
   registration: DevcontainerRegistration,
   session: DevcontainerSessionRecord | null,

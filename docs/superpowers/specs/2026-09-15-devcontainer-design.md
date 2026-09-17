@@ -39,18 +39,16 @@ VS Code による利用中のコンテナ置換は初版の対応操作にしな
 
 ## 起動の責任と準備完了
 
-原案からの変更として、nas の supervisor が Compose を生成して
+原案からの変更として、nas の分離プロセスが Compose を生成して
 `docker compose up -d` まで行う。Dev Containers はその既存サービスへ接続する。
-これにより `initializeCommand` が戻る前にユーザー作成、環境準備、実構成検査まで
+これにより `initializeCommand` が戻る前にユーザー作成と環境準備を
 完了できる。Compose の project 名・service 名は生成設定と一致させる。
 
 `up` の成功条件は次の全てである。
 
 - 構成・profile の検証と既存の nas trust 検証に成功した。
 - 必要なプロキシ、HostExec、mask-filter、port relay がスコープ内で生存している。
-- Compose コンテナが running で、初期化プロセスが正常に完了した。
-- ホストから Docker inspect で実構成を検査し、計画との一致を確認した。
-- 非 root の対象 UID で、HOME、実行環境、必要な socket の利用を確認した。
+- Compose コンテナが running で、初期化完了 marker を一度確認できた。
 
 初期化を終えたコンテナは非 root で待機する。`up` の失敗は非ゼロで返し、
 Dev Containers 側にも接続を続行させない。コンテナの表示名や marker ファイルだけを
@@ -88,9 +86,9 @@ workspace は呼び出したディレクトリに固定する。worktree 作成�
 既存ディレクトリ、symlink、複数の devcontainer 定義は自動移行しない。
 失敗した作成で利用者の既存ファイルを削除しない。
 
-Compose、起動計画、所有記録、ロック、ログはホスト専用ディレクトリに置く。
+Compose、登録情報、ロック、ログはホスト専用ディレクトリに置く。
 恒久的な登録情報は nas の state 配下、実行状態は runtime 配下で workspace ID ごとに
-分ける。workspace ID は canonical path の SHA-256、世代はランダムな session ID とする。
+分ける。workspace ID は canonical path の SHA-256、session ID はランダムとする。
 ホスト専用ディレクトリは 0700、記録・Compose は 0600 とする。
 `.devcontainer/devcontainer.json` はホスト側 Compose の絶対パスを参照する。
 
@@ -101,8 +99,8 @@ Compose 自体や管理 socket を参照先へ mount しない。
 
 登録時の設定内容・profile・nas の実装版を指紋として保存する。
 `up` は現在の設定と照合し、違えば再利用も新規起動も拒否する。
-ホストで変更した設定は停止後に `init` を再実行する手順とし、nas が以前作成したと
-所有記録で確認できるものだけを更新する。独自編集の黙示的な承認はしない。
+ホストで変更した設定は停止後に `init` を再実行する手順とし、`init` は既存の
+`.devcontainer` を上書きしない。独自編集の黙示的な承認はしない。
 
 RO mount は稼働中エージェントからの変更を防ぐためのもので、ホスト上の利用者や
 別のホストプロセスまで制限しない。VS Code が nas より先に読む任意のホスト設定を
@@ -110,25 +108,28 @@ RO mount は稼働中エージェントからの変更を防ぐためのもの�
 
 ## セッションの状態と回収
 
-状態遷移は `preparing → starting → ready → stopping → stopped` とし、
+セッション記録は `starting → ready → stopping → stopped` とし、
 途中の失敗は `failed` に記録する。失敗理由は秘密を除いた診断として保存する。
 workspace ごとの排他を取得してから生存状態を確認する。
 
+分離プロセス (`devcontainer _serve`) はコンテナを見張るためではなく、準備
+パイプラインの Effect scope — proxy / hostexec broker / maskfs / port_bind — を
+コンテナと同じ寿命で保持するために存在する。生存判定はそのプロセスが life 全体で
+保持する flock 一つで行い、コンテナの生死は Docker と `docker compose ps` に委ねる。
+
 | 状態・操作 | 動作 |
 | --- | --- |
-| 同時に二つの up | 一つだけが資源を獲得し、もう一つは同じ結果を期限付きで待つ |
-| ready への up | 指紋、supervisor、コンテナ ID、実構成を再確認して再利用 |
-| 準備・生成失敗 | コンテナを停止・削除してからスコープを解放 |
-| down | 自分が所有する世代のコンテナを停止・削除してから資源を解放 |
-| down の再実行 | 終了済みとして成功。別世代や別 workspace を操作しない |
-| supervisor 不在 | 古い世代を再利用せず、所有ラベルで確認して回収 |
-| コンテナ停止・置換 | 該当 ID に限って終了処理。新しいコンテナを追跡対象へすり替えない |
+| 同時に二つの up | workspace の排他で直列化し、後続は ready を期限付きで待つ |
+| ready への up | 指紋と分離プロセスの生存を確認して再利用 |
+| 準備・生成失敗 | `docker compose down` の後にスコープを解放し failed を記録 |
+| down | 分離プロセスを SIGTERM で止め、`docker compose down` で片付ける |
+| down の再実行 | 終了済みとして成功。別 workspace を操作しない |
+| 分離プロセス不在 | ready 記録でも failed として表示し、再利用しない |
 | SIGINT / SIGTERM | 起動中も含めて停止処理を起動し、Effect の finalizer を待つ |
 | Docker 利用不能 | failed を残し、回収未完了を表示。状態を削除して成功扱いにしない |
 
 起動全体の既定期限は 120 秒。準備・コンテナ初期化・競合待ちのどこで失敗したかを示す。
 既存の長時間イメージビルドは事前に `nas rebuild` で済ませる手順を案内する。
-supervisor はコンテナの終了確認と broker の故障を監視する。
 強制終了時にも既存の外部ネットワーク隔離を維持し、許可外の直通経路へ切り替えない。
 
 `session.multiplex` による対話端末の attach はこの起動経路では行わない。
@@ -170,8 +171,9 @@ profile を黙って弱い構成へ書き換えず、拒否理由と該当設定
 既存の proxy による通信制御、HostExec の exec / control socket 分離、出力マスクを
 維持する。秘密フレームはホスト専用とし、終了時に削除する。
 ホスト Docker socket、privileged、危険な capability、管理領域を覆う追加 mount は拒否する。
-Docker inspect で mount の source/target/RO、image、UID 方針、network、capability、
-security options、env と管理ラベルを照合する。差分には env の値を表示しない。
+拒否は profile の検証 (`init` / `up`) と mount の計画時に行う。起動後に Docker inspect で
+実構成を計画と突き合わせ直すことはしない。同じ Compose 定義から Docker が起動する以上、
+再検査は同じ入力を二度読むだけで、検出できる差分を増やさない。
 
 VS Code Server・拡張の導入・認証で必要な通信先は実測してから設定例へ反映する。
 不明な通信先を広いワイルドカードで許可しない。
@@ -183,7 +185,7 @@ IDE MCP、Git 認証の自動転送、自動ポート転送、ブラウザ連携
 | 場所 | 責務 |
 | --- | --- |
 | `src/cli/devcontainer.ts` | 引数、利用手順、結果表示。domain client を呼ぶ |
-| `src/domain/devcontainer/` | init/up/status/down、所有記録、排他、常駐プロセス管理 |
+| `src/domain/devcontainer/` | init/up/status/down、登録情報、排他、分離プロセスの起動と停止 |
 | `src/stages/launch/` | 最終計画、Docker / Compose 変換、Compose セッションの生存期間 |
 | `src/cli.ts` の pipeline builder | 共通の準備と起動先の選択。通常 CLI の順序を維持 |
 | `src/docker/embed/` | 初期化完了通知、環境適用、非 root ランチャー |
@@ -195,12 +197,12 @@ domain / stage service は Effect の Tag・Live・Fake を持ち、I/O の薄�
 
 ## 検証と完了条件
 
-1. Unit: CLI 分岐、Compose の値保持、拒否設定、既存起動との同値性、状態遷移、
-   同時 up、失敗時回収、別世代を消さないこと、環境の一度だけの適用。
+1. Unit: CLI 分岐、Compose の値保持、拒否設定、既存起動との同値性、セッション記録、
+   同時 up、失敗時回収、環境の一度だけの適用。
 2. Integration: 実ファイルの排他・原子的更新・symlink 拒否、実子プロセスの終了、
    `docker compose config` と inspect の一致、実コンテナの初期化と再接続。
 3. 拒否試験: 入口ファイルの改変、余分な mount / network / capability、
-   proxy env を外した通信、古い socket、broker 停止、コンテナ置換。
+   proxy env を外した通信、古い socket。
 4. 実機: バージョンを記録した VS Code / Dev Containers / Claude 拡張で、初回接続、
    チャット・差分・ターミナル、別ウィンドウ、再接続、down 後の再起動、認証状態を確認。
 5. 変更後チェック: formatting、lint、型検査、unit を行い、最後に full suite を一度実行。
