@@ -56,6 +56,14 @@ export function describeDevcontainerSharing(
           : "destinations outside the allowlist are denied",
     },
   ];
+  // The store mount is decided by the mount probes, which the profile cannot
+  // see — "auto" means the disclosure can only promise the conditional form.
+  if (profile.nix.enable !== false && profile.nix.mountSocket)
+    disclosures.push({
+      topic: "nix",
+      detail:
+        "host /nix store and daemon socket, read-write, when the host has Nix",
+    });
   const rules = profile.hostexec?.rules.length ?? 0;
   disclosures.push({
     topic: "host commands",
