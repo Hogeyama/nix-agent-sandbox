@@ -221,6 +221,30 @@
           '';
         };
 
+        # contrib/vscode-nas-approval はホスト側 VS Code に入れる拡張。
+        # vsce package はファイルを zip するだけで完結するが、npm 不在の
+        # ビルドサンドボックスで依存解決を試みないよう --no-dependencies が必須。
+        # package.json に repository が無いと対話プロンプトで止まるため
+        # フラグで黙らせる。LICENSE はリポジトリのものを同梱済み。
+        vscodeApprovalVersion =
+          (builtins.fromJSON (builtins.readFile ./contrib/vscode-nas-approval/package.json)).version;
+        vscodeNasApproval = pkgs.stdenv.mkDerivation {
+          pname = "nas-approval";
+          version = vscodeApprovalVersion;
+          src = ./contrib/vscode-nas-approval;
+          nativeBuildInputs = [ pkgs.vsce ];
+          dontConfigure = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            vsce package --no-dependencies --allow-missing-repository \
+              --out nas-approval-${vscodeApprovalVersion}.vsix
+          '';
+          installPhase = ''
+            mkdir -p $out
+            cp nas-approval-*.vsix $out/
+          '';
+        };
+
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
         nasAssets = pkgs.runCommand "nas-assets" { } ''
@@ -331,6 +355,7 @@
           maskfs-bundled = maskfsBundled;
           mask-filter = maskFilter;
           sumi = sumi;
+          vscode-nas-approval = vscodeNasApproval;
         };
 
         devShells.default = pkgs.mkShell {

@@ -4,6 +4,24 @@ Routes nas Dev Container approval requests (hostexec / network) into the
 attached VS Code window. Active only when `vscode.env.remoteName` is
 `dev-container` and the workspace is registered with `nas devcontainer`.
 
+## Install (release vsix)
+
+```sh
+curl -fsSLo /tmp/nas-approval.vsix https://github.com/Hogeyama/nix-agent-sandbox/releases/download/vscode-nas-approval-latest/nas-approval.vsix
+code --install-extension /tmp/nas-approval.vsix
+```
+
+This URL always points to the newest release. To pin a version, download the
+versioned `nas-approval-<version>.vsix` asset from a `vscode-nas-approval-v*`
+tag instead (the extension is released separately from nas).
+
+## Install (nix build)
+
+```sh
+nix build github:Hogeyama/nix-agent-sandbox#vscode-nas-approval
+code --install-extension result/nas-approval-*.vsix
+```
+
 ## Install (nix / home-manager)
 
 ```nix
@@ -14,13 +32,6 @@ programs.vscode.extensions = [
     src = <path to>/contrib/vscode-nas-approval;
   })
 ];
-```
-
-## Install (vsix)
-
-```sh
-bun x @vscode/vsce package --no-dependencies   # produces nas-approval-0.1.0.vsix
-code --install-extension nas-approval-0.1.0.vsix
 ```
 
 ## Install (manual)

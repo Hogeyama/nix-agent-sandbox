@@ -1,0 +1,130 @@
+name: Release vscode-nas-approval
+
+# vscode-nas-approval is released separately from nas. To release:
+#   1. set contrib/vscode-nas-approval/VERSION and the "version" field of
+#      contrib/vscode-nas-approval/package.json, and add a matching
+#      "## [X.Y.Z]" section to contrib/vscode-nas-approval/CHANGELOG.md
+#   2. commit, then push the tag vscode-nas-approval-vX.Y.Z
+# Releases are created with --latest=false so /releases/latest keeps pointing
+# at nas. The same vsix is also uploaded to the rolling
+# "vscode-nas-approval-latest" release under the fixed asset name
+# nas-approval.vsix, whose download URL the README uses so it never needs
+# editing.
+
+on:
+  push:
+    tags:
+      - "vscode-nas-approval-v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag, VERSION, package.json and changelog agree
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(tr -d '\n' < contrib/vscode-nas-approval/VERSION)"
+          if [ "vscode-nas-approval-v${version}" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match contrib/vscode-nas-approval/VERSION ($version)"
+            exit 1
+          fi
+          pkg_version="$(jq -r .version contrib/vscode-nas-approval/package.json)"
+          if [ "$pkg_version" != "$version" ]; then
+            echo "::error::contrib/vscode-nas-approval/package.json version ($pkg_version) does not match VERSION ($version)"
+            exit 1
+          fi
+          if ! grep -q "^## \[${version}\]" contrib/vscode-nas-approval/CHANGELOG.md; then
+            echo "::error::contrib/vscode-nas-approval/CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710
+
+      - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
+
+      - name: Build vsix
+        run: nix build .#vscode-nas-approval --out-link result-vsix --print-build-logs
+
+      - name: Prepare artifact
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          cp -L "result-vsix/nas-approval-${VERSION}.vsix" .
+          # Fixed name for the rolling vscode-nas-approval-latest release.
+          cp -L "result-vsix/nas-approval-${VERSION}.vsix" nas-approval.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-nas-approval-${{ github.ref_name }}
+          path: |
+            nas-approval-${{ needs.verify.outputs.version }}.vsix
+            nas-approval.vsix
+
+  release:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' contrib/vscode-nas-approval/CHANGELOG.md > notes.md
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "vscode-nas-approval ${VERSION}" \
+            --notes-file notes.md \
+            --latest=false \
+            "nas-approval-${VERSION}.vsix"
+
+      - name: Update the rolling vscode-nas-approval-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          title="vscode-nas-approval latest (${VERSION})"
+          notes="Always the newest vscode-nas-approval release, currently ${VERSION}. Use the ${TAG} release to pin this version."
+          if gh release view vscode-nas-approval-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload vscode-nas-approval-latest --repo "$GITHUB_REPOSITORY" --clobber \
+              nas-approval.vsix
+            gh release edit vscode-nas-approval-latest --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes"
+            # Keep the tag on the commit the assets were built from, so it never
+            # holds on to an older or rewritten commit.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/vscode-nas-approval-latest" -f sha="$GITHUB_SHA" -F force=true
+          else
+            gh release create vscode-nas-approval-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes "$notes" \
+              --latest=false \
+              nas-approval.vsix
+          fi
