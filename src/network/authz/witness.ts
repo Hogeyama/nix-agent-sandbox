@@ -294,6 +294,7 @@ function documentFor(
     operations: [operation],
     rootFields: [rootField],
     argumentValues: {},
+    unresolvedArguments: [],
   };
   return {
     at: a.at,

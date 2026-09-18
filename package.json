@@ -49,6 +49,7 @@
     "babel-preset-solid": "^1.9",
     "bun-types": "latest",
     "bun2nix": "latest",
+    "graphql": "^16.14.2",
     "parse5": "^7.3.0",
     "typescript": "^6.0.2"
   }

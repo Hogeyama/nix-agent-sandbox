@@ -309,6 +309,7 @@ const REQUEST_BODIES: readonly RequestBody[] = [
         operations: ["query"],
         rootFields: ["f"],
         argumentValues: { login: ["v1"] },
+        unresolvedArguments: [],
       },
     },
   },
@@ -320,6 +321,7 @@ const REQUEST_BODIES: readonly RequestBody[] = [
         operations: ["mutation"],
         rootFields: ["g"],
         argumentValues: { login: ["v2"] },
+        unresolvedArguments: [],
       },
     },
   },
@@ -331,6 +333,20 @@ const REQUEST_BODIES: readonly RequestBody[] = [
         operations: ["query", "mutation"],
         rootFields: ["f", "g"],
         argumentValues: {},
+        unresolvedArguments: [],
+      },
+    },
+  },
+  // login が変数で与えられ解決できない。login を縛る条件は判定不能になる。
+  {
+    kind: "json",
+    value: { query: DOCUMENT_TEXT },
+    documents: {
+      "/query": {
+        operations: ["query"],
+        rootFields: ["f"],
+        argumentValues: {},
+        unresolvedArguments: ["login"],
       },
     },
   },
@@ -338,7 +354,12 @@ const REQUEST_BODIES: readonly RequestBody[] = [
     kind: "json",
     value: { q2: DOCUMENT_TEXT },
     documents: {
-      "/q2": { operations: ["query"], rootFields: ["f"], argumentValues: {} },
+      "/q2": {
+        operations: ["query"],
+        rootFields: ["f"],
+        argumentValues: {},
+        unresolvedArguments: [],
+      },
     },
   },
 ];

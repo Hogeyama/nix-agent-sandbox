@@ -144,6 +144,7 @@ describe("matchIntersectionWitness", () => {
           // 制約された引数は置かない。引数を持たない document は
           // 「その引数が現れるなら値はこの集合」という条件を満たす。
           argumentValues: {},
+          unresolvedArguments: [],
         },
       },
     });

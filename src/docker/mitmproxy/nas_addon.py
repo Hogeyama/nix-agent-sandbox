@@ -2235,6 +2235,336 @@ def _evaluate_body_match_with_diagnostic(
     return ("false" if determined_false else "true"), None
 
 
+# GraphQL document facts.
+#
+# Mirrors src/network/authz/graphql.ts, which is the reference the parity
+# tests hold this against. A document yields no facts ("unparseable") when:
+#
+# - parse fails (syntax error, or the parser's own recursion runs out)
+# - it has more tokens than the rule's maxNodes (parse max_tokens)
+# - its depth exceeds the rule's maxDepth
+# - it has no operation (fragments only): a server cannot execute it, so a
+#   gate has no reason to let it through quietly
+# - it spreads an undefined fragment, or fragment spreads form a cycle
+#
+# Depth is the deepest nesting of SelectionSet / ListValue / ObjectValue
+# nodes counted from the document (depth 0), continuing through any other
+# node kinds in between. The three kinds exist with the same shape in
+# graphql-js and graphql-core, which is what keeps the two counts equal:
+# `query { a { b } }` is 2 and `{ f(x: {a: [1]}) }` is 3.
+#
+# Every walk here is iterative. The parser is recursive descent and can
+# still raise RecursionError on a deeply nested document before maxDepth is
+# measured; that is caught and treated like a syntax error.
+
+_GRAPHQL_DEPTH_NODES = (
+    graphql.language.SelectionSetNode,
+    graphql.language.ListValueNode,
+    graphql.language.ObjectValueNode,
+)
+
+_NO_GRAPHQL_VARIABLES = object()
+
+
+class _GraphqlParsed:
+    """The variable-independent part of one parsed document.
+
+    Kept in the per-request memo under (text, max_tokens). maxDepth and the
+    variables differ between rules and `at` positions, so they are applied
+    on each lookup rather than baked into the cached value."""
+
+    __slots__ = (
+        "depth", "valid", "operations", "root_fields", "arguments",
+    )
+
+    def __init__(self, depth, valid, operations, root_fields, arguments):
+        self.depth = depth
+        self.valid = valid
+        self.operations = operations
+        self.root_fields = root_fields
+        # (name, value node) for every argument node, in source order.
+        self.arguments = arguments
+
+
+def _graphql_children(node) -> list:
+    children = []
+    for key in node.keys:
+        if key == "loc":
+            continue
+        value = getattr(node, key, None)
+        if isinstance(value, graphql.language.Node):
+            children.append(value)
+        elif isinstance(value, (list, tuple)):
+            children.extend(
+                child for child in value
+                if isinstance(child, graphql.language.Node)
+            )
+    return children
+
+
+def _walk_graphql_definition(definition):
+    """Return (depth, argument nodes, fragment spread names) under one
+    definition. A definition itself is not a depth node, so walking each
+    definition from 0 equals walking the document from 0."""
+    deepest = 0
+    arguments = []
+    spreads = []
+    stack = [(definition, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, _GRAPHQL_DEPTH_NODES):
+            depth += 1
+            if depth > deepest:
+                deepest = depth
+        if isinstance(node, graphql.language.ArgumentNode):
+            arguments.append(node)
+        elif isinstance(node, graphql.language.FragmentSpreadNode):
+            spreads.append(node.name.value)
+        for child in _graphql_children(node):
+            stack.append((child, depth))
+    # graphql-core's node `keys` do not follow source order (a field lists
+    # its directives before its arguments), so order by source position to
+    # get document order the way graphql-js's visitor yields it.
+    arguments.sort(key=lambda argument: argument.loc.start)
+    return deepest, arguments, spreads
+
+
+def _graphql_spreads_are_valid(
+    all_spreads: list, fragment_spreads: dict
+) -> bool:
+    """Every spread names a defined fragment and the spread graph between
+    fragments is acyclic, whether or not an operation reaches the cycle."""
+    for name in all_spreads:
+        if name not in fragment_spreads:
+            return False
+    visiting, done = 1, 2
+    state = {}
+    for root in fragment_spreads:
+        if state.get(root) == done:
+            continue
+        state[root] = visiting
+        stack = [[root, 0]]
+        while stack:
+            frame = stack[-1]
+            edges = fragment_spreads.get(frame[0], [])
+            if frame[1] >= len(edges):
+                state[frame[0]] = done
+                stack.pop()
+                continue
+            following = edges[frame[1]]
+            frame[1] += 1
+            following_state = state.get(following)
+            if following_state == visiting:
+                return False
+            if following_state is None:
+                state[following] = visiting
+                stack.append([following, 0])
+    return True
+
+
+def _graphql_root_fields(operations: list, fragments: dict) -> list:
+    """Field names directly under each operation, expanding root inline
+    fragments and fragment spreads (each fragment at most once). Fragments
+    deeper than the root are not expanded: they name no root field."""
+    fields = {}
+    expanded = set()
+    stack = [
+        [operation.selection_set.selections, 0]
+        for operation in reversed(operations)
+    ]
+    while stack:
+        frame = stack[-1]
+        if frame[1] >= len(frame[0]):
+            stack.pop()
+            continue
+        selection = frame[0][frame[1]]
+        frame[1] += 1
+        if isinstance(selection, graphql.language.FieldNode):
+            fields[selection.name.value] = None
+        elif isinstance(selection, graphql.language.InlineFragmentNode):
+            stack.append([selection.selection_set.selections, 0])
+        elif isinstance(selection, graphql.language.FragmentSpreadNode):
+            name = selection.name.value
+            if name in expanded:
+                continue
+            expanded.add(name)
+            fragment = fragments.get(name)
+            if fragment is not None:
+                stack.append([fragment.selection_set.selections, 0])
+    return list(fields)
+
+
+def _parse_graphql_document(text: str, max_tokens: int):
+    """Parse and summarise one document; None when it does not parse."""
+    try:
+        document = graphql.parse(text, max_tokens=max_tokens)
+    except (graphql.GraphQLError, RecursionError):
+        return None
+
+    depth = 0
+    arguments = []
+    all_spreads = []
+    operations = []
+    fragments = {}
+    fragment_spreads = {}
+    for definition in document.definitions:
+        definition_depth, definition_arguments, spreads = (
+            _walk_graphql_definition(definition)
+        )
+        depth = max(depth, definition_depth)
+        arguments.extend(definition_arguments)
+        all_spreads.extend(spreads)
+        if isinstance(definition, graphql.language.OperationDefinitionNode):
+            operations.append(definition)
+        elif isinstance(definition, graphql.language.FragmentDefinitionNode):
+            fragments[definition.name.value] = definition
+            fragment_spreads[definition.name.value] = spreads
+
+    valid = bool(operations) and _graphql_spreads_are_valid(
+        all_spreads, fragment_spreads
+    )
+    return _GraphqlParsed(
+        depth=depth,
+        valid=valid,
+        # The shorthand `{ ... }` parses as a query operation definition.
+        operations=list(dict.fromkeys(
+            operation.operation.value for operation in operations
+        )),
+        root_fields=(
+            _graphql_root_fields(operations, fragments) if valid else []
+        ),
+        arguments=[
+            (argument.name.value, argument.value) for argument in arguments
+        ],
+    )
+
+
+def _resolve_graphql_argument(value, variables) -> Optional[str]:
+    """A string literal is its value; `$v` is variables[v] when that is a
+    string. Every other literal and every unresolvable variable is None."""
+    if isinstance(value, graphql.language.StringValueNode):
+        return value.value
+    if not isinstance(value, graphql.language.VariableNode):
+        return None
+    if not isinstance(variables, dict):
+        return None
+    resolved = variables.get(value.name.value, _POINTER_MISSING)
+    return resolved if type(resolved) is str else None
+
+
+def _parse_graphql_facts(
+    text: str, limits: dict, variables=_NO_GRAPHQL_VARIABLES,
+    memo: Optional[dict] = None,
+) -> Optional[dict]:
+    """Facts of one document under one rule's limits, or None.
+
+    `memo` is a dict owned by one request and keyed by (text, max_tokens):
+    rules nearly always share their limits, so one request parses each
+    document once. It must not outlive the request, so that body-derived
+    strings are not kept in the process."""
+    max_tokens = limits["maxNodes"]
+    key = (text, max_tokens)
+    if memo is not None and key in memo:
+        parsed = memo[key]
+    else:
+        parsed = _parse_graphql_document(text, max_tokens)
+        if memo is not None:
+            memo[key] = parsed
+    if parsed is None or parsed.depth > limits["maxDepth"]:
+        return None
+    if not parsed.valid:
+        return None
+
+    argument_values = {}
+    unresolved = {}
+    for name, value in parsed.arguments:
+        resolved = _resolve_graphql_argument(value, variables)
+        if resolved is None:
+            unresolved[name] = None
+            continue
+        argument_values.setdefault(name, {})[resolved] = None
+    return {
+        "operations": list(parsed.operations),
+        "rootFields": list(parsed.root_fields),
+        "argumentValues": {
+            name: list(values) for name, values in argument_values.items()
+        },
+        "unresolvedArguments": list(unresolved),
+    }
+
+
+def _graphql_variables_for(root, at: str):
+    """The `variables` member of the object that carries the document at
+    `at` (the GraphQL-over-HTTP `{query, variables}` shape). A document at
+    the root has no sibling and so no variables."""
+    if at == "" or not at.startswith("/"):
+        return _NO_GRAPHQL_VARIABLES
+    parent = at[:at.rfind("/")]
+    found = _resolve_json_pointer(root, parent + "/variables")
+    return _NO_GRAPHQL_VARIABLES if found is _POINTER_MISSING else found
+
+
+def _graphql_facts_at(root, at: str, limits: dict, memo: Optional[dict]):
+    """(target, facts) for the document at `at`. target is _POINTER_MISSING
+    when nothing is there; facts is None unless the target is a string that
+    yields facts."""
+    target = _resolve_json_pointer(root, at)
+    if type(target) is not str:
+        return target, None
+    return target, _parse_graphql_facts(
+        target, limits, _graphql_variables_for(root, at), memo
+    )
+
+
+def _graphql_satisfies(condition: dict, facts: dict) -> str:
+    indeterminate = False
+    determined_false = False
+
+    allowed_operations = condition["operations"]
+    if not all(op in allowed_operations for op in facts["operations"]):
+        determined_false = True
+    root_fields = condition.get("rootFields")
+    if root_fields is not None:
+        if not all(field in root_fields for field in facts["rootFields"]):
+            determined_false = True
+    # "Where an argument of this name appears, its value is in this set."
+    # A named argument with an unresolvable occurrence is indeterminate, not
+    # false: false would let a broken variable drop the request to a broader
+    # rule.
+    for name, allowed in (condition.get("arguments") or {}).items():
+        if name in facts["unresolvedArguments"]:
+            indeterminate = True
+            continue
+        observed = facts["argumentValues"].get(name)
+        if observed is None:
+            continue
+        if not all(value in allowed for value in observed):
+            determined_false = True
+
+    if indeterminate:
+        return "indeterminate"
+    return "false" if determined_false else "true"
+
+
+def _evaluate_graphql(
+    condition: dict, parsed_body, limits: dict, memo: Optional[dict]
+) -> str:
+    """Three-valued evaluation of a graphql body condition.
+
+    `condition` carries `at`, `operations`, and optionally `rootFields`
+    (None: unconstrained) and `arguments` (name -> allowed strings). A
+    missing target is false; a target that is not a document with facts is
+    indeterminate."""
+    target, facts = _graphql_facts_at(
+        parsed_body, condition["at"], limits, memo
+    )
+    if target is _POINTER_MISSING:
+        return "false"
+    if facts is None:
+        return "indeterminate"
+    return _graphql_satisfies(condition, facts)
+
+
 def _body_truth_table(
     document: dict, host: str, port: int, method: str, path: str,
     body_kind: str, body_size: Optional[int], parsed_body=None,

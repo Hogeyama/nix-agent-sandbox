@@ -95,6 +95,8 @@ export interface GraphqlDocument {
   readonly rootFields: readonly string[];
   /** 引数名 → document 中に現れたその引数の値の全体。 */
   readonly argumentValues: Readonly<Record<string, readonly string[]>>;
+  /** 値を文字列に解決できなかった出現を 1 つ以上持つ引数名。 */
+  readonly unresolvedArguments: readonly string[];
 }
 
 export type HostPattern =

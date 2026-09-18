@@ -1261,6 +1261,10 @@
     url = "https://registry.npmjs.org/github-slugger/-/github-slugger-2.0.0.tgz";
     hash = "sha512-IaOQ9puYtjrkq7Y0Ygl9KDZnrf/aiUJYUpVf89y8kyaxbRG7Y1SrX/jaumrv81vc61+kiMempujsM3Yw7w5qcw==";
   };
+  "graphql@16.14.2" = fetchurl {
+    url = "https://registry.npmjs.org/graphql/-/graphql-16.14.2.tgz";
+    hash = "sha512-Chq1s4CY7jmh8gO2qvLIJyfCDIN+EHLFW/9iShnp1z8FjBQMoodWP1kDC36VAMXXIvAjj4ARa7ntfAV2BrjsbA==";
+  };
   "h3@1.15.11" = fetchurl {
     url = "https://registry.npmjs.org/h3/-/h3-1.15.11.tgz";
     hash = "sha512-L3THSe2MPeBwgIZVSH5zLdBBU90TOxarvhK9d04IDY2AmVS8j2Jz2LIWtwsGOU3lu2I5jCN7FNvVfY2+XyF+mg==";

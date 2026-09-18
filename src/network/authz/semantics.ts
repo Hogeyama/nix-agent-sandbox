@@ -133,29 +133,44 @@ function evaluateGraphql(
     // 対象が存在しないなら偽。存在するのに document として読めないなら判定不能。
     return found === undefined ? "false" : "indeterminate";
   }
-  return satisfiesDocument(condition, document) ? "true" : "false";
+  return satisfiesDocument(condition, document);
 }
 
 function satisfiesDocument(
   condition: NormalizedGraphql,
   document: GraphqlDocument,
-): boolean {
+): Truth {
+  let indeterminate = false;
+  let determinedFalse = false;
+
   if (!document.operations.every((op) => condition.operations.includes(op))) {
-    return false;
+    determinedFalse = true;
   }
   const rootFields = condition.rootFields;
   if (rootFields !== null) {
-    if (!document.rootFields.every((field) => rootFields.includes(field)))
-      return false;
+    if (!document.rootFields.every((field) => rootFields.includes(field))) {
+      determinedFalse = true;
+    }
   }
   // 「この名前の引数が現れるなら、その値はこの集合に含まれる」。引数が 1 つも
-  // 現れない document では制約が空になるので真である。
+  // 現れない document では制約が空になるので真である。名指しした引数が 1 つ
+  // でも解決不能なら判定不能である — 偽に倒すと、壊れた変数を送るだけでより
+  // 広いルールへ落とせる fail-open になる。
   for (const [name, allowed] of condition.argumentValues) {
+    if (document.unresolvedArguments.includes(name)) {
+      indeterminate = true;
+      continue;
+    }
     const observed = document.argumentValues[name];
     if (observed === undefined) continue;
-    if (!observed.every((value) => allowed.includes(value))) return false;
+    if (!observed.every((value) => allowed.includes(value))) {
+      determinedFalse = true;
+    }
   }
-  return true;
+
+  // 判定不能を偽より優先する。真になれない候補で評価を打ち切らせるためである。
+  if (indeterminate) return "indeterminate";
+  return determinedFalse ? "false" : "true";
 }
 
 export function resolvePointer(

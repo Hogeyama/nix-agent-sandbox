@@ -132,10 +132,13 @@ describe("graphql 条件の意味", () => {
     operations: readonly ("query" | "mutation")[],
     rootFields: readonly string[],
     argumentValues: Record<string, readonly string[]>,
+    unresolvedArguments: readonly string[] = [],
   ): RequestBody => ({
     kind: "json",
     value: { query: "..." },
-    documents: { "/query": { operations, rootFields, argumentValues } },
+    documents: {
+      "/query": { operations, rootFields, argumentValues, unresolvedArguments },
+    },
   });
 
   test("すべての operation と root field が集合に含まれるときだけ真になる", () => {
@@ -181,6 +184,41 @@ describe("graphql 条件の意味", () => {
         ),
       ),
     ).toBe("false");
+  });
+
+  test("条件が名指しする引数が解決不能なら判定不能である", () => {
+    // 偽に倒すと、壊れた変数を送るだけでより広いルールへ落とせる fail-open
+    // になる。判定不能は偽より優先するので、別の側面が偽でも打ち切る。
+    expect(
+      evaluateMatch(
+        match,
+        request(
+          withDocument(["query"], ["organization"], {}, ["login"]),
+          "/graphql",
+        ),
+      ),
+    ).toBe("indeterminate");
+    expect(
+      evaluateMatch(
+        match,
+        request(
+          withDocument(["mutation"], ["other"], {}, ["login"]),
+          "/graphql",
+        ),
+      ),
+    ).toBe("indeterminate");
+  });
+
+  test("条件が名指ししない引数の解決不能は判定に関与しない", () => {
+    expect(
+      evaluateMatch(
+        match,
+        request(
+          withDocument(["query"], ["organization"], {}, ["first"]),
+          "/graphql",
+        ),
+      ),
+    ).toBe("true");
   });
 
   test("at の対象が document として読めないなら判定不能である", () => {
