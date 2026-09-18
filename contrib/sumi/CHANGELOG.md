@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.2.0] - 2026-09-18
+
 ### Changed
 
 - `sumi scan` now registers verified credential masks in user settings, allowing sandboxed Bash to read files with secret values and their copies replaced. Rescans preserve user metadata and unverified paths, report skips and removed masks, and restore settings if saving ownership fails. Authentication destinations remain user-configured.
