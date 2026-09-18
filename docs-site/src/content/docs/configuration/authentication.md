@@ -84,14 +84,18 @@ agentState {
 署名をホストへ移譲する場合は、`gpg` の呼び出しのうち通す形を hostexec のルールで固定します。次は `git commit -S` が出す形だけを許す例です。
 
 ```pkl
-new {
-  id = "gpg-git-sign"
-  match {
-    argv0 = "gpg"
-    argRegex = "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$"
+hostexec = new HostExecConfig {
+  rules {
+    new {
+      id = "gpg-git-sign"
+      match {
+        argv0 = "gpg"
+        argRegex = "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$"
+      }
+      cwd { mode = "workspace-or-session-tmp" }
+      approval = "allow"
+    }
   }
-  cwd { mode = "workspace-or-session-tmp" }
-  approval = "allow"
 }
 ```
 

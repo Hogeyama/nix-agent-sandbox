@@ -34,7 +34,7 @@ profiles {
     (d/'prior.pkl').write_text(prefix+'profiles { ["claude"] = (super["claude"]) {\n'+blocks[0]+'\n} }')
     source='amends "prior.pkl"\nprofiles { ["claude"] {\n'+b+'\n} }'
    else:
-    profile='codex' if path.stem=='authentication' and i==2 else 'claude'
+    profile='codex' if path.stem=='authentication' and i==3 else 'claude'
     source=prefix+'profiles { ["'+profile+'"] = (super["'+profile+'"]) {\n'+b+'\n} }'
    v=evalp(source,label);count+=1
    if path.stem=='profiles' and i==1:
