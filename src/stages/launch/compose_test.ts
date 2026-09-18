@@ -158,16 +158,64 @@ test("compileCompose: rejects plans without a named network", () => {
   ).toThrow("named network");
 });
 
-test("compileCompose: rejects container network mode", () => {
-  expect(() =>
-    compileCompose(
-      makePlan({
-        network: { mode: "container", containerName: "nas-dind-sidecar" },
-      }),
-      "nas-agent-test",
-      "nas-test",
-    ),
-  ).toThrow("container network mode");
+test("compileCompose: container network mode emits network_mode and drops namespace-owner fields", () => {
+  const document = compileCompose(
+    makePlan({
+      network: { mode: "container", containerName: "nas-dind-sidecar" },
+      extraHosts: [{ host: "nas-envoy", ip: "172.20.0.2" }],
+    }),
+    "nas-agent-test",
+    "nas-test",
+  );
+
+  expect(document.services.agent.network_mode).toEqual(
+    "container:nas-dind-sidecar",
+  );
+  // A joiner cannot declare networks or add hosts: the namespace owner
+  // (the DinD sidecar) carries the session network and /etc/hosts entries.
+  expect(document.services.agent.networks).toBeUndefined();
+  expect(document.services.agent.extra_hosts).toBeUndefined();
+  expect(document.networks).toBeUndefined();
+});
+
+test("compileCompose: named volumes become volume mounts plus external declarations", () => {
+  const document = compileCompose(
+    makePlan({
+      mounts: [{ source: "/work", target: "/work" }],
+      namedVolumes: [
+        { name: "nas-dind-tmp-x", target: "/tmp/nas-shared" },
+        { name: "nas-ro-cache", target: "/cache", readOnly: true },
+      ],
+    }),
+    "nas-agent-test",
+    "nas-test",
+  );
+
+  expect(document.services.agent.volumes).toEqual([
+    {
+      type: "bind",
+      source: "/work",
+      target: "/work",
+      read_only: false,
+      bind: { create_host_path: false },
+    },
+    {
+      type: "volume",
+      source: "nas-dind-tmp-x",
+      target: "/tmp/nas-shared",
+      read_only: false,
+    },
+    {
+      type: "volume",
+      source: "nas-ro-cache",
+      target: "/cache",
+      read_only: true,
+    },
+  ]);
+  expect(document.volumes).toEqual({
+    "nas-dind-tmp-x": { external: true },
+    "nas-ro-cache": { external: true },
+  });
 });
 
 test("compileCompose: rejects remaining Docker run arguments", () => {

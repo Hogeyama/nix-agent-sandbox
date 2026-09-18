@@ -63,6 +63,11 @@ export function compileLaunchOpts(
     args.push("-v", `${mount.source}:${mount.target}${suffix}`);
   }
 
+  for (const volume of plan.namedVolumes) {
+    const suffix = volume.readOnly ? ":ro" : "";
+    args.push("-v", `${volume.name}:${volume.target}${suffix}`);
+  }
+
   if (plan.network) {
     if (plan.network.mode === "container") {
       args.push("--network", `container:${plan.network.containerName}`);

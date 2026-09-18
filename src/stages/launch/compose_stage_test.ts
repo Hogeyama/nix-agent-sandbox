@@ -29,6 +29,7 @@ const container: ContainerPlan = {
   },
   network: { mode: "network", name: "nas-net" },
   extraHosts: [],
+  namedVolumes: [],
   extraRunArgs: [],
   command: { agentCommand: ["claude"], extraArgs: ["already"] },
   labels: {},

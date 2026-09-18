@@ -19,6 +19,7 @@ test("createRebuildInitialState: seeds workspace and container slices", () => {
     image: "nas-sandbox",
     workDir: "/repo/worktree",
     mounts: [],
+    namedVolumes: [],
     env: { static: {}, dynamicOps: [] },
     extraHosts: [],
     extraRunArgs: [],

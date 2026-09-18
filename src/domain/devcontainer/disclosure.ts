@@ -64,6 +64,12 @@ export function describeDevcontainerSharing(
       detail:
         "host /nix store and daemon socket, read-write, when the host has Nix",
     });
+  if (profile.docker.enable)
+    disclosures.push({
+      topic: "docker",
+      detail:
+        "rootless Docker-in-Docker sidecar shares the session network namespace; inner containers' published ports appear on localhost; the daemon and its data are removed on down",
+    });
   const rules = profile.hostexec?.rules.length ?? 0;
   disclosures.push({
     topic: "host commands",

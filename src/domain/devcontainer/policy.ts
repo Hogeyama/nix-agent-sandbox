@@ -8,8 +8,6 @@ export function validateDevcontainerProfile(
   const errors: string[] = [];
   if (profile.agent !== "claude")
     errors.push("agent must be claude for devcontainer sessions");
-  if (profile.docker.enable)
-    errors.push("docker.enable must be false for devcontainer sessions");
   if (profile.worktree)
     errors.push(
       "worktree is unsupported; create the worktree first, then run init there",

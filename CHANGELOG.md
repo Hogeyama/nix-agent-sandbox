@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- **Dev Container Docker**: accept `docker.enable = true` for devcontainer sessions. The agent container joins the session-scoped rootless DinD sidecar's network namespace via Compose `network_mode: container:` and shares the DinD temp volume, so Docker and Testcontainers work over `tcp://127.0.0.1:2375` the same way as in normal CLI sessions.
+
 ### Changed
 
 - **Agent settings**: mount the host agent settings files read-only over the writable state directory — `~/.claude/settings.json` and `settings.local.json`, `~/.codex/config.toml`, `~/.copilot/config.json` and `mcp-config.json`. They declare hooks and MCP servers that run on the host, so an agent that rewrote them got host code execution the next time the user started that agent outside the container. Set `agentState.protectSettings = false` to keep them writable. `~/.claude.json` is not covered: Claude rewrites it while running. See [the host credentials guide](docs-site/src/content/docs/configuration/authentication.md).

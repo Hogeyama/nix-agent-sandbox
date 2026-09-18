@@ -111,12 +111,27 @@ export type ObservabilityState =
  *
  * `kind` is intentionally absent: production only uses bind mounts and adding
  * `kind` would allow a silent encoding fallback bug (volume treated as bind).
- * Re-introduce with a matching encoder if named volumes are ever needed.
+ * Named volumes are kept out of this union entirely — they live in
+ * `ContainerPlan.namedVolumes`, which has its own encoders.
  */
 export interface MountSpec {
   readonly source: string;
   readonly target: string;
   /** `true` to mount read-only (camelCase avoids clash with TS keyword). */
+  readonly readOnly?: boolean;
+}
+
+/**
+ * A named Docker volume mount (e.g. the DinD shared tmp volume).
+ *
+ * Kept separate from MountSpec: `source` here is a volume name, not a host
+ * path, and treating one as a bind mount silently creates a host directory
+ * instead of failing. Both launch compilers encode this type explicitly.
+ */
+export interface NamedVolumeMount {
+  readonly name: string;
+  readonly target: string;
+  /** `true` to mount read-only. */
   readonly readOnly?: boolean;
 }
 
@@ -169,6 +184,7 @@ export interface ContainerPlan {
   readonly image: string;
   readonly workDir: string;
   readonly mounts: readonly MountSpec[];
+  readonly namedVolumes: readonly NamedVolumeMount[];
   readonly env: EnvPlan;
   readonly network?: NetworkAttachment;
   readonly extraHosts: readonly ExtraHost[];

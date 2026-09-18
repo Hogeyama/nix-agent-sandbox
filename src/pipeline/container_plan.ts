@@ -10,6 +10,7 @@ import type {
   DynamicEnvOp,
   ExtraHost,
   MountSpec,
+  NamedVolumeMount,
   NetworkAttachment,
 } from "./state.ts";
 
@@ -21,7 +22,7 @@ import type {
  * A partial update to a ContainerPlan.
  *
  * Merge semantics (applied by mergeContainerPlan):
- *   - mounts, env.dynamicOps, extraRunArgs, extraHosts → append
+ *   - mounts, namedVolumes, env.dynamicOps, extraRunArgs, extraHosts → append
  *   - env.static, labels                               → key-merge (patch wins)
  *   - network, command, image, workDir, shmSize        → replace (undefined = keep base)
  */
@@ -29,6 +30,7 @@ export interface ContainerPatch {
   readonly image?: string;
   readonly workDir?: string;
   readonly mounts?: readonly MountSpec[];
+  readonly namedVolumes?: readonly NamedVolumeMount[];
   readonly env?: {
     readonly static?: Readonly<Record<string, string>>;
     readonly dynamicOps?: readonly DynamicEnvOp[];
@@ -54,6 +56,7 @@ export function emptyContainerPlan(
     image,
     workDir,
     mounts: [],
+    namedVolumes: [],
     env: { static: {}, dynamicOps: [] },
     extraHosts: [],
     extraRunArgs: [],
@@ -82,6 +85,10 @@ export function mergeContainerPlan(
       patch.mounts !== undefined
         ? [...base.mounts, ...patch.mounts]
         : base.mounts,
+    namedVolumes:
+      patch.namedVolumes !== undefined
+        ? [...base.namedVolumes, ...patch.namedVolumes]
+        : base.namedVolumes,
     env: {
       static:
         patch.env?.static !== undefined

@@ -45,6 +45,7 @@ const container: ContainerPlan = {
   env: { static: { NAS_UID: "1000", NAS_USER: "tester" }, dynamicOps: [] },
   network: { mode: "network", name: "nas-net" },
   extraHosts: [],
+  namedVolumes: [],
   extraRunArgs: [],
   command: { agentCommand: ["claude"], extraArgs: ["$literal"] },
   labels: {

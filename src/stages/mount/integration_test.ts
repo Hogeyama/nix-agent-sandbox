@@ -155,6 +155,7 @@ test("MountStage: propagates log level from prior container env", async () => {
         image: "nas-sandbox",
         workDir,
         mounts: [],
+        namedVolumes: [],
         env: { static: { NAS_LOG_LEVEL: "warn" }, dynamicOps: [] },
         extraHosts: [],
         extraRunArgs: [],

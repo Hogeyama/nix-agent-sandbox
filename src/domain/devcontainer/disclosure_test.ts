@@ -87,6 +87,21 @@ test("extra mounts are listed with their direction", () => {
   ]);
 });
 
+test("an enabled DinD sidecar is disclosed with its lifetime", () => {
+  const profile = devcontainerProfile();
+  const found = describeDevcontainerSharing(profile).find(
+    (entry) => entry.topic === "docker",
+  );
+  expect(found).toBeUndefined();
+
+  const detailText = detail(
+    { ...profile, docker: { ...profile.docker, enable: true } },
+    "docker",
+  );
+  expect(detailText).toContain("rootless");
+  expect(detailText).toContain("removed on down");
+});
+
 test("the credentials shared from the host home are always disclosed", () => {
   // These outlive the container, which is the part a Dev Container user has
   // no reason to assume.

@@ -1356,6 +1356,7 @@ test("MountStage: planner emits container patch with structured mounts and dynam
         image: "slice-image",
         workDir: "/slice/workdir",
         mounts: [{ source: "/existing/src", target: "/existing/dst" }],
+        namedVolumes: [],
         env: {
           static: { EXISTING_ENV: "1" },
           dynamicOps: [],
@@ -1516,6 +1517,7 @@ test("MountStage run(): creates directories via MountSetupService and returns re
       dynamicOps: [],
     },
     extraHosts: [],
+    namedVolumes: [],
     extraRunArgs: [],
     command: {
       agentCommand: [
@@ -1568,6 +1570,7 @@ test("MountStage run(): preserves structured base container state", async () => 
         image: "slice-image",
         workDir: "/slice/workdir",
         mounts: [{ source: "/structured/src", target: "/structured/dst" }],
+        namedVolumes: [],
         env: {
           static: { STRUCTURED_ONLY: "1" },
           dynamicOps: [],

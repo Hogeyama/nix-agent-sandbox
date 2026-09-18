@@ -404,12 +404,13 @@ test("DindStage: planner merges into existing container slice and overrides a st
       dynamicOps: [],
     },
     extraHosts: [],
-    extraRunArgs: [
-      "--shm-size",
-      "2g",
-      "-v",
-      "nas-dind-tmp-abcdef12-3456-7890-abcd-ef1234567890:/tmp/nas-shared",
+    namedVolumes: [
+      {
+        name: "nas-dind-tmp-abcdef12-3456-7890-abcd-ef1234567890",
+        target: "/tmp/nas-shared",
+      },
     ],
+    extraRunArgs: ["--shm-size", "2g"],
     network: {
       mode: "container",
       containerName: "nas-dind-abcdef12-3456-7890-abcd-ef1234567890",
@@ -550,9 +551,8 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(result.container?.env.static.DOCKER_HOST).toEqual(
     "tcp://127.0.0.1:2375",
   );
-  expect(result.container?.extraRunArgs).toEqual([
-    "-v",
-    "nas-dind-tmp-test-session-1234:/tmp/nas-shared",
+  expect(result.container?.namedVolumes).toEqual([
+    { name: "nas-dind-tmp-test-session-1234", target: "/tmp/nas-shared" },
   ]);
 
   expect(teardownCalls.length).toEqual(0);

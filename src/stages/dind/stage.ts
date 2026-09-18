@@ -316,7 +316,9 @@ function buildContainerState(
   return mergeContainerPlan(input.container, {
     network: { mode: "container", containerName: config.containerName },
     env: { static: staticEnv },
-    extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],
+    namedVolumes: [
+      { name: config.sharedTmpVolume, target: SHARED_TMP_MOUNT_PATH },
+    ],
   });
 }
 

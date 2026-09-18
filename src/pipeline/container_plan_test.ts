@@ -15,6 +15,7 @@ function makeBasePlan(overrides?: Partial<ContainerPlan>): ContainerPlan {
     image: "nas-sandbox:latest",
     workDir: "/workspace/project",
     mounts: [],
+    namedVolumes: [],
     env: { static: {}, dynamicOps: [] },
     extraHosts: [],
     extraRunArgs: [],
@@ -56,6 +57,20 @@ test("mergeContainerPlan: mounts are appended", () => {
   expect(result.mounts).toEqual([
     { source: "/a", target: "/a" },
     { source: "/b", target: "/b", readOnly: true },
+  ]);
+});
+
+test("mergeContainerPlan: namedVolumes are appended", () => {
+  const base = makeBasePlan({
+    namedVolumes: [{ name: "vol-a", target: "/a" }],
+  });
+  const patch: ContainerPatch = {
+    namedVolumes: [{ name: "vol-b", target: "/b", readOnly: true }],
+  };
+  const result = mergeContainerPlan(base, patch);
+  expect(result.namedVolumes).toEqual([
+    { name: "vol-a", target: "/a" },
+    { name: "vol-b", target: "/b", readOnly: true },
   ]);
 });
 

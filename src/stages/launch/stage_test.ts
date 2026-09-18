@@ -96,6 +96,7 @@ test("planLaunch: composes launch opts from container slice", () => {
       },
       network: { mode: "network", name: "slice-net", alias: "slice-agent" },
       extraHosts: [],
+      namedVolumes: [],
       extraRunArgs: ["--init"],
       command: {
         agentCommand: ["slice-agent"],
@@ -156,6 +157,7 @@ test("planLaunch: slice contract keeps workdir/network/mounts singular in launch
       env: { static: {}, dynamicOps: [] },
       network,
       extraHosts: [],
+      namedVolumes: [],
       extraRunArgs: ["--init", "--cpus", "2"],
       command: { agentCommand: ["slice-agent"], extraArgs: [] },
       labels: {},
@@ -225,6 +227,7 @@ function makeBasePlan(overrides?: Partial<ContainerPlan>): ContainerPlan {
     image: "nas-sandbox:latest",
     workDir: "/workspace/project",
     mounts: [],
+    namedVolumes: [],
     env: { static: {}, dynamicOps: [] },
     extraHosts: [],
     extraRunArgs: [],
@@ -270,6 +273,28 @@ test("compileLaunchOpts: mounts encoded as -v args in order", () => {
     if (opts.args[i] === "-v") vArgs.push(opts.args[i + 1]);
   }
   expect(vArgs).toEqual(["/src:/work", "/nix:/nix:ro", "/cfg:/etc/cfg"]);
+});
+
+test("compileLaunchOpts: named volumes encoded as -v args after bind mounts", () => {
+  const plan = makeBasePlan({
+    mounts: [{ source: "/src", target: "/work" }],
+    namedVolumes: [
+      { name: "nas-dind-tmp-x", target: "/tmp/nas-shared" },
+      { name: "nas-cache", target: "/cache", readOnly: true },
+    ],
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-x");
+
+  const vArgs: string[] = [];
+  for (let i = 0; i < opts.args.length; i++) {
+    if (opts.args[i] === "-v") vArgs.push(opts.args[i + 1]);
+  }
+  expect(vArgs).toEqual([
+    "/src:/work",
+    "nas-dind-tmp-x:/tmp/nas-shared",
+    "nas-cache:/cache:ro",
+  ]);
 });
 
 test("compileLaunchOpts: dynamic env ops are encoded into NAS_ENV_OPS", () => {
@@ -374,6 +399,7 @@ test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => 
     },
     network: { mode: "network", name: "nas-proxy-net", alias: "nas-agent" },
     extraHosts: [],
+    namedVolumes: [],
     extraRunArgs: ["--shm-size", "2g"],
     command: { agentCommand: ["copilot", "run"], extraArgs: ["--verbose"] },
     labels: { "nas.managed": "true", "nas.kind": "agent" },
