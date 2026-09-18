@@ -1,6 +1,5 @@
 import type { DevcontainerRegistration } from "./types.ts";
 
-/** Forwarding protections beyond these keys require target-version IDE verification. */
 export function renderDevcontainerConfig(
   registration: DevcontainerRegistration,
   remoteUser: string,
@@ -28,7 +27,6 @@ export function renderDevcontainerConfig(
         settings: {
           "claudeCode.claudeProcessWrapper":
             "/usr/local/bin/nas-devcontainer-claude",
-          "remote.autoForwardPorts": false,
         },
       },
     },

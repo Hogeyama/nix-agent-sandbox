@@ -28,7 +28,6 @@ test("managed config uses argv initialize and explicit user, lifetime and Claude
         settings: {
           "claudeCode.claudeProcessWrapper":
             "/usr/local/bin/nas-devcontainer-claude",
-          "remote.autoForwardPorts": false,
         },
       },
     },
