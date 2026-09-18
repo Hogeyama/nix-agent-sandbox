@@ -23,7 +23,6 @@ import {
 } from "../stages/launch.ts";
 import {
   ensureDevcontainerClaudeState,
-  resolveDevcontainerGitMetadata,
   resolveMountProbes,
 } from "../stages/mount.ts";
 import { ensureUiDaemon } from "../ui/daemon.ts";
@@ -95,53 +94,48 @@ export async function runDevcontainerRuntime(
   const host = options.host ?? buildHostEnv();
   const workspace = options.registration.workspace;
   const guard = createStartupGuard(deadlineAt, options.signal);
-  const { probes, mountProbes, gitMetadataPaths, claudeState, buildProbes } =
-    await (async () => {
-      try {
-        const probes = await guard.wait(resolveProbes(host));
-        const mountProbes = await guard.wait(
-          resolveMountProbes(host, options.profile, workspace),
-        );
-        const gitMetadataPaths = await guard.wait(
-          resolveDevcontainerGitMetadata(workspace),
-        );
-        const claudeState = await guard.wait(
-          ensureDevcontainerClaudeState(host.home),
-        );
-        const buildProbes = await guard.wait(
-          resolveBuildProbes("nas-sandbox", {
-            timeoutMs: Math.max(1, deadlineAt - Date.now()),
-            signal: guard.signal,
+  const { probes, mountProbes, claudeState, buildProbes } = await (async () => {
+    try {
+      const probes = await guard.wait(resolveProbes(host));
+      const mountProbes = await guard.wait(
+        resolveMountProbes(host, options.profile, workspace),
+      );
+      const claudeState = await guard.wait(
+        ensureDevcontainerClaudeState(host.home),
+      );
+      const buildProbes = await guard.wait(
+        resolveBuildProbes("nas-sandbox", {
+          timeoutMs: Math.max(1, deadlineAt - Date.now()),
+          signal: guard.signal,
+        }),
+      );
+
+      const networkNotify = resolveNotifyBackend(
+        options.profile.network.pendingNotify,
+      );
+      const hostexecNotify = resolveNotifyBackend(
+        options.profile.hostexec?.prompt.notify ?? "auto",
+      );
+      if (networkNotify === "desktop" || hostexecNotify === "desktop")
+        checkNotifySend();
+      if (options.config.ui.enable) {
+        await guard.wait(
+          ensureUiDaemon({
+            port: options.config.ui.port,
+            idleTimeout: options.config.ui.idleTimeout,
           }),
         );
-
-        const networkNotify = resolveNotifyBackend(
-          options.profile.network.pendingNotify,
-        );
-        const hostexecNotify = resolveNotifyBackend(
-          options.profile.hostexec?.prompt.notify ?? "auto",
-        );
-        if (networkNotify === "desktop" || hostexecNotify === "desktop")
-          checkNotifySend();
-        if (options.config.ui.enable) {
-          await guard.wait(
-            ensureUiDaemon({
-              port: options.config.ui.port,
-              idleTimeout: options.config.ui.idleTimeout,
-            }),
-          );
-        }
-        return {
-          probes,
-          mountProbes,
-          gitMetadataPaths,
-          claudeState,
-          buildProbes,
-        };
-      } finally {
-        guard.close();
       }
-    })();
+      return {
+        probes,
+        mountProbes,
+        claudeState,
+        buildProbes,
+      };
+    } finally {
+      guard.close();
+    }
+  })();
   process.env.NAS_SESSION_ID = options.sessionId;
 
   const input = {
@@ -160,7 +154,6 @@ export async function runDevcontainerRuntime(
     devcontainerMounts: {
       ...claudeState,
       vscodeDir: paths.vscodeDir,
-      gitMetadataPaths,
     },
   });
   const composeStage = createComposeStage(input, {

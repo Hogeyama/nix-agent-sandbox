@@ -1711,9 +1711,8 @@ const ideMounts = {
   claudeDir: "/state:$x/claude",
   claudeJson: "/state:$x/claude.json",
   vscodeDir: "/state:$x/vscode",
-  gitMetadataPaths: [] as string[],
 };
-test("IDE mounts dedicated state and managed config without automatic host git config", () => {
+test("IDE mounts dedicated state and managed config", () => {
   const { input, mountProbes } = makeInput({
     mountProbes: makeMountProbes({ gitConfigExists: true }),
   });
@@ -1731,13 +1730,22 @@ test("IDE mounts dedicated state and managed config without automatic host git c
     target: `${TEST_WORK_DIR}/.devcontainer`,
     readOnly: true,
   });
-  expect(
-    plan.containerPatch.mounts?.some(
-      (m) => m.source === `${TEST_HOME}/.config/git`,
-    ),
-  ).toBe(false);
 });
-test("IDE exposes only masked worktree and Git metadata subtrees", () => {
+
+// IDE launches used to withhold this mount even when a plain CLI launch would
+// include it; that gap is intentionally closed so both paths behave the same.
+test("IDE mounts host git config same as a plain CLI launch", () => {
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitConfigExists: true }),
+  });
+  const plan = planMount(input, mountProbes, ideMounts);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: `${TEST_HOME}/.config/git`,
+    target: `${CONTAINER_HOME}/.config/git`,
+    readOnly: true,
+  });
+});
+test("IDE shares the main repository root of a worktree, same as a plain CLI launch", () => {
   const workDir = "/repo/worktrees/one";
   const { input, mountProbes } = makeInput({
     slices: { workspace: { workDir, imageName: "nas", maskedRoot: "/masked" } },
@@ -1746,42 +1754,31 @@ test("IDE exposes only masked worktree and Git metadata subtrees", () => {
       localConfigPaths: [`${workDir}/.nas/config.pkl`],
     }),
   });
-  const plan = planMount(input, mountProbes, {
-    ...ideMounts,
-    gitMetadataPaths: ["/repo/.git"],
-  });
-  expect(plan.containerPatch.mounts).toContainEqual({
-    source: "/masked/worktrees/one",
-    target: workDir,
-  });
-  expect(plan.containerPatch.mounts).toContainEqual({
-    source: "/masked/.git",
-    target: "/repo/.git",
-  });
-  expect(plan.containerPatch.mounts).toContainEqual({
+  const ide = planMount(input, mountProbes, ideMounts);
+  const cli = planMount(input, mountProbes);
+  const repoMount = { source: "/masked", target: "/repo" };
+  expect(ide.containerPatch.mounts).toContainEqual(repoMount);
+  expect(cli.containerPatch.mounts).toContainEqual(repoMount);
+  expect(ide.containerPatch.mounts).toContainEqual({
     source: "/masked/worktrees/one/.nas",
     target: `${workDir}/.nas`,
     readOnly: true,
   });
-  expect(plan.containerPatch.mounts?.some((m) => m.target === "/repo")).toBe(
-    false,
-  );
 });
-test("IDE refuses external worktree when the active mask view cannot cover it", () => {
+
+test("IDE with maskfs refuses a linked worktree outside the main repository root", () => {
+  const workDir = "/repo-linked/worktrees/one";
   const { input, mountProbes } = makeInput({
-    slices: {
-      workspace: {
-        workDir: "/external/one",
-        imageName: "nas",
-        maskedRoot: "/masked",
-      },
-    },
-    mountProbes: makeMountProbes({ gitWorktreeMainRoot: "/repo" }),
-  });
-  expect(() =>
-    planMount(input, mountProbes, {
-      ...ideMounts,
-      gitMetadataPaths: ["/repo/.git"],
+    slices: { workspace: { workDir, imageName: "nas", maskedRoot: "/masked" } },
+    mountProbes: makeMountProbes({
+      gitWorktreeMainRoot: "/repo",
+      localConfigPaths: [`${workDir}/.nas/config.pkl`],
     }),
-  ).toThrow("beneath the repository root");
+  });
+  // workDir が mountSource (/repo) の外にあるとマスク済みビューに対応する
+  // ソースが無い。`..` で maskedRoot を脱出したゴミパスを bind する代わりに
+  // 明示的なエラーにする。
+  expect(() => planMount(input, mountProbes, ideMounts)).toThrow(
+    "beneath the mounted root",
+  );
 });

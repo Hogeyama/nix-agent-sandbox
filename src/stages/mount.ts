@@ -2,10 +2,7 @@
  * mount ステージ — barrel re-export
  */
 
-export {
-  ensureDevcontainerClaudeState,
-  resolveDevcontainerGitMetadata,
-} from "./mount/mount_probes.ts";
+export { ensureDevcontainerClaudeState } from "./mount/mount_probes.ts";
 export {
   type MountDirectoryEntry,
   MountSetupService,

@@ -56,9 +56,6 @@ const DEFAULT_CONTAINER_USER = "nas";
 
 export interface DevcontainerMountInput extends ClaudeStatePaths {
   readonly vscodeDir: string;
-  /** Canonical Git metadata roots resolved before the pipeline; validate the
-   * assembled mounts with the Dev Container host-path policy before launch. */
-  readonly gitMetadataPaths: readonly string[];
 }
 
 export interface MountPlanDirectory {
@@ -181,35 +178,22 @@ export function planMount(
   // NAS_LOG_LEVEL is set in initialPrior.envVars by cli.ts
 
   // ワークスペースマウント
-  // 通常 CLI の git worktree は本体リポジトリルートまで共有する。
-  // IDE は同じ MaskFs ビューから workspace と必要な Git metadata だけを共有する。
+  // git worktree は本体リポジトリルートまで共有する。
   // maskfs 有効時はバインドソースだけマスク済みビューに差し替える
   // (コンテナ内パスは実パスのまま維持する)
   const mountSource = resolveWorkspaceMountSource(workspace, probes);
-  const ideSource = (target: string): string => {
+  const viewSource = (target: string): string => {
     if (!workspace.maskedRoot) return target;
     if (!isPathWithin(target, mountSource)) {
       throw new Error(
-        "[nas] IDE with active MaskFs requires the worktree and Git metadata beneath the repository root; use a worktree beneath the repository root",
+        "[nas] devcontainer with active MaskFs requires the workDir beneath the mounted root (a linked worktree outside its repository root is not covered)",
       );
     }
     return path.join(workspace.maskedRoot, path.relative(mountSource, target));
   };
-  const bindSource = devcontainer
-    ? ideSource(path.resolve(workspace.workDir))
-    : (workspace.maskedRoot ?? mountSource);
   const containerWorkDir = path.resolve(workspace.workDir);
-  addMount(
-    args,
-    mounts,
-    bindSource,
-    devcontainer ? containerWorkDir : mountSource,
-  );
+  addMount(args, mounts, workspace.maskedRoot ?? mountSource, mountSource);
   if (devcontainer) {
-    for (const metadata of devcontainer.gitMetadataPaths) {
-      if (!isPathWithin(metadata, containerWorkDir))
-        addMount(args, mounts, ideSource(metadata), metadata);
-    }
     addMount(
       args,
       mounts,
@@ -219,7 +203,7 @@ export function planMount(
     addMount(
       args,
       mounts,
-      ideSource(`${containerWorkDir}/.devcontainer`),
+      viewSource(`${containerWorkDir}/.devcontainer`),
       `${containerWorkDir}/.devcontainer`,
       true,
     );
@@ -239,9 +223,9 @@ export function planMount(
   // IDE は .nas 全体を RO にし、有効なマスク済みビューも維持する。
   for (const configPath of probes.localConfigPaths) {
     if (devcontainer) {
-      if (isPathWithin(configPath, containerWorkDir)) {
+      if (isPathWithin(configPath, mountSource)) {
         const configDir = path.dirname(configPath);
-        addMount(args, mounts, ideSource(configDir), configDir, true);
+        addMount(args, mounts, viewSource(configDir), configDir, true);
       }
     } else if (isPathWithin(configPath, mountSource)) {
       addMount(args, mounts, configPath, configPath, true);
@@ -305,7 +289,7 @@ export function planMount(
   }
 
   // git 設定マウント
-  if (!devcontainer && probes.gitConfigExists) {
+  if (probes.gitConfigExists) {
     addMount(
       args,
       mounts,
