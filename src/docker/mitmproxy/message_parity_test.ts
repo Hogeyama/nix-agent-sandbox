@@ -13,6 +13,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { ResolvedDocument } from "../../network/authz/resolve.ts";
@@ -24,6 +25,11 @@ import {
 
 const python3 = Bun.which("python3");
 const addonDir = path.dirname(new URL(import.meta.url).pathname);
+
+// message_parity.py は nas_addon を import し、nas_addon は ./vendor の
+// graphql-core を必要とする。vendor/ は gitignore 済みの生成物なので、
+// `bun run vendor` 未実行の checkout では ModuleNotFoundError で落ちる。
+const vendoredDeps = existsSync(path.join(addonDir, "vendor", "graphql"));
 
 const MASK_VALUES = ["s3cret-value"];
 
@@ -75,7 +81,7 @@ async function messagesFor(requestBody: string): Promise<{
   return JSON.parse(stdout);
 }
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "the broker accepts the authorization truth table the addon builds",
   async () => {
     const document = await shippedDocument();
@@ -108,7 +114,7 @@ async function shippedDocument(): Promise<ResolvedDocument> {
   ) as ResolvedDocument;
 }
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "the broker accepts the review query the addon builds",
   async () => {
     const document = await shippedDocument();
@@ -134,7 +140,7 @@ test.skipIf(!python3)(
   },
 );
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "the broker accepts the outcome report the addon builds",
   async () => {
     const document = await shippedDocument();
@@ -148,7 +154,7 @@ test.skipIf(!python3)(
   },
 );
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "a value too long to keep whole still fits what the broker accepts",
   async () => {
     // 値はボディ由来なので、長さはリクエストが選ぶ。addon は畳んで digest を
@@ -163,7 +169,7 @@ test.skipIf(!python3)(
   },
 );
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "a body the policy accepts produces no violation to confirm",
   async () => {
     const { result, outcome } = await messagesFor(body([]));

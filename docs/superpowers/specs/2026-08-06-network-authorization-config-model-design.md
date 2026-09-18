@@ -1486,6 +1486,14 @@ pip を使わずに配れる。proxy は `runtimeDir` を `/nas-network` に bin
 `sys.path` に自分のディレクトリを足して `import graphql` する。ディレクトリごと配る形は
 `ui/dist` に前例がある。自前イメージのビルドも、実行時のネットワークアクセスも要らない。
 
+vendor ツリーそのものは git に入れない。`vendor/` は gitignore し、版は
+`src/docker/mitmproxy/vendor-requirements.txt` の 1 行（`graphql-core==3.2.11`）だけで
+固定する。開発時は `bun run vendor`（uv で `vendor/` に展開する）で作り、Nix のビルドは
+同じピンを読んで PyPI の sdist を取得し、`vendor/graphql/` と `vendor/LICENSE-graphql-core`
+を組み立てる（`flake.nix` の `graphqlCorePin`）。どちらの経路でも addon から見える配置は
+同じなので、実行時の契約（`runtimeDir` へのコピー、`sys.path`、vendor ツリーを含む
+ハッシュ）は変わらない。
+
 実装で手当てが要る点を挙げる。
 
 - `computeAddonHash` は `nas_addon.py` 単体をハッシュし、コンテナのラベル

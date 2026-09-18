@@ -79,6 +79,7 @@ describe("HostExecSetupServiceLive", () => {
       rmdir: () => Effect.die(new Error("unexpected rmdir call")),
       stat: () => Effect.die(new Error("unexpected stat call")),
       exists: () => Effect.die(new Error("unexpected exists call")),
+      readdir: () => Effect.die(new Error("unexpected readdir call")),
       readFile: () => Effect.die(new Error("unexpected readFile call")),
       rename: () => Effect.die(new Error("unexpected rename call")),
       mkdtemp: () => Effect.die(new Error("unexpected mkdtemp call")),

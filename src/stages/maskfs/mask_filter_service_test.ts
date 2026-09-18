@@ -146,6 +146,7 @@ async function runCapturing(
       rename: () => Effect.void,
       stat: () => Effect.succeed({} as any),
       exists: () => Effect.succeed(false),
+      readdir: () => Effect.succeed([]),
       mkdtemp: () => Effect.succeed("/tmp/fake"),
     }),
   );
@@ -386,6 +387,7 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
         rename: () => Effect.void,
         stat: () => Effect.succeed({} as any),
         exists: () => Effect.succeed(false),
+        readdir: () => Effect.succeed([]),
         mkdtemp: () => Effect.succeed("/tmp/fake"),
       }),
     );
@@ -460,6 +462,7 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
         rename: () => Effect.void,
         stat: () => Effect.succeed({} as any),
         exists: () => Effect.succeed(false),
+        readdir: () => Effect.succeed([]),
         mkdtemp: () => Effect.succeed("/tmp/fake"),
       }),
     );

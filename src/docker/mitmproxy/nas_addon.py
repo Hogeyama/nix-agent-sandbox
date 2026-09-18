@@ -21,6 +21,15 @@ from typing import Optional
 
 from mitmproxy import connection, http
 
+# graphql-core is vendored under ./vendor (the proxy image carries no pip
+# install step, so the addon resolves it relative to this file). The same
+# relative layout holds in the repository, the runtime dir that
+# copyAddonScript populates, and the bundled asset tree.
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+)
+import graphql  # noqa: E402
+
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
 BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")

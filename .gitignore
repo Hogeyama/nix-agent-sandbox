@@ -15,3 +15,7 @@ zig-out/
 .zig-cache/
 __pycache__/
 *.pyc
+# Populated by `bun run vendor` (uv pip install --target, see
+# src/docker/mitmproxy/vendor-requirements.txt); the nix build fetches the
+# same sdist instead.
+src/docker/mitmproxy/vendor/

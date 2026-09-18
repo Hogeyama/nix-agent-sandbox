@@ -13,6 +13,7 @@
 
 import { expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import type { AuthzConfig } from "../../network/authz/config.ts";
 import { normalizeBody } from "../../network/authz/relation.ts";
@@ -28,6 +29,11 @@ import type { RequestTransport } from "../../network/protocol.ts";
 
 const python3 = Bun.which("python3");
 const addonDir = path.dirname(new URL(import.meta.url).pathname);
+
+// decide_parity.py は nas_addon を import し、nas_addon は ./vendor の
+// graphql-core を必要とする。vendor/ は gitignore 済みの生成物なので、
+// `bun run vendor` 未実行の checkout では ModuleNotFoundError で落ちる。
+const vendoredDeps = existsSync(path.join(addonDir, "vendor", "graphql"));
 
 interface BodyCase {
   readonly name: string;
@@ -566,7 +572,7 @@ function decisionLine(
   ].join("|");
 }
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "the addon reproduces the resolver's decision on every axis of selection",
   async () => {
     const resolved = resolveAuthzConfig(CONFIG);
@@ -658,7 +664,7 @@ test.skipIf(!python3)(
   },
 );
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "overflowing JSON numbers have the same candidate truth on host and addon",
   async () => {
     const resolved = resolveAuthzConfig({

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   chmod,
   copyFile,
+  cp,
   mkdir,
   mkdtemp,
   rm,
@@ -35,6 +36,12 @@ import {
 
 const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const canBindMount = SHARED_TMP !== undefined || !process.env.DOCKER_HOST;
+// nas_addon.py は ./vendor を sys.path に足して graphql を import する。
+// vendor/ は gitignore 済みの生成物なので、`bun run vendor` 未実行の
+// checkout では setupAddonFixture の cp が ENOENT で落ちる。
+const vendoredDeps = existsSync(
+  new URL("./vendor/graphql", import.meta.url).pathname,
+);
 const dockerAvailable = (() => {
   try {
     return Bun.spawnSync(["docker", "info"], {
@@ -780,6 +787,16 @@ async function setupAddonFixture(
       new URL("./nas_addon.py", import.meta.url).pathname,
       paths.addonScriptPath,
     );
+    // The addon imports the vendored graphql-core relative to its own path;
+    // a runtime dir with nas_addon.py alone fails to load the script at all.
+    // `dereference` matters: in a git worktree `vendor/` is a symlink into the
+    // main checkout, and copying it as a symlink puts a dangling link inside
+    // the container's bind mount, where the addon dies on `import graphql`.
+    await cp(
+      new URL("./vendor", import.meta.url).pathname,
+      path.join(paths.runtimeDir, "vendor"),
+      { recursive: true, dereference: true },
+    );
     await writeFile(
       `${paths.authzDir}/${sessionId}.json`,
       JSON.stringify(document),
@@ -830,59 +847,65 @@ async function teardownFixture(fixture?: AddonFixture): Promise<void> {
   await rm(fixture.auditDir, { recursive: true, force: true }).catch(() => {});
 }
 
-test("setupAddonFixture cleans partial state when setup fails after broker start", async () => {
-  const setupError = new Error("injected post-broker setup failure");
-  let partial: { runtimeDir: string; broker: SessionBroker } | undefined;
-  let thrown: unknown;
+test.skipIf(!vendoredDeps)(
+  "setupAddonFixture cleans partial state when setup fails after broker start",
+  async () => {
+    const setupError = new Error("injected post-broker setup failure");
+    let partial: { runtimeDir: string; broker: SessionBroker } | undefined;
+    let thrown: unknown;
 
-  try {
     try {
-      await setupAddonFixture(
-        "nas-addon-partial-setup-",
-        RESOLVED_DOCUMENT,
-        { workspace: ["SECRET123"] },
-        {
-          afterBrokerStarted: async (state) => {
-            partial = state;
-            throw setupError;
+      try {
+        await setupAddonFixture(
+          "nas-addon-partial-setup-",
+          RESOLVED_DOCUMENT,
+          { workspace: ["SECRET123"] },
+          {
+            afterBrokerStarted: async (state) => {
+              partial = state;
+              throw setupError;
+            },
           },
-        },
-      );
-    } catch (error) {
-      thrown = error;
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBe(setupError);
+      expect(partial).toBeDefined();
+      expect(existsSync(partial?.runtimeDir ?? "")).toBe(false);
+    } finally {
+      if (partial) {
+        await partial.broker.close().catch(() => {});
+        await rm(partial.runtimeDir, { recursive: true, force: true });
+      }
     }
+  },
+);
 
-    expect(thrown).toBe(setupError);
-    expect(partial).toBeDefined();
-    expect(existsSync(partial?.runtimeDir ?? "")).toBe(false);
-  } finally {
-    if (partial) {
-      await partial.broker.close().catch(() => {});
-      await rm(partial.runtimeDir, { recursive: true, force: true });
+test.skipIf(!vendoredDeps)(
+  "setupAddonFixture installs the shared resolved document",
+  async () => {
+    const fixture = await setupAddonFixture("nas-addon-review-rule-");
+    try {
+      const document = await Bun.file(
+        `${fixture.paths.authzDir}/${fixture.sessionId}.json`,
+      ).json();
+
+      // addon が読むファイルと broker が握るルールが同一であることが、
+      // このスイートの前提そのもの。
+      expect(document).toEqual(RESOLVED_DOCUMENT);
+      expect(document.contractVersion).toBe(1);
+    } finally {
+      await teardownFixture(fixture);
     }
-  }
-});
-
-test("setupAddonFixture installs the shared resolved document", async () => {
-  const fixture = await setupAddonFixture("nas-addon-review-rule-");
-  try {
-    const document = await Bun.file(
-      `${fixture.paths.authzDir}/${fixture.sessionId}.json`,
-    ).json();
-
-    // addon が読むファイルと broker が握るルールが同一であることが、
-    // このスイートの前提そのもの。
-    expect(document).toEqual(RESOLVED_DOCUMENT);
-    expect(document.contractVersion).toBe(1);
-  } finally {
-    await teardownFixture(fixture);
-  }
-});
+  },
+);
 
 const WEBSOCKET_TARGET_PORT = 8091;
 const WEBSOCKET_TARGET_IDLE_TIMEOUT_SECONDS = 15;
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: default-denied scope returns 403 before upstream handshake",
   async () => {
     const resources = protocolResources("nas-ws-denied");
@@ -921,7 +944,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: one handshake approval releases multiple messages without another pending item",
   async () => {
     const resources = protocolResources("nas-ws-review");
@@ -975,7 +998,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: masks an authorized client message before upstream echo",
   async () => {
     const resources = protocolResources("nas-ws-mask");
@@ -1022,7 +1045,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: forbidden secret is never delivered and leaves the session fail-closed",
   async () => {
     const resources = protocolResources("nas-ws-forbid");
@@ -1075,7 +1098,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
 
 const ANTHROPIC_TARGET_PORT = 8090;
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic bodyless GET: masks URL and headers before forwarding",
   async () => {
     const networkName = `nas-addon-net-${crypto.randomUUID().slice(0, 8)}`;
@@ -1188,7 +1211,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic /v1/messages: masks secret in JSON body before forwarding",
   async () => {
     // `api.anthropic.com` を denied-IP 判定に引っかからない upstream に
@@ -1307,7 +1330,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic: unknown content block is held for review and denied closed",
   async () => {
     // 未知の content block type は upstream connect より前に review へ回る。
@@ -1419,7 +1442,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic: blocked endpoint policy is enforced before upstream connect",
   async () => {
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;

@@ -196,8 +196,10 @@ interface GraphqlDocument {
 ### パーサの置き場
 
 - **Python（実行系の正本）**: graphql-core **v3.2.11** を
-  `src/docker/mitmproxy/vendor/graphql/` に vendoring する（sdist の `src/graphql` を
-  そのまま。`vendor/LICENSE-graphql-core` を添える）。`nas_addon.py` は module 先頭で
+  `src/docker/mitmproxy/vendor/graphql/` に置く（sdist の `src/graphql` を
+  そのまま。`vendor/LICENSE-graphql-core` を添える）。**vendor ツリーは git に入れない**:
+  `vendor/` は gitignore し、ピンは `src/docker/mitmproxy/vendor-requirements.txt`、
+  開発時は `bun run vendor`（uv）、Nix は同じピンを `fetchurl` で取得して組み立てる。`nas_addon.py` は module 先頭で
   `sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor"))`
   してから `import graphql` する（起動時 1 回、実測 195ms）。repo 内でテストを走らせる
   ときも同じ相対位置で解決される。
@@ -219,8 +221,9 @@ interface GraphqlDocument {
 - `computeAddonHash` は `nas_addon.py` と vendor ツリーの両方を含めたハッシュにする。
   含めないと、ライブラリを更新しても proxy コンテナが再作成されない（仕様「段階 4」が
   名指しする手当て）。
-- `flake.nix:176` に `cp -r ${self}/src/docker/mitmproxy/vendor $out/docker/mitmproxy/`
-  を足す。`resolveAsset` の仕組み（`NAS_ASSET_DIR`）は変えない。
+- `flake.nix` は repo の `vendor/` を写すのではなく、`vendor-requirements.txt` のピンから
+  sdist を取得して `$out/docker/mitmproxy/vendor/` を組み立てる（`graphqlCorePin`）。
+  `resolveAsset` の仕組み（`NAS_ASSET_DIR`）は変えない。
 
 ## やること
 

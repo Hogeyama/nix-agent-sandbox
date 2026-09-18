@@ -20,7 +20,8 @@
     "docs:build": "astro --root docs-site build && bun scripts/check_docs.ts",
     "docs:preview": "astro --root docs-site preview",
     "bun2nix": "bun2nix -o bun.nix",
-    "benchmark:startup": "bun run scripts/benchmark_startup.ts"
+    "benchmark:startup": "bun run scripts/benchmark_startup.ts",
+    "vendor": "rm -rf src/docker/mitmproxy/vendor && uv pip install --target src/docker/mitmproxy/vendor -r src/docker/mitmproxy/vendor-requirements.txt"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",

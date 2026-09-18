@@ -5,7 +5,7 @@
  * Fake implementation uses an in-memory Map for testing.
  */
 
-import type { Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import { Context, Effect, Layer } from "effect";
 
@@ -39,6 +39,11 @@ export class FsService extends Context.Tag("nas/FsService")<
     readonly rmdir: (path: string) => Effect.Effect<void>;
     readonly stat: (path: string) => Effect.Effect<Stats>;
     readonly exists: (path: string) => Effect.Effect<boolean>;
+    /**
+     * List the entries directly inside a directory (not recursive).
+     * Callers that need a tree walk recurse on `Dirent.isDirectory()`.
+     */
+    readonly readdir: (path: string) => Effect.Effect<Dirent[]>;
     readonly readFile: (path: string) => Effect.Effect<string>;
     readonly rename: (oldPath: string, newPath: string) => Effect.Effect<void>;
     readonly mkdtemp: (prefix: string) => Effect.Effect<string>;
@@ -111,6 +116,12 @@ export const FsServiceLive = Layer.succeed(FsService, {
           },
         ),
       catch: fsError("exists", path),
+    }).pipe(Effect.orDie),
+
+  readdir: (path) =>
+    Effect.tryPromise({
+      try: () => fs.readdir(path, { withFileTypes: true }),
+      catch: fsError("readdir", path),
     }).pipe(Effect.orDie),
 
   readFile: (path) =>
@@ -229,6 +240,53 @@ export function makeFsServiceFake(): {
       }),
 
     exists: (path) => Effect.sync(() => store.has(path)),
+
+    readdir: (path) =>
+      Effect.sync(() => {
+        const self = store.get(path);
+        if (self && !self.isDirectory) {
+          // fs.readdir on a non-directory is ENOTDIR, not an empty list;
+          // returning [] would let a caller mistake a file for an empty
+          // directory and silently skip a tree it meant to walk.
+          throw new Error(`ENOTDIR: ${path}`);
+        }
+        const prefix = path.endsWith("/") ? path : `${path}/`;
+        const names = new Map<
+          string,
+          { isDirectory: boolean; isSymbolicLink: boolean }
+        >();
+        for (const [key, entry] of store) {
+          if (!key.startsWith(prefix)) continue;
+          const rest = key.slice(prefix.length);
+          const slash = rest.indexOf("/");
+          if (slash === -1) {
+            names.set(rest, {
+              isDirectory: !!entry.isDirectory,
+              isSymbolicLink: !!entry.symlinkTarget,
+            });
+          } else {
+            // A deeper descendant implies an intermediate directory even when
+            // no explicit mkdir entry was recorded for it.
+            names.set(rest.slice(0, slash), {
+              isDirectory: true,
+              isSymbolicLink: false,
+            });
+          }
+        }
+        if (names.size === 0 && !self) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return [...names.entries()].map(
+          ([name, { isDirectory, isSymbolicLink }]) =>
+            ({
+              name,
+              parentPath: path,
+              isFile: () => !isDirectory && !isSymbolicLink,
+              isDirectory: () => isDirectory,
+              isSymbolicLink: () => isSymbolicLink,
+            }) as Dirent,
+        );
+      }),
 
     readFile: (path) =>
       Effect.sync(() => {

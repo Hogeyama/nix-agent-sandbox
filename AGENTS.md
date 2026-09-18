@@ -6,6 +6,11 @@ code in this repository.
 ## Quick Start Commands
 
 ```bash
+# Setup (required on a fresh checkout)
+bun install                # Install JS dependencies
+bun run vendor             # Populate src/docker/mitmproxy/vendor/ (gitignored;
+                           # the mitmproxy addon's python tests skip without it)
+
 # Development and testing
 bun run test:unit          # Unit only, no Docker — use this while iterating
 bun run test               # Full suite (src/ + tests/) — run ONCE as the final check
