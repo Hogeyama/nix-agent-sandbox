@@ -129,7 +129,7 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
 - **🟡 部分対応（settings 系のみ RO overlay）**: 状態ディレクトリは RW のまま、実在する設定ファイルだけを
   RO の file bind mount で上乗せする（`src/agents/settings_protection.ts`）。対象は
   `~/.claude/settings.json`・`settings.local.json`、`~/.codex/config.toml`、
-  `~/.copilot/config.json`・`mcp-config.json`。`profile.agentState.protectSettings`（既定 true）で切れる。
+  `~/.copilot/config.json`・`mcp-config.json`。`profile.agentState.protectSettings`（既定 false、opt-in）で有効にする。VS Code 拡張などコンテナ内から設定ファイルに書くツールが RO でエラーになるため既定では無効。
 - **⬜ 残る穴**:
   - **`~/.claude.json` の `mcpServers`** — host で claude 起動時に自動 spawn されるので settings.json の
     hooks と同じ自動実行経路だが、claude が実行中に書き換える（`~/.claude/backups/` に数分間隔の
@@ -140,8 +140,7 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
     「`.git/hooks`/`.git/config` が RW で無保護」と同根。user scope と違い当該リポジトリ限定なので
     severity は低いが未対応。
 - **未検証**: コンテナ内 claude は起動時に一度 `~/.claude/settings.json` を書く（内容は同一）。
-  RO 化で EROFS/EBUSY をどう扱うかは実測していない。壊れる運用があれば
-  `agentState.protectSettings = false` が逃げ道。
+  RO 化で EROFS/EBUSY をどう扱うかは実測していない。VS Code 拡張ではエラーになったため既定を false にした。
 
 ### コンテナ権限ハードニング
 - [ ] `compileLaunchOpts`（`src/stages/launch/stage.ts`）に `--security-opt no-new-privileges` + `--cap-drop ALL` を追加する。

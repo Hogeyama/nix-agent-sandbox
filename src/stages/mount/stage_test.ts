@@ -983,7 +983,13 @@ test("MountStage: agentState.protectSettings reaches the agent mounts", () => {
 
   const mountProbes = makeMountProbes({ agentProbes });
   const protected_ = planMount(
-    makeInput({ profile: makeProfile({ agent: "claude" }), mountProbes }).input,
+    makeInput({
+      profile: makeProfile({
+        agent: "claude",
+        agentState: { protectSettings: true },
+      }),
+      mountProbes,
+    }).input,
     mountProbes,
   );
   expect(protected_.containerPatch.mounts).toContainEqual(roMount);

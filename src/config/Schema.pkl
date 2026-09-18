@@ -106,13 +106,13 @@ class AgentStateConfig {
   /// エージェントに書き換えられると、ユーザが次にホストでエージェントを起動した
   /// 瞬間にホストでの任意コード実行が成立する。
   ///
-  /// 既定では実在する設定ファイルだけを RO の bind mount で上乗せする。
+  /// `true` にすると実在する設定ファイルだけを RO の bind mount で上乗せする。
   /// ワークスペース内の `.claude/settings.json` など、リポジトリ側の設定は
   /// エージェントが編集する対象と同じツリーにあるため保護しない。
   ///
-  /// `false` にするとコンテナ内から設定ファイルを書き換えられるようになる
-  /// 代わりに、この経路が開く。
-  protectSettings: Boolean = true
+  /// 既定は `false`。コンテナ内でこれらのファイルに書き込むツール
+  /// （VS Code 拡張など）が RO のファイルに当たってエラーになるため。
+  protectSettings: Boolean = false
 }
 
 class WorktreeConfig {

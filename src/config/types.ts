@@ -219,7 +219,7 @@ export interface AgentStateConfig {
 }
 
 export const DEFAULT_AGENT_STATE_CONFIG: AgentStateConfig = {
-  protectSettings: true,
+  protectSettings: false,
 };
 
 /** プロファイル */
