@@ -27,6 +27,7 @@ import {
 } from "./store.ts";
 import {
   DevcontainerError,
+  type DevcontainerInputs,
   type DevcontainerRegistration,
   type DevcontainerSessionRecord,
   type DevcontainerStatus,
@@ -51,6 +52,11 @@ export interface DevcontainerLifecycleOptions {
   readonly verifyRegistration?: (
     workspace: string,
   ) => Promise<DevcontainerRegistration>;
+  /** Profile/config load; overridden by tests that have no nas config. */
+  readonly loadInputs?: (
+    workspace: string,
+    profileName: string,
+  ) => Promise<DevcontainerInputs>;
 }
 
 function active(phase: DevcontainerSessionRecord["phase"]): boolean {
@@ -146,6 +152,7 @@ export function makeDevcontainerLifecycle(
   const signalProcess =
     options.signalProcess ?? ((pid, signal) => process.kill(pid, signal));
   const readProcCmdline = options.readProcCmdline ?? readProcCmdlineFile;
+  const loadInputs = options.loadInputs ?? loadDevcontainerInputs;
 
   /** A recycled PID must never be signalled: the argv has to still be ours. */
   const isDevcontainerRuntimePid = async (
@@ -190,12 +197,16 @@ export function makeDevcontainerLifecycle(
       throw new DevcontainerError(
         "devcontainer config is missing; run devcontainer init again",
       );
-    const inputs = await loadDevcontainerInputs(
-      workspace,
-      registration.profileName,
-    );
+    const inputs = await loadInputs(workspace, registration.profileName);
     const errors = validateDevcontainerProfile(inputs.profile);
     if (errors.length) throw new DevcontainerError(errors.join("\n"));
+    // The generated devcontainer.json names agent-specific extensions and
+    // wrapper settings, so a profile whose agent changed since init would
+    // boot a container configured for the wrong agent.
+    if (inputs.profile.agent !== registration.agent)
+      throw new DevcontainerError(
+        `profile agent changed since init (${registration.agent} -> ${inputs.profile.agent}); run devcontainer init again`,
+      );
     return registration;
   };
   const verify = options.verifyRegistration ?? verifyLive;
@@ -229,7 +240,7 @@ export function makeDevcontainerLifecycle(
         throw new DevcontainerError(
           "session must be stopped before init; run devcontainer down",
         );
-      const inputs = await loadDevcontainerInputs(workspace, profileName);
+      const inputs = await loadInputs(workspace, profileName);
       const errors = validateDevcontainerProfile(inputs.profile);
       if (errors.length) throw new DevcontainerError(errors.join("\n"));
 
@@ -238,6 +249,7 @@ export function makeDevcontainerLifecycle(
         workspaceId: devcontainerWorkspaceId(workspace),
         workspace,
         profileName: inputs.profileName,
+        agent: inputs.profile.agent,
         configPath: path.join(configDir, "devcontainer.json"),
         composePath: paths.composeFile,
         stateRoot: paths.stateRoot,

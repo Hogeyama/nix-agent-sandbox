@@ -9,6 +9,7 @@ const registration: DevcontainerRegistration = {
   workspaceId: "a".repeat(64),
   workspace: "/repo",
   profileName: "claude",
+  agent: "claude",
   configPath: "/repo/.devcontainer/devcontainer.json",
   composePath: "/state/compose.json",
   stateRoot: "/state/workspace",

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "../../lib/fs_utils.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
+import { devcontainerProfile } from "./fixtures.ts";
 import {
   makeDevcontainerLifecycle,
   serveDevcontainerRuntime,
@@ -53,6 +54,7 @@ async function makeFixture(): Promise<{
     workspaceId: devcontainerWorkspaceId(workspace),
     workspace,
     profileName: "claude",
+    agent: "claude",
     configPath: path.join(workspace, ".devcontainer", "devcontainer.json"),
     composePath: paths.composeFile,
     stateRoot: paths.stateRoot,
@@ -227,6 +229,68 @@ test("down leaves alone a session claimed while it was stopping", async () => {
 
   expect(dockerCalls.some((call) => call.includes("down"))).toBe(false);
   expect(status?.phase).toBe("starting");
+});
+
+test("verify rejects a profile whose agent changed since init", async () => {
+  const { host, workspace, registration } = await makeFixture();
+  await mkdir(path.dirname(registration.configPath), { recursive: true });
+  await atomicWriteFile(registration.configPath, "{}\n");
+  const lifecycle = makeDevcontainerLifecycle(host, {
+    docker: noDocker as never,
+    loadInputs: async () => ({
+      profile: { ...devcontainerProfile(), agent: "codex" },
+      profileName: registration.profileName,
+      command: ["nas"],
+    }),
+  });
+
+  await expect(lifecycle.verify(workspace)).rejects.toThrow(
+    "profile agent changed since init (claude -> codex)",
+  );
+});
+
+test("verify resolves when the profile agent matches the registration", async () => {
+  const { host, workspace, registration } = await makeFixture();
+  await mkdir(path.dirname(registration.configPath), { recursive: true });
+  await atomicWriteFile(registration.configPath, "{}\n");
+  const paths = resolveDevcontainerPaths(host, workspace);
+  const codexRegistration = { ...registration, agent: "codex" as const };
+  await atomicWriteFile(
+    paths.registrationFile,
+    `${JSON.stringify(codexRegistration)}\n`,
+  );
+  const lifecycle = makeDevcontainerLifecycle(host, {
+    docker: noDocker as never,
+    loadInputs: async () => ({
+      profile: { ...devcontainerProfile(), agent: "codex" },
+      profileName: registration.profileName,
+      command: ["nas"],
+    }),
+  });
+
+  await expect(lifecycle.verify(workspace)).resolves.toEqual(codexRegistration);
+});
+
+test("a registration written without an agent field verifies as claude", async () => {
+  const { host, workspace, registration } = await makeFixture();
+  await mkdir(path.dirname(registration.configPath), { recursive: true });
+  await atomicWriteFile(registration.configPath, "{}\n");
+  // Registrations written before Codex support carry no agent field.
+  const { agent: _agent, ...legacy } = registration;
+  const paths = resolveDevcontainerPaths(host, workspace);
+  await atomicWriteFile(paths.registrationFile, `${JSON.stringify(legacy)}\n`);
+  const lifecycle = makeDevcontainerLifecycle(host, {
+    docker: noDocker as never,
+    loadInputs: async () => ({
+      profile: devcontainerProfile(),
+      profileName: registration.profileName,
+      command: ["nas"],
+    }),
+  });
+
+  await expect(lifecycle.verify(workspace)).resolves.toMatchObject({
+    agent: "claude",
+  });
 });
 
 test("status is null for an unregistered workspace", async () => {

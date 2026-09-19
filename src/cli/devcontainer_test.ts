@@ -13,6 +13,7 @@ const registration: DevcontainerRegistration = {
   workspaceId: "workspace-id",
   workspace: "/work",
   profileName: "claude",
+  agent: "claude",
   configPath: "/work/.devcontainer/devcontainer.json",
   composePath: "/state/compose.json",
   stateRoot: "/state/workspace",

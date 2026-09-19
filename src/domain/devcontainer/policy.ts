@@ -6,8 +6,8 @@ export function validateDevcontainerProfile(
   profile: Profile,
 ): readonly string[] {
   const errors: string[] = [];
-  if (profile.agent !== "claude")
-    errors.push("agent must be claude for devcontainer sessions");
+  if (profile.agent !== "claude" && profile.agent !== "codex")
+    errors.push("agent must be claude or codex for devcontainer sessions");
   if (profile.worktree)
     errors.push(
       "worktree is unsupported; create the worktree first, then run init there",
