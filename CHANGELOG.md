@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- **Dev Container Codex**: `nas devcontainer init --profile codex` generates a `.devcontainer` that installs the `openai.chatgpt` extension and points its `chatgpt.cliExecutable` at an in-container wrapper, which resolves the extension-bundled `codex` binary and re-applies the nas environment (env ops, hostexec, observability `-c` config) before launching the app-server. Host `~/.codex` is shared read-write, with `config.toml` overlaid read-only when `agentState.protectSettings` is on, and `up` refuses to start when the profile's agent changed since `init`. Profile `agentArgs` are filtered to `-c`/`--config` key=value pairs for the app-server launch, and dropped args are reported at `init`. Note: `chatgpt.cliExecutable` is a development-only extension hook, so extension updates may change the contract.
+
 ## [0.18.0] - 2026-09-18
 
 ### Added
