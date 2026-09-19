@@ -66,6 +66,7 @@ export interface ObservabilityStageDeps {
   readonly profile: Pick<Profile, "agent">;
   readonly profileName: string;
   readonly sessionId: string;
+  readonly devcontainer?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +235,7 @@ function runObservability(
       port: handle.port,
       agentCommand: input.container.command.agentCommand,
       extraArgs: input.container.command.extraArgs,
+      devcontainer: deps.devcontainer,
     });
 
     const slice: ObservabilityState = {

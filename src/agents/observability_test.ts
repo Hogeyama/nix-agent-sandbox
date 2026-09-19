@@ -247,6 +247,29 @@ test("buildAgentObservabilityContainerPatch: codex empty command injects codex b
   ]);
 });
 
+test("buildAgentObservabilityContainerPatch: codex devcontainer routes trace config into extraArgs", () => {
+  expect(
+    buildAgentObservabilityContainerPatch({
+      agent: "codex",
+      sessionId: "s",
+      profileName: "p",
+      port: 4318,
+      agentCommand: ["codex"],
+      extraArgs: ["--existing"],
+      devcontainer: true,
+    }),
+  ).toEqual({
+    command: {
+      agentCommand: ["codex"],
+      extraArgs: [
+        "-c",
+        'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+        "--existing",
+      ],
+    },
+  });
+});
+
 test("buildObservabilityEnv: port is rendered into the endpoint URL", () => {
   const env = buildObservabilityEnv({
     agent: "claude",
