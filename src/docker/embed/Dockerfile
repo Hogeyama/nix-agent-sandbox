@@ -29,6 +29,7 @@ COPY devcontainer-env.sh /usr/local/lib/nas/devcontainer-env.sh
 COPY devcontainer-exec.sh /usr/local/bin/nas-devcontainer-exec
 COPY devcontainer-idle.sh /usr/local/bin/nas-devcontainer-idle
 COPY devcontainer-claude.sh /usr/local/bin/nas-devcontainer-claude
+COPY devcontainer-codex.sh /usr/local/bin/nas-devcontainer-codex
 COPY direnv-bootstrap.sh /usr/local/libexec/nas-direnv-bootstrap
 COPY direnv-lib.sh nix-direnv.sh /usr/local/share/nas/
 COPY nix-direnv.LICENSE /usr/local/share/licenses/nix-direnv/LICENSE
@@ -38,7 +39,8 @@ RUN printf '%s  %s\n' \
       '/usr/local/share/nas/nix-direnv.sh' | sha256sum -c - \
   && chmod +x /entrypoint.sh /usr/local/bin/nas-direnv-exec \
     /usr/local/bin/nas-devcontainer-exec /usr/local/bin/nas-devcontainer-idle \
-    /usr/local/bin/nas-devcontainer-claude /usr/local/libexec/nas-direnv-bootstrap
+    /usr/local/bin/nas-devcontainer-claude /usr/local/bin/nas-devcontainer-codex \
+    /usr/local/libexec/nas-direnv-bootstrap
 
 # エージェントバイナリのマウント先
 RUN mkdir -p /usr/local/bin /home /nix

@@ -57,11 +57,15 @@ Codex 拡張の実機接続確認が済むまでは「接続確認済み」と�
 
 wrapper の処理順:
 
-1. 実 codex を解決する。候補は拡張の同梱バイナリのみ:
+1. 実 codex を解決する。候補は拡張の同梱バイナリのみ。拡張は
+   cliExecutable を spawn する際に起動中ビルドの同梱 bin ディレクトリを
+   PATH 末尾へ足すので、まず PATH 上で `*/openai.chatgpt-*/bin/*` に
+   合う末尾側のエントリを使う (glob より正確: 更新で残った旧版や
+   別 channel のディレクトリを拾わない)。PATH で見つからなければ
    `$HOME/.vscode-server/extensions/openai.chatgpt-*/bin/*/codex` を
-   glob し、実行可能なものをバージョンソートした末尾 (最新) を使う。
-   見つからなければ非ゼロで終了して stderr に理由を出す
-   (ホストバイナリは mount しないため fallback は存在しない)。
+   glob し、実行可能なものを拡張 dir 名のバージョンでソートした末尾
+   (最新) を使う。見つからなければ非ゼロで終了して stderr に理由を
+   出す (ホストバイナリは mount しないため fallback は存在しない)。
 2. `/usr/local/lib/nas/devcontainer-env.sh` を source して
    `nas_devcontainer_apply` を実行する。apply は PATH を baseline に
    再設定するため、拡張が末尾へ足した同梱 bin ディレクトリは失われる。

@@ -270,3 +270,182 @@ test.skipIf(!imageBuildable)(
   },
   60_000,
 );
+
+test.skipIf(!imageBuildable)(
+  `nas-devcontainer-codex resolves the bundled binary and forwards agent args${!imageBuildable ? ` (${skipReason})` : ""}`,
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "nas-devcontainer-codex-"));
+    const name = `nas-ide-codex-${crypto.randomUUID()}`;
+    const image = `${name}:test`;
+    const workspace = path.join(root, "workspace");
+    const command = [
+      "/usr/local/bin/nas-devcontainer-idle",
+      "",
+      "space arg",
+      "$(false)",
+    ];
+    try {
+      await mkdir(workspace, { mode: 0o777 });
+      for (const asset of [
+        "entrypoint.sh",
+        "direnv-exec.sh",
+        "devcontainer-env.sh",
+        "devcontainer-exec.sh",
+        "devcontainer-idle.sh",
+        "devcontainer-claude.sh",
+        "devcontainer-codex.sh",
+      ]) {
+        await writeFile(
+          path.join(root, asset),
+          await readFile(new URL(`./embed/${asset}`, import.meta.url)),
+        );
+      }
+      await writeFile(
+        path.join(root, "Dockerfile"),
+        `FROM ${baseImage}\nCOPY entrypoint.sh /entrypoint.sh\nCOPY direnv-exec.sh /usr/local/bin/nas-direnv-exec\nCOPY devcontainer-env.sh /usr/local/lib/nas/devcontainer-env.sh\nCOPY devcontainer-exec.sh /usr/local/bin/nas-devcontainer-exec\nCOPY devcontainer-idle.sh /usr/local/bin/nas-devcontainer-idle\nCOPY devcontainer-claude.sh /usr/local/bin/nas-devcontainer-claude\nCOPY devcontainer-codex.sh /usr/local/bin/nas-devcontainer-codex\nRUN chmod +x /entrypoint.sh /usr/local/bin/nas-*\nENTRYPOINT ["/entrypoint.sh"]\n`,
+      );
+      const build = await run(["docker", "build", "-t", image, root]);
+      expect(build.code, build.stderr).toBe(0);
+      const start = await run([
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        name,
+        "--network",
+        "none",
+        "-v",
+        `${workspace}:${workspace}`,
+        "-w",
+        workspace,
+        "-e",
+        "NAS_DEVCONTAINER=true",
+        "-e",
+        "NAS_DIRENV_ENABLED=true",
+        "-e",
+        "NAS_UPSTREAM_PROXY=http://proxy.invalid:3128",
+        "-e",
+        "NAS_UID=1000",
+        "-e",
+        "NAS_GID=1000",
+        "-e",
+        "NAS_USER=nas",
+        "-e",
+        `WORKSPACE=${workspace}`,
+        "-e",
+        "NAS_DEVCONTAINER_ENV_KEYS=TASK5_PREFIX",
+        "-e",
+        "NAS_ENV_OPS=__nas_pfx 'TASK5_PREFIX' 'prefix' ':'",
+        "-e",
+        "NAS_LOG_LEVEL=quiet",
+        image,
+        ...command,
+      ]);
+      expect(start.code, start.stderr).toBe(0);
+      let ready = false;
+      for (let i = 0; i < 100; i++) {
+        const result = await run([
+          "docker",
+          "exec",
+          "--user",
+          "1000:1000",
+          name,
+          "test",
+          "-f",
+          "/run/nas-devcontainer/ready",
+        ]);
+        if (result.code === 0) {
+          ready = true;
+          break;
+        }
+        if (
+          (
+            await run(["docker", "inspect", "-f", "{{.State.Running}}", name])
+          ).stdout.trim() !== "true"
+        )
+          break;
+        await Bun.sleep(25);
+      }
+      expect(ready, (await run(["docker", "logs", name])).stderr).toBe(true);
+      const bundled =
+        "$HOME/.vscode-server/extensions/openai.chatgpt-9.9.9/bin/linux-x86_64/codex";
+      // The newer version lives under .vscode-server-insiders so the glob
+      // fallback proves it sorts on the version, not the channel path.
+      const bundledNew =
+        "$HOME/.vscode-server-insiders/extensions/openai.chatgpt-99.0.0/bin/linux-x86_64/codex";
+      const install = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        "-e",
+        "HOME=/home/nas",
+        name,
+        "/bin/bash",
+        "-c",
+        `mkdir -p "$(dirname "${bundled}")" && printf '#!/bin/bash\\nprintf "%%s\\\\n" "$@"\\n' > "${bundled}" && chmod +x "${bundled}" && mkdir -p "$(dirname "${bundledNew}")" && printf '#!/bin/bash\\nprintf "codex-99.0.0\\\\n"\\n' > "${bundledNew}" && chmod +x "${bundledNew}"`,
+      ]);
+      expect(install.code, install.stderr).toBe(0);
+      // The extension appends the running build's bin dir to PATH when it
+      // spawns cliExecutable; the wrapper must prefer that over a newer
+      // version still on disk.
+      const wrapped = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        "-e",
+        "HOME=/home/nas",
+        "-e",
+        "PATH=/usr/local/bin:/usr/bin:/bin:/home/nas/.vscode-server/extensions/openai.chatgpt-9.9.9/bin/linux-x86_64",
+        name,
+        "/usr/local/bin/nas-devcontainer-codex",
+        "-c",
+        "features.code_mode_host=true",
+        "app-server",
+      ]);
+      expect(wrapped.code, wrapped.stderr).toBe(0);
+      // -c pair, then the captured NAS_AGENT_ARGS ("", "space arg",
+      // "$(false)" — the empty arg prints as a blank line), then the
+      // extension's own argv passed to the wrapper.
+      expect(wrapped.stdout).toBe(
+        "-c\nshell_environment_policy.inherit=all\n\nspace arg\n$(false)\n-c\nfeatures.code_mode_host=true\napp-server\n",
+      );
+      // Without the extension's PATH entry the glob fallback resolves the
+      // newest bundled binary by version.
+      const globbed = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        "-e",
+        "HOME=/home/nas",
+        name,
+        "/usr/local/bin/nas-devcontainer-codex",
+        "app-server",
+      ]);
+      expect(globbed.code, globbed.stderr).toBe(0);
+      expect(globbed.stdout).toBe("codex-99.0.0\n");
+      const missing = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        "-e",
+        "HOME=/home/nas-noext",
+        name,
+        "/usr/local/bin/nas-devcontainer-codex",
+        "app-server",
+      ]);
+      expect(missing.code).toBe(64);
+      expect(missing.stderr).toContain(
+        "nas-devcontainer-codex: no bundled codex found under ~/.vscode-server*/extensions/openai.chatgpt-*",
+      );
+    } finally {
+      await run(["docker", "rm", "-f", name]);
+      await run(["docker", "image", "rm", image]);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);

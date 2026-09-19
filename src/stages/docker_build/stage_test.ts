@@ -329,6 +329,7 @@ test("Dev Container launcher assets are materialized and participate in image id
     "devcontainer-exec.sh",
     "devcontainer-idle.sh",
     "devcontainer-claude.sh",
+    "devcontainer-codex.sh",
   ]) {
     expect(assets.files).toContain(file);
   }
