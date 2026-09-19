@@ -256,7 +256,11 @@ export function makeDevcontainerLifecycle(
         command: inputs.command,
       };
       const bytes = `${JSON.stringify(
-        renderDevcontainerConfig(record, host.user.trim() || "nas"),
+        renderDevcontainerConfig(
+          record,
+          host.user.trim() || "nas",
+          inputs.profile.agent,
+        ),
         null,
         2,
       )}\n`;
