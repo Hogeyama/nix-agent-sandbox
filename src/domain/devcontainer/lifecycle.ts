@@ -7,6 +7,7 @@ import {
   readTextFile,
 } from "../../lib/fs_utils.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
+import { filterDevcontainerAgentArgs } from "./agent_args.ts";
 import { renderDevcontainerConfig } from "./config.ts";
 import {
   type DevcontainerInitResult,
@@ -283,9 +284,14 @@ export function makeDevcontainerLifecycle(
         else await atomicWriteFile(record.configPath, previousConfig);
         throw error;
       }
+      const filtered = filterDevcontainerAgentArgs(
+        inputs.profile.agent,
+        inputs.profile.agentArgs,
+      );
       return {
         registration: record,
         sharing: describeDevcontainerSharing(inputs.profile),
+        droppedAgentArgs: filtered.dropped,
       };
     });
   };

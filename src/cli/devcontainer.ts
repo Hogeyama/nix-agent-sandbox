@@ -55,13 +55,20 @@ export async function runDevcontainerCommand(
   const command = parseDevcontainerArgs(args, cwd);
   const domain = client ?? makeClient(buildHostEnv());
   if (command.action === "init") {
-    const { registration, sharing } = await domain.init(
+    const { registration, sharing, droppedAgentArgs } = await domain.init(
       command.workspace,
       command.profile,
     );
     console.log(`Created ${registration.configPath}`);
     console.log(`Profile: ${registration.profileName}`);
     printSharing(sharing);
+    if (droppedAgentArgs.length > 0) {
+      console.log("");
+      console.log(
+        "Profile agentArgs the Codex IDE session cannot use (only -c/--config pairs are passed):",
+      );
+      for (const arg of droppedAgentArgs) console.log(`  dropped: ${arg}`);
+    }
     return;
   }
   const result = await domain[command.action](command.workspace);

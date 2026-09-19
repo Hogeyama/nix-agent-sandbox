@@ -121,3 +121,49 @@ test("protected Claude state discloses both writable sharing and private runtime
   expect(text).toContain("configuration read-only");
   expect(text).toContain("logs and caches session-private");
 });
+
+test("codex disclosure names the shared ~/.codex directory", () => {
+  const sharing = describeDevcontainerSharing({
+    ...devcontainerProfile(),
+    agent: "codex",
+  });
+  const credentials = sharing.find((entry) =>
+    entry.topic.includes("credentials"),
+  );
+  expect(credentials).toEqual({
+    topic: "Codex credentials",
+    detail: "host ~/.codex, read-write; kept on the host after down",
+  });
+});
+
+test("codex disclosure warns that cliExecutable is a development-only hook", () => {
+  const codex = describeDevcontainerSharing({
+    ...devcontainerProfile(),
+    agent: "codex",
+  });
+  expect(codex.find((entry) => entry.topic === "Codex extension")).toEqual({
+    topic: "Codex extension",
+    detail:
+      "chatgpt.cliExecutable is redirected to nas's wrapper — a development-only hook that extension updates may change",
+  });
+  expect(
+    describeDevcontainerSharing(devcontainerProfile()).find(
+      (entry) => entry.topic === "Codex extension",
+    ),
+  ).toBeUndefined();
+});
+
+test("protected Codex state keeps config.toml read-only over the shared directory", () => {
+  const text = detail(
+    {
+      ...devcontainerProfile(),
+      agent: "codex",
+      agentState: { protectSettings: true },
+    },
+    "Codex credentials",
+  );
+  expect(text).toContain("~/.codex");
+  expect(text).toContain("read-write");
+  expect(text).toContain("config.toml");
+  expect(text).toContain("read-only");
+});

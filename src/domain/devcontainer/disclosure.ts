@@ -9,6 +9,12 @@ export interface DevcontainerDisclosure {
 export interface DevcontainerInitResult {
   readonly registration: DevcontainerRegistration;
   readonly sharing: readonly DevcontainerDisclosure[];
+  /**
+   * Profile agentArgs the IDE session cannot use (Codex app-server accepts
+   * only -c/--config pairs). Surfaced at init, the last point nas is on
+   * screen before VS Code takes over.
+   */
+  readonly droppedAgentArgs: readonly string[];
 }
 
 /**
@@ -32,12 +38,31 @@ export function describeDevcontainerSharing(
       topic: "workspace",
       detail: "shared read-write; .devcontainer and .nas stay read-only",
     },
-    {
-      topic: "Claude credentials",
-      detail: profile.agentState.protectSettings
-        ? "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down"
-        : "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
-    },
+    profile.agent === "codex"
+      ? {
+          topic: "Codex credentials",
+          detail: profile.agentState.protectSettings
+            ? "host ~/.codex shared read-write; config.toml read-only; kept on the host after down"
+            : "host ~/.codex, read-write; kept on the host after down",
+        }
+      : {
+          topic: "Claude credentials",
+          detail: profile.agentState.protectSettings
+            ? "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down"
+            : "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
+        },
+    // cliExecutable is the only hook OpenAI ships for the Codex extension
+    // and it is documented as development-only, so the generated config says
+    // so where the user can still see it.
+    ...(profile.agent === "codex"
+      ? [
+          {
+            topic: "Codex extension",
+            detail:
+              "chatgpt.cliExecutable is redirected to nas's wrapper — a development-only hook that extension updates may change",
+          },
+        ]
+      : []),
     {
       topic: "IDE server",
       detail:
