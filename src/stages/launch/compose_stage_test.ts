@@ -63,3 +63,21 @@ test("IDE finalization adds lookup labels and applies each argv/env operation on
   });
   expect(result.container.env.dynamicOps).toEqual(container.env.dynamicOps);
 });
+
+test("codex devcontainer keeps only -c pairs from profile agentArgs", () => {
+  const codexInput = {
+    ...input,
+    profile: {
+      agent: "codex",
+      agentArgs: ["-c", "model=o4-mini", "--yolo", "prompt"],
+    },
+  } as StageInput;
+  const result = finalizeDevcontainerPlan(codexInput, container, {
+    registration,
+  });
+  expect(result.container.command.extraArgs).toEqual([
+    "already",
+    "-c",
+    "model=o4-mini",
+  ]);
+});

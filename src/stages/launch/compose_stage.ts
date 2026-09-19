@@ -1,5 +1,7 @@
 import { Effect } from "effect";
+import { filterDevcontainerAgentArgs } from "../../domain/devcontainer/agent_args.ts";
 import type { DevcontainerRegistration } from "../../domain/devcontainer.ts";
+import { logWarn } from "../../log.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { ContainerPlan } from "../../pipeline/state.ts";
@@ -17,8 +19,20 @@ export function finalizeDevcontainerPlan(
   container: ContainerPlan,
   options: ComposeStageOptions,
 ) {
+  const filtered = filterDevcontainerAgentArgs(
+    shared.profile.agent,
+    shared.profile.agentArgs,
+  );
+  if (filtered.dropped.length > 0)
+    logWarn(
+      `[nas] devcontainer dropped agentArgs the IDE session cannot use: ${filtered.dropped.join(" ")}`,
+    );
   const finalized = finalizeLaunchPlan(
-    { ...shared, container },
+    {
+      ...shared,
+      profile: { ...shared.profile, agentArgs: [...filtered.kept] },
+      container,
+    },
     options.agentExtraArgs ?? [],
   );
   return {
