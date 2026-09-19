@@ -577,6 +577,126 @@ profiles {
 });
 
 test.skipIf(!hasPkl)(
+  "loadConfig: accepts GraphQL conditions in match and in a BodyExpect",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["github"] {
+          targets { "api.github.com" }
+          fallback = "review"
+          rules {
+            ["graphql"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body { format = "json" }
+              }
+              onMatch = "allow"
+              onIndeterminate = "review"
+              expect {
+                new BodyExpect {
+                  graphql {
+                    operations { "query" }
+                    rootFields { "repository"; "viewer" }
+                    arguments {
+                      ["owner"] { "my-org" }
+                      ["login"] { "my-org" }
+                    }
+                  }
+                  onViolation = "review"
+                }
+              }
+            }
+            ["graphql.mutation"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body {
+                  format = "json"
+                  graphql { at = "/query"; operations { "mutation" } }
+                }
+              }
+              onMatch = "deny"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      const rules = config.profiles.dev.network.scopes.github?.rules;
+      expect(rules?.graphql?.expect).toEqual([
+        {
+          kind: "body",
+          onViolation: "review",
+          equals: {},
+          oneOf: {},
+          graphql: {
+            at: "/query",
+            operations: ["query"],
+            rootFields: ["repository", "viewer"],
+            arguments: { owner: ["my-org"], login: ["my-org"] },
+          },
+        },
+      ]);
+      expect(rules?.["graphql.mutation"]?.match.body).toEqual({
+        format: "json",
+        equals: {},
+        oneOf: {},
+        graphql: { at: "/query", operations: ["mutation"], arguments: {} },
+      });
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: stops an empty graphql listing before startup",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["github"] {
+          targets { "api.github.com" }
+          rules {
+            ["graphql"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body { format = "json" }
+              }
+              onMatch = "allow"
+              expect {
+                new BodyExpect { graphql { operations {} } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+        /profile "dev": ルール github\.graphql の expect\[0\] の graphql\.operations が空の Listing です/,
+      );
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: accepts equals and oneOf body match conditions",
   async () => {
     const configPkl = `amends "Schema.pkl"

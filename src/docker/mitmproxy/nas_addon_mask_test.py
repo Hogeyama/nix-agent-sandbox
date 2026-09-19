@@ -896,6 +896,115 @@ class AuthzDocumentContractTest(unittest.TestCase):
                 self._messages_rule(document)["match"][field] = value
                 self.assert_invalid(document)
 
+    def _graphql_condition(self, **overrides):
+        condition = {
+            "at": "/query",
+            "operations": ["query"],
+            "rootFields": None,
+            "arguments": {},
+        }
+        condition.update(overrides)
+        return condition
+
+    def test_accepts_graphql_match_and_body_expect_conditions(self):
+        document = copy.deepcopy(self.fixture)
+        rule = self._messages_rule(document)
+        rule["match"]["graphql"] = self._graphql_condition(
+            rootFields=["repository", "_node2"],
+            arguments={"owner": ["my-org"], "_after9": ["x"]},
+        )
+        rule["expect"].append({
+            "kind": "body",
+            "onViolation": "review",
+            "equals": {"/variables/o": "my-org"},
+            "oneOf": {},
+            "graphql": self._graphql_condition(at=""),
+        })
+        self._write(document)
+
+        self.assertEqual(self._load(), document)
+
+    def test_rejects_a_graphql_condition_it_cannot_evaluate(self):
+        cases = [
+            ("not an object", ["query"]),
+            ("missing key", {"at": "/query", "operations": ["query"],
+                             "arguments": {}}),
+            ("unknown key", {**self._graphql_condition(), "maxDepth": 3}),
+            ("bad at", self._graphql_condition(at="query")),
+            ("empty operations", self._graphql_condition(operations=[])),
+            ("unknown operation",
+             self._graphql_condition(operations=["query", "fragment"])),
+            ("empty rootFields", self._graphql_condition(rootFields=[])),
+            ("non-string root field",
+             self._graphql_condition(rootFields=[1])),
+            ("root field that is not a GraphQL name",
+             self._graphql_condition(rootFields=["repository "])),
+            ("arguments not an object",
+             self._graphql_condition(arguments=[])),
+            ("empty argument set",
+             self._graphql_condition(arguments={"owner": []})),
+            ("argument key that is not a GraphQL name",
+             self._graphql_condition(arguments={"owner ": ["my-org"]})),
+            ("non-string argument value",
+             self._graphql_condition(arguments={"owner": [1]})),
+        ]
+        for name, condition in cases:
+            for side in ("match", "expect"):
+                with self.subTest(name=name, side=side):
+                    document = copy.deepcopy(self.fixture)
+                    rule = self._messages_rule(document)
+                    if side == "match":
+                        rule["match"]["graphql"] = condition
+                    else:
+                        rule["expect"].append({
+                            "kind": "body", "onViolation": "deny",
+                            "equals": {}, "oneOf": {}, "graphql": condition,
+                        })
+                    self.assert_invalid(document)
+
+    def test_rejects_a_body_expect_it_cannot_run(self):
+        valid = {
+            "kind": "body", "onViolation": "deny",
+            "equals": {}, "oneOf": {}, "graphql": None,
+        }
+        cases = [
+            ("missing graphql key",
+             {k: v for k, v in valid.items() if k != "graphql"}),
+            ("bad equals pointer", {**valid, "equals": {"x": 1}}),
+            ("non-scalar equals", {**valid, "equals": {"/x": [1]}}),
+            ("empty oneOf set", {**valid, "oneOf": {"/x": []}}),
+            # Counted as JavaScript counts: 128 non-BMP characters are 256
+            # code units, so one more is over.
+            ("equals pointer over the length limit",
+             {**valid, "equals": {"/" + "p" * 256: "x"}}),
+            ("oneOf pointer over the length limit",
+             {**valid, "oneOf": {"/" + "\U0001F600" * 128: ["x"]}}),
+        ]
+        for name, expect in cases:
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.fixture)
+                self._messages_rule(document)["expect"].append(expect)
+                self.assert_invalid(document)
+
+    def test_accepts_a_body_expect_pointer_at_the_length_limit(self):
+        document = copy.deepcopy(self.fixture)
+        self._messages_rule(document)["expect"].append({
+            "kind": "body", "onViolation": "deny", "graphql": None,
+            "equals": {"/" + "p" * 255: "x"},
+            "oneOf": {"/" + "\U0001F600" * 127 + "p": ["x"]},
+        })
+        self._write(document)
+        self.assertEqual(self._load(), document)
+
+    def test_rejects_graphql_without_json_format(self):
+        for body_format in (None, "none", "opaque"):
+            with self.subTest(body_format=body_format):
+                document = copy.deepcopy(self.fixture)
+                match = document["scopes"][0]["rules"][1]["match"]
+                match["bodyFormat"] = body_format
+                match["graphql"] = self._graphql_condition()
+                self.assert_invalid(document)
+
     def test_rejects_value_conditions_without_json_format(self):
         for body_format in (None, "none", "opaque"):
             with self.subTest(body_format=body_format):
@@ -1764,6 +1873,7 @@ def _finding(value="future", expect=0, at="/**/content/*", count=1):
         "kind": "schema-mismatch",
         "pointer": "/content/0",
         "value": value,
+        "label": None,
         "excerpt": '{"type":"%s"}' % value,
         "count": count,
     }
@@ -3746,6 +3856,136 @@ class RequestPolicyFlowTest(unittest.TestCase):
     def _injected(self, flow):
         return flow.request.headers.get("x-api-key")
 
+    def _graphql_rule(self, condition_in):
+        rule = _messages_rule()
+        condition = {
+            "at": "/query", "operations": ["query"],
+            "rootFields": ["viewer"], "arguments": {},
+        }
+        if condition_in == "match":
+            rule["match"]["graphql"] = condition
+        else:
+            rule["expect"].append({
+                "kind": "body", "onViolation": "review",
+                "equals": {}, "oneOf": {}, "graphql": condition,
+            })
+        return rule
+
+    GRAPHQL_POLYGLOT = (
+        b'{"query":"{ viewer { login } }",'
+        b'"pad":"&query=mutation%20%7B%20danger%20%7D&x="}'
+    )
+
+    def test_graphql_rejects_ambiguous_transport_before_broker(self):
+        from urllib.parse import parse_qs
+
+        # The same envelope executes a mutation when parsed as a form,
+        # although the JSON `query` satisfies the query-only rule.
+        self.assertEqual(
+            parse_qs(self.GRAPHQL_POLYGLOT.decode())["query"],
+            ["mutation { danger }"],
+        )
+        rejected_headers = [
+            [],
+            [("content-type", "application/x-www-form-urlencoded")],
+            [("content-type", "multipart/form-data; boundary=x")],
+            [("content-type", "text/plain")],
+            [("content-type", "application/graphql")],
+            [("content-type", "application/custom+json")],
+            [("content-type", "application/json; charset=iso-8859-1")],
+            [("content-type", "application/json; charset=utf-16")],
+            [("content-type", "application/json; charset=utf-8; charset=utf-8")],
+            [("content-type", "application/json; unknown=value")],
+            [("content-type", "application/json, application/json")],
+            [("content-type", "application/json"),
+             ("content-type", "application/json")],
+            [("content-type", "application/json"),
+             ("content-type", "application/x-www-form-urlencoded")],
+            [("content-type", "application/x-www-form-urlencoded"),
+             ("content-type", "application/json")],
+            [("content-type", "application/json"),
+             ("content-encoding", "identity"),
+             ("content-encoding", "identity")],
+        ]
+        for condition_in in ("match", "expect"):
+            document = _flow_document(
+                [self._graphql_rule(condition_in)], fallback="allow"
+            )
+            for headers in rejected_headers:
+                with self.subTest(condition_in=condition_in, headers=headers):
+                    flow, messages, _stderr = self._run(
+                        document=document, headers=headers,
+                        content=self.GRAPHQL_POLYGLOT,
+                    )
+                    self.assertEqual(flow.response.status_code, 403)
+                    self.assertEqual(messages, [])
+                    self.assertIsNone(self._injected(flow))
+
+    def test_graphql_accepts_unambiguous_json_transport(self):
+        for condition_in in ("match", "expect"):
+            for content_type in (
+                "application/json", "application/json; charset=utf-8",
+                'Application/JSON; Charset="UTF-8"',
+            ):
+                with self.subTest(condition_in=condition_in, type=content_type):
+                    flow, messages, _stderr = self._run(
+                        document=_flow_document([self._graphql_rule(condition_in)]),
+                        headers=[("content-type", content_type)],
+                        content=self.GRAPHQL_POLYGLOT,
+                    )
+                    self.assertIsNone(flow.response)
+                    self.assertEqual(messages[0]["type"], "authorize")
+                    self.assertEqual(self._reviews(messages), [])
+                    self.assertEqual(self._injected(flow), "injected-value")
+
+    def test_graphql_rejects_bytes_that_json_would_autodetect_as_utf16_or_utf32(self):
+        document = _flow_document([self._graphql_rule("match")])
+        for encoding in ("utf-16", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"):
+            with self.subTest(encoding=encoding):
+                body = self.GRAPHQL_POLYGLOT.decode().encode(encoding)
+                self.assertEqual(json.loads(body), json.loads(self.GRAPHQL_POLYGLOT))
+                flow, messages, _stderr = self._run(
+                    document=document,
+                    headers=[("content-type", "application/json; charset=utf-8")],
+                    content=body,
+                )
+                self.assertEqual(flow.response.status_code, 403)
+                self.assertEqual(messages, [])
+                self.assertIsNone(self._injected(flow))
+
+    def test_graphql_rejects_a_body_mitmproxy_cannot_decode(self):
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._graphql_rule("expect")]),
+            headers=[("content-type", "application/json")],
+            request_class=FakeUndecodableRequest,
+        )
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(messages, [])
+
+    def test_graphql_transport_guard_only_applies_to_matching_candidates(self):
+        for overrides in ({"method": "GET"}, {"path": "/other"},
+                          {"host": "other.example.com"}):
+            with self.subTest(overrides=overrides):
+                document = _flow_document(
+                    [self._graphql_rule("match")],
+                    fallback="allow", network_fallback="allow",
+                )
+                flow, messages, _stderr = self._run(
+                    document=document, content=self.GRAPHQL_POLYGLOT,
+                    headers=[("content-type", "application/x-www-form-urlencoded")],
+                    rule_id=("$fallback" if "host" in overrides else "api.$fallback"),
+                    **overrides,
+                )
+                self.assertIsNone(flow.response)
+                self.assertEqual(messages[0]["type"], "authorize")
+        # Non-GraphQL JSON policies retain their existing behavior as well.
+        flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            content=self.GRAPHQL_POLYGLOT,
+        )
+        self.assertIsNone(flow.response)
+        self.assertEqual(messages[0]["type"], "authorize")
+
     def _run_connect(self, addon, client_id, *, authenticated):
         headers = (
             {"proxy-authorization": self.proxy_auth} if authenticated else {}
@@ -4150,9 +4390,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual((outcome["result"], outcome["reason"]),
                          ("block", "schema-mismatch"))
         self.assertEqual(
-            [(f["expect"], f["at"], f["value"], f["excerpt"], f["count"])
+            [(f["expect"], f["at"], f["value"], f["label"], f["excerpt"],
+              f["count"])
              for f in outcome["findings"]],
-            [(0, "/content/*", "future",
+            [(0, "/content/*", "future", None,
               '{"type":"future","note":"****"}', 1)],
         )
 

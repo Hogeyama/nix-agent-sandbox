@@ -37,16 +37,21 @@ export function evaluateMatch(
   if (!match.paths.some((path) => compiledPathMatches(path, request.path))) {
     return "false";
   }
-  return evaluateBody(match.body, request.body);
+  return evaluateBody(match.body, request.body, request.path);
 }
 
 export function accepts(match: CompiledMatch, request: AuthzRequest): boolean {
   return evaluateMatch(match, request) === "true";
 }
 
+/**
+ * `requestPath` はクエリ文字列を含むリクエストのパスである。読むのは `graphql`
+ * 条件だけで、クエリ文字列の有無しか見ない (`hasQueryString`)。
+ */
 export function evaluateBody(
   condition: NormalizedBody,
   body: RequestBody,
+  requestPath: string,
 ): Truth {
   if (condition.format === null) return "true";
   // ボディが存在しないリクエストは、ボディの存在を要求するどの format も満たさ
@@ -56,19 +61,27 @@ export function evaluateBody(
   switch (condition.format) {
     case "none":
       // 「ボディが存在し、その長さが 0 である」
-      return body.kind === "empty" ? evaluateContent(condition, body) : "false";
+      return body.kind === "empty"
+        ? evaluateContent(condition, body, requestPath)
+        : "false";
     case "opaque":
       // ボディの存在だけを条件にし、内容を解析しない。
-      return evaluateContent(condition, body);
+      return evaluateContent(condition, body, requestPath);
     case "json":
-      if (body.kind === "json") return evaluateContent(condition, body);
+      if (body.kind === "json") {
+        return evaluateContent(condition, body, requestPath);
+      }
       // 0 バイトのボディも壊れたボディも JSON として解析できない。偽ではなく
       // 判定不能である。
       return "indeterminate";
   }
 }
 
-function evaluateContent(condition: NormalizedBody, body: RequestBody): Truth {
+function evaluateContent(
+  condition: NormalizedBody,
+  body: RequestBody,
+  requestPath: string,
+): Truth {
   if (condition.pointers.size === 0 && condition.graphql === null)
     return "true";
   if (body.kind !== "json") {
@@ -93,7 +106,7 @@ function evaluateContent(condition: NormalizedBody, body: RequestBody): Truth {
   }
 
   if (condition.graphql !== null) {
-    switch (evaluateGraphql(condition.graphql, body)) {
+    switch (evaluateGraphql(condition.graphql, body, requestPath)) {
       case "indeterminate":
         indeterminate = true;
         break;
@@ -123,10 +136,22 @@ function evaluatePointer(
   return keys.has(scalarKey(found)) ? "true" : "false";
 }
 
+/**
+ * URL にクエリ文字列があれば、ボディを見る前に判定不能とする。ボディに
+ * document が無くても同じである。GraphQL のサーバは document と変数を URL
+ * からも読む。express-graphql は `?query=` / `?variables=` をボディより優先し、
+ * Rails はクエリ文字列の引数をボディの引数とまとめる (`variables[login]=x` は
+ * 入れ子のハッシュになる)。実行されるものがボディの document と同じだと言え
+ * ないので、真も偽も言えない。偽にすると、`?query=mutation...` と無関係な
+ * ボディを送るだけでより広いルールへ落とせる。引数名の一覧ではなくクエリ
+ * 文字列の有無で決めるのは、名前も綴りもサーバごとに違うからである。
+ */
 function evaluateGraphql(
   condition: NormalizedGraphql,
   body: Extract<RequestBody, { kind: "json" }>,
+  requestPath: string,
 ): Truth {
+  if (hasQueryString(requestPath)) return "indeterminate";
   const document = body.documents?.[condition.at];
   if (document === undefined) {
     const found = resolvePointer(body.value, condition.at);
@@ -171,6 +196,12 @@ function satisfiesDocument(
   // 判定不能を偽より優先する。真になれない候補で評価を打ち切らせるためである。
   if (indeterminate) return "indeterminate";
   return determinedFalse ? "false" : "true";
+}
+
+/** リクエストのパスが空でないクエリ文字列 (`?` の後に 1 文字以上) を持つか。 */
+export function hasQueryString(requestPath: string): boolean {
+  const query = requestPath.indexOf("?");
+  return query !== -1 && query + 1 < requestPath.length;
 }
 
 export function resolvePointer(

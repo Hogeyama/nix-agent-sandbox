@@ -58,6 +58,180 @@ describe("parseGraphqlFacts", () => {
     expect(facts.unresolvedArguments).toEqual(["if"]);
   });
 
+  describe("変数の既定値", () => {
+    const withDefault =
+      'query ($o: String = "my-org") { repository(owner: $o) { name } }';
+
+    test("variables が無い・null・キーを持たないオブジェクトなら operation の既定値で解決する", () => {
+      const cases: readonly (JsonValue | undefined)[] = [
+        undefined,
+        null,
+        {},
+        { other: "x" },
+      ];
+      for (const variables of cases) {
+        const facts = parseGraphqlFacts(withDefault, LIMITS, variables)!;
+        expect(facts.argumentValues).toEqual({ owner: ["my-org"] });
+        expect(facts.unresolvedArguments).toEqual([]);
+      }
+    });
+
+    test("variables に与えた値が既定値より優先する", () => {
+      const facts = parseGraphqlFacts(withDefault, LIMITS, { o: "other" })!;
+      expect(facts.argumentValues).toEqual({ owner: ["other"] });
+      expect(facts.unresolvedArguments).toEqual([]);
+    });
+
+    test("variables の明示の null や文字列でない値は既定値に落ちず解決不能", () => {
+      for (const provided of [null, 42]) {
+        const facts = parseGraphqlFacts(withDefault, LIMITS, { o: provided })!;
+        expect(facts.argumentValues).toEqual({});
+        expect(facts.unresolvedArguments).toEqual(["owner"]);
+      }
+    });
+
+    test("オブジェクトでない variables の下では変数は既定値に落ちず解決不能", () => {
+      // 文字列の variables を JSON として読み直して実行するサーバがあるので、
+      // 既定値の "my-org" で解決すると実行される値 ("other-org") と食い違う。
+      const cases: readonly JsonValue[] = [
+        '{"o":"other-org"}',
+        "",
+        [],
+        [{ o: "my-org" }],
+        42,
+        0,
+        true,
+        false,
+      ];
+      for (const variables of cases) {
+        const facts = parseGraphqlFacts(withDefault, LIMITS, variables)!;
+        expect(facts.argumentValues).toEqual({});
+        expect(facts.unresolvedArguments).toEqual(["owner"]);
+      }
+    });
+
+    test("オブジェクトでない variables でも文字列リテラルの引数は解決する", () => {
+      const facts = parseGraphqlFacts(
+        'query ($o: String = "my-org") { a(owner: "lit", o: $o) }',
+        LIMITS,
+        '{"o":"x"}',
+      )!;
+      expect(facts.argumentValues).toEqual({ owner: ["lit"] });
+      expect(facts.unresolvedArguments).toEqual(["o"]);
+    });
+
+    test("文字列でない既定値は解決不能", () => {
+      const facts = parseGraphqlFacts(
+        "query ($n: Int = 10, $e: E = FOO, $z: String = null, $l: [String] = " +
+          '["a"]) { a(n: $n, e: $e, z: $z, l: $l) }',
+        LIMITS,
+      )!;
+      expect(facts.argumentValues).toEqual({});
+      expect(facts.unresolvedArguments).toEqual(["n", "e", "z", "l"]);
+    });
+
+    test("同じ変数を 2 度宣言した operation を持つ document は解析できない", () => {
+      for (const text of [
+        'query ($o: String = "my-org", $o: String = "evil") { r(owner: $o) }',
+        'query ($o: String = "my-org", $o: String) { r(owner: $o) }',
+        "query A { a } query B ($o: String, $o: Int) { b }",
+      ]) {
+        expect(parseGraphqlFacts(text, LIMITS)).toBeNull();
+      }
+      // 別々の operation が同じ名前を宣言するのは正当である。
+      expect(
+        parseGraphqlFacts(
+          'query A ($o: String = "a") { a } query B ($o: String) { b }',
+          LIMITS,
+        ),
+      ).not.toBeNull();
+    });
+
+    test("共有 fragment の引数は到達する operation ごとの既定値をすべて集める", () => {
+      const facts = parseGraphqlFacts(
+        'query A ($o: String = "a") { ...f } ' +
+          'query B ($o: String = "b") { viewer { ...f } } ' +
+          "fragment f on Query { repository(owner: $o) { name } }",
+        LIMITS,
+      )!;
+      expect(facts.argumentValues).toEqual({ owner: ["a", "b"] });
+      expect(facts.unresolvedArguments).toEqual([]);
+    });
+
+    test("既定値を持たない operation から (推移的に) 届く共有 fragment は解決不能も載る", () => {
+      const facts = parseGraphqlFacts(
+        'query A ($o: String = "a") { ...f } ' +
+          "query B ($o: String) { ...g } " +
+          "fragment g on Query { ...f } " +
+          "fragment f on Query { repository(owner: $o) { name } }",
+        LIMITS,
+      )!;
+      expect(facts.argumentValues).toEqual({ owner: ["a"] });
+      expect(facts.unresolvedArguments).toEqual(["owner"]);
+    });
+
+    test("どの operation からも届かない fragment の引数は variables だけで解決する", () => {
+      const text =
+        'query ($o: String = "a") { viewer } ' +
+        "fragment f on Query { repository(owner: $o) }";
+      const bare = parseGraphqlFacts(text, LIMITS)!;
+      expect(bare.argumentValues).toEqual({});
+      expect(bare.unresolvedArguments).toEqual(["owner"]);
+      const provided = parseGraphqlFacts(text, LIMITS, { o: "v" })!;
+      expect(provided.argumentValues).toEqual({ owner: ["v"] });
+      expect(provided.unresolvedArguments).toEqual([]);
+    });
+
+    test("operation ごとの fragment 展開量が maxNodes を超えると解析できない", () => {
+      // 20 個の operation がそれぞれ引数 20 個の fragment に届くので、
+      // 展開量は 20 × (1 + 20) = 420。token 数はそれより少ない。
+      const text =
+        "query { ...f } ".repeat(20) +
+        `fragment f on Q { ${"a(x: 1) ".repeat(20)}}`;
+      expect(parseGraphqlFacts(text, { maxNodes: 420, maxDepth: 16 })).not.toBe(
+        null,
+      );
+      expect(parseGraphqlFacts(text, { maxNodes: 419, maxDepth: 16 })).toBe(
+        null,
+      );
+    });
+
+    test("fragment が spread する相異なる fragment の数も展開量に数える", () => {
+      // f への訪問は 1 + 0 + 20、g1..g20 への訪問は 1 ずつなので、
+      // operation 1 つあたり 41、20 個で 820。
+      const spreads = Array.from({ length: 20 }, (_, i) => `...g${i}`).join(
+        " ",
+      );
+      const targets = Array.from(
+        { length: 20 },
+        (_, i) => `fragment g${i} on Q { a }`,
+      ).join(" ");
+      const text = `${"query { ...f } ".repeat(20)}fragment f on Q { ${spreads} } ${targets}`;
+      expect(parseGraphqlFacts(text, { maxNodes: 820, maxDepth: 16 })).not.toBe(
+        null,
+      );
+      expect(parseGraphqlFacts(text, { maxNodes: 819, maxDepth: 16 })).toBe(
+        null,
+      );
+    });
+
+    test("同じ spread の繰り返しは 1 本の辺として数えて辿る", () => {
+      // f は g を 200 回 spread するが辺は 1 本なので、f への訪問は 1 + 0 + 1、
+      // g への訪問は 1 + 20。operation 1 つあたり 23、40 個で 920。
+      // 繰り返しを数えるなら (あるいは辿るなら) 境界はここに来ない。
+      const text =
+        "query { ...f } ".repeat(40) +
+        `fragment f on Q { ${"...g ".repeat(200)}} ` +
+        `fragment g on Q { ${"a(x: 1) ".repeat(20)}}`;
+      expect(parseGraphqlFacts(text, { maxNodes: 920, maxDepth: 16 })).not.toBe(
+        null,
+      );
+      expect(parseGraphqlFacts(text, { maxNodes: 919, maxDepth: 16 })).toBe(
+        null,
+      );
+    });
+  });
+
   test("深さは SelectionSet・ObjectValue・ListValue を document 直下から数える", () => {
     // SelectionSet + ObjectValue + ListValue で深さ 3。上限ちょうどは通り、
     // 1 つ下げると落ちる。Python 側も同じ数え方で揃える。
@@ -85,6 +259,16 @@ describe("parseGraphqlFacts", () => {
     [
       "未定義 fragment",
       "query { ...missing }",
+      { maxNodes: 10_000, maxDepth: 16 },
+    ],
+    [
+      "同名の fragment の再定義",
+      "query { ...f } fragment f on Q { a } fragment f on Q { b }",
+      { maxNodes: 10_000, maxDepth: 16 },
+    ],
+    [
+      "使われない同名の fragment の再定義",
+      "query { a } fragment f on Q { a } fragment f on Q { a }",
       { maxNodes: 10_000, maxDepth: 16 },
     ],
     [
@@ -192,6 +376,48 @@ describe("facts と evaluateMatch の結合", () => {
         variables: { o: "other-org" },
       }),
     ).toBe("false");
+  });
+
+  test("variables に無い変数は operation の既定値で arguments の条件を判定する", () => {
+    expect(
+      evaluate({
+        query:
+          'query ($o: String = "my-org") { repository(owner: $o) { name } }',
+      }),
+    ).toBe("true");
+    expect(
+      evaluate({
+        query:
+          'query ($o: String = "other-org") { repository(owner: $o) { name } }',
+      }),
+    ).toBe("false");
+  });
+
+  test("variables が null なら既定値で、オブジェクトでなければ判定不能になる", () => {
+    const query =
+      'query ($o: String = "my-org") { repository(owner: $o) { name } }';
+    expect(evaluate({ query, variables: null })).toBe("true");
+    expect(evaluate({ query, variables: {} })).toBe("true");
+    for (const variables of ['{"o":"other-org"}', [], 1, true]) {
+      expect(evaluate({ query, variables })).toBe("indeterminate");
+    }
+  });
+
+  test("variables メンバが無い・ルートの document は既定値、文字列の variables は解決不能", () => {
+    const query = 'query ($o: String = "d") { a(o: $o) }';
+    expect(
+      buildGraphqlDocuments({ query }, ["/query"], LIMITS)["/query"]!
+        .argumentValues,
+    ).toEqual({ o: ["d"] });
+    expect(
+      buildGraphqlDocuments({ query, variables: "{}" }, ["/query"], LIMITS)[
+        "/query"
+      ]!.unresolvedArguments,
+    ).toEqual(["o"]);
+    // document がボディのルートなら兄弟は無く、既定値で解決する。
+    expect(
+      buildGraphqlDocuments(query, [""], LIMITS)[""]!.argumentValues,
+    ).toEqual({ o: ["d"] });
   });
 
   test("名指しした引数が解決不能なら判定不能 (偽ではない)", () => {

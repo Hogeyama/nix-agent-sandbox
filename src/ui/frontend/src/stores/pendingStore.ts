@@ -67,6 +67,7 @@ export type NetworkViolationRow = {
   kind: string;
   pointer: string;
   value: string | null;
+  label: string | null;
   excerpt: string | null;
   count: number;
 };
@@ -144,6 +145,7 @@ function violationsOf(
     kind: violation.kind ?? "",
     pointer: violation.pointer ?? "",
     value: violation.value ?? null,
+    label: violation.label ?? null,
     excerpt: violation.excerpt ?? null,
     count: violation.count ?? 1,
   }));

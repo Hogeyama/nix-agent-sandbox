@@ -169,6 +169,9 @@ const validBodyDiagnostics = [
   { code: "invalid-json" },
   { code: "empty-json-body" },
   { code: "non-scalar-at-pointer", pointer: "/messages/0/content" },
+  { code: "graphql-unparseable", pointer: "/query" },
+  { code: "graphql-query-string", pointer: "/query" },
+  { code: "graphql-unresolved-argument", pointer: "/query", argument: "owner" },
 ] as const;
 
 for (const diagnostic of validBodyDiagnostics) {
@@ -243,6 +246,32 @@ const invalidBodyDiagnostics = [
   [
     "a non-string pointer",
     { "policy.json": { code: "non-scalar-at-pointer", pointer: 1 } },
+  ],
+  [
+    "a graphql diagnostic carrying body text",
+    {
+      "policy.json": {
+        code: "graphql-unparseable",
+        pointer: "/query",
+        document: "mutation { deleteRepository }",
+      },
+    },
+  ],
+  [
+    "a query-string diagnostic carrying the query string",
+    {
+      "policy.json": {
+        code: "graphql-query-string",
+        pointer: "/query",
+        query: "query=mutation",
+      },
+    },
+  ],
+  [
+    "an unresolved-argument diagnostic without its argument",
+    {
+      "policy.json": { code: "graphql-unresolved-argument", pointer: "/query" },
+    },
   ],
 ] as const;
 
@@ -438,6 +467,7 @@ const validFinding: ViolationFinding = {
   kind: "schema-mismatch",
   pointer: "/messages/0/content/1",
   value: "future_block",
+  label: null,
   excerpt: '{"type":"future_block"}',
   count: 3,
 };
@@ -467,6 +497,9 @@ const invalidFindings = [
   ["a non-string pointer", { ...validFinding, pointer: null }],
   ["an over-long value", { ...validFinding, value: "x".repeat(4096) }],
   ["an over-long pointer", { ...validFinding, pointer: "/".repeat(4096) }],
+  ["a missing label", { ...validFinding, label: undefined }],
+  ["a non-string label", { ...validFinding, label: 7 }],
+  ["an over-long label", { ...validFinding, label: "x".repeat(4096) }],
   ["an over-long excerpt", { ...validFinding, excerpt: "x".repeat(8192) }],
   ["an over-long selector", { ...validFinding, at: "/x".repeat(4096) }],
 ] as const;
@@ -482,6 +515,44 @@ for (const [name, finding] of invalidFindings) {
     ).not.toBeNull();
   });
 }
+
+// BodyExpect の所見は document の本文を運ばない。値は正準形の短い文字列か
+// リクエストごとの UUID で、UUID のときだけ表示名を持つ。抜粋は null である。
+test("request policy outcome validation accepts BodyExpect findings", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      {
+        ...validOutcome,
+        findings: [
+          {
+            expect: 0,
+            expectKind: "body",
+            at: "/query",
+            kind: "schema-mismatch",
+            pointer: "/query",
+            value: "argument:owner=other-org",
+            label: null,
+            excerpt: null,
+            count: 1,
+          },
+          {
+            expect: 0,
+            expectKind: "body",
+            at: "/query",
+            kind: "body-unavailable",
+            pointer: "/query",
+            value: "0b6f3c1e-2d4a-4f7b-9c8e-5a1d2e3f4a5b",
+            label: "document:(unanalysable)",
+            excerpt: null,
+            count: 1,
+          },
+        ],
+      },
+      "sess_test",
+      document,
+    ),
+  ).toBeNull();
+});
 
 test("request policy outcome validation rejects too many findings", () => {
   expect(

@@ -18,6 +18,28 @@ test("network card keeps method/target and filters unknown scopes", () => {
   expect(vm.reason.label).toBe("the matched rule asks for review");
 });
 
+test("network card shows a violation's label in place of its value", () => {
+  const vm = cardViewModel("network", {
+    sessionId: "s1",
+    requestId: "r1",
+    host: "api.github.com",
+    port: 443,
+    approvalScopes: ["once", "violation"],
+    violations: [
+      {
+        pointer: "/query",
+        value: "0b6f3c1e-2d4a-4f7b-9c8e-5a1d2e3f4a5b",
+        label: "document:(unanalysable)",
+      },
+      { pointer: "/query", value: "argument:owner=other-org", label: null },
+    ],
+  });
+  expect(vm.violations.map((v) => v.label)).toEqual([
+    "/query = document:(unanalysable)",
+    "/query = argument:owner=other-org",
+  ]);
+});
+
 test("network card falls back to once when scopes are empty", () => {
   const vm = cardViewModel("network", {
     sessionId: "s1",

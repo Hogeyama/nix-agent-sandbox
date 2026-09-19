@@ -143,6 +143,54 @@ describe("ルールの重なり", () => {
     expect(message).toContain("ルール api.exact-path と api.exact-method");
     expect(message).toContain("両方に一致するリクエストの例");
     expect(message).toContain('ボディ: "root-value"');
+    // root を指す Pointer は空文字なので、表では (root) と書かないと値だけが浮く。
+    expect(message).toContain(
+      [
+        '  api.exact-path    GET|POST  /run  body json (root)="root-value"',
+        '  api.exact-method  GET       /**   body json (root)="root-value"',
+      ].join("\n"),
+    );
+  });
+
+  test("ボディ条件のないルール同士の表にはボディの列を足さない", () => {
+    const message = joined(ambiguous);
+    expect(message).toContain(
+      [
+        "  api.repos.read   GET|HEAD  /repos/{org}/{repo}/**",
+        "  api.repos.pulls  GET       /repos/*/*/pulls",
+        "",
+        "  解決方法:",
+      ].join("\n"),
+    );
+  });
+
+  test("片側だけがボディ条件を持つとき、もう片側の行にはボディ条件なしと書く", () => {
+    const message = joined(
+      oneRule({
+        mode: {
+          match: {
+            methods: ["GET", "POST"],
+            paths: ["/run"],
+            body: {
+              format: "json",
+              oneOf: { "/mode": ["fast", "safe"] },
+              equals: { "/kind": 1 },
+            },
+          },
+          onMatch: "allow",
+        },
+        any: {
+          match: { methods: ["POST"], paths: ["/**"] },
+          onMatch: "deny",
+        },
+      }),
+    );
+    expect(message).toContain(
+      [
+        '  api.mode  GET|POST  /run  body json /mode="fast"|"safe" /kind=1',
+        "  api.any   POST      /**   ボディ条件なし",
+      ].join("\n"),
+    );
   });
 
   test("エラーには両方の match と 3 つの解決方法が載る", () => {
@@ -453,6 +501,188 @@ describe("ルールの重なり", () => {
   });
 });
 
+describe("GraphQL 条件の重なり", () => {
+  type GraphqlCondition = NonNullable<
+    NonNullable<
+      NonNullable<
+        AuthzConfig["network"]["scopes"][string]["rules"]
+      >[string]["match"]["body"]
+    >["graphql"]
+  >;
+
+  /** `POST /graphql` を分け合う 2 本のルール。違いは graphql 条件だけにある。 */
+  function twoGraphqlRules(
+    read: GraphqlCondition,
+    other: GraphqlCondition,
+    overrides?: { readonly read?: string[]; readonly other?: string[] },
+  ): AuthzConfig {
+    const rule = (graphql: GraphqlCondition, names?: string[]) => ({
+      match: {
+        methods: ["POST"],
+        paths: ["/graphql"],
+        body: { format: "json" as const, graphql },
+      },
+      onMatch: "allow" as const,
+      ...(names === undefined ? {} : { overrides: names }),
+    });
+    return oneRule({
+      read: rule(read, overrides?.read),
+      other: rule(other, overrides?.other),
+    });
+  }
+
+  test("rootFields が交差してどちらも包含しなければエラーになり、証人に document が載る", () => {
+    const message = joined(
+      twoGraphqlRules(
+        { operations: ["query"], rootFields: ["repository", "viewer"] },
+        { operations: ["query"], rootFields: ["viewer", "organization"] },
+      ),
+    );
+    expect(message).toContain(
+      "ルール api.read と api.other の受理集合が交差します",
+    );
+    // 共通の root field を持つ document が、at の位置に置かれて現れる。
+    expect(message).toContain(
+      'ボディ: {"query":"query { viewer { __typename } }"}',
+    );
+    expect(message).toContain('overrides { "read" }');
+  });
+
+  test("メソッドとパスが同じルールどうしでは、表の列にボディ条件の違いが載る", () => {
+    const message = joined(
+      twoGraphqlRules(
+        {
+          operations: ["query"],
+          rootFields: ["repository", "viewer"],
+          arguments: { owner: ["my-org"] },
+        },
+        { operations: ["query"], rootFields: ["viewer", "organization"] },
+      ),
+    );
+    expect(message).toContain(
+      'api.read   POST  /graphql  body json graphql /query operations=query rootFields=repository|viewer arguments.owner="my-org"',
+    );
+    expect(message).toContain(
+      "api.other  POST  /graphql  body json graphql /query operations=query rootFields=viewer|organization",
+    );
+  });
+
+  test("at が異なる 2 条件は交差し、どちらも包含しないので overrides が要る", () => {
+    const read = { at: "/query", operations: ["query" as const] };
+    const other = { at: "/doc", operations: ["query" as const] };
+
+    const message = joined(twoGraphqlRules(read, other));
+    expect(message).toContain(
+      "ルール api.read と api.other の受理集合が交差します",
+    );
+    // それぞれの位置に別の document を置いた 1 つのボディが両方を満たす。
+    expect(message).toContain(
+      'ボディ: {"query":"query { field { __typename } }","doc":"query { field { __typename } }"}',
+    );
+
+    expect(errorsOf(twoGraphqlRules(read, other, { other: ["read"] }))).toEqual(
+      [],
+    );
+  });
+
+  test("at が異なれば operations が素でも交差する", () => {
+    const message = joined(
+      twoGraphqlRules(
+        { at: "/query", operations: ["query"] },
+        { at: "/doc", operations: ["mutation"] },
+      ),
+    );
+    expect(message).toContain(
+      'ボディ: {"query":"query { field { __typename } }","doc":"mutation { field { __typename } }"}',
+    );
+  });
+
+  test("arguments の値集合が素でも交差し、証人は引数を持たない document になる", () => {
+    const message = joined(
+      twoGraphqlRules(
+        { operations: ["query"], arguments: { owner: ["a"] } },
+        { operations: ["query"], arguments: { owner: ["b"] } },
+      ),
+    );
+    expect(message).toContain("受理集合が交差します");
+    expect(message).toContain(
+      'ボディ: {"query":"query { field { __typename } }"}',
+    );
+  });
+
+  test("包含関係にある graphql 条件は overrides なしで共存できる", () => {
+    for (const [narrow, wide] of [
+      [{ operations: ["query"] }, { operations: ["query", "mutation"] }],
+      [
+        { operations: ["query"], rootFields: ["viewer"] },
+        { operations: ["query"], rootFields: ["viewer", "repository"] },
+      ],
+      [
+        { operations: ["query"], rootFields: ["viewer"] },
+        { operations: ["query"] },
+      ],
+      [
+        { operations: ["query"], arguments: { owner: ["my-org"] } },
+        { operations: ["query"], arguments: { owner: ["my-org", "other"] } },
+      ],
+      [
+        { operations: ["query"], arguments: { owner: ["my-org"] } },
+        { operations: ["query"] },
+      ],
+    ] as const satisfies readonly (readonly [
+      GraphqlCondition,
+      GraphqlCondition,
+    ])[]) {
+      expect(errorsOf(twoGraphqlRules(narrow, wide))).toEqual([]);
+    }
+  });
+
+  test("graphql 条件を持つルールは、同じ位置の format だけのルールに包含される", () => {
+    expect(
+      errorsOf(
+        oneRule({
+          read: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: { format: "json", graphql: { operations: ["query"] } },
+            },
+            onMatch: "allow",
+          },
+          any: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: { format: "json" },
+            },
+            onMatch: "review",
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("operations が素な 2 条件は交差しないので、overrides を書くとエラーになる", () => {
+    const read = { operations: ["query" as const] };
+    const write = { operations: ["mutation" as const] };
+    expect(errorsOf(twoGraphqlRules(read, write))).toEqual([]);
+    expect(joined(twoGraphqlRules(read, write, { read: ["other"] }))).toContain(
+      "交差しない相手",
+    );
+  });
+
+  test("rootFields が素な 2 条件は交差しない", () => {
+    expect(
+      errorsOf(
+        twoGraphqlRules(
+          { operations: ["query"], rootFields: ["viewer"] },
+          { operations: ["query"], rootFields: ["repository"] },
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("実 ID の一意性", () => {
   /**
    * キー構文は `.` を許すので、`<スコープ名>.<キー>` の連結は一意に戻せない。
@@ -611,7 +841,75 @@ describe("match の構文", () => {
         ),
       ).toContain(`format = "${format}" に oneOf`);
     });
+
+    test(`${format} に graphql を併記するとエラーになる`, () => {
+      expect(
+        joined(
+          oneRule({
+            a: {
+              match: {
+                paths: ["/a"],
+                body: { format, graphql: { operations: ["query"] } },
+              },
+              onMatch: "allow",
+            },
+          }),
+        ),
+      ).toContain(`format = "${format}" に graphql`);
+    });
   }
+
+  test("match の graphql は expect と同じく空の Listing を拒否する", () => {
+    const message = joined(
+      oneRule({
+        a: {
+          match: {
+            paths: ["/a"],
+            body: {
+              format: "json",
+              graphql: {
+                operations: [],
+                rootFields: [],
+                arguments: { owner: [] },
+              },
+            },
+          },
+          onMatch: "allow",
+        },
+      }),
+    );
+    expect(message).toContain("match.body.graphql.operations が空の Listing");
+    expect(message).toContain("match.body.graphql.rootFields が空の Listing");
+    expect(message).toContain(
+      "match.body.graphql.arguments の owner が空の Listing",
+    );
+    expect(message).toContain("決して発火しません");
+  });
+
+  test("graphql の at は JSON Pointer でなければならない", () => {
+    const message = joined(
+      oneRule({
+        a: {
+          match: {
+            paths: ["/a"],
+            body: {
+              format: "json",
+              graphql: { at: "query", operations: ["query"] },
+            },
+          },
+          onMatch: "allow",
+          expect: [
+            {
+              kind: "body",
+              graphql: { at: "/bad~2", operations: ["query"] },
+            },
+          ],
+        },
+      }),
+    );
+    expect(message).toContain("match.body.graphql.at の query");
+    expect(message).toContain("expect[0] の graphql.at の /bad~2");
+  });
 
   const invalidBodyValues: readonly (readonly [string, unknown])[] = [
     ["配列", ["fast"]],
@@ -845,6 +1143,78 @@ describe("受理条件", () => {
         }),
       ),
     ).toContain("/kind");
+  });
+
+  // addon は解決済みドキュメントを同じ形で検証し直し、読めない条件があると
+  // ドキュメント全体を拒否する。ここで止めないと最初のリクエストが 403 になる。
+  test("BodyExpect の equals / oneOf は match と同じ形の検査を受ける", () => {
+    const message = joined(
+      oneRule({
+        a: {
+          match: { paths: ["/a"], body: { format: "json" } },
+          onMatch: "allow",
+          expect: [
+            {
+              kind: "body",
+              equals: { mode: "fast" },
+              oneOf: {
+                "/tier": [{ nested: true }] as unknown as readonly string[],
+              },
+            },
+          ],
+        },
+      }),
+    );
+    expect(message).toContain("expect[0] の equals の mode は RFC 6901");
+    expect(message).toContain(
+      "expect[0] の oneOf の /tier は文字列・有限な数値・真偽値",
+    );
+  });
+
+  // 所見の値は Pointer を切らずに含むので、Pointer が長いと broker が所見を
+  // 受け取れず、そのリクエストは承認できない。
+  for (const field of ["equals", "oneOf"] as const) {
+    const bodyExpect = (pointer: string) =>
+      oneRule({
+        a: {
+          match: { paths: ["/a"], body: { format: "json" } },
+          onMatch: "allow",
+          expect: [
+            field === "equals"
+              ? { kind: "body", equals: { [pointer]: "x" } }
+              : { kind: "body", oneOf: { [pointer]: ["x"] } },
+          ],
+        },
+      });
+
+    test(`BodyExpect の ${field} の Pointer は 257 文字だとエラーになる`, () => {
+      expect(joined(bodyExpect(`/${"p".repeat(256)}`))).toContain(
+        `ルール api.a の expect[0] の ${field} の Pointer /${"p".repeat(31)}… は 257 文字で、上限の 256 文字を超えています。`,
+      );
+    });
+
+    test(`BodyExpect の ${field} の Pointer は 256 文字なら受け付ける`, () => {
+      expect(errorsOf(bodyExpect(`/${"p".repeat(255)}`))).toEqual([]);
+    });
+  }
+
+  test("match.body の Pointer には長さの上限を課さない", () => {
+    expect(
+      errorsOf(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                equals: { [`/${"p".repeat(300)}`]: "x" },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      ),
+    ).toEqual([]);
   });
 
   test("graphql の operations が空だとエラーになる", () => {
@@ -1189,6 +1559,29 @@ describe("設定の警告", () => {
     );
     expect(warnings.join("\n")).toContain("api.gql.read");
     expect(warnings.join("\n")).toContain("expect");
+  });
+
+  test("graphql 条件を match に置いたルールも、広い無条件 allow に覆われていると警告する", () => {
+    const warnings = warningsOf(
+      oneRule({
+        "gql.read": {
+          match: {
+            methods: ["POST"],
+            paths: ["/graphql"],
+            body: { format: "json", graphql: { operations: ["query"] } },
+          },
+          onMatch: "allow",
+        },
+        "api.all": {
+          match: { methods: ["POST"], paths: ["/**"] },
+          onMatch: "allow",
+        },
+      }),
+    ).join("\n");
+    expect(warnings).toContain(
+      "ルール api.gql.read のボディ条件は、同一スコープのより広い無条件 allow ルール api.api.all に覆われています",
+    );
+    expect(warnings).toContain("条件を match ではなく expect に置いてください");
   });
 
   test("overrides の総数がルール数を超えると警告する", () => {

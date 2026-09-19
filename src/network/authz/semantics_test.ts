@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type CompiledMatch, compileMatch } from "./relation.ts";
-import { evaluateMatch } from "./semantics.ts";
+import { evaluateBody, evaluateMatch } from "./semantics.ts";
 import type { Match, RequestBody } from "./types.ts";
 
 function compile(match: Match): CompiledMatch {
@@ -231,6 +231,55 @@ describe("graphql 条件の意味", () => {
     // 対象が存在しない場合は偽である。
     expect(
       evaluateMatch(match, request({ kind: "json", value: {} }, "/graphql")),
+    ).toBe("false");
+  });
+
+  // パスの照合はクエリ文字列を落として行う (resolve.ts の `pathForSelection`)。
+  // ここではボディ条件だけを、クエリ文字列を含むパスとともに評価する。
+  test("URL にクエリ文字列があれば graphql 条件は判定不能である", () => {
+    // サーバは document と変数を URL からも読むので、ボディの document が
+    // 実行されるものだと言えない。document が無いボディでも偽にしない。
+    // 偽にすると `?query=mutation...` がより広いルールへ落ちる。
+    for (const path of [
+      "/graphql?query=mutation%7Bx%7D",
+      "/graphql?variables[login]=other",
+      "/graphql?unrelated=1",
+    ]) {
+      for (const body of [
+        withDocument(["query"], ["organization"], {}),
+        { kind: "json", value: {} } as const,
+      ]) {
+        expect(evaluateBody(match.body, body, path)).toBe("indeterminate");
+      }
+    }
+    // `?` の後が空なら関係しない。
+    expect(
+      evaluateBody(
+        match.body,
+        withDocument(["query"], ["organization"], {}),
+        "/graphql?",
+      ),
+    ).toBe("true");
+  });
+
+  test("クエリ文字列は graphql 以外のボディ条件に関与しない", () => {
+    const tier = compile({
+      paths: ["/graphql"],
+      body: { format: "json", equals: { "/tier": "gold" } },
+    });
+    expect(
+      evaluateBody(
+        tier.body,
+        { kind: "json", value: { tier: "gold" } },
+        "/graphql?a=1",
+      ),
+    ).toBe("true");
+    expect(
+      evaluateBody(
+        tier.body,
+        { kind: "json", value: { tier: "bronze" } },
+        "/graphql?a=1",
+      ),
     ).toBe("false");
   });
 });

@@ -23,7 +23,7 @@ host 側で 1 度だけ解決する構成は引き継ぐ。
 ## 満たす要件
 
 1. 単一パスの中身で分岐する。 `POST /graphql` に対し、読み取り専用の操作で
-   あり、かつ `variables.o` が `my-org` であるときだけ自動許可し、外れたら
+   あり、かつ組織を指す引数が `my-org` であるときだけ自動許可し、外れたら
    人間の確認に回す。
 2. パスのセグメントを変数として取り出す。 `/repos/{org}/{repo}/issues` の
    `org` を条件にする。
@@ -311,7 +311,8 @@ class GraphqlMatch {
 
   /// 引数名ごとに許す文字列リテラルの集合。document 中に現れるその名前の引数の
   /// 値が、すべてこの集合に含まれるときだけ真になる。変数で与えられた引数は、
-  /// 対応する variables の値で評価する。省略時は制約しない。
+  /// 対応する variables の値で評価し、variables に無ければ operation が宣言する
+  /// 既定値で評価する。省略時は制約しない。
   arguments: Mapping<String, Listing<String>> = new {}
 }
 ```
@@ -325,11 +326,88 @@ GraphQL の判定は document を解析して行う。名前のない省略形 `
 として扱う。文字列の走査による近似は行わない。コメント、文字列リテラル、ブロック
 文字列、複数の定義、fragment の混在を正しく区別する必要があるためである。
 
+次のいずれかに当たる document は解析できないものとして扱う。サーバが実行できない、
+あるいはどう実行されるかを検査の側で決められない document を、検査ゲートが黙って
+通す理由はない。
+
+- 構文エラー、token 数が `maxNodes` を超える、深さが `maxDepth` を超える
+- operation を 1 つも持たない（fragment のみ）
+- 同じ名前の fragment を 2 度定義する（GraphQL の UniqueFragmentNames に反する）
+- 1 つの operation が同じ名前の変数を 2 度宣言する（UniqueVariableNames に反する）。
+  既定値をどちらの宣言から取るかは実装によって割れ、検証せずに実行する graphql-js は
+  後の宣言を使う
+- 未定義の fragment を spread する、または spread が循環する
+- operation ごとの fragment の展開量が `maxNodes` を超える（下記）
+
 `rootFields` と `arguments` はいずれも集合の包含であり、`operations` と同じ形をしている。
 任意の述語ではないので、特異度の比較も重なりの検出も従来どおり成立する。
 
-`arguments` の評価では、引数が変数で与えられている場合に `variables` を引いて解決する。
-解決できない引数（`variables` に無い、値が文字列でない）は違反として扱う。document 中に
+`arguments` の評価では、引数が変数 `$v` で与えられている場合、document と同じ
+オブジェクトの兄弟メンバ `variables` の形で解決の仕方が決まる。
+
+- `variables` が無い（メンバが存在しない、または document がボディのルートにあって
+  兄弟が無い）か JSON の `null`: その変数を使う operation が宣言する既定値
+  （`$v: String = "..."`）を使う
+- `variables` がオブジェクト: キー `v` を持てばその値を使う。明示の `null` も与えた
+  値であり、既定値には落ちない。キーを持たなければ無い場合と同じく既定値を使う
+- `variables` がそれ以外（文字列、配列、数値、真偽値）: 解決できない。既定値も使わない
+- 既定値も無ければ解決できない
+
+結果が文字列のときだけ解決できたとする。与えた値や既定値が文字列でない（数値、`null`、
+enum、リスト、オブジェクト）なら解決できない。
+
+既定値に落ちてよいのは、実行される値が既定値だと言い切れるときだけである。ボディに
+`variables` が無いか `null` なら変数は与えられておらず、オブジェクトでキーが無ければ
+その変数は与えられていない。どちらも GraphQL の実行規則により既定値が入る。ただし
+これが言えるのは、変数の出どころがボディだけのときである。URL のクエリ文字列から
+変数を読むサーバには、ボディに `variables` が無くても変数を与えられる。そのため
+クエリ文字列を持つリクエストでは、そもそも条件を評価しない（下記）。
+オブジェクトでない `variables` の扱いはサーバによって割れる。拒否する実装もあれば、
+文字列を JSON として読み直して変数に使う実装（graphql-ruby の generator が作る
+controller など）もある。後者に `variables: "{\"login\":\"other-org\"}"` を送れば、
+検査側が既定値で `my-org` と解決しても実行は `other-org` で行われる。どの値で実行
+されるかを検査側で決められないので、この場合は変数参照の引数をすべて解決できない
+ものとし、既定値で許可側に倒さない。文字列リテラルの引数はこの影響を受けない。
+
+**URL にクエリ文字列を持つリクエストでは、`graphql` 条件は判定できない。** `graphql`
+条件が見るのはボディの `at` と兄弟の `variables` だけだが、サーバは document と変数を
+URL からも読む。express-graphql は `?query=` / `?variables=` をボディより優先し、
+Rails はクエリ文字列の引数をボディの引数とまとめる（`variables[login]=x` は入れ子の
+ハッシュとして読まれる）。`POST /graphql?query=mutation{...}` に無害なボディを
+付ければ、検査したものとは別の document が実行される。ボディに `variables` を置かず
+`?variables=...` を付ければ、検査側が既定値で解決した変数が別の値で実行される。
+そこで `?` の後に 1 文字でもあるリクエストでは、`graphql` 条件をボディを見る前に
+判定不能とする（ボディに document が無くても偽にしない。偽にすると
+`?query=mutation...` がより広いルールへ落ちる）。ただしこれが効くのは、ボディが
+`format` を満たしてそのルールが候補に残るときだけである。ボディの無い POST や GET は
+`format = "json"` を満たさないので `graphql` ルールには当たらず、他のルールか
+`fallback` が決める。express-graphql はクエリ文字列だけの GET/POST も実行するので、
+同じスコープに広い `allow` があれば `?query=mutation...` はそこで通る。これは広い
+`allow` を置いた帰結であり（「判定の二相」）、防ぐなら広い側を `review` にするか、
+ボディの無い `/graphql` を拒否するルールを置く。`match` では `onIndeterminate` に
+従い、診断 `graphql-query-string` を付ける。`BodyExpect` では document を解析せず、
+違反 1 件とする（「承認の単位」）。引数名の一覧（`query` / `variables` /
+`operationName` …）で判定しないのは、名前も綴りもサーバごとに違い、Rails のように
+入れ子の綴りで同じ引数を運べるからである。`?` だけで中身が無い URL は対象にしない。
+同じ `match` や `BodyExpect` の `equals` / `oneOf` はクエリ文字列の影響を受けない。
+診断にも所見にもクエリ文字列の本文は載せない。
+
+変数は operation ごとに宣言されるので、fragment の中の引数は、その fragment に
+（spread を推移的に辿って）到達する operation ごとに評価する。複数の operation から
+使われる fragment では、解決できた値をすべて集め、1 つでも解決できない評価があれば
+解決できない引数としても扱う。`operationName` でどの operation が実行されるかには
+依存させない。実行されるのがどれであっても検査が緩まないようにするためである。
+どの operation からも到達しない fragment の引数は既定値を持たないものとして
+`variables` だけで解決する。
+
+operation ごとの評価と、到達する fragment を探す走査は、operation の数と fragment の
+大きさの積だけ仕事を増やし得る。そこで operation が到達する fragment 1 つにつき
+「1 + その fragment の引数の数 + その fragment が spread する相異なる fragment の数」を
+数え、合計が `maxNodes` を超える document は解析できないものとして扱う。同じ fragment
+への spread の繰り返しは 1 本として数え、1 本として辿る。1 回の訪問の仕事がその訪問の
+課金を超えないので、走査と評価の総量は document の大きさと `maxNodes` の和で抑えられる。
+
+解決できない引数は違反として扱う。document 中に
 その名前の引数が 1 つも現れない場合は制約が空になるので真である。`arguments` は
 「この名前の引数が現れるなら、その値はこの集合に含まれる」を意味し、「この引数が現れる」
 ことは要求しない。
@@ -413,6 +491,8 @@ read を暗黙に持つので、組織を限定したトークンでも他の組
 - 条件の評価に必要なバイト数が予算を超える。
 - 条件の対象が存在するが、条件と噛み合わない型を持つ（`graphql.at` が文字列でない、
   `equals` の対象がオブジェクトである等）。
+- `graphql` 条件を持つルールで、リクエストの URL がクエリ文字列を持つ（サーバが
+  document や変数を URL から読み得るため。「ボディ条件」を参照）。
 
 `format = "json"` はルートの型を問わない。ルートがオブジェクトであることを要求
 したい場合は、受理条件の `JsonRoot` を使う。
@@ -820,6 +900,66 @@ Pointer を持たせれば取り出せる。
 よい」を意味する。ルール全体を無効にするわけではないので、同じルールの他の受理条件は
 効き続ける。
 
+**`BodyExpect` の `equals` / `oneOf` の値は JSON Pointer を含む。** 1 つの
+`BodyExpect` は複数の Pointer を並べられるが、受理条件の識別子は `BodyExpect` 全体で
+1 つである。`UnionShape` ならセレクタごとに識別子が分かれるが、ここでは分かれない。
+値が違反したスカラーだけだと、`/model` の `"other"` を承認すれば `/owner` の `"other"`
+も通り、`/model` が無いことを承認すれば `/owner` が無いことも通る。承認者はどちらも
+見ていない。そこで値を次の形にする。
+
+- 集合に無いスカラー: `<pointer>=<スカラーの JSON テキスト>`（`/owner="other"`、
+  `/n=1`）。JSON テキストにするのは、文字列の `"true"` と真偽値の `true` を別の値に
+  保つためである。スカラーはボディ由来なのでマスクしてから載せる。
+- 対象が無い: `<pointer>=(missing)`
+- 対象がスカラーでない: `<pointer>=(not-scalar)`
+
+Pointer は設定から取った文字列で、ボディ由来ではないので、マスクも切り詰めもせず
+そのまま載せる（所見の `at` も同じ Pointer を切らずに運んでいる）。その長さは設定
+エラーで 256 文字までに抑える（「設定エラー」）。長さの上限は
+スカラーの部分にだけ、これまでどおり（切ったときは切る前の全体のダイジェストを付けて）
+かける。値全体を切ると、長い Pointer がスカラーを値の外へ押し出す。スカラーの所見には
+抜粋が無いので、承認者は見えない値を承認することになる。
+
+**GraphQL の許されない operation と root field、解析できない document、解決できない
+引数、URL のクエリ文字列は、1 リクエストずつ承認する。**
+`BodyExpect` の `graphql` 条件の所見のうち、`operations` に無い種別の operation を含む
+所見、`rootFields` に無い root field を含む所見、document を解析できなかった所見、
+名前を挙げた引数を解決できなかった所見、URL がクエリ文字列を持つために document を
+検査しなかった所見には、違反した値としてリクエストごとの乱数の識別子（UUID）を載せる。1 つのリクエストの中では
+事実 1 つにつき UUID を 1 つ引く（同じ種別の operation や、別名で並べた同じ root
+field が複数あっても所見は 1 件）。
+単位の値の成分がそのリクエストにしか一致しないので、承認も拒否もそのリクエスト限りに
+なる。ある mutation を承認しても別の mutation について、ある document を承認しても
+別の document について、何かを言ったことにはならないからである。root field も同じで
+ある。`rootFields` が `search` や `node` を締め出すのは、何を読むかが document から
+静的に見えないからであり（「GraphQL に対する対象の限定」）、ある `node(id:)` を承認
+しても別の `node(id:)` について何かを言ったことにはならない。`rootField:node` を
+固定の値にすると、1 度の承認がセッションの残りのあらゆる `node(id:)` を通す。
+クエリ文字列の所見は、実行される document も変数もリクエストごとに URL の中にあるので
+同じである。固定の値を置くと、
+`operation:mutation` の 1 度の承認がセッションの残りのあらゆる mutation
+（`deleteRepository` も）を確認なしに通し、「読み取り以外は人に回す」というルールの
+意図が 1 回のクリックで消える。同じく 1 度の承認がその後の解析できない document すべて
+（たとえば `maxDepth` より深く入れ子にした mutation）を通してしまい、解決できない引数の
+値はリテラルで書かれた同じ綴りの引数値と衝突する。代償として、同じ document を送り直す
+たびに確認が出て、`violation` の粒度はこれらの所見に限って `once` と同じに振る舞う。
+そのため、答えを要する所見がすべてこの種類であるリクエストには `violation` の粒度を
+提示しない。選んでも `once` と区別がつかず、承認者に記憶されると誤解させるからである。
+他の所見と混在するリクエストでは提示し、記憶されるのは他の所見の側だけになる。
+何が起きたかの読める説明（`operation:<種別>`、`rootField:<name>`、
+`document:(unanalysable)`、`document:(query-string)`、`argument:<name>=(unresolved)`）は所見の表示名 `label` に
+載せる。承認 UI は UUID の代わりにこれを出し、監査ログは値と並べて記録する。表示名は
+承認の単位には入らない。root field の名前は document から取った語なので、ほかの
+表示名と同じくマスクと長さの上限を通して載せる。抜粋 `excerpt` はボディの抜粋という
+意味のまま null にしておく。クエリ文字列の所見は種別を `body-unavailable` とし、同じ
+`BodyExpect` のほかの GraphQL の所見を伴わない（ボディの document が実行されるものか
+分からないので解析しない）。クエリ文字列そのものは値にも表示名にも載せない。
+
+`violation` の粒度で覚えられる GraphQL の所見は、集合に無い引数値の
+`argument:<name>=<value>` だけである。値が読む対象を名指すので、承認者は何を
+通すかを見て押せる。許してよい root field を広げたいときは、セッションの承認では
+なく設定の `rootFields` に足す。
+
 **承認済みの集合は broker が保持する。** 受理条件の検査は addon 側で行うが、承認結果を
 resolved ドキュメントに書き戻して addon へ押し返すことはしない。addon は違反ごとに
 broker へ問い合わせ、broker が承認済みの組をキャッシュから即答する。addon は現行でも
@@ -1195,6 +1335,15 @@ amend でできるのはルールの追加・置換・削除までである。pr
 - `captures` の制約、`oneOf` の値集合、`graphql` の `operations` / `rootFields` /
   `arguments` の各エントリのいずれかが空の Listing である。受理集合が空になり、その
   ルールは決して発火しないため。
+- `graphql` の `rootFields` の要素、または `arguments` のキーが GraphQL の名前
+  (`[_A-Za-z][_0-9A-Za-z]*`) でない。そのような名前は document に現れ得ないので、
+  `rootFields` の要素は何も許さず、`arguments` のキーの制約は何も制約しないまま
+  黙って通るため。`match.body` と `BodyExpect` のどちらに書いた条件にも適用する。
+- `BodyExpect` の `equals` / `oneOf` の JSON Pointer が 256 文字（UTF-16 の単位）を
+  超える。違反の所見はこの Pointer を切らずに値に含め（「承認の単位」）、broker は
+  値の長さを確かめてから所見を受け取るので、長い Pointer の所見は受け取られず、その
+  リクエストは承認できなくなるため。`match.body` の Pointer は所見に載らないので対象に
+  しない。
 
 ## 設定エラーの提示
 
@@ -1461,7 +1610,8 @@ preset の `onViolation` を `review` に切り替えるのはこの段階であ
   `BodyExpect` の両方で有効にする
 - 名前のない省略形 `{ ... }` を `query` として扱う、コメント・文字列リテラル・ブロック
   文字列・fragment の区別
-- `arguments` の変数解決（引数が変数のときに `variables` を引く）
+- `arguments` の変数解決（引数が変数のときに `variables` を引き、無ければ operation の
+  既定値を使う）
 
 **graphql-core v3.2.11 を vendoring して使う。** 使うのは `graphql.language.parse()`
 だけであり、**スキーマを構築せず、実行もしない**。
@@ -1548,8 +1698,13 @@ scopes {
         onIndeterminate = "review"
         expect {
           new BodyExpect {
-            graphql { operations { "query" } }
-            equals { ["/variables/o"] = "my-org" }
+            graphql {
+              operations { "query" }
+              arguments {
+                ["owner"] { "my-org" }
+                ["login"] { "my-org" }
+              }
+            }
             onViolation = "review"
           }
         }
@@ -1559,18 +1714,28 @@ scopes {
 }
 ```
 
-mutation を含む document、`variables.o` が別の組織を指す document、`variables` を
-持たないボディは、いずれも `graphql` ルールが引き受けたうえで受理条件に違反し、
-`onViolation = "review"` で人間の確認に回る。条件を `match` ではなく `expect` に置いた
-ので、同一スコープに広い `allow` ルールがあっても拾われない。ボディが壊れていて解析
-できない場合は `match` が判定不能になり、`onIndeterminate = "review"` が効く。
+mutation を含む document と、`owner` / `login` 引数が `my-org` 以外を指す document は、
+いずれも `graphql` ルールが引き受けたうえで受理条件に違反し、`onViolation = "review"` で
+人間の確認に回る。引数の値は `variables` を引いて（無ければ operation の既定値で）
+解決してから比べるので、変数の名前が何であっても、`organization(login: "other-org")` の
+ように直書きしても同じ判定になる。変数が `variables` にも既定値にも無い、文字列でない、
+document を解析できない場合も違反として確認に回る。URL にクエリ文字列がある
+リクエスト（`POST /graphql?query=mutation{...}` など）も、ボディが読み取りであっても
+違反として確認に回る。条件を `match` ではなく `expect` に置いたので、同一スコープに広い `allow` ルールが
+あっても拾われない。ただしボディの無いリクエスト（`GET /graphql?query=...` や
+ボディ無しの POST）は `format = "json"` を満たさずこのルールに当たらないので、広い
+`allow` があればそちらで通る。ボディが JSON として壊れている場合は `match` が判定不能になり、
+`onIndeterminate = "review"` が効く。
 
-ただし `equals { ["/variables/o"] = "my-org" }` が縛るのは**変数の値**であって、query が
-実際に読む対象ではない。変数を使わず `organization(login: "my-org")` と直書きした
-document はこの条件をすり抜ける。対象組織を絞りたい場合は `equals` ではなく
-`graphql.rootFields` と `graphql.arguments` を使う（「GraphQL に対する対象の限定」を
-参照）。この例は `match` と `expect` の使い分け、`onIndeterminate`、`BodyExpect` の働きを
-示すためのものである。
+この例が縛るのは「`owner` / `login` という名前の引数が現れたら、その値は `my-org`」
+だけである。引数は document のどこに現れても名前で照合する（「GraphQL に対する対象の
+限定」を参照）。したがって入れ子のフィールドの同名の引数も `my-org` でなければ違反になる
+一方、これらの引数を持たないフィールドは何も縛られない。`search(query: "org:other-org")`
+や `node(id: ...)` のように読む対象が `owner` / `login` 以外に現れるクエリは、この条件の
+ままでは自動許可される。入口をさらに絞るには `graphql.rootFields` を併用する。それでも
+グラフを辿って他の組織に届くことは防げず、この制約は削減であって境界ではない。この例は
+`match` と `expect` の使い分け、`onIndeterminate`、`BodyExpect` の働きを示すためのもの
+である。
 
 ### 要件 2 と 3: パスのセグメントで絞り、同じ条件で注入する
 
@@ -1706,5 +1871,10 @@ const v1: Scope = new {
 - GraphQL の判定に document の解析を要求するので、`match` の評価コストが JSON の
   解析だけでは済まなくなる。
 - クエリ文字列は選択に参加しないので、`?` 以降で挙動が変わる API は区別できない。
+  例外は `graphql` 条件で、クエリ文字列があればその条件を判定不能にする（「ボディ
+  条件」を参照）。GraphQL のサーバは document と変数を URL からも読むので、ボディ
+  だけを見た判定は実行されるものを表さない。代償として、クエリ文字列を付けて
+  GraphQL を送るクライアントのリクエストは、ボディが条件を満たしていても
+  `onIndeterminate` や `onViolation` の確認に回る。
 - preset の受理条件を設定で緩められない。上流が追加した content block のタグは、設定
   ではなくセッションごとの承認で通す（「preset の受理条件は緩められない」を参照）。

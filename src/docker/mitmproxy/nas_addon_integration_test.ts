@@ -12,7 +12,11 @@ import {
 import net from "node:net";
 import path from "node:path";
 import { queryAuditLogs } from "../../audit/store.ts";
-import type { ResolvedDocument } from "../../network/authz/resolve.ts";
+import { githubGraphqlExample } from "../../network/authz/examples_fixture.ts";
+import {
+  type ResolvedDocument,
+  withoutInjectLiterals,
+} from "../../network/authz/resolve.ts";
 import {
   documentWithScopes,
   resolvedDocument,
@@ -689,6 +693,11 @@ interface AddonFixture {
 }
 
 interface AddonFixtureSetupOptions {
+  /**
+   * addon が読むファイルに書くドキュメント。省略時は broker と同じもの。
+   * 注入を持つ設定では、本番と同じく `withoutInjectLiterals` を通した形を渡す。
+   */
+  addonDocument?: ResolvedDocument;
   afterBrokerStarted?: (partial: {
     runtimeDir: string;
     broker: SessionBroker;
@@ -799,7 +808,7 @@ async function setupAddonFixture(
     );
     await writeFile(
       `${paths.authzDir}/${sessionId}.json`,
-      JSON.stringify(document),
+      JSON.stringify(options.addonDocument ?? document),
     );
     await writeSessionRegistry(paths, {
       version: 1,
@@ -1603,6 +1612,282 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+const GITHUB_TARGET_PORT = 8093;
+const GITHUB_TOKEN = "ghp_integration_token";
+
+/**
+ * 仕様の受け入れ例 (`githubGraphqlExample`) をそのまま解決したもの。変えるのは
+ * ターゲットのポートだけで、fake upstream が平文 HTTP で待つポートに向ける。
+ */
+function githubGraphqlDocuments(): {
+  broker: ResolvedDocument;
+  addon: ResolvedDocument;
+} {
+  const config = githubGraphqlExample();
+  const scope = config.network?.scopes?.github;
+  if (!scope) throw new Error("githubGraphqlExample lost its github scope");
+  const broker = resolvedDocument({
+    ...config,
+    network: {
+      ...config.network,
+      scopes: {
+        github: { ...scope, targets: [`api.github.com:${GITHUB_TARGET_PORT}`] },
+      },
+    },
+  });
+  return { broker, addon: withoutInjectLiterals(broker) };
+}
+
+async function setupGithubGraphqlFixture(
+  dirPrefix: string,
+): Promise<AddonFixture> {
+  const documents = githubGraphqlDocuments();
+  return await setupAddonFixture(
+    dirPrefix,
+    documents.broker,
+    { "gh-token": [GITHUB_TOKEN] },
+    { addonDocument: documents.addon },
+  );
+}
+
+function sendGraphql(
+  fixture: AddonFixture,
+  proxyPort: number,
+  body: string,
+  query = "",
+): Promise<string> {
+  return sendProxyRequest(
+    proxyPort,
+    `http://api.github.com:${GITHUB_TARGET_PORT}/graphql${query}`,
+    `${fixture.sessionId}:${fixture.token}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    },
+  );
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: a query whose variable resolves to an allowed owner is forwarded with the injected token",
+  async () => {
+    const resources = protocolResources("nas-gql-allow");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-gql-allow-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+
+      // 引数はリテラルでなく変数で渡す。addon は variables を引いて解決した
+      // 値で arguments を判定するので、これが通れば解決まで働いている。
+      const body = JSON.stringify({
+        query:
+          'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { nodes { title } } } }',
+        variables: { o: "my-org" },
+      });
+      const response = await sendGraphql(fixture, proxyPort, body);
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "POST /graphql",
+      );
+
+      expect(response).toContain("200 OK");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
+      expect(upstreamLogs).toContain(body);
+      const outcome = await expectSinglePolicyOutcome(
+        fixture.auditDir,
+        {
+          ruleId: "github.graphql",
+          requestPolicyResult: "pass",
+          reason: "recognized-json",
+        },
+        "graphql read",
+      );
+      expect(JSON.stringify(outcome)).not.toContain(GITHUB_TOKEN);
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: documents the acceptance example refuses are held for review before upstream",
+  async () => {
+    const resources = protocolResources("nas-gql-review");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-gql-review-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+
+      const cases = [
+        {
+          name: "mutation",
+          bodyMarker: "deleteRepository(",
+          body: JSON.stringify({
+            query: 'mutation { deleteRepository(owner: "my-org") { ok } }',
+          }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "schema-mismatch",
+                label: "operation:mutation",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          name: "variable resolving to another owner",
+          // other-org は所見の正準形に正当に現れるので、document 側の語で見る。
+          bodyMarker: "repository(owner: $o",
+          body: JSON.stringify({
+            query:
+              'query($o: String!) { repository(owner: $o, name: "x") { id } }',
+            variables: { o: "other-org" },
+          }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "schema-mismatch",
+                value: "argument:owner=other-org",
+                label: null,
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          name: "unanalysable document",
+          bodyMarker: "query { repository(",
+          body: JSON.stringify({ query: "query { repository(" }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "body-unavailable",
+                label: "document:(unanalysable)",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          // サーバは URL の document も実行するので、ボディが読み取りでも
+          // 1 リクエスト限りの違反として人に回す。
+          name: "query string",
+          query: "?query=mutation%7BdeleteRepository%7D",
+          bodyMarker: "repository(owner: $o",
+          body: JSON.stringify({
+            query:
+              'query($o: String!) { repository(owner: $o, name: "x") { id } }',
+            variables: { o: "my-org" },
+          }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "body-unavailable",
+                label: "document:(query-string)",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          // JSON として読めないので match の body 条件が判定不能になり、
+          // 受理条件に届く前にルールの onIndeterminate が人に回す。
+          name: "broken JSON",
+          bodyMarker: "viewer { login }",
+          body: '{"query": "query { viewer { login } }"',
+          expected: {
+            ruleId: "github.graphql",
+            askReason: "indeterminate",
+            bodyDiagnostic: { code: "invalid-json" },
+          },
+        },
+      ];
+
+      for (const testCase of cases) {
+        const responsePromise = sendGraphql(
+          fixture,
+          proxyPort,
+          testCase.body,
+          "query" in testCase ? testCase.query : "",
+        );
+        const pending = await waitForPendingItem(fixture, testCase.name);
+        expect(pending, testCase.name).toMatchObject({
+          state: "pending",
+          ...testCase.expected,
+        });
+        if (
+          testCase.name === "mutation" ||
+          testCase.name === "unanalysable document" ||
+          testCase.name === "query string"
+        ) {
+          // 同一性はリクエストごとの UUID。承認が別の mutation や別の document
+          // へ広がらない。
+          expect(pending.violations?.[0]?.value ?? "", testCase.name).toMatch(
+            UUID_PATTERN,
+          );
+        }
+        // document 本文は確認にも監査にも載らない。載るのは正準形の短い値
+        // だけ。目印が送ったボディに実在することを先に確かめ、検査が空振り
+        // しないようにする。
+        expect(testCase.body, testCase.name).toContain(testCase.bodyMarker);
+        expect(JSON.stringify(pending), testCase.name).not.toContain(
+          testCase.bodyMarker,
+        );
+        await sendBrokerRequest(
+          brokerSocketPath(fixture.paths, fixture.sessionId),
+          { type: "deny", requestId: pending.requestId },
+        );
+        const response = await responsePromise;
+        expect(response, testCase.name).toContain("403");
+        expect(await fixture.broker.listPending(), testCase.name).toEqual([]);
+        const auditLogs = await queryAuditLogs(
+          { domain: "network" },
+          fixture.auditDir,
+        );
+        expect(auditLogs.length, testCase.name).toBeGreaterThan(0);
+        expect(JSON.stringify(auditLogs), testCase.name).not.toContain(
+          testCase.bodyMarker,
+        );
+      }
+
+      // どれも upstream に届いていない。fake upstream は完全なリクエストを
+      // 1 本受け取った時点でそれを印字する。
+      expect(await dockerLogs(resources.targetName)).not.toContain("POST ");
+    } finally {
+      await cleanupProtocolResources(resources);
       await teardownFixture(fixture);
     }
   },

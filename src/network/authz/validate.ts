@@ -28,6 +28,7 @@ import {
   LIMIT_CEILINGS,
   LIMIT_KEYS,
   type Limits,
+  MAX_BODY_EXPECT_POINTER_CHARS,
   parseInjectValue,
   type ResolvedLimits,
   RULE_KEY_PATTERN,
@@ -43,6 +44,7 @@ import {
   KNOWN_HTTP_METHODS,
   matchesIntersect,
   matchSubsumes,
+  type NormalizedBody,
   normalizeMethod,
   parseTarget,
   targetSetsIntersect,
@@ -300,65 +302,113 @@ function checkBodyMatch(
   if (body === undefined) return false;
 
   let broken = false;
-  if (body.format !== "json" && Object.keys(body.equals ?? {}).length > 0) {
+  const conditions: readonly [string, boolean][] = [
+    ["equals", Object.keys(body.equals ?? {}).length > 0],
+    ["oneOf", Object.keys(body.oneOf ?? {}).length > 0],
+    ["graphql", body.graphql !== undefined],
+  ];
+  for (const [name, present] of conditions) {
+    if (body.format === "json" || !present) continue;
     diagnostics.push(
       error(
-        `ルール ${id} の match.body.format = "${body.format}" に equals を併記できません。値条件は format = "json" を要します。`,
-      ),
-    );
-    broken = true;
-  }
-  if (body.format !== "json" && Object.keys(body.oneOf ?? {}).length > 0) {
-    diagnostics.push(
-      error(
-        `ルール ${id} の match.body.format = "${body.format}" に oneOf を併記できません。値条件は format = "json" を要します。`,
+        `ルール ${id} の match.body.format = "${body.format}" に ${name} を併記できません。ボディの条件は format = "json" を要します。`,
       ),
     );
     broken = true;
   }
 
+  return (
+    checkBodyConditions(
+      diagnostics,
+      `ルール ${id} の match.body.`,
+      body,
+      "このルールは決して発火しません",
+    ) || broken
+  );
+}
+
+/**
+ * `match.body` と `BodyExpect` に共通するボディ条件の形を検査する。
+ *
+ * addon は解決済みドキュメントを同じ形で検証し直し、読めない条件を 1 つでも
+ * 見つけるとドキュメント全体を拒否する。ここで止めないと、設定の誤りが
+ * セッション開始時ではなく最初のリクエストの 403 として現れる。
+ *
+ * `prefix` は診断の主語 (`ルール x の match.body.` / `ルール x の expect[0] の `)、
+ * `never` は空の Listing が意味する帰結である。
+ */
+function checkBodyConditions(
+  diagnostics: Diagnostic[],
+  prefix: string,
+  body: Pick<BodyMatchConfig, "equals" | "oneOf" | "graphql">,
+  never: string,
+): boolean {
+  let broken = false;
+  const fail = (message: string): void => {
+    diagnostics.push(error(`${prefix}${message}`));
+    broken = true;
+  };
+
   for (const [pointer, value] of Object.entries(body.equals ?? {})) {
     if (!isValidJsonPointer(pointer)) {
-      diagnostics.push(
-        error(
-          `ルール ${id} の match.body.equals の ${pointer} は RFC 6901 JSON Pointer として不正です。`,
-        ),
-      );
-      broken = true;
+      fail(`equals の ${pointer} は RFC 6901 JSON Pointer として不正です。`);
     }
-    if (isFiniteJsonScalar(value)) continue;
-    diagnostics.push(
-      error(
-        `ルール ${id} の match.body.equals の ${pointer} は文字列・有限な数値・真偽値のいずれかである必要があります。`,
-      ),
-    );
-    broken = true;
+    if (!isFiniteJsonScalar(value)) {
+      fail(
+        `equals の ${pointer} は文字列・有限な数値・真偽値のいずれかである必要があります。`,
+      );
+    }
   }
   for (const [pointer, values] of Object.entries(body.oneOf ?? {})) {
     if (!isValidJsonPointer(pointer)) {
-      diagnostics.push(
-        error(
-          `ルール ${id} の match.body.oneOf の ${pointer} は RFC 6901 JSON Pointer として不正です。`,
-        ),
-      );
-      broken = true;
+      fail(`oneOf の ${pointer} は RFC 6901 JSON Pointer として不正です。`);
     }
     if (values.length === 0) {
-      diagnostics.push(
-        error(
-          `ルール ${id} の match.body.oneOf の ${pointer} が空の Listing です。受理集合が空になり、このルールは決して発火しません。`,
-        ),
+      fail(
+        `oneOf の ${pointer} が空の Listing です。受理集合が空になり、${never}。`,
       );
-      broken = true;
     }
-    for (const value of values as readonly unknown[]) {
-      if (isFiniteJsonScalar(value)) continue;
-      diagnostics.push(
-        error(
-          `ルール ${id} の match.body.oneOf の ${pointer} は文字列・有限な数値・真偽値のみを持つ必要があります。`,
-        ),
+    if (!(values as readonly unknown[]).every(isFiniteJsonScalar)) {
+      fail(
+        `oneOf の ${pointer} は文字列・有限な数値・真偽値のみを持つ必要があります。`,
       );
-      broken = true;
+    }
+  }
+
+  const graphql = body.graphql;
+  if (graphql === undefined) return broken;
+  if (graphql.at !== undefined && !isValidJsonPointer(graphql.at)) {
+    fail(
+      `graphql.at の ${graphql.at} は RFC 6901 JSON Pointer として不正です。`,
+    );
+  }
+  if (graphql.operations.length === 0) {
+    fail(
+      `graphql.operations が空の Listing です。受理集合が空になり、${never}。`,
+    );
+  }
+  if (graphql.rootFields !== undefined && graphql.rootFields.length === 0) {
+    fail(
+      `graphql.rootFields が空の Listing です。受理集合が空になり、${never}。`,
+    );
+  }
+  for (const field of graphql.rootFields ?? []) {
+    if (!isGraphqlName(field)) {
+      fail(
+        `graphql.rootFields の ${JSON.stringify(field)} は GraphQL の名前ではありません。document に現れ得ないので、この要素は何も許しません。`,
+      );
+    }
+  }
+  for (const [name, values] of Object.entries(graphql.arguments ?? {})) {
+    if (!isGraphqlName(name)) {
+      fail(
+        `graphql.arguments のキー ${JSON.stringify(name)} は GraphQL の名前ではありません。document に現れ得ないので、このキーの制約は何も制約しません。`,
+      );
+    }
+    if (values.length === 0) {
+      fail(
+        `graphql.arguments の ${name} が空の Listing です。受理集合が空になり、${never}。`,
+      );
     }
   }
   return broken;
@@ -368,6 +418,14 @@ function isValidJsonPointer(pointer: string): boolean {
   return (
     pointer === "" || (pointer.startsWith("/") && !/~(?![01])/u.test(pointer))
   );
+}
+
+/**
+ * GraphQL の Name (先頭が `_` か英字、以降が `_`・英数字) か。root field 名も引数名も
+ * document ではこの形でしか書けない。
+ */
+function isGraphqlName(value: string): boolean {
+  return /^[_A-Za-z][_0-9A-Za-z]*$/u.test(value);
 }
 
 function isFiniteJsonScalar(value: unknown): boolean {
@@ -420,7 +478,7 @@ function checkExpects(
         ),
       );
     }
-    checkEmptyExpectListings(diagnostics, id, index, expect);
+    checkExpectConditions(diagnostics, id, index, expect);
   }
 
   if (!expects.some((expect) => expect.onViolation === "allow")) return;
@@ -434,7 +492,7 @@ function checkExpects(
   }
 }
 
-function checkEmptyExpectListings(
+function checkExpectConditions(
   diagnostics: Diagnostic[],
   id: string,
   index: number,
@@ -450,37 +508,23 @@ function checkEmptyExpectListings(
     return;
   }
   if (expect.kind !== "body") return;
-
-  for (const [pointer, values] of Object.entries(expect.oneOf ?? {})) {
-    if (values.length === 0) {
+  checkBodyConditions(
+    diagnostics,
+    `${where} の `,
+    expect,
+    "この条件は決して満たされません",
+  );
+  // 違反の所見は Pointer を値に含めて broker へ送る。長さの上限を超えた
+  // Pointer の所見は broker に拒まれ、そのリクエストは承認できない。
+  for (const [field, pointers] of [
+    ["equals", Object.keys(expect.equals ?? {})],
+    ["oneOf", Object.keys(expect.oneOf ?? {})],
+  ] as const) {
+    for (const pointer of pointers) {
+      if (pointer.length <= MAX_BODY_EXPECT_POINTER_CHARS) continue;
       diagnostics.push(
         error(
-          `${where} の oneOf の ${pointer} が空の Listing です。受理集合が空になり、この条件は決して満たされません。`,
-        ),
-      );
-    }
-  }
-  const graphql = expect.graphql;
-  if (graphql === undefined) return;
-  if (graphql.operations.length === 0) {
-    diagnostics.push(
-      error(
-        `${where} の graphql.operations が空の Listing です。受理集合が空になり、この条件は決して満たされません。`,
-      ),
-    );
-  }
-  if (graphql.rootFields !== undefined && graphql.rootFields.length === 0) {
-    diagnostics.push(
-      error(
-        `${where} の graphql.rootFields が空の Listing です。受理集合が空になり、この条件は決して満たされません。`,
-      ),
-    );
-  }
-  for (const [name, values] of Object.entries(graphql.arguments ?? {})) {
-    if (values.length === 0) {
-      diagnostics.push(
-        error(
-          `${where} の graphql.arguments の ${name} が空の Listing です。受理集合が空になり、この条件は決して満たされません。`,
+          `${where} の ${field} の Pointer ${pointer.slice(0, 32)}… は ${pointer.length} 文字で、上限の ${MAX_BODY_EXPECT_POINTER_CHARS} 文字を超えています。違反の所見はこの Pointer を値に含めるので、超えると承認できない所見になります。`,
         ),
       );
     }
@@ -904,10 +948,16 @@ function describeRuleConflict(a: CompiledRule, b: CompiledRule): string {
     );
   }
   lines.push(
-    ...alignedRows([
-      [a.id, describeMethods(a), a.config.match.paths.join(" ")],
-      [b.id, describeMethods(b), b.config.match.paths.join(" ")],
-    ]),
+    ...alignedRows(
+      [a, b].map((rule) => [
+        rule.id,
+        describeMethods(rule),
+        rule.config.match.paths.join(" "),
+        ...(hasBodyCondition(a) || hasBodyCondition(b)
+          ? [describeBodyCondition(rule.match.body)]
+          : []),
+      ]),
+    ),
     "",
     "  解決方法:",
     `    - ${b.id} に overrides { ${JSON.stringify(a.key)} } を書く`,
@@ -922,6 +972,43 @@ function describeMethods(rule: CompiledRule): string {
   return methods === undefined || methods.length === 0
     ? "(全メソッド)"
     : methods.join("|");
+}
+
+function hasBodyCondition(rule: CompiledRule): boolean {
+  return rule.match.body.format !== null;
+}
+
+/**
+ * ボディ条件を 1 行に畳む。
+ *
+ * GraphQL のルールは `POST /graphql` 1 本を分け合うので、メソッドとパスの列が
+ * 2 行とも同じになる。違いはボディ条件にしかなく、それを表に出さないと書き手は
+ * どちらを狭めればよいか分からない。値は設定から来た文字列なので、そのまま載せる。
+ */
+function describeBodyCondition(body: NormalizedBody): string {
+  if (body.format === null) return "ボディ条件なし";
+  const parts = [`body ${body.format}`];
+  for (const [pointer, values] of body.pointers) {
+    parts.push(
+      `${pointer === "" ? "(root)" : pointer}=${values.map((value) => JSON.stringify(value)).join("|")}`,
+    );
+  }
+  const graphql = body.graphql;
+  if (graphql !== null) {
+    parts.push(
+      `graphql ${graphql.at === "" ? "(root)" : graphql.at}`,
+      `operations=${graphql.operations.join("|")}`,
+    );
+    if (graphql.rootFields !== null) {
+      parts.push(`rootFields=${graphql.rootFields.join("|")}`);
+    }
+    for (const [name, values] of graphql.argumentValues) {
+      parts.push(
+        `arguments.${name}=${values.map((value) => JSON.stringify(value)).join("|")}`,
+      );
+    }
+  }
+  return parts.join(" ");
 }
 
 /** 列を揃えた 2 行の表を作る。書き手が差分を目で拾えるようにするため。 */

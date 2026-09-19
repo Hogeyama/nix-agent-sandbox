@@ -41,8 +41,12 @@ function networkCard(entry) {
     .map((value) => ({ value, label: NETWORK_SCOPE_LABELS[value] }));
   if (scopes.length === 0)
     scopes.push({ value: "once", label: NETWORK_SCOPE_LABELS.once });
+  // `label`, when present, stands in for a value that is only a per-request
+  // identity (a UUID) and would tell the reader nothing.
   const violations = (entry.violations ?? []).map((v) => ({
-    label: [v.pointer, v.value].filter(Boolean).join(" = ") || "violation",
+    label:
+      [v.pointer, v.label ?? v.value].filter(Boolean).join(" = ") ||
+      "violation",
   }));
   const meta = [];
   if (entry.reviewContext?.path) {

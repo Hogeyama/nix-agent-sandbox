@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- A network violation that carries a `label` shows that label in place of its
+  value. nas sets it on findings whose value is a per-request identity.
+
 ## [0.1.0] - 2026-09-18
 
 First release.

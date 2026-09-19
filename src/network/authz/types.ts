@@ -32,7 +32,12 @@ export interface GraphqlMatch {
   readonly operations: readonly GraphqlOperation[];
   /** 許す root field 名。省略時は制約しない。 */
   readonly rootFields?: readonly string[];
-  /** 引数名ごとに許す文字列リテラルの集合。省略時は制約しない。 */
+  /**
+   * 引数名ごとに許す文字列の集合。省略時は制約しない。変数参照の引数は兄弟の
+   * `variables` (無いか null ならその operation の既定値) で解決し、
+   * `variables` がオブジェクトでも null でもなければ解決できない (規則は
+   * `graphql.ts` の `resolveArgumentValue`)。
+   */
   readonly arguments?: Readonly<Record<string, readonly string[]>>;
 }
 

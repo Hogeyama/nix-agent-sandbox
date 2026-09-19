@@ -33,6 +33,12 @@ export interface AuditViolation {
   pointer: string;
   /** Masked offending value, or null for a condition that has no value. */
   value: string | null;
+  /**
+   * Masked display text to read in place of `value`, when the value is an
+   * opaque per-request identity (a UUID) rather than something a reader can
+   * interpret. Null otherwise; absent in entries written before it existed.
+   */
+  label?: string | null;
   /** How many violations of this condition carried this value. */
   count: number;
 }

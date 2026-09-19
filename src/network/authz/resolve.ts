@@ -17,6 +17,7 @@ import {
   type Action,
   type AuditMode,
   type AuthzConfig,
+  type BodyExpect,
   type BodyMatchConfig,
   DEFAULT_AUDIT_MODE,
   DEFAULT_SECRET_DISPOSITIONS,
@@ -35,11 +36,18 @@ import {
   type WebSocketPolicy,
 } from "./config.ts";
 import { type CompiledPath, compiledPathMatches } from "./pattern.ts";
-import { type CompiledMatch, hostMatches, normalizeBody } from "./relation.ts";
+import {
+  type CompiledMatch,
+  hostMatches,
+  type NormalizedGraphql,
+  normalizeBody,
+} from "./relation.ts";
 import { evaluateBody, type Truth } from "./semantics.ts";
 import { compareTargetSpecificity, precedenceOrder } from "./specificity.ts";
 import type {
   BodyFormat,
+  BodyMatch,
+  GraphqlOperation,
   JsonScalar,
   RequestBody,
   Result,
@@ -55,8 +63,35 @@ import {
   rulePrecedes,
 } from "./validate.ts";
 
+/**
+ * 正規化済みの GraphQL 条件。`at` の既定値を適用し、各集合の重複を除いてある。
+ *
+ * addon はこの形をキーの過不足なく検証するので、省略可能な項目も必ず置く。
+ */
+export interface ResolvedGraphql {
+  readonly at: string;
+  readonly operations: readonly GraphqlOperation[];
+  /** null は「制約しない」。 */
+  readonly rootFields: readonly string[] | null;
+  readonly arguments: Readonly<Record<string, readonly string[]>>;
+}
+
+/**
+ * 解決済みの `BodyExpect`。addon が形を過不足なく検証できるように、省略された
+ * 項目も空の値か null で置く。
+ */
+export interface ResolvedBodyExpect {
+  readonly kind: "body";
+  readonly onViolation: ViolationAction;
+  readonly equals: Readonly<Record<string, JsonScalar>>;
+  readonly oneOf: Readonly<Record<string, readonly JsonScalar[]>>;
+  readonly graphql: ResolvedGraphql | null;
+}
+
 /** 解決後は `onViolation` が必ず決まっている。省略時は `deny`。 */
-export type ResolvedExpect = Expect & { readonly onViolation: ViolationAction };
+export type ResolvedExpect =
+  | (Exclude<Expect, BodyExpect> & { readonly onViolation: ViolationAction })
+  | ResolvedBodyExpect;
 
 export interface ResolvedMatch {
   /** null は全メソッド。 */
@@ -66,6 +101,8 @@ export interface ResolvedMatch {
   readonly bodyFormat: BodyFormat | null;
   readonly equals: Readonly<Record<string, JsonScalar>>;
   readonly oneOf: Readonly<Record<string, readonly JsonScalar[]>>;
+  /** null は GraphQL 条件を持たない。 */
+  readonly graphql: ResolvedGraphql | null;
 }
 
 export interface ResolvedRule {
@@ -247,10 +284,7 @@ function resolveRule(
     match: toResolvedMatch(rule.match, rule.config.match.body),
     onMatch: rule.config.onMatch,
     onIndeterminate: rule.config.onIndeterminate ?? "deny",
-    expect: (rule.config.expect ?? []).map((expect) => ({
-      ...expect,
-      onViolation: expect.onViolation ?? "deny",
-    })),
+    expect: (rule.config.expect ?? []).map(resolveExpect),
     limits: mergeLimits(inherited.limits, rule.config.limits),
     secrets: { ...inherited.secrets, ...rule.config.secrets },
     inject: effectiveInject(inherited.inject, rule.config.inject),
@@ -267,12 +301,77 @@ function toResolvedMatch(
     paths: match.paths,
     bodyFormat: match.body.format,
     equals: { ...body?.equals },
-    oneOf: Object.fromEntries(
-      Object.entries(body?.oneOf ?? {}).map(([pointer, values]) => [
-        pointer,
-        [...values],
-      ]),
+    oneOf: copyOneOf(body?.oneOf),
+    graphql: toResolvedGraphql(match.body.graphql),
+  };
+}
+
+function resolveExpect(expect: Expect): ResolvedExpect {
+  const onViolation = expect.onViolation ?? "deny";
+  if (expect.kind !== "body") return { ...expect, onViolation };
+  return {
+    kind: "body",
+    onViolation,
+    equals: { ...expect.equals },
+    oneOf: copyOneOf(expect.oneOf),
+    // match 側と同じ正規化を通す。`at` の既定値を 2 か所に書かないためである。
+    graphql:
+      expect.graphql === undefined
+        ? null
+        : toResolvedGraphql(
+            normalizeBody({ format: "json", graphql: expect.graphql }).graphql,
+          ),
+  };
+}
+
+function copyOneOf(
+  oneOf: Readonly<Record<string, readonly JsonScalar[]>> | undefined,
+): Readonly<Record<string, readonly JsonScalar[]>> {
+  return Object.fromEntries(
+    Object.entries(oneOf ?? {}).map(([pointer, values]) => [
+      pointer,
+      [...values],
+    ]),
+  );
+}
+
+function toResolvedGraphql(
+  graphql: NormalizedGraphql | null,
+): ResolvedGraphql | null {
+  if (graphql === null) return null;
+  return {
+    at: graphql.at,
+    operations: [...graphql.operations],
+    rootFields: graphql.rootFields === null ? null : [...graphql.rootFields],
+    arguments: Object.fromEntries(
+      [...graphql.argumentValues].map(([name, values]) => [name, [...values]]),
     ),
+  };
+}
+
+/**
+ * 解決済みの match から、意味論 (`evaluateBody`) が受け取るボディ条件を組み直す。
+ * 既定の葉の述語と、同じ述語を外から注入するテストが共有する。
+ */
+export function resolvedBodyMatch(match: ResolvedMatch): BodyMatch | undefined {
+  if (match.bodyFormat === null) return undefined;
+  const graphql = match.graphql;
+  return {
+    format: match.bodyFormat,
+    equals: match.equals,
+    oneOf: match.oneOf,
+    ...(graphql === null
+      ? {}
+      : {
+          graphql: {
+            at: graphql.at,
+            operations: graphql.operations,
+            ...(graphql.rootFields === null
+              ? {}
+              : { rootFields: graphql.rootFields }),
+            arguments: graphql.arguments,
+          },
+        }),
   };
 }
 
@@ -558,16 +657,9 @@ export function decide(
     evaluateRuleBody ??
     ((rule: ResolvedRule): Truth =>
       evaluateBody(
-        normalizeBody(
-          rule.match.bodyFormat === null
-            ? undefined
-            : {
-                format: rule.match.bodyFormat,
-                equals: rule.match.equals,
-                oneOf: rule.match.oneOf,
-              },
-        ),
+        normalizeBody(resolvedBodyMatch(rule.match)),
         request.body as RequestBody,
+        request.path,
       ));
   for (const rule of orderedCandidates(scope, request)) {
     const truth = leaf(rule);

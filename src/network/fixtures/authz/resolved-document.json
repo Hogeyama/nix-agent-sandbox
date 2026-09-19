@@ -91,7 +91,8 @@
             ],
             "bodyFormat": "json",
             "equals": {},
-            "oneOf": {}
+            "oneOf": {},
+            "graphql": null
           },
           "onMatch": "allow",
           "onIndeterminate": "deny",
@@ -490,7 +491,8 @@
             ],
             "bodyFormat": null,
             "equals": {},
-            "oneOf": {}
+            "oneOf": {},
+            "graphql": null
           },
           "onMatch": "allow",
           "onIndeterminate": "deny",
@@ -548,7 +550,8 @@
             ],
             "bodyFormat": "json",
             "equals": {},
-            "oneOf": {}
+            "oneOf": {},
+            "graphql": null
           },
           "onMatch": "allow",
           "onIndeterminate": "deny",
@@ -596,7 +599,8 @@
             ],
             "bodyFormat": "json",
             "equals": {},
-            "oneOf": {}
+            "oneOf": {},
+            "graphql": null
           },
           "onMatch": "allow",
           "onIndeterminate": "deny",

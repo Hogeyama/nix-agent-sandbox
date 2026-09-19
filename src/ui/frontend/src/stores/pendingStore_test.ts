@@ -182,6 +182,7 @@ describe("normalizeNetworkPending", () => {
             kind: "schema-mismatch",
             pointer: "/messages/0/content/1",
             value: "future_block",
+            label: null,
             excerpt: '{"type":"future_block"}',
             count: 3,
           },
@@ -195,10 +196,28 @@ describe("normalizeNetworkPending", () => {
         kind: "schema-mismatch",
         pointer: "/messages/0/content/1",
         value: "future_block",
+        label: null,
         excerpt: '{"type":"future_block"}',
         count: 3,
       },
     ]);
+  });
+
+  test("carries the label shown in place of a per-request value", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({
+        violations: [
+          {
+            kind: "body-unavailable",
+            value: "0b6f3c1e-2d4a-4f7b-9c8e-5a1d2e3f4a5b",
+            label: "document:(unanalysable)",
+            excerpt: null,
+          },
+        ],
+      }),
+    ]);
+    expect(rows[0]?.violations[0]?.label).toBe("document:(unanalysable)");
+    expect(rows[0]?.violations[0]?.excerpt).toBeNull();
   });
 
   test("a violation with no value is still one violation", () => {
@@ -213,6 +232,7 @@ describe("normalizeNetworkPending", () => {
         kind: "unexpected-body",
         pointer: "",
         value: null,
+        label: null,
         excerpt: null,
         count: 1,
       },

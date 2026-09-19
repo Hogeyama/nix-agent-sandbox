@@ -51,7 +51,10 @@ export type BodyDiagnostic =
     }
   | { code: "invalid-json" }
   | { code: "empty-json-body" }
-  | { code: "non-scalar-at-pointer"; pointer: string };
+  | { code: "non-scalar-at-pointer"; pointer: string }
+  | { code: "graphql-unparseable"; pointer: string }
+  | { code: "graphql-query-string"; pointer: string }
+  | { code: "graphql-unresolved-argument"; pointer: string; argument: string };
 
 // Metadata-only result of the opt-in raw request body audit. The raw bytes
 // never travel in pending or audit-list payloads.
@@ -109,6 +112,9 @@ export type ViolationFindingLike = {
   // The offending value — the unknown tag itself. Null for a condition
   // that has no value to approve, such as "the body must be empty".
   value?: string | null;
+  // Text to show in place of `value` when present. The value is then an
+  // opaque per-request identity (a UUID) that tells a reader nothing.
+  label?: string | null;
   // The offending node on its own, pruned and masked.
   excerpt?: string | null;
   // How many nodes violated the same condition with the same value.

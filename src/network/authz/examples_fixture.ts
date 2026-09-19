@@ -34,8 +34,10 @@ export function githubGraphqlExample(): AuthzConfig {
               expect: [
                 {
                   kind: "body",
-                  graphql: { operations: ["query"] },
-                  equals: { "/variables/o": "my-org" },
+                  graphql: {
+                    operations: ["query"],
+                    arguments: { owner: ["my-org"], login: ["my-org"] },
+                  },
                   onViolation: "review",
                 },
               ],

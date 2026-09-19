@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import type { RequestBodyAuditConfig } from "../config/types.ts";
+import { MAX_BODY_EXPECT_POINTER_CHARS } from "./authz/config.ts";
 import type { DecisionReason, ResolvedDocument } from "./authz/resolve.ts";
 import type { Truth } from "./authz/semantics.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
@@ -127,7 +128,17 @@ export type BodyDiagnostic =
     }
   | { code: "invalid-json" }
   | { code: "empty-json-body" }
-  | { code: "non-scalar-at-pointer"; pointer: string };
+  | { code: "non-scalar-at-pointer"; pointer: string }
+  /** `pointer` は条件の `at`。document の本文は載らない。 */
+  | { code: "graphql-unparseable"; pointer: string }
+  /**
+   * URL にクエリ文字列があり、`pointer` (条件の `at`) の GraphQL 条件を判定
+   * できなかった。サーバは document と変数を URL からも読む。クエリ文字列は
+   * 載らない。
+   */
+  | { code: "graphql-query-string"; pointer: string }
+  /** `argument` は条件が名指しした引数名。値は載らない。 */
+  | { code: "graphql-unresolved-argument"; pointer: string; argument: string };
 
 export interface AuthorizeRequest {
   version: 1;
@@ -186,7 +197,10 @@ export const REQUEST_POLICY_SUCCESS_REASONS = [
  *
  * - `schema-mismatch`: 受理条件が要求する形になっていない。
  * - `unexpected-body`: `EmptyBody` に対してボディが存在した。
- * - `body-unavailable`: `EmptyBody` に対してボディを読めなかった。
+ * - `body-unavailable`: `EmptyBody` に対してボディを読めなかった、
+ *   `BodyExpect` の GraphQL document を解析できなかった、または URL に
+ *   クエリ文字列があり、実行される GraphQL document をボディから決められ
+ *   なかった。
  * - `inspection-incomplete`: セレクタの走査が予算を使い切り、部分木を
  *   検査しないまま終わった。何が違反したかを言えないので承認できない。
  * - `findings-truncated`: 保持上限に達し、記述しなかった違反がある。
@@ -214,7 +228,8 @@ const APPROVABLE_FINDING_KINDS: readonly ViolationFindingKind[] = [
  *
  * ボディ由来のフィールド (`pointer` / `value` / `excerpt`) は addon が
  * マスクしてから載せる。承認 UI と監査ログに出ていく記録なので、生の秘密が
- * 載っていてはならない。
+ * 載っていてはならない。`label` は設定由来の語か operation の種別だが、同じく
+ * マスクして載せる。
  */
 export interface ViolationFinding {
   /**
@@ -229,9 +244,32 @@ export interface ViolationFinding {
   kind: ViolationFindingKind;
   /** マスク済みの JSON Pointer。値を持たない受理条件では空。 */
   pointer: string;
-  /** マスク済みの違反した値。承認の同一性の一部。値がない条件では null。 */
+  /**
+   * マスク済みの違反した値。承認の同一性の一部。値がない条件では null。
+   *
+   * `BodyExpect` の `equals` / `oneOf` では、Pointer を頭に付けた
+   * `/owner="other"` (値は JSON テキスト)、`/owner=(missing)`、
+   * `/owner=(not-scalar)` の形になる。1 つの `BodyExpect` の Pointer は同じ
+   * 位置 (`expect`) を共有するので、Pointer を値に含めないと別の Pointer の
+   * 同じ値が同じ承認になる。
+   *
+   * 承認を他のリクエストへ広げてはならない事実 (許されない GraphQL
+   * operation と root field、解析できない GraphQL document、解決できない
+   * GraphQL 引数、URL のクエリ文字列) では、addon がリクエストごとに作る UUID が入る。何が違反したかは
+   * `label` が言う。
+   */
   value: string | null;
-  /** マスク済みの、そのノードだけの抜粋。 */
+  /**
+   * 表示名。あるとき、承認 UI と監査ログは `value` の代わりにこれを出す。
+   *
+   * 値が UUID の所見が、違反した事実を短い定まった語で書いたもの
+   * (`operation:mutation`、`rootField:node`、`document:(unanalysable)`、
+   * `document:(query-string)`、`argument:owner=(unresolved)`) である。
+   * UUID は同一性のためだけにあり、読む人には何も言わないからである。
+   * 承認の同一性には入らない。それ以外の所見では null。
+   */
+  label: string | null;
+  /** マスク済みの、そのノードだけの抜粋。ボディの一部であり、無ければ null。 */
   excerpt: string | null;
   /** 同じ (受理条件, 値) の違反の件数。 */
   count: number;
@@ -569,9 +607,17 @@ function isBodyDiagnostic(value: unknown): value is BodyDiagnostic {
         (diagnostic.maxBodyBytes as number) > 0
       );
     case "non-scalar-at-pointer":
+    case "graphql-unparseable":
+    case "graphql-query-string":
       return (
         hasExactFields(diagnostic, ["code", "pointer"]) &&
         typeof diagnostic.pointer === "string"
+      );
+    case "graphql-unresolved-argument":
+      return (
+        hasExactFields(diagnostic, ["code", "pointer", "argument"]) &&
+        typeof diagnostic.pointer === "string" &&
+        typeof diagnostic.argument === "string"
       );
     default:
       return false;
@@ -702,8 +748,18 @@ const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
  * 自分の側でメモリを閉じるためである。
  */
 const MAX_FINDINGS = 1024;
-/** マスク済みの値の長さ。addon は 276 文字で畳むので、その倍を天井にする。 */
-const MAX_FINDING_VALUE_CHARS = 552;
+/**
+ * マスク済みの値の長さ (UTF-16 の単位)。
+ *
+ * addon はボディ由来の部分を 276 コードポイントで畳む。サロゲートペアの文字は
+ * ここでは 2 単位に数えるので、それは最大 552 単位になる。`UnionShape` と
+ * GraphQL の値はこれだけでできている。`BodyExpect` の `equals` / `oneOf` の値は
+ * 設定の Pointer (最大 `MAX_BODY_EXPECT_POINTER_CHARS`、切らない) と `=` を
+ * その前に付ける。天井はその和である。
+ */
+const MAX_FINDING_VALUE_CHARS = MAX_BODY_EXPECT_POINTER_CHARS + 1 + 552;
+/** 表示名も addon が値と同じ 276 文字で畳む。 */
+const MAX_FINDING_LABEL_CHARS = 552;
 const MAX_FINDING_POINTER_CHARS = 1024;
 const MAX_FINDING_EXCERPT_CHARS = 2048;
 const MAX_FINDING_SELECTOR_CHARS = 512;
@@ -714,10 +770,17 @@ const FINDING_FIELDS = new Set([
   "kind",
   "pointer",
   "value",
+  "label",
   "excerpt",
   "count",
 ]);
-const EXPECT_KINDS = ["", "emptyBody", "jsonRoot", "unionShape"] as const;
+const EXPECT_KINDS = [
+  "",
+  "emptyBody",
+  "jsonRoot",
+  "body",
+  "unionShape",
+] as const;
 
 function isBoundedString(value: unknown, max: number): boolean {
   return typeof value === "string" && value.length <= max;
@@ -757,6 +820,7 @@ export function validateViolationFindings(value: unknown): string | null {
       !isListedValue(record.kind, VIOLATION_FINDING_KINDS) ||
       !isBoundedString(record.pointer, MAX_FINDING_POINTER_CHARS) ||
       !isBoundedNullableString(record.value, MAX_FINDING_VALUE_CHARS) ||
+      !isBoundedNullableString(record.label, MAX_FINDING_LABEL_CHARS) ||
       !isBoundedNullableString(record.excerpt, MAX_FINDING_EXCERPT_CHARS) ||
       !Number.isSafeInteger(record.count) ||
       (record.count as number) < 1

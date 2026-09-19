@@ -299,6 +299,28 @@ class UnionShape extends Expect {
   allowed: Listing<String>
 }
 
+/// ボディの値と GraphQL document に対する受理条件。語彙は `BodyMatch` と同じ。
+///
+/// `match.body` との使い分け: 同じ条件を `match` に置くと、外れたリクエストは同一
+/// スコープのより広いルールに拾われる。必ず満たしてほしい条件はここに置く。
+///
+/// `equals` / `oneOf` は、Pointer の対象が無い・スカラーでない・値が集合に無い、の
+/// いずれも違反になる。`graphql` は、document を解析できない (対象が無い・文字列で
+/// ない・壊れている・予算を超える) ことも、名指しした引数の値を解決できないことも
+/// 違反になる。
+class BodyExpect extends Expect {
+  kind = "body"
+
+  /// JSON Pointer と値の完全一致。値は文字列・数値・真偽値のいずれか。
+  equals: Mapping<String, Any> = new {}
+
+  /// JSON Pointer と許す値の集合。
+  oneOf: Mapping<String, Listing<Any>> = new {}
+
+  /// GraphQL document の条件。
+  graphql: GraphqlMatch?
+}
+
 /// ボディの解釈方法。
 ///
 /// - `"none"`: ボディが存在し、その長さが 0 である。
@@ -315,6 +337,43 @@ class BodyMatch {
 
   /// JSON Pointer と許す値の集合。値の形は設定検査で確認する。
   oneOf: Mapping<String, Listing<Any>> = new {}
+
+  /// GraphQL document の条件。`format = "json"` を要する。
+  graphql: GraphqlMatch?
+}
+
+/// GraphQL document に対する条件。3 つの制約はいずれも集合の包含である。
+///
+/// document は解析して判定する。名前のない省略形 `{ ... }` は `query` として扱う。
+/// root の inline fragment と fragment spread は展開して root field を数える。
+///
+/// 同じ host・method・path にこの条件を使う候補ルールがあるリクエストは、ルール選択の
+/// 前に UTF-8 の `application/json` ボディを要求する。Content-Type は 1 個のみで、
+/// パラメータは省略または `charset=utf-8` のみ。欠落・重複・他形式は fallback や
+/// 人間の承認に回さず拒否する。match と expect の両方に適用する。
+///
+/// これは読む対象の削減であって境界ではない。許可した入口から GraphQL のグラフを
+/// 辿れば、他の対象に到達できる。
+class GraphqlMatch {
+  /// document を運ぶフィールドの JSON Pointer。変数はこの Pointer の親にある
+  /// `variables` から引く (`{ "query": ..., "variables": {...} }` の形)。
+  at: String = "/query"
+
+  /// 許す operation の種別。document 中のすべての operation がこの集合に含まれる
+  /// ときだけ成り立つ。
+  operations: Listing<"query"|"mutation"|"subscription">
+
+  /// 許す root field 名。すべての operation の直下のフィールドがこの集合に含まれる
+  /// ときだけ成り立つ。省略時は制約しない。
+  rootFields: Listing<String>?
+
+  /// 引数名ごとに許す文字列の集合。document 中に現れるその名前の引数の値が、すべて
+  /// この集合に含まれるときだけ成り立つ。引数が現れることは要求しない。
+  ///
+  /// 変数で与えられた引数は `variables` の値で評価する。値を文字列に解決できない
+  /// 出現 (`variables` に無い、文字列でない、文字列以外のリテラル) は、`match` では
+  /// 判定不能、`expect` では違反になる。ここで名指ししない引数は判定に関与しない。
+  arguments: Mapping<String, Listing<String>> = new {}
 }
 
 /// そのルールがリクエストを引き受けるかどうかを決める条件。

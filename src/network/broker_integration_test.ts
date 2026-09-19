@@ -1,10 +1,14 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getRequestBody, queryAuditLogs } from "../audit/store.ts";
 import { _resetNotifySendCache } from "../lib/notify_utils.ts";
-import type { ResolvedDocument } from "./authz/resolve.ts";
+import {
+  type ResolvedDocument,
+  withoutInjectLiterals,
+} from "./authz/resolve.ts";
 import { documentWithScopes, resolvedDocument } from "./authz/testing.ts";
 import { SessionBroker, sendBrokerRequest } from "./broker.ts";
 import type {
@@ -451,6 +455,7 @@ test("SessionBroker: the audit records which condition a violation broke", async
           kind: "schema-mismatch",
           pointer: "/messages/0/content/1",
           value: "future_block",
+          label: null,
           excerpt: '{"type":"future_block"}',
           count: 2,
         },
@@ -468,6 +473,7 @@ test("SessionBroker: the audit records which condition a violation broke", async
         kind: "schema-mismatch",
         pointer: "/messages/0/content/1",
         value: "future_block",
+        label: null,
         count: 2,
       },
     ]);
@@ -542,6 +548,7 @@ function finding(
     kind: "schema-mismatch",
     pointer: "/messages/0/content/1",
     value,
+    label: null,
     excerpt: `{"type":"${value}"}`,
     count: 1,
     ...overrides,
@@ -554,6 +561,7 @@ async function withReviewBroker(
     auditDir: string;
     broker: SessionBroker;
   }) => Promise<void>,
+  document: ResolvedDocument = OUTCOME_DOCUMENT,
 ): Promise<void> {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-review-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
@@ -561,7 +569,7 @@ async function withReviewBroker(
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy",
-    document: OUTCOME_DOCUMENT,
+    document,
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
     auditDir,
@@ -680,6 +688,7 @@ test("SessionBroker: a finding is masked again with the whole registry", async (
       review("req-masked", [
         finding("future_block", {
           pointer: "/messages/s3cret-value/content/1",
+          label: "label:s3cret-value",
           excerpt: '{"type":"future_block","note":"s3cret-value"}',
         }),
       ]),
@@ -687,6 +696,7 @@ test("SessionBroker: a finding is masked again with the whole registry", async (
     const pending = await waitForPending(socketPath);
     expect(pending.items[0].violations?.[0]).toMatchObject({
       pointer: "/messages/****/content/1",
+      label: "label:****",
       excerpt: '{"type":"future_block","note":"****"}',
     });
 
@@ -697,6 +707,7 @@ test("SessionBroker: a finding is masked again with the whole registry", async (
     await decision;
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
     expect(logs[0].violations?.[0].pointer).toEqual("/messages/****/content/1");
+    expect(logs[0].violations?.[0].label).toEqual("label:****");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -771,6 +782,679 @@ test("SessionBroker: an approval covers the value it was shown and no other", as
     }
     expect((await otherValue).decision).toEqual("deny");
     expect((await otherCondition).decision).toEqual("deny");
+  });
+});
+
+// 1 つの BodyExpect の Pointer はすべて同じ受理条件の位置に並ぶので、承認の
+// 同一性で Pointer どうしを分けるのは addon が作る値である。ここでは所見を
+// 手で書かず、実際の addon の検査に作らせて broker に渡す。
+const BODY_EXPECT_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "allow",
+    rules: {
+      body: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/body"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+        expect: [
+          {
+            kind: "body",
+            equals: { "/model": "m", "/owner": "o" },
+            onViolation: "review",
+          },
+        ],
+      },
+    },
+  },
+});
+
+const python3 = Bun.which("python3");
+const addonDir = path.join(
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+  "docker",
+  "mitmproxy",
+);
+// message_parity.py は nas_addon を import し、nas_addon は gitignore 済みの
+// ./vendor にある graphql-core を要する。
+const vendoredDeps = existsSync(path.join(addonDir, "vendor", "graphql"));
+
+/**
+ * addon が `document` の `policy.body` ルールで `body` を検査して broker へ
+ * 送る review の所見。
+ */
+async function addonFindings(
+  body: unknown,
+  document: ResolvedDocument = BODY_EXPECT_DOCUMENT,
+): Promise<ViolationFinding[]> {
+  const proc = Bun.spawn(
+    [
+      python3 as string,
+      "message_parity.py",
+      JSON.stringify(body),
+      "[]",
+      JSON.stringify({
+        document: withoutInjectLiterals(document),
+        ruleId: "policy.body",
+        host: "api.example.com",
+        path: "/v1/body",
+      }),
+    ],
+    {
+      cwd: addonDir,
+      env: {
+        ...process.env,
+        PYTHONPATH: path.join(addonDir, "testdata", "mitmproxy_stub"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  if (exitCode !== 0) throw new Error(`message_parity.py failed: ${stderr}`);
+  return (JSON.parse(stdout) as { review: { findings: ViolationFinding[] } })
+    .review.findings;
+}
+
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: approving a BodyExpect value at one Pointer does not approve another Pointer",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const bodyReview = async (requestId: string, body: unknown) =>
+        review(requestId, await addonFindings(body), "policy.body");
+
+      // `/model` が "other" で、`/owner` が無い。
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await bodyReview("req-first", { model: "other" }),
+      );
+      await waitForPending(socketPath);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-first",
+        scope: "violation",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      // 承認した違反そのものは、もう聞かれない。
+      expect(
+        (
+          await sendBrokerRequest<DecisionResponse>(
+            socketPath,
+            await bodyReview("req-again", { model: "other" }),
+          )
+        ).decision,
+      ).toEqual("allow");
+
+      // 同じ "other" でも `/owner` なら、同じ「無い」でも `/model` なら、
+      // 承認者が見ていない別の違反である。
+      const otherValue = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await bodyReview("req-owner-value", { model: "m", owner: "other" }),
+      );
+      const otherMissing = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await bodyReview("req-model-missing", { owner: "o" }),
+      );
+      const pending = await waitForPending(socketPath, 2);
+      expect(pending.items.map((item) => item.requestId).sort()).toEqual([
+        "req-model-missing",
+        "req-owner-value",
+      ]);
+      for (const requestId of ["req-owner-value", "req-model-missing"]) {
+        await sendBrokerRequest(socketPath, { type: "deny", requestId });
+      }
+      expect((await otherValue).decision).toEqual("deny");
+      expect((await otherMissing).decision).toEqual("deny");
+    }, BODY_EXPECT_DOCUMENT);
+  },
+);
+
+// 許されない GraphQL operation も、addon がリクエストごとの UUID を値に置く。
+// `operation:mutation` を固定の値にすると、1 件の mutation の承認が以後の
+// あらゆる mutation をセッションの間通してしまう。ここでも所見は実際の addon
+// に作らせる。
+const GRAPHQL_EXPECT_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "allow",
+    rules: {
+      body: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/body"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+        expect: [
+          { kind: "body", equals: { "/model": "m" }, onViolation: "review" },
+          {
+            kind: "body",
+            graphql: { at: "/query", operations: ["query"] },
+            onViolation: "review",
+          },
+        ],
+      },
+    },
+  },
+});
+
+const graphqlReview = async (requestId: string, body: unknown) =>
+  review(
+    requestId,
+    await addonFindings(body, GRAPHQL_EXPECT_DOCUMENT),
+    "policy.body",
+  );
+
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: approving one mutation does not approve the next",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const mutation = { model: "m", query: "mutation { a { id } }" };
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await graphqlReview("req-mutation-first", mutation),
+      );
+      const pending = await waitForPending(socketPath);
+      expect(pending.items[0].violations?.map((v) => v.label)).toEqual([
+        "operation:mutation",
+      ]);
+      // 覚えても次の mutation には効かないので、覚える粒度は出さない。
+      expect(pending.items[0].approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-mutation-first",
+        scope: "once",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      const second = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await graphqlReview("req-mutation-second", {
+          model: "m",
+          query: "mutation { deleteRepository { id } }",
+        }),
+      );
+      expect(
+        (await waitForPending(socketPath)).items.map((item) => item.requestId),
+      ).toEqual(["req-mutation-second"]);
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: "req-mutation-second",
+      });
+      expect((await second).decision).toEqual("deny");
+    }, GRAPHQL_EXPECT_DOCUMENT);
+  },
+);
+
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: approving a card with a mutation remembers only the other violation",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await graphqlReview("req-mixed-first", {
+          model: "other",
+          query: "mutation { a { id } }",
+        }),
+      );
+      const pending = await waitForPending(socketPath);
+      expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-mixed-first",
+        scope: "violation",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      // 通常の違反だけなら、もう聞かれない。
+      expect(
+        (
+          await sendBrokerRequest<DecisionResponse>(
+            socketPath,
+            await graphqlReview("req-ordinary-only", {
+              model: "other",
+              query: "{ a { id } }",
+            }),
+          )
+        ).decision,
+      ).toEqual("allow");
+
+      // mutation は覚えられていないので、もう一度人に聞く。
+      const second = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await graphqlReview("req-mutation-only", {
+          model: "m",
+          query: "mutation { deleteRepository { id } }",
+        }),
+      );
+      const again = await waitForPending(socketPath);
+      expect(again.items.map((item) => item.requestId)).toEqual([
+        "req-mutation-only",
+      ]);
+      expect(again.items[0].approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: "req-mutation-only",
+      });
+      expect((await second).decision).toEqual("deny");
+    }, GRAPHQL_EXPECT_DOCUMENT);
+  },
+);
+
+// 許されない root field も、addon がリクエストごとの UUID を値に置く。
+// `rootField:node` を固定の値にすると、1 件の `node(id:)` の承認が、何を読む
+// か分からない以後のあらゆる `node(id:)` をセッションの間通してしまう。
+// 集合に無い引数値 (`argument:owner=...`) は値が読む対象を名指すので、
+// これまでどおり覚えられる。
+const ROOT_FIELD_EXPECT_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "allow",
+    rules: {
+      body: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/body"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+        expect: [
+          {
+            kind: "body",
+            graphql: {
+              at: "/query",
+              operations: ["query"],
+              rootFields: ["repository"],
+              arguments: { owner: ["my-org"] },
+            },
+            onViolation: "review",
+          },
+        ],
+      },
+    },
+  },
+});
+
+const rootFieldReview = async (requestId: string, query: string) =>
+  review(
+    requestId,
+    await addonFindings({ query }, ROOT_FIELD_EXPECT_DOCUMENT),
+    "policy.body",
+  );
+
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: approving one refused root field does not approve the next",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await rootFieldReview("req-node-first", '{ node(id: "a") { id } }'),
+      );
+      const pending = await waitForPending(socketPath);
+      expect(pending.items[0].violations?.map((v) => v.label)).toEqual([
+        "rootField:node",
+      ]);
+      // 覚えても次の node には効かないので、覚える粒度は出さない。
+      expect(pending.items[0].approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-node-first",
+        scope: "once",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      const second = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await rootFieldReview("req-node-second", '{ node(id: "b") { id } }'),
+      );
+      expect(
+        (await waitForPending(socketPath)).items.map((item) => item.requestId),
+      ).toEqual(["req-node-second"]);
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: "req-node-second",
+      });
+      expect((await second).decision).toEqual("deny");
+    }, ROOT_FIELD_EXPECT_DOCUMENT);
+  },
+);
+
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: approving a card with a root field remembers only the argument value",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await rootFieldReview(
+          "req-root-mixed",
+          '{ repository(owner: "other-org") { id } node(id: "a") { id } }',
+        ),
+      );
+      const pending = await waitForPending(socketPath);
+      expect(
+        pending.items[0].violations?.map((v) => [v.value, v.label]),
+      ).toEqual([
+        [expect.stringMatching(/^[0-9a-f-]{36}$/), "rootField:node"],
+        ["argument:owner=other-org", null],
+      ]);
+      expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-root-mixed",
+        scope: "violation",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      // 引数値だけなら、もう聞かれない。
+      expect(
+        (
+          await sendBrokerRequest<DecisionResponse>(
+            socketPath,
+            await rootFieldReview(
+              "req-argument-only",
+              '{ repository(owner: "other-org") { name } }',
+            ),
+          )
+        ).decision,
+      ).toEqual("allow");
+
+      // root field は覚えられていないので、もう一度人に聞く。
+      const second = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await rootFieldReview("req-node-only", '{ node(id: "b") { id } }'),
+      );
+      const again = await waitForPending(socketPath);
+      expect(again.items.map((item) => item.requestId)).toEqual([
+        "req-node-only",
+      ]);
+      expect(again.items[0].approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: "req-node-only",
+      });
+      expect((await second).decision).toEqual("deny");
+    }, ROOT_FIELD_EXPECT_DOCUMENT);
+  },
+);
+
+test("SessionBroker: approving one unanalysable document does not approve the next", async () => {
+  // 値を持たない事実 (解析できない GraphQL document) は、addon がリクエスト
+  // ごとに新しい UUID を値に置く。承認の同一性は値で決まるので、1 件の承認が
+  // 後から来る別の document に及ぶことはない。
+  const unanalysable = (): ViolationFinding =>
+    finding(crypto.randomUUID(), {
+      expectKind: "body",
+      at: "/query",
+      kind: "body-unavailable",
+      pointer: "/query",
+      label: "document:(unanalysable)",
+      excerpt: null,
+    });
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-first-document", [unanalysable()]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-first-document",
+      scope: "once",
+    });
+    expect((await first).decision).toEqual("allow");
+
+    const second = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-second-document", [unanalysable()]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].requestId).toEqual("req-second-document");
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-second-document",
+    });
+    expect((await second).decision).toEqual("deny");
+  });
+});
+
+test("SessionBroker: denying one unresolved GraphQL argument does not deny the next", async () => {
+  // 拒否の側も UUID の値に縛られる。粒度なしの拒否が残す直近の拒否
+  // (negativeCache) は、次の別の値には効かず、もう一度人に聞く。
+  const unresolved = (): ViolationFinding =>
+    finding(crypto.randomUUID(), {
+      expectKind: "body",
+      at: "/query",
+      pointer: "/query",
+      label: "argument:owner=(unresolved)",
+      excerpt: null,
+    });
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-first-argument", [unresolved()]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-first-argument",
+    });
+    expect(await first).toMatchObject({
+      decision: "deny",
+      reason: "denied-by-user",
+    });
+
+    const second = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-second-argument", [unresolved()]),
+    );
+    expect(
+      (await waitForPending(socketPath)).items.map((item) => item.requestId),
+    ).toEqual(["req-second-argument"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-second-argument",
+    });
+    expect(await second).toMatchObject({
+      decision: "deny",
+      reason: "denied-by-user",
+    });
+
+    const third = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-third-argument", [unresolved()]),
+    );
+    expect(
+      (await waitForPending(socketPath)).items.map((item) => item.requestId),
+    ).toEqual(["req-third-argument"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-third-argument",
+      scope: "once",
+    });
+    expect((await third).decision).toEqual("deny");
+  });
+});
+
+test("SessionBroker: a card of only per-request values does not offer to remember them", async () => {
+  // UUID の値は次のリクエストに現れないので、`violation` で覚えても `once` と
+  // 同じにしか働かない。その選択肢は「この値を覚える」と読めるので出さず、
+  // それでも送ってきた相手には断る。カードは残り、`once` で答え直せる。
+  const unanalysable = finding(crypto.randomUUID(), {
+    expectKind: "body",
+    at: "/query",
+    kind: "body-unavailable",
+    pointer: "/query",
+    label: "document:(unanalysable)",
+    excerpt: null,
+  });
+  await withReviewBroker(async ({ socketPath }) => {
+    const decision = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-uuid-only", [unanalysable]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].approvalScopes).toEqual(["once"]);
+
+    for (const type of ["approve", "deny"] as const) {
+      const refused = await sendBrokerRequest<{
+        type: "error";
+        requestId: string;
+        message: string;
+      }>(socketPath, { type, requestId: "req-uuid-only", scope: "violation" });
+      expect(refused.type).toEqual("error");
+      expect(refused.message.toLowerCase()).toContain("scope not allowed");
+    }
+    expect(
+      (await waitForPending(socketPath)).items.map((item) => item.requestId),
+    ).toEqual(["req-uuid-only"]);
+
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-uuid-only",
+      scope: "once",
+    });
+    expect((await decision).decision).toEqual("allow");
+  });
+});
+
+test("SessionBroker: a card mixing per-request and ordinary values still offers to remember", async () => {
+  // 通常の所見は覚えられるので、`violation` には意味が残る。
+  await withReviewBroker(async ({ socketPath }) => {
+    const decision = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed", [
+        finding("future_block"),
+        finding(crypto.randomUUID(), {
+          expectKind: "body",
+          at: "/query",
+          pointer: "/query",
+          label: "argument:owner=(unresolved)",
+          excerpt: null,
+        }),
+      ]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-mixed",
+    });
+    expect((await decision).decision).toEqual("deny");
+  });
+});
+
+// 混在カードを `violation` で答えると、UUID の同一性も approvedViolations /
+// deniedViolations に入る。そこへ UUID が入りうるのはこの経路だけである。
+// 覚えるのは通常の所見だけとして働き、次の UUID には何も効かないこと。
+const unresolvedArgument = (): ViolationFinding =>
+  finding(crypto.randomUUID(), {
+    expectKind: "body",
+    at: "/query",
+    pointer: "/query",
+    label: "argument:owner=(unresolved)",
+    excerpt: null,
+  });
+
+test("SessionBroker: approving a mixed card remembers the ordinary value, not the per-request one", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-first", [
+        finding("future_block"),
+        unresolvedArgument(),
+      ]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-mixed-first",
+      scope: "violation",
+    });
+    expect((await first).decision).toEqual("allow");
+
+    // 通常の所見だけなら、もう聞かれない。
+    expect(
+      (
+        await sendBrokerRequest<DecisionResponse>(
+          socketPath,
+          review("req-ordinary-only", [finding("future_block")]),
+        )
+      ).decision,
+    ).toEqual("allow");
+
+    // 新しい UUID が混ざれば、その部分だけを問うカードになる。
+    const second = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-second", [
+        finding("future_block"),
+        unresolvedArgument(),
+      ]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.map((item) => item.requestId)).toEqual([
+      "req-mixed-second",
+    ]);
+    expect(pending.items[0].approvalScopes).toEqual(["once"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-mixed-second",
+    });
+    expect((await second).decision).toEqual("deny");
+  });
+});
+
+test("SessionBroker: denying a mixed card remembers the ordinary value, not the per-request one", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-first", [
+        finding("future_block"),
+        unresolvedArgument(),
+      ]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-mixed-first",
+      scope: "violation",
+    });
+    expect((await first).decision).toEqual("deny");
+
+    // 通常の所見を含むリクエストは、聞かずに拒否される。
+    expect(
+      await sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        review("req-mixed-second", [
+          finding("future_block"),
+          unresolvedArgument(),
+        ]),
+      ),
+    ).toMatchObject({ decision: "deny", reason: "denied-by-user" });
+
+    // 新しい UUID だけなら、拒否は及ばずもう一度聞かれる。
+    const third = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-uuid-only", [unresolvedArgument()]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.map((item) => item.requestId)).toEqual([
+      "req-uuid-only",
+    ]);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-uuid-only",
+      scope: "once",
+    });
+    expect((await third).decision).toEqual("allow");
   });
 });
 

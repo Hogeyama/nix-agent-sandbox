@@ -591,7 +591,7 @@ export class SessionBroker {
       notificationAbort,
       // ターゲットは同一性に入らないので、広さを選ぶ粒度は出さない。残る問いは
       // 「この違反を覚えるかどうか」だけである。
-      allowedScopes: ["once", "violation"],
+      allowedScopes: violationScopesFor(asked),
       identities: asked.map((finding) => violationKey(message.ruleId, finding)),
       findings: [...shown],
     };
@@ -1176,6 +1176,10 @@ export class SessionBroker {
         finding.value === null
           ? null
           : maskText(finding.value, this.maskPatterns),
+      label:
+        finding.label === null
+          ? null
+          : maskText(finding.label, this.maskPatterns),
       excerpt:
         finding.excerpt === null
           ? null
@@ -1361,6 +1365,7 @@ function toAuditViolation(finding: ViolationFinding): AuditViolation {
     kind: finding.kind,
     pointer: finding.pointer,
     value: finding.value,
+    label: finding.label,
     count: finding.count,
   };
 }
@@ -1382,6 +1387,23 @@ function approvalScopesFor(decided: AuthzDecision): readonly ApprovalScope[] {
   return scopePinsTarget(decided.scope)
     ? ["once", "rule"]
     : ["once", "host-port", "host"];
+}
+
+/**
+ * 違反の確認で選べる粒度。
+ *
+ * 答えを要する所見がすべて `label` を持つ — 値がリクエストごとの UUID である —
+ * なら、`violation` は出さない。覚えた同一性に次のリクエストが一致することは
+ * ないので、その粒度は `once` と同じ働きしかせず、「この値を覚える」と読める
+ * 選択肢は押す人を欺く。通常の所見が 1 件でも混ざっていれば、それは覚えられる
+ * ので出す。出さなかった粒度が送られてきたら `approve` / `deny` が断る。
+ */
+function violationScopesFor(
+  asked: readonly ViolationFinding[],
+): readonly ApprovalScope[] {
+  return asked.every((finding) => finding.label !== null)
+    ? ["once"]
+    : ["once", "violation"];
 }
 
 function scopePinsTarget(scope: ResolvedScope | null): boolean {
@@ -1466,6 +1488,40 @@ function violationNeedsApproval(
  * 無い違反を出す一方、`{"type": ""}` は値が空文字列の違反を出す。前者を承認
  * した人は後者を見ていないので、同じ鍵に落としてはならない。`JSON.stringify`
  * が `null` と `""` を書き分けるので、それを鍵の成分にする。
+ *
+ * 鍵に JSON Pointer は入らない。`UnionShape` はセレクタごとに受理条件の位置が
+ * 分かれるが、`BodyExpect` の `equals` / `oneOf` は 1 つの位置に複数の Pointer
+ * を並べる。そこで addon が値に Pointer を含める (`/owner="other"`、
+ * `/owner=(missing)`、`/owner=(not-scalar)`)。`/model` の `"other"` を承認した
+ * 人は `/owner` の `"other"` を見ていないし、`/model` が無いことを承認した人は
+ * `/owner` が無いことを見ていないからである。
+ *
+ * 1 件を承認しても他のリクエストに広げてはならない違反 (許されない GraphQL
+ * operation と root field、解析できない GraphQL document、解決できない GraphQL 引数、
+ * GraphQL 条件を判定できなくする URL のクエリ文字列) には、addon が
+ * リクエストごとの UUID を値として載せる。鍵はそのリクエストにしか
+ * 一致しないので、ここで特別扱いは要らない。`operation:mutation` を固定の値に
+ * すると、1 件の mutation を承認しただけで、以後のあらゆる mutation
+ * (`deleteRepository` も) がセッションの間は確認なしに通る。「読み取り以外は
+ * 人に回す」というルールの意図が 1 回の承認で消える。`rootField:node` も
+ * 同じで、1 件の `node(id:)` の承認が、何を読むか見えない以後のあらゆる
+ * `node(id:)` を通す。
+ *
+ * その代わり、この所見については承認だけでなく拒否も覚えられない。
+ * `deniedViolations` の鍵も、直近の拒否を覚える `negativeCache` の鍵
+ * (`violationGroupKey`、まだ答えの無い違反の鍵を束ねたもの) も UUID を含むので、
+ * 次のリクエストには二度と一致しない。そのため、
+ *
+ * - 許されない operation や root field、解析できない document、解決できない引数、
+ *   クエリ文字列を含むリクエストは、再送のたびに新しいカードと通知になる。
+ * - 答えを待つ間に同じ document が重ねて届いても 1 枚のカードに畳まれない。
+ *   束ねる鍵が UUID で分かれるので、同じリクエストに並ぶ通常の違反ごと
+ *   別のカードになる。
+ * - `violation` の粒度は、この所見に限っては `once` と同じに振る舞う。同じ
+ *   カードに並ぶ通常の違反は、これまでどおり覚えられる。
+ *
+ * これは受け入れた代償である。どちらの答えを覚えても、人が見ていない別の
+ * document にその答えが及ぶ。
  */
 function violationKey(ruleId: string, finding: ViolationFinding): string {
   return `${ruleId}\u0000${finding.expect}\u0000${JSON.stringify(finding.value)}`;
