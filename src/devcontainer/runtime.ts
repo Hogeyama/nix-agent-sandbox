@@ -22,7 +22,7 @@ import {
   serveComposeSession,
 } from "../stages/launch.ts";
 import {
-  ensureDevcontainerClaudeState,
+  ensureDevcontainerAgentState,
   resolveMountProbes,
 } from "../stages/mount.ts";
 import { ensureUiDaemon } from "../ui/daemon.ts";
@@ -94,14 +94,14 @@ export async function runDevcontainerRuntime(
   const host = options.host ?? buildHostEnv();
   const workspace = options.registration.workspace;
   const guard = createStartupGuard(deadlineAt, options.signal);
-  const { probes, mountProbes, claudeState, buildProbes } = await (async () => {
+  const { probes, mountProbes, agentState, buildProbes } = await (async () => {
     try {
       const probes = await guard.wait(resolveProbes(host));
       const mountProbes = await guard.wait(
         resolveMountProbes(host, options.profile, workspace),
       );
-      const claudeState = await guard.wait(
-        ensureDevcontainerClaudeState(host.home),
+      const agentState = await guard.wait(
+        ensureDevcontainerAgentState(options.profile.agent, host.home),
       );
       const buildProbes = await guard.wait(
         resolveBuildProbes("nas-sandbox", {
@@ -129,7 +129,7 @@ export async function runDevcontainerRuntime(
       return {
         probes,
         mountProbes,
-        claudeState,
+        agentState,
         buildProbes,
       };
     } finally {
@@ -152,7 +152,7 @@ export async function runDevcontainerRuntime(
     buildProbes,
     mountProbes,
     devcontainerMounts: {
-      ...claudeState,
+      ...agentState,
       vscodeDir: paths.vscodeDir,
     },
   });

@@ -11,7 +11,7 @@ import { Effect } from "effect";
 import { configureAgent } from "../../agents/registry.ts";
 import type {
   AgentConfigResult,
-  ClaudeStatePaths,
+  DevcontainerAgentState,
   ProtectedClaudeState,
 } from "../../agents/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
@@ -55,7 +55,7 @@ const DEFAULT_CONTAINER_USER = "nas";
 // MountPlan — pure data description returned by planMount()
 // ---------------------------------------------------------------------------
 
-export interface DevcontainerMountInput extends ClaudeStatePaths {
+export interface DevcontainerMountInput extends DevcontainerAgentState {
   readonly vscodeDir: string;
 }
 
@@ -493,7 +493,8 @@ export function planMount(
 
   applyAgentResult(
     configureAgent({
-      claudeState: devcontainer,
+      claudeState: devcontainer?.claudeState,
+      codexState: devcontainer?.codexState,
       protectedClaudeState,
       agent: profile.agent,
       mode: profile.mode ?? "terminal",

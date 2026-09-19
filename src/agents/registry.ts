@@ -57,6 +57,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         throw new Error('ACP mode currently supports only agent "claude"');
       }
       return configureCodex({
+        codexState: input.codexState,
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectCodexProbes(input.probes),
