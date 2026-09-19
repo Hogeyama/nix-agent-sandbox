@@ -12,6 +12,17 @@ export interface ClaudeStatePaths {
   readonly claudeJson: string;
 }
 
+/** Host state exposed through a private, writable container state root. */
+export interface ProtectedClaudeState {
+  readonly runtimeDir: string;
+  readonly claudeJson: string;
+  readonly entries: readonly {
+    readonly source: string;
+    readonly name: string;
+    readonly readOnly: boolean;
+  }[];
+}
+
 /** configureAgent 系の共通出力 */
 export interface AgentConfigResult {
   readonly mounts?: readonly MountSpec[];
@@ -23,6 +34,7 @@ export interface AgentConfigResult {
 /** configureAgent 系の共通入力 */
 export interface AgentConfigInput {
   readonly claudeState?: ClaudeStatePaths;
+  readonly protectedClaudeState?: ProtectedClaudeState;
   readonly agent: AgentType;
   readonly mode: AgentMode;
   readonly containerHome: string;
@@ -30,7 +42,7 @@ export interface AgentConfigInput {
   readonly probes: AgentProbes;
   /**
    * エージェントの状態ディレクトリ配下の設定ファイルを RO で上乗せするか
-   * (`profile.agentState.protectSettings`)。see agents/settings_protection.ts
+   * (`profile.agentState.protectSettings`)。Claude は設定ディレクトリも含む。
    */
   readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];

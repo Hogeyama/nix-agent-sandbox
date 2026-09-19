@@ -22,7 +22,7 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | 優先 | 項目 | 種別 | 工数 | 根拠 |
 |---|---|---|---|---|
 | **P0** | §3-A ドキュメント/スキルのドリフト | Docs | 小 | 現行実装に合わせて更新する |
-| **P1** | H2 認証情報ディレクトリ常時 RW → host persistence | Sec | 中〜大 | settings 系は RO overlay 済み。`~/.claude.json` の `mcpServers` と plugins/skills が残る |
+| **P1** | H2 認証情報ディレクトリ常時 RW → host persistence | Sec | 中〜大 | Claude は認証・履歴以外を RO / session-private 化。`~/.claude.json` の MCP は managed settings で制限が必要 |
 | **P1** | コンテナ権限ハードニング（no-new-privileges/cap-drop） | Sec | 中 | `no-new-privileges` + `cap-drop ALL` を検証して追加する |
 | **P1** | `/nix` RW マウント | Sec | 小〜中 | コンテナ root 奪取で store 汚染 → 他セッション RCE |
 | **P1** | `.git/hooks`/`.git/config` RW 無保護 | Sec | 小 | RO bind mount で保護する |
@@ -75,7 +75,7 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | H5 DNS リバインディング SSRF | ✅ 解決 | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留め。SNI は論理ホスト名を維持 |
 | H6 IP リテラル拒否リストの穴 | ✅ 解決 | TS の構造的 IP パースと Python `ipaddress` を同一境界 corpus で parity 検証 |
 | 危険設定削除 (gcloud/aws/gpg) | ✅ 解決 | 型・mount 分岐・probe・Pkl schema から削除。旧設定は移行先を名指しして load 失敗 |
-| H2 認証情報ディレクトリ RW | 🟡 部分解決 **P1** | settings 系だけ RO overlay（`agents/settings_protection.ts`）。`~/.claude.json` は claude が実行中に書くため未対応 |
+| H2 認証情報ディレクトリ RW | 🟡 部分解決 **P1** | Claude は設定類を RO、認証・履歴・projects を RW 共有。`~/.claude.json` の MCP 制限は managed settings が必要 |
 | コンテナ権限ハードニング | ⬜ 残 **P1** | `no-new-privileges` + `cap-drop ALL` の追加が必要 |
 | M9 argv0 表示/実行不一致 | ⬜ 残 **P1** | 承認表示と実行を同じ `capability.argv0` に統一する |
 | fallback 死蔵フィールド | ⬜ 残 **P1** | 型+Schema+テストから削除する |
@@ -126,16 +126,15 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
 ### H2. `~/.claude` 等が常時 RW マウント → agent が hook 仕込んで host persistence
 - **脅威**: in-container agent が `~/.claude/settings.json` の `PreToolUse`/`Stop` hook を書き換え、
   ユーザが次回 **host 上で直接** `claude` を起動した瞬間に host 任意コード実行。
-- **🟡 部分対応（settings 系のみ RO overlay）**: 状態ディレクトリは RW のまま、実在する設定ファイルだけを
-  RO の file bind mount で上乗せする（`src/agents/settings_protection.ts`）。対象は
-  `~/.claude/settings.json`・`settings.local.json`、`~/.codex/config.toml`、
-  `~/.copilot/config.json`・`mcp-config.json`。`profile.agentState.protectSettings`（既定 false、opt-in）で有効にする。VS Code 拡張などコンテナ内から設定ファイルに書くツールが RO でエラーになるため既定では無効。
+- **🟡 部分対応（`profile.agentState.protectSettings = true`、既定 false）**:
+  Claude は `~/.claude` の設定・plugins・skills・agents・commands・hooks 等を RO で共有し、
+  認証・履歴・projects（auto memory を含む）だけを RW 共有する。ログ・キャッシュ・shell snapshots と
+  ホストにない項目は session-private。通常起動・ACP・Dev Container で共通。
+  Codex / Copilot は従来どおり実在する設定ファイルだけを RO overlay する。
 - **⬜ 残る穴**:
-  - **`~/.claude.json` の `mcpServers`** — host で claude 起動時に自動 spawn されるので settings.json の
-    hooks と同じ自動実行経路だが、claude が実行中に書き換える（`~/.claude/backups/` に数分間隔の
-    バックアップが残る）ため RO にできない。session 別コピーを RW で見せる方式が要る。
-  - **plugins / skills / agents / commands / statusline** — モデル経由でホスト実行に至る。今回の
-    scope 外（コンテナ内での skill 作成・plugin install を壊す）。
+  - **`~/.claude.json` の `mcpServers`** — 実行中の更新用に RW 共有する。
+    ホスト・コンテナの両方で managed settings に `allowManagedMcpServersOnly: true` と
+    `allowedMcpServers: []` を配置すれば、このファイルからの MCP 起動を拒否できる。nas は自動設定しない。
   - **workspace 内の `.claude/settings.json`・`.git/hooks`・`.github/hooks/`** — 下の
     「`.git/hooks`/`.git/config` が RW で無保護」と同根。user scope と違い当該リポジトリ限定なので
     severity は低いが未対応。

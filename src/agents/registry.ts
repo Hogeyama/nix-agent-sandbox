@@ -32,6 +32,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
       return configureClaude({
         mode: input.mode,
         claudeState: input.claudeState,
+        protectedClaudeState: input.protectedClaudeState,
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectClaudeProbes(input.probes),

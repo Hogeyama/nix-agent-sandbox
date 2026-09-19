@@ -212,8 +212,8 @@ export const DEFAULT_GUIDE_CONFIG: GuideConfig = {
 /** ホストのエージェント状態ディレクトリ (`~/.claude` 等) の扱い */
 export interface AgentStateConfig {
   /**
-   * 状態ディレクトリ配下の設定ファイルを RO の bind mount で上乗せする。
-   * see agents/settings_protection.ts
+   * Claude は設定類を RO、認証・履歴・プロジェクト状態を RW 共有する。
+   * Codex / Copilot は実在する設定ファイルを RO で上乗せする。
    */
   protectSettings: boolean;
 }

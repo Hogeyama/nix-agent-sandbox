@@ -34,8 +34,9 @@ export function describeDevcontainerSharing(
     },
     {
       topic: "Claude credentials",
-      detail:
-        "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
+      detail: profile.agentState.protectSettings
+        ? "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down"
+        : "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
     },
     {
       topic: "IDE server",

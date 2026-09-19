@@ -109,3 +109,15 @@ test("the credentials shared from the host home are always disclosed", () => {
   expect(detailText).toContain("~/.claude");
   expect(detailText).toContain("after down");
 });
+
+test("protected Claude state discloses both writable sharing and private runtime data", () => {
+  const profile = {
+    ...devcontainerProfile(),
+    agentState: { protectSettings: true },
+  };
+  const text = detail(profile, "Claude credentials");
+  expect(text).toContain("auto memory");
+  expect(text).toContain("~/.claude.json shared read-write");
+  expect(text).toContain("configuration read-only");
+  expect(text).toContain("logs and caches session-private");
+});

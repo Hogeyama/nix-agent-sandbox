@@ -19,7 +19,7 @@ test("configureClaude: ACP reuses Claude mounts and invokes the adapter from PAT
     containerHome: "/home/nas",
     hostHome: "/home/host",
     probes: installedClaude,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: ["--read-only"],
     priorEnvVars: { HTTPS_PROXY: "http://localhost:18080" },
   });
@@ -48,7 +48,7 @@ test("configureClaude: ACP requires a native host Claude installation", () => {
       containerHome: "/home/nas",
       hostHome: "/home/host",
       probes: { ...installedClaude, claudeBinPath: null },
-      protectSettings: true,
+      protectSettings: false,
       priorDockerArgs: [],
       priorEnvVars: {},
     }),
@@ -60,7 +60,7 @@ test("configureClaude: absent mode preserves terminal behavior", () => {
     containerHome: "/home/nas",
     hostHome: "/home/host",
     probes: installedClaude,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -77,7 +77,7 @@ const input = {
     claudeBinPath: "/host/claude",
     claudeSettingsFiles: [],
   },
-  protectSettings: true,
+  protectSettings: false,
   priorDockerArgs: [],
   priorEnvVars: {},
 };
@@ -109,69 +109,80 @@ test("normal Claude CLI retains host mounts and executable", () => {
   expect(result.agentCommand).toEqual(["claude"]);
 });
 
-// `~/.claude` stays writable for credentials and session history, so the
-// settings files that hooks would run from are re-mounted read-only on top of
-// it. Without this an agent can plant a `PreToolUse` hook that runs on the
-// host the next time the user starts Claude there.
-const withSettings = {
-  ...input,
-  probes: {
-    ...input.probes,
-    claudeSettingsFiles: ["settings.json", "settings.local.json"],
-  },
+test("protectSettings fails closed when the protected state was not prepared", () => {
+  expect(() => configureClaude({ ...input, protectSettings: true })).toThrow(
+    "Protected Claude state must be prepared",
+  );
+});
+
+const protectedState = {
+  runtimeDir: "/private/claude-state",
+  claudeJson: "/host/home/.claude.json",
+  entries: [
+    { source: "/host/home/.claude/plugins", name: "plugins", readOnly: true },
+    {
+      source: "/host/home/.claude/.credentials.json",
+      name: ".credentials.json",
+      readOnly: false,
+    },
+    {
+      source: "/host/home/.claude/projects",
+      name: "projects",
+      readOnly: false,
+    },
+  ],
 };
 
-test("protectSettings re-mounts the host settings files read-only", () => {
-  const result = configureClaude(withSettings);
-  expect(result.dockerArgs).toEqual([
-    "-v",
-    "/host/home/.claude:/home/nas/.claude",
-    "-v",
-    "/host/home/.claude/settings.json:/home/nas/.claude/settings.json:ro",
-    "-v",
-    "/host/home/.claude/settings.local.json:/home/nas/.claude/settings.local.json:ro",
-    "-v",
-    "/host/home/.claude.json:/home/nas/.claude.json",
-    "-v",
-    "/host/claude:/home/nas/.local/bin/claude:ro",
-  ]);
-});
-
-test("protectSettings = false leaves the settings files writable", () => {
-  const result = configureClaude({ ...withSettings, protectSettings: false });
-  expect(result.dockerArgs.filter((arg) => arg.endsWith(":ro"))).toEqual([
-    "/host/claude:/home/nas/.local/bin/claude:ro",
-  ]);
-});
-
-test("protectSettings covers the dedicated state directory too", () => {
-  const result = configureClaude({
-    ...withSettings,
-    claudeState: {
-      claudeDir: "/state:$x/claude",
-      claudeJson: "/state:$x/claude.json",
-    },
+for (const mode of ["terminal", "acp"] as const) {
+  test(`protected ${mode} mounts a private root and never mounts the host state directory`, () => {
+    const result = configureClaude({
+      ...input,
+      protectSettings: true,
+      mode,
+      protectedClaudeState: protectedState,
+    });
+    expect(result.mounts).toContainEqual({
+      source: protectedState.runtimeDir,
+      target: "/home/nas/.claude",
+    });
+    expect(result.mounts).toContainEqual({
+      source: "/host/home/.claude/plugins",
+      target: "/home/nas/.claude/plugins",
+      readOnly: true,
+    });
+    expect(result.mounts).toContainEqual({
+      source: "/host/home/.claude/.credentials.json",
+      target: "/home/nas/.claude/.credentials.json",
+      readOnly: false,
+    });
+    expect(
+      result.mounts?.some((mount) => mount.source === "/host/home/.claude"),
+    ).toBe(false);
+    expect(result.dockerArgs).not.toContain(
+      "/host/home/.claude:/home/nas/.claude",
+    );
+    expect(result.dockerArgs).toContain(
+      "/host/claude:/home/nas/.local/bin/claude:ro",
+    );
   });
-  expect(result.mounts).toEqual([
-    { source: "/state:$x/claude", target: "/home/nas/.claude" },
-    {
-      source: "/state:$x/claude/settings.json",
-      target: "/home/nas/.claude/settings.json",
-      readOnly: true,
-    },
-    {
-      source: "/state:$x/claude/settings.local.json",
-      target: "/home/nas/.claude/settings.local.json",
-      readOnly: true,
-    },
-    { source: "/state:$x/claude.json", target: "/home/nas/.claude.json" },
-  ]);
-});
+}
 
-// The ACP adapter reuses the terminal mounts, so it must inherit the overlay.
-test("protectSettings applies in ACP mode", () => {
-  const result = configureClaude({ ...withSettings, mode: "acp" });
-  expect(result.dockerArgs).toContain(
-    "/host/home/.claude/settings.json:/home/nas/.claude/settings.json:ro",
+test("protected Dev Container uses the same layout without a native binary mount", () => {
+  const result = configureClaude({
+    ...input,
+    protectSettings: true,
+    claudeState: {
+      claudeDir: "/host/home/.claude",
+      claudeJson: "/host/home/.claude.json",
+    },
+    protectedClaudeState: protectedState,
+  });
+  expect(result.mounts).toEqual(
+    configureClaude({
+      ...input,
+      protectSettings: true,
+      protectedClaudeState: protectedState,
+    }).mounts,
   );
+  expect(result.dockerArgs).toEqual([]);
 });

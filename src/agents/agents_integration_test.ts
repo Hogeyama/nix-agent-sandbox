@@ -98,7 +98,7 @@ test("configureAgent: dispatches claude configuration", () => {
       claudeBinPath: "/usr/bin/claude",
       claudeSettingsFiles: [],
     },
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: ["--existing"],
     priorEnvVars: {},
   });
@@ -194,7 +194,7 @@ test("configureClaude: sets PATH with .local/bin prepended", () => {
     containerHome,
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -216,7 +216,7 @@ test("configureClaude: mounts ~/.claude when directory exists", () => {
     containerHome,
     hostHome,
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -236,7 +236,7 @@ test("configureClaude: does not mount ~/.claude when directory is absent", () =>
     containerHome,
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -257,7 +257,7 @@ test("configureClaude: mounts ~/.claude.json when file exists", () => {
     containerHome,
     hostHome,
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -277,7 +277,7 @@ test("configureClaude: does not mount ~/.claude.json when file is absent", () =>
     containerHome,
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -297,7 +297,7 @@ test("configureClaude: mounts binary and uses ['claude'] when binary found", () 
     containerHome,
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -319,7 +319,7 @@ test("configureClaude: uses install script when claude binary not found", () => 
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -345,7 +345,7 @@ test("configureClaude: bootstrap command forwards appended arguments to claude",
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: {},
   });
@@ -386,7 +386,7 @@ test("configureClaude: preserves existing dockerArgs", () => {
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: ["--existing", "arg"],
     priorEnvVars: {},
   });
@@ -405,7 +405,7 @@ test("configureClaude: preserves existing envVars", () => {
     containerHome: "/home/testuser",
     hostHome: "/home/host",
     probes,
-    protectSettings: true,
+    protectSettings: false,
     priorDockerArgs: [],
     priorEnvVars: { EXISTING: "value" },
   });

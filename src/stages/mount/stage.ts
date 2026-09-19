@@ -12,6 +12,7 @@ import { configureAgent } from "../../agents/registry.ts";
 import type {
   AgentConfigResult,
   ClaudeStatePaths,
+  ProtectedClaudeState,
 } from "../../agents/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
@@ -101,15 +102,24 @@ export function createMountStage(
         ...shared,
         ...input,
       };
-      const plan = planMount(stageInput, mountProbes, devcontainer);
-      const workspace = resolveWorkspace(input);
-      const container = mergeContainerPlan(
-        resolveContainerBase(input, workspace),
-        plan.containerPatch,
-      );
-
       return Effect.gen(function* () {
         const mountSetupService = yield* MountSetupService;
+        const protectedState =
+          shared.profile.agent === "claude" &&
+          shared.profile.agentState.protectSettings
+            ? yield* mountSetupService.prepareClaudeState(shared.host.home)
+            : undefined;
+        const plan = planMount(
+          stageInput,
+          mountProbes,
+          devcontainer,
+          protectedState,
+        );
+        const workspace = resolveWorkspace(input);
+        const container = mergeContainerPlan(
+          resolveContainerBase(input, workspace),
+          plan.containerPatch,
+        );
 
         yield* mountSetupService.ensureDirectories(plan.directories);
 
@@ -142,8 +152,18 @@ export function planMount(
   input: MountStageInput,
   probes: MountProbes,
   devcontainer?: DevcontainerMountInput,
+  protectedClaudeState?: ProtectedClaudeState,
 ): MountPlan {
   const { host, profile } = input;
+  if (
+    profile.agent === "claude" &&
+    profile.agentState.protectSettings &&
+    !protectedClaudeState
+  ) {
+    throw new Error(
+      "[nas] Protected Claude state must be prepared before planning mounts",
+    );
+  }
   const workspace = resolveWorkspace(input);
 
   // Runtime ordering guard: MaskFsStage must run before MountStage when the
@@ -474,6 +494,7 @@ export function planMount(
   applyAgentResult(
     configureAgent({
       claudeState: devcontainer,
+      protectedClaudeState,
       agent: profile.agent,
       mode: profile.mode ?? "terminal",
       containerHome,

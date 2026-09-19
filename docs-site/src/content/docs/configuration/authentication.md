@@ -40,17 +40,7 @@ lines は複数の値になるため、ヘッダー注入や単一値のホス�
 
 ## エージェント設定ファイルの保護
 
-ホストの `~/.claude`・`~/.codex`・`~/.copilot` は、認証情報とセッション履歴を持ち込むため読み書き可能で共有します。`agentState.protectSettings` を有効にすると、そのうち設定ファイルだけを読み取り専用に上書きします。既定は無効です。
-
-| エージェント | 読み取り専用にするファイル |
-| --- | --- |
-| claude | `~/.claude/settings.json`、`~/.claude/settings.local.json` |
-| codex | `~/.codex/config.toml` |
-| copilot | `~/.copilot/config.json`、`~/.copilot/mcp-config.json` |
-
-これらは hooks や MCP サーバとして、ホストで同じエージェントを起動したときにホスト上で実行されるコマンドを宣言します。コンテナ内のエージェントが書き換えられると、次にホストでエージェントを起動した瞬間にホストで任意のコマンドが動きます。対象はホストに実在するファイルだけで、まだ設定ファイルが無いホストでは何も追加されません。
-
-この経路を塞ぐには、対象プロファイルで有効にします。
+`agentState.protectSettings` を有効にすると、ホストから共有する設定をコンテナ内で書き換えられなくなります。既定は無効です。
 
 ```pkl
 agentState {
@@ -58,14 +48,36 @@ agentState {
 }
 ```
 
-有効にすると、コンテナ内からこれらのファイルに書き込むツール（VS Code 拡張など）はエラーになります。既定で無効にしているのはこのためです。ホスト側の設定を変えたいだけなら、コンテナ内ではなくホストで編集してください。
+Claude では、ホストの設定・plugins・skills・agents・commands・hooks などを読み取り専用で共有します。`~/.claude/sumi/` に置いた secrets file も対象です。共有範囲は通常起動・ACP・Dev Container で共通です。
+
+| Claude の保存先 | 扱い |
+| --- | --- |
+| `~/.claude.json`、`~/.claude/.credentials.json` | 読み書き可能で共有 |
+| `~/.claude/history.jsonl`、`projects/`、`file-history/` | 読み書き可能で共有。`projects/` 内の auto memory も含む |
+| ログ・キャッシュ・shell snapshots | セッション専用。終了時に削除 |
+| その他の `~/.claude/` 直下の項目 | ホストにあれば読み取り専用で共有。なければセッション専用 |
+
+認証・履歴の共有先がなければ、起動時に作成します。ホストの設定変更や既存 plugin の更新はホストで行ってください。コンテナ内からの更新は読み取り専用のため失敗します。
+
+Codex / Copilot は状態ディレクトリを読み書き可能で共有し、次の実在する設定ファイルだけを読み取り専用にします。
+
+| エージェント | 読み取り専用にするファイル |
+| --- | --- |
+| codex | `~/.codex/config.toml` |
+| copilot | `~/.copilot/config.json`、`~/.copilot/mcp-config.json` |
 
 ### 保護しないもの
 
-保護の対象は、エージェントが実行中に書き換えないユーザー単位の設定ファイルに限ります。次のものは同じ経路を持ちますが対象外です。
+`~/.claude.json` は Claude が実行中に更新するため、読み書き可能で共有します。ここに追加された MCP サーバーの起動も防ぐには、ホスト・コンテナの両方に次の [managed settings](https://code.claude.com/docs/en/managed-mcp#restrict-the-allowlist-to-managed-settings-only) を配置します。nas が自動で追加する設定ではありません。
 
-- `~/.claude.json` — `mcpServers` を持ちますが、claude が実行中に書き換えるため読み取り専用にできません。
-- 作業フォルダーの `.claude/settings.json`、`.git/hooks`、`.github/hooks/` — エージェントが編集する対象と同じツリーにあります。信頼できないリポジトリでは、ホストでそのフォルダーの hooks が動く操作をする前に中身を確認してください。
+```json
+{
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": []
+}
+```
+
+作業フォルダーの `.claude/settings.json`、`.git/hooks`、`.github/hooks/` は保護しません。信頼できないリポジトリでは、ホストでそのフォルダーの hooks が動く操作をする前に中身を確認してください。
 
 ## 廃止した設定ディレクトリの共有
 

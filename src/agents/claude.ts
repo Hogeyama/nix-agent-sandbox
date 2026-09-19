@@ -5,13 +5,12 @@
 import {
   CLAUDE_SETTINGS_FILES,
   existingSettingsFiles,
-  settingsMountArgs,
-  settingsMountSpecs,
 } from "./settings_protection.ts";
 import type {
   AgentConfigResult,
   AgentMode,
   ClaudeStatePaths,
+  ProtectedClaudeState,
 } from "./types.ts";
 
 const DEFAULT_CONTAINER_PATH =
@@ -61,10 +60,11 @@ export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
 export interface ClaudeConfigInput {
   readonly mode?: AgentMode;
   readonly claudeState?: ClaudeStatePaths;
+  readonly protectedClaudeState?: ProtectedClaudeState;
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: ClaudeProbes;
-  /** `~/.claude` 配下の設定ファイルを RO で上乗せするか。 */
+  /** ホストの設定類を RO にし、認証・履歴だけを RW 共有するか。 */
   readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
@@ -83,28 +83,40 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     envVars.PATH ?? DEFAULT_CONTAINER_PATH
   }`;
 
-  // probes は `${hostHome}/.claude` を見ており、claudeState.claudeDir も
-  // 同じホストディレクトリを指す (mount_probes の ensureDevcontainerClaudeState)。
-  // どちらの経路でも同じ相対パスを RO で上乗せできる。
-  const protectedSettings = input.protectSettings
-    ? probes.claudeSettingsFiles
-    : [];
+  if (input.protectSettings && !input.protectedClaudeState) {
+    throw new Error(
+      "[nas] Protected Claude state must be prepared before configuring Claude",
+    );
+  }
+
+  const stateMounts = input.protectedClaudeState
+    ? [
+        {
+          source: input.protectedClaudeState.runtimeDir,
+          target: `${containerHome}/.claude`,
+        },
+        ...input.protectedClaudeState.entries.map((entry) => ({
+          source: entry.source,
+          target: `${containerHome}/.claude/${entry.name}`,
+          readOnly: entry.readOnly,
+        })),
+        {
+          source: input.protectedClaudeState.claudeJson,
+          target: `${containerHome}/.claude.json`,
+        },
+      ]
+    : undefined;
 
   if (input.claudeState) {
     return {
       dockerArgs: args,
       envVars,
       agentCommand: ["claude"],
-      mounts: [
+      mounts: stateMounts ?? [
         {
           source: input.claudeState.claudeDir,
           target: `${containerHome}/.claude`,
         },
-        ...settingsMountSpecs(
-          input.claudeState.claudeDir,
-          `${containerHome}/.claude`,
-          protectedSettings,
-        ),
         {
           source: input.claudeState.claudeJson,
           target: `${containerHome}/.claude.json`,
@@ -114,19 +126,12 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
   }
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
-  if (probes.claudeDirExists) {
+  if (!stateMounts && probes.claudeDirExists) {
     args.push("-v", `${hostHome}/.claude:${containerHome}/.claude`);
-    args.push(
-      ...settingsMountArgs(
-        `${hostHome}/.claude`,
-        `${containerHome}/.claude`,
-        protectedSettings,
-      ),
-    );
   }
 
   // ~/.claude.json をマウント（設定）
-  if (probes.claudeJsonExists) {
+  if (!stateMounts && probes.claudeJsonExists) {
     args.push("-v", `${hostHome}/.claude.json:${containerHome}/.claude.json`);
   }
 
@@ -145,6 +150,7 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     envVars.NODE_EXTRA_CA_CERTS = NAS_PROXY_CA_CERT_PATH;
     return {
       dockerArgs: [...args],
+      mounts: stateMounts,
       envVars,
       agentCommand: [CLAUDE_AGENT_ACP_COMMAND],
     };
@@ -165,7 +171,7 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
         "claude",
       ];
 
-  return { dockerArgs: [...args], envVars, agentCommand };
+  return { dockerArgs: [...args], mounts: stateMounts, envVars, agentCommand };
 }
 
 // ---------------------------------------------------------------------------

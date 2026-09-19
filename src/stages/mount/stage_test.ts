@@ -991,6 +991,14 @@ test("MountStage: agentState.protectSettings reaches the agent mounts", () => {
       mountProbes,
     }).input,
     mountProbes,
+    undefined,
+    {
+      runtimeDir: "/tmp/claude-state",
+      claudeJson: `${TEST_HOME}/.claude.json`,
+      entries: [
+        { source: roMount.source, name: "settings.json", readOnly: true },
+      ],
+    },
   );
   expect(protected_.containerPatch.mounts).toContainEqual(roMount);
 
@@ -1781,4 +1789,75 @@ test("IDE with maskfs refuses a linked worktree outside the main repository root
   expect(() => planMount(input, mountProbes, ideMounts)).toThrow(
     "beneath the mounted root",
   );
+});
+
+test("MountStage run(): prepares protected Claude state before planning and retains it until scope closes", async () => {
+  const mountProbes = makeMountProbes();
+  const { sharedInput, slices } = makeInput({
+    profile: makeProfile({ agentState: { protectSettings: true } }),
+    mountProbes,
+  });
+  const prepared = {
+    runtimeDir: "/private/claude",
+    claudeJson: `${TEST_HOME}/.claude.json`,
+    entries: [],
+  };
+  const events: string[] = [];
+  const layer = makeMountSetupServiceFake({
+    prepareClaudeState: (home) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          expect(home).toBe(TEST_HOME);
+          events.push("prepare");
+          return prepared;
+        }),
+        () =>
+          Effect.sync(() => {
+            events.push("release");
+          }),
+      ),
+    ensureDirectories: () =>
+      Effect.sync(() => {
+        events.push("directories");
+      }),
+  });
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const result = yield* createMountStage(sharedInput, mountProbes).run(
+          slices,
+        );
+        expect(result.container.mounts).toContainEqual({
+          source: prepared.runtimeDir,
+          target: `${CONTAINER_HOME}/.claude`,
+        });
+        expect(events).toEqual(["prepare", "directories"]);
+      }),
+    ).pipe(Effect.provide(layer)),
+  );
+  expect(events).toEqual(["prepare", "directories", "release"]);
+});
+
+test("MountStage run(): a failed protected-state preparation cannot fall back to RW sharing", async () => {
+  const mountProbes = makeMountProbes();
+  const { sharedInput, slices } = makeInput({
+    profile: makeProfile({ agentState: { protectSettings: true } }),
+    mountProbes,
+  });
+  let created = false;
+  const layer = makeMountSetupServiceFake({
+    prepareClaudeState: () => Effect.fail(new Error("invalid shared path")),
+    ensureDirectories: () =>
+      Effect.sync(() => {
+        created = true;
+      }),
+  });
+  await expect(
+    Effect.runPromise(
+      createMountStage(sharedInput, mountProbes)
+        .run(slices)
+        .pipe(Effect.provide(layer), Effect.scoped),
+    ),
+  ).rejects.toThrow("invalid shared path");
+  expect(created).toBe(false);
 });
