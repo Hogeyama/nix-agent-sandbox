@@ -4,7 +4,7 @@
  * 設定を解決器に通し、ホストが addon に書き出す形 (`withoutInjectLiterals`) の
  * ドキュメントを graphql_acceptance.py に渡す。addon はそのドキュメントを
  * 検証し直し、リクエストごとに候補の真偽表・選択・受理条件の検査を行う。
- * 所見は broker の検証器 (`validateViolationFindings`) にも通す。
+ * 違反レコードは broker の検証器 (`validateViolationFindings`) にも通す。
  *
  * 選択の突き合わせ (TS の `decide` との一致) は decide_parity_test.ts の役目で
  * あり、ここでは addon が同じ解決済みドキュメントの上で期待どおりに振る舞う
@@ -285,7 +285,7 @@ test.skipIf(!python3 || !vendoredDeps)(
       findings: [],
     });
     // クエリ文字列があれば、ボディの document を解析せずに 1 リクエスト限りの
-    // 違反とし、人の確認に回す。所見にクエリ文字列は載らない。
+    // 違反とし、人の確認に回す。違反レコードにクエリ文字列は載らない。
     for (const name of ["query-string-document", "query-string-variables"]) {
       const result = results.get(name);
       expect([name, summary(result)]).toEqual([
@@ -415,7 +415,7 @@ test.skipIf(!python3 || !vendoredDeps)(
       "<uuid rootField:search>",
     ]);
 
-    // document の本文は所見に載らない。値は正準形の短い文字列だけで、抜粋は無い。
+    // document の本文は違反レコードに載らない。値は正準形の短い文字列だけで、抜粋は無い。
     for (const result of results.values()) {
       const text = JSON.stringify(result.findings);
       expect(text).not.toContain("marker-in-document");

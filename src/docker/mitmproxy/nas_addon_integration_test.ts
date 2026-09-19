@@ -1763,7 +1763,7 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
         },
         {
           name: "variable resolving to another owner",
-          // other-org は所見の正準形に正当に現れるので、document 側の語で見る。
+          // other-org は違反レコードの正準形に正当に現れるので、document 側の語で見る。
           bodyMarker: "repository(owner: $o",
           body: JSON.stringify({
             query:

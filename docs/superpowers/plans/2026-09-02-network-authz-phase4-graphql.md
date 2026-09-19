@@ -74,7 +74,7 @@ graphql が今どこで切れているかは次の 7 か所である。
    `equals` / `oneOf` のみ）。解決済みドキュメントにも載らない
 4. `nas_addon.py` — `_MATCH_KEYS` に `graphql` が無く、`_EXPECT_KEYS` に `body` が
    無く、GraphQL パーサも無い
-5. `protocol.ts:720` の `EXPECT_KINDS` — `"body"` が無いので、body 由来の所見を運ぶ
+5. `protocol.ts:720` の `EXPECT_KINDS` — `"body"` が無いので、body 由来の違反レコードを運ぶ
    電文が検証で落ちる
 6. `flake.nix:176` — `nas_addon.py` 単体しかアセットに含めない。vendor ツリーの
    置き場が無い
@@ -170,25 +170,25 @@ interface GraphqlDocument {
 この 3 値化のため `semantics.ts` の `satisfiesDocument` は boolean ではなく `Truth` を
 返す形になる。使用箇所は `evaluateGraphql`（同ファイル）だけである。
 
-### BodyExpect の違反所見の形
+### BodyExpect の違反レコードの形
 
 `_evaluate_expects`（`nas_addon.py:1624`）に kind `"body"` の分岐を足す。承認の同一性は
 既存どおり (ルール ID, expect 内の位置, 違反した値) である。
 
 - `equals` / `oneOf`: Pointer の対象が**無い**・**スカラーでない**・**値が集合に無い**、
   のいずれも違反（受理条件に判定不能は無い。仕様「BodyExpect は match がボディの解析に
-  成功した後にだけ評価する」）。所見は kind `schema-mismatch`、`pointer` = その JSON
+  成功した後にだけ評価する」）。違反レコードは kind `schema-mismatch`、`pointer` = その JSON
   Pointer（マスク済み）、`value` = マスク済みスカラー（対象が無い・スカラーでない場合は
   null）、`excerpt` = スカラーでない場合のみ `_violation_excerpt` の出力。
-- `graphql`: 勝ったルール自身の予算で facts を取り、違反した側面ごとに所見を作る。
+- `graphql`: 勝ったルール自身の予算で facts を取り、違反した側面ごとに違反レコードを作る。
   kind `schema-mismatch`、`at` = graphql の `at`、`pointer` = 同じく `at`、`excerpt` =
-  null（document 本文は所見に載せない）。`value` は次の正準形とし、マスクを通す。
+  null（document 本文は違反レコードに載せない）。`value` は次の正準形とし、マスクを通す。
   - 許されない operation: `operation:mutation`
   - 許されない root field: `rootField:node`
   - 許されない引数値: `argument:owner=other-org`
   - 名指しした引数が解決不能: `argument:owner=(unresolved)`
   - document が解析できない（`at` の対象が無い・文字列でない・parse 失敗・予算超過）:
-    kind `body-unavailable`、`value` = null の所見 1 件
+    kind `body-unavailable`、`value` = null の違反レコード 1 件
   同一 (位置, value) は `count` に畳む（`unionShape` と同じ）。
 - `format != "json"` のルールに `BodyExpect` を置けない検査は、addon 側は既存の
   「`emptyBody` 以外は json を要る」（`nas_addon.py:562-564`）が自動で覆う。
@@ -299,7 +299,7 @@ interface GraphqlDocument {
   `_evaluate_body_match_with_diagnostic` にタスク 3 の `_evaluate_graphql` を配線し
   （判定不能の診断 code は `graphql-unparseable` など 1 語で足す）、
   `_evaluate_expects` に kind `"body"` の分岐（「決まっていること > BodyExpect の
-  違反所見の形」）を足す。
+  違反レコードの形」）を足す。
 - `protocol.ts`: `EXPECT_KINDS` に `"body"` を足す。
 - `examples_fixture.ts` の `githubGraphqlExample` が診断なしで解決でき、その解決済み
   ドキュメントを `_is_valid_authz_document` が受理することをテストで固定する
@@ -331,7 +331,7 @@ interface GraphqlDocument {
   無い、の 7 形。TS 側の参照述語は `buildGraphqlDocuments` を**そのルールの limits**で
   呼んで `RequestBody.documents` を組む（`requestBody` がボディをルールの
   `maxBodyBytes` で組み直しているのと同じ位置）。
-- `message_parity_test.ts` に、kind `"body"` の所見（`schema-mismatch` と
+- `message_parity_test.ts` に、kind `"body"` の違反レコード（`schema-mismatch` と
   `body-unavailable` の両方）を載せた電文が broker の検証器を通る 1 件を足す。
 
 ### 7. 実トラフィックの受け入れ（Docker あり）
@@ -341,7 +341,7 @@ interface GraphqlDocument {
   - `query` + 許された変数 → 自動許可、注入ヘッダー付き
   - mutation → `onViolation = "review"` の違反として pending に載る
   - 壊れた JSON → `onIndeterminate = "review"`
-- UI の pending カードが `expectKind = "body"` の所見を他の所見と同じに描画することを
+- UI の pending カードが `expectKind = "body"` の違反レコードを他の違反レコードと同じに描画することを
   目視で 1 度確認する（`src/ui/frontend/src/stores/pendingStore.ts` は kind を文字列と
   して扱っており、コード変更は想定しない）。
 
@@ -425,7 +425,7 @@ T1〜T3 が先頭なのは順序の要請である。パーサと意味論を固
 - 名指しした引数が解決できない document は、match では判定不能（打ち切り +
   `onIndeterminate`）、expect では違反になる
 - document 本文が承認 UI・監査ログ・broker のメモリのいずれにも生では載らない
-  （所見の `value` は正準形の短い文字列で、マスクを通っている）
+  （違反レコードの `value` は正準形の短い文字列で、マスクを通っている）
 - graphql 条件を持つ設定エラー（併記・空 Listing・交差の未解決）がセッション開始時に
   止まり、証人に document の例が現れる
 - vendor の更新が proxy コンテナの再作成を引き起こす

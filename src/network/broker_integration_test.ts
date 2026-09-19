@@ -423,7 +423,7 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
 
 test("SessionBroker: the audit records which condition a violation broke", async () => {
   // 理由は閉じた語彙なので `schema-mismatch` としか言えない。どの受理条件が
-  // どの値で落ちたかは所見にしかないので、所見が記録に入らないとセッションが
+  // どの値で落ちたかは違反レコードにしかないので、違反レコードが記録に入らないとセッションが
   // 終わったあとに何も分からない。
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-policy-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
@@ -786,7 +786,7 @@ test("SessionBroker: an approval covers the value it was shown and no other", as
 });
 
 // 1 つの BodyExpect の Pointer はすべて同じ受理条件の位置に並ぶので、承認の
-// 同一性で Pointer どうしを分けるのは addon が作る値である。ここでは所見を
+// 同一性で Pointer どうしを分けるのは addon が作る値である。ここでは違反レコードを
 // 手で書かず、実際の addon の検査に作らせて broker に渡す。
 const BODY_EXPECT_DOCUMENT = documentWithScopes({
   policy: {
@@ -825,7 +825,7 @@ const vendoredDeps = existsSync(path.join(addonDir, "vendor", "graphql"));
 
 /**
  * addon が `document` の `policy.body` ルールで `body` を検査して broker へ
- * 送る review の所見。
+ * 送る review の違反レコード。
  */
 async function addonFindings(
   body: unknown,
@@ -920,7 +920,7 @@ test.skipIf(!python3 || !vendoredDeps)(
 
 // 許されない GraphQL operation も、addon がリクエストごとの UUID を値に置く。
 // `operation:mutation` を固定の値にすると、1 件の mutation の承認が以後の
-// あらゆる mutation をセッションの間通してしまう。ここでも所見は実際の addon
+// あらゆる mutation をセッションの間通してしまう。ここでも違反レコードは実際の addon
 // に作らせる。
 const GRAPHQL_EXPECT_DOCUMENT = documentWithScopes({
   policy: {
@@ -1327,7 +1327,7 @@ test("SessionBroker: a card of only per-request values does not offer to remembe
 });
 
 test("SessionBroker: a card mixing per-request and ordinary values still offers to remember", async () => {
-  // 通常の所見は覚えられるので、`violation` には意味が残る。
+  // 通常の違反レコードは覚えられるので、`violation` には意味が残る。
   await withReviewBroker(async ({ socketPath }) => {
     const decision = sendBrokerRequest<DecisionResponse>(
       socketPath,
@@ -1354,7 +1354,7 @@ test("SessionBroker: a card mixing per-request and ordinary values still offers 
 
 // 混在カードを `violation` で答えると、UUID の同一性も approvedViolations /
 // deniedViolations に入る。そこへ UUID が入りうるのはこの経路だけである。
-// 覚えるのは通常の所見だけとして働き、次の UUID には何も効かないこと。
+// 覚えるのは通常の違反レコードだけとして働き、次の UUID には何も効かないこと。
 const unresolvedArgument = (): ViolationFinding =>
   finding(crypto.randomUUID(), {
     expectKind: "body",
@@ -1381,7 +1381,7 @@ test("SessionBroker: approving a mixed card remembers the ordinary value, not th
     });
     expect((await first).decision).toEqual("allow");
 
-    // 通常の所見だけなら、もう聞かれない。
+    // 通常の違反レコードだけなら、もう聞かれない。
     expect(
       (
         await sendBrokerRequest<DecisionResponse>(
@@ -1429,7 +1429,7 @@ test("SessionBroker: denying a mixed card remembers the ordinary value, not the 
     });
     expect((await first).decision).toEqual("deny");
 
-    // 通常の所見を含むリクエストは、聞かずに拒否される。
+    // 通常の違反レコードを含むリクエストは、聞かずに拒否される。
     expect(
       await sendBrokerRequest<DecisionResponse>(
         socketPath,
@@ -1633,7 +1633,7 @@ async function withMixedBroker(
 }
 
 test("SessionBroker: a recorded violation does not become a question", async () => {
-  // `onViolation = "allow"` は「記録して通せ、訊くな」である。所見には載る
+  // `onViolation = "allow"` は「記録して通せ、訊くな」である。違反レコードには載る
   // ので承認者はリクエスト全体を見られるが、押す対象にはならない。ここを
   // 分けないと、リクエストごとに変わる値のせいで確認が毎ターン出る。
   await withMixedBroker(async (socketPath) => {

@@ -4472,7 +4472,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
             message for message in messages if message["type"] == "authorize"
         )
         # ボディの断片は載らない。100KB の会話の先頭 1024 バイトからは
-        # 判断できず、判断の材料は検査のあとに所見として別に届く。
+        # 判断できず、判断の材料は検査のあとに違反レコードとして別に届く。
         self.assertEqual(
             authorization["reviewContext"],
             {

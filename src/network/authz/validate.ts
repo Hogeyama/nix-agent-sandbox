@@ -514,8 +514,8 @@ function checkExpectConditions(
     expect,
     "この条件は決して満たされません",
   );
-  // 違反の所見は Pointer を値に含めて broker へ送る。長さの上限を超えた
-  // Pointer の所見は broker に拒まれ、そのリクエストは承認できない。
+  // 違反レコードは Pointer を値に含めて broker へ送る。長さの上限を超えた
+  // Pointer の違反レコードは broker に拒まれ、そのリクエストは承認できない。
   for (const [field, pointers] of [
     ["equals", Object.keys(expect.equals ?? {})],
     ["oneOf", Object.keys(expect.oneOf ?? {})],
@@ -524,7 +524,7 @@ function checkExpectConditions(
       if (pointer.length <= MAX_BODY_EXPECT_POINTER_CHARS) continue;
       diagnostics.push(
         error(
-          `${where} の ${field} の Pointer ${pointer.slice(0, 32)}… は ${pointer.length} 文字で、上限の ${MAX_BODY_EXPECT_POINTER_CHARS} 文字を超えています。違反の所見はこの Pointer を値に含めるので、超えると承認できない所見になります。`,
+          `${where} の ${field} の Pointer ${pointer.slice(0, 32)}… は ${pointer.length} 文字で、上限の ${MAX_BODY_EXPECT_POINTER_CHARS} 文字を超えています。違反レコードはこの Pointer を値に含めるので、超えると承認できない違反レコードになります。`,
         ),
       );
     }

@@ -110,7 +110,7 @@ export interface NormalizedTarget {
  * 確認のカードに出す、リクエストについての事実。
  *
  * ボディの断片は載らない。100KB の会話の先頭 1024 バイトからは判断できず、
- * 判断の材料になるもの — 受理条件が拒んだノード — は検査のあとに所見として
+ * 判断の材料になるもの — 受理条件が拒んだノード — は検査のあとに違反レコードとして
  * 別に届く。
  */
 export interface ReviewContext {
@@ -193,7 +193,7 @@ export const REQUEST_POLICY_SUCCESS_REASONS = [
 ] as const;
 
 /**
- * 所見の種別。
+ * 違反レコードの種別。
  *
  * - `schema-mismatch`: 受理条件が要求する形になっていない。
  * - `unexpected-body`: `EmptyBody` に対してボディが存在した。
@@ -216,7 +216,7 @@ export const VIOLATION_FINDING_KINDS = [
 
 export type ViolationFindingKind = (typeof VIOLATION_FINDING_KINDS)[number];
 
-/** 承認の単位を成せる所見の種別。残りは記述を欠くので押せる対象にならない。 */
+/** 承認の単位を成せる違反レコードの種別。残りは記述を欠くので押せる対象にならない。 */
 const APPROVABLE_FINDING_KINDS: readonly ViolationFindingKind[] = [
   "schema-mismatch",
   "unexpected-body",
@@ -262,11 +262,11 @@ export interface ViolationFinding {
   /**
    * 表示名。あるとき、承認 UI と監査ログは `value` の代わりにこれを出す。
    *
-   * 値が UUID の所見が、違反した事実を短い定まった語で書いたもの
+   * 値が UUID の違反レコードが、違反した事実を短い定まった語で書いたもの
    * (`operation:mutation`、`rootField:node`、`document:(unanalysable)`、
    * `document:(query-string)`、`argument:owner=(unresolved)`) である。
    * UUID は同一性のためだけにあり、読む人には何も言わないからである。
-   * 承認の同一性には入らない。それ以外の所見では null。
+   * 承認の同一性には入らない。それ以外の違反レコードでは null。
    */
   label: string | null;
   /** マスク済みの、そのノードだけの抜粋。ボディの一部であり、無ければ null。 */
@@ -276,7 +276,7 @@ export interface ViolationFinding {
 }
 
 /**
- * その所見が承認の単位を成すか。
+ * その違反レコードが承認の単位を成すか。
  *
  * 承認の同一性は (ルール ID, 受理条件の位置, 違反した値) なので、位置か値の
  * どちらかを欠く記録は押せる対象にならない。走査が完了しなかった記録と、
@@ -741,7 +741,7 @@ const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
 ]);
 
 /**
- * 1 通のメッセージが運べる所見の件数。
+ * 1 通のメッセージが運べる違反レコードの件数。
  *
  * addon 側の上限は「受理条件ごとに 64 件 + 打ち切りの記録」なので、受理条件を
  * 15 本置いても届かない。broker がこれを持つのは、addon の上限を信じずに
@@ -791,9 +791,9 @@ function isBoundedNullableString(value: unknown, max: number): boolean {
 }
 
 /**
- * 所見の列を検証する。
+ * 違反レコードの列を検証する。
  *
- * 所見は addon がボディから組み立てたもので、値もポインタも抜粋も
+ * 違反レコードは addon がボディから組み立てたもので、値もポインタも抜粋も
  * 攻撃者が選んだ文字列に由来する。長さと件数をここで閉じないと、承認 UI と
  * 監査ログとメモリがボディの大きさに引きずられる。
  */

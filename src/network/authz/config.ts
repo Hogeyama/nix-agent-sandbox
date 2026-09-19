@@ -73,9 +73,9 @@ export const LIMIT_CEILINGS: ResolvedLimits = {
  * `BodyExpect` の `equals` / `oneOf` に書ける JSON Pointer の長さ (UTF-16 の
  * 単位、JavaScript の `length`)。
  *
- * 違反の所見は Pointer を切らずに値の頭に付ける (`/owner="other"`)。所見は
+ * 違反レコードは Pointer を切らずに値の頭に付ける (`/owner="other"`)。違反レコードは
  * broker が長さを確かめてから受け取るので、Pointer の長さに上限が無いと、
- * 長い Pointer の所見は broker に拒まれ、そのリクエストは承認できなくなる。
+ * 長い Pointer の違反レコードは broker に拒まれ、そのリクエストは承認できなくなる。
  * 値の天井 (`protocol.ts` の `MAX_FINDING_VALUE_CHARS`) はこの長さから
  * 組み立てる。
  */

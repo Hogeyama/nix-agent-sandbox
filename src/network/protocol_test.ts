@@ -482,7 +482,7 @@ test("request policy outcome validation accepts findings", () => {
   ).toBeNull();
 });
 
-// 所見の中身はボディ由来である。件数も 1 件あたりの長さも攻撃者が選べるので、
+// 違反レコードの中身はボディ由来である。件数も 1 件あたりの長さも攻撃者が選べるので、
 // 承認 UI と監査ログとメモリがボディの大きさに引きずられないよう、broker は
 // addon の上限を信じずに自分で閉じる。
 const invalidFindings = [
@@ -516,7 +516,7 @@ for (const [name, finding] of invalidFindings) {
   });
 }
 
-// BodyExpect の所見は document の本文を運ばない。値は正準形の短い文字列か
+// BodyExpect の違反レコードは document の本文を運ばない。値は正準形の短い文字列か
 // リクエストごとの UUID で、UUID のときだけ表示名を持つ。抜粋は null である。
 test("request policy outcome validation accepts BodyExpect findings", () => {
   expect(

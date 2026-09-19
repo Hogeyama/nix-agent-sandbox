@@ -1171,7 +1171,7 @@ describe("受理条件", () => {
     );
   });
 
-  // 所見の値は Pointer を切らずに含むので、Pointer が長いと broker が所見を
+  // 違反レコードの値は Pointer を切らずに含むので、Pointer が長いと broker が違反レコードを
   // 受け取れず、そのリクエストは承認できない。
   for (const field of ["equals", "oneOf"] as const) {
     const bodyExpect = (pointer: string) =>

@@ -1,14 +1,14 @@
 /**
  * addon が送るメッセージを、broker の検証器がそのまま受け取れること。
  *
- * 違反の確認は 2 プロセスに跨る。addon がボディを検査して所見を組み立て、
+ * 違反の確認は 2 プロセスに跨る。addon がボディを検査して違反レコードを組み立て、
  * broker がそれを検証してから人に出す。broker はフィールド 1 つ知らないだけで
  * メッセージを丸ごと拒み、addon は拒まれたリクエストを通さないので、形の
  * ずれは「間違った答え」ではなく「動かないセッション」になる。
  *
  * 片側だけのテストではこれを捕まえられない。python 側は自分が作った dict を
- * 見るだけで、TypeScript 側は手で書いた所見を見るだけだからである。ここでは
- * **実際の検査が出した**所見からメッセージを組み立てさせ、broker の検証器に
+ * 見るだけで、TypeScript 側は手で書いた違反レコードを見るだけだからである。ここでは
+ * **実際の検査が出した**違反レコードからメッセージを組み立てさせ、broker の検証器に
  * 通す。
  */
 
@@ -140,7 +140,7 @@ test.skipIf(!python3 || !vendoredDeps)(
       body([
         { type: "future_block", note: "s3cret-value" },
         { type: "another_future_block" },
-        // 同じタグの 2 件目は件数に畳まれるので、所見は 2 件になる。
+        // 同じタグの 2 件目は件数に畳まれるので、違反レコードは 2 件になる。
         { type: "future_block" },
       ]),
     );
@@ -205,7 +205,7 @@ const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
- * ボディ条件 (`BodyExpect`) を 3 つ持つルール。1 つのボディが 3 種の所見を
+ * ボディ条件 (`BodyExpect`) を 3 つ持つルール。1 つのボディが 3 種の違反レコードを
  * 同時に出す: 値条件の `schema-mismatch`、GraphQL の `schema-mismatch`
  * (正準形の値と、値が UUID になる解決不能な引数)、解析できない document の
  * `body-unavailable`。
@@ -290,7 +290,7 @@ test.skipIf(!python3 || !vendoredDeps)(
 
     const findingsOf = (message: unknown) =>
       (message as { findings: ViolationFinding[] }).findings;
-    // 値が UUID の所見は「何らかの UUID」として比べる。読める事実は label にある。
+    // 値が UUID の違反レコードは「何らかの UUID」として比べる。読める事実は label にある。
     const shown = (finding: ViolationFinding) => [
       finding.expect,
       finding.expectKind,
@@ -367,7 +367,7 @@ test.skipIf(!python3 || !vendoredDeps)(
   "the broker accepts the findings a URL query string leaves on GraphQL conditions",
   async () => {
     // サーバは document と変数を URL からも読むので、GraphQL の条件ごとに
-    // 1 件、リクエスト限りの所見になる。クエリ文字列は所見に載らない。
+    // 1 件、リクエスト限りの違反レコードになる。クエリ文字列は違反レコードに載らない。
     const target = {
       ...bodyExpectTarget(),
       path: "/graphql?query=mutation%7BdeleteRepository%7D",
@@ -416,7 +416,7 @@ test.skipIf(!python3 || !vendoredDeps)(
 test.skipIf(!python3 || !vendoredDeps)(
   "the broker accepts a finding whose value carries the longest pointer",
   async () => {
-    // 所見の値は Pointer を切らずに頭に付け、ボディ由来のスカラーだけを畳む。
+    // 違反レコードの値は Pointer を切らずに頭に付け、ボディ由来のスカラーだけを畳む。
     // 設定が許す最長の Pointer に、畳んだ後でも UTF-16 で最も長くなる
     // スカラー (サロゲートペアの文字だけの文字列) を並べても、broker の
     // 天井に収まること。
