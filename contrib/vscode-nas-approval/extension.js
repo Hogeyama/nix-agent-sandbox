@@ -1,5 +1,11 @@
 const vscode = require("vscode");
-const { runNas, spawnNasWatch } = require("./lib/nasCli");
+const {
+  runNas,
+  spawnNasWatch,
+  resolveNasCommand,
+  clearResolvedCommandCache,
+  extractWslDistroFromAuthority,
+} = require("./lib/nasCli");
 const { parseDevcontainerStatus, readySessionId } = require("./lib/session");
 const {
   makeWatchState,
@@ -14,12 +20,12 @@ const POLL_MS = 30_000;
 const DOMAINS = ["hostexec", "network"];
 
 function activate(context) {
-  // nas Dev Container 以外 (local / SSH / WSL / web) では何もしない。
-  if (vscode.env.remoteName !== "dev-container") return;
-
   const nasPath = () =>
     vscode.workspace.getConfiguration("nas-approval").get("nasPath", "nas");
   const output = vscode.window.createOutputChannel("nas approval");
+  output.appendLine(
+    `activated (remoteName=${JSON.stringify(vscode.env.remoteName)}; nasPath="${nasPath()}")`,
+  );
   const statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     10,
@@ -89,12 +95,16 @@ function activate(context) {
     }, POLL_MS);
   };
 
-  const startWatchers = (fsPath, f, sessionId) => {
+  const startWatchers = async (fsPath, f, sessionId) => {
     if (f.dead) return;
     f.sessionId = sessionId;
+    const command = await resolveNasCommand(nasPath(), f.distroHint, (msg) =>
+      output.appendLine(msg),
+    );
+    if (f.dead) return; // folder could have closed while resolving
     for (const domain of DOMAINS) {
       f.watchers.push(
-        spawnNasWatch(nasPath(), domain, sessionId, {
+        spawnNasWatch(command, domain, sessionId, {
           onLine: (line) => {
             try {
               if (applyWatchEvent(f.watchState, JSON.parse(line))) refreshUi();
@@ -103,9 +113,12 @@ function activate(context) {
             }
           },
           onError: (msg) => output.appendLine(`[${domain}] ${msg.trimEnd()}`),
-          onExit: () => {
+          onExit: (code) => {
             // teardown 済み (rescan で除去 / dispose) なら再起動しない。
             if (f.dead) return;
+            output.appendLine(
+              `[${domain}] watch for session ${sessionId} exited (code ${code}); will re-poll ${fsPath}`,
+            );
             // EOF はセッション終了。次のセッションを待つ。
             stopWatchers(f);
             refreshUi();
@@ -120,18 +133,28 @@ function activate(context) {
     if (f.dead || f.resolving) return;
     f.resolving = true;
     try {
+      const command = await resolveNasCommand(nasPath(), f.distroHint, (msg) =>
+        output.appendLine(msg),
+      );
       let out;
       try {
-        out = await runNas(nasPath(), [
+        out = await runNas(command, [
           "devcontainer",
           "status",
           "--workspace",
-          fsPath,
+          f.workspacePath,
           "--json",
         ]);
       } catch (err) {
         if (err.code === "ENOENT") {
-          f.gaveUp = true; // nas 不在: この folder では諦める
+          // nas 不在: この folder では諦める。Windows+WSL2+Dev Container の
+          // 三重構成では、UI extensionKind は常に一番外側 (Windows) で動くので、
+          // nas が別のリモート層 (WSL) にしかいないとここに来る。
+          f.gaveUp = true;
+          output.appendLine(
+            `giving up on ${fsPath}: "${command}" was not found (${err.message}). ` +
+              `Set nas-approval.nasPath explicitly, then run "NAS: Refresh Approval Session".`,
+          );
           return;
         }
         output.appendLine(`status failed for ${fsPath}: ${err.message}`);
@@ -141,18 +164,31 @@ function activate(context) {
       let status;
       try {
         status = parseDevcontainerStatus(out);
-      } catch {
-        output.appendLine(`unparseable status for ${fsPath}`);
+      } catch (err) {
+        output.appendLine(
+          `unparseable status for ${fsPath}: ${err.message}. Raw output: ${out.trim()}`,
+        );
         schedulePoll(fsPath, f);
         return;
       }
       if (status === null) {
-        f.gaveUp = true; // nas 管理外の workspace: 以後ポーリングしない
+        // nas 管理外の workspace: 以後ポーリングしない。
+        f.gaveUp = true;
+        output.appendLine(
+          `giving up on ${fsPath}: not a nas-managed workspace (devcontainer status returned null)`,
+        );
         return;
       }
       const sid = readySessionId(status);
-      if (sid) startWatchers(fsPath, f, sid);
-      else schedulePoll(fsPath, f);
+      if (sid) {
+        output.appendLine(`session ${sid} ready for ${fsPath}; watching`);
+        await startWatchers(fsPath, f, sid);
+      } else {
+        output.appendLine(
+          `${fsPath}: phase=${status.phase}, not ready yet; will retry in ${POLL_MS / 1000}s`,
+        );
+        schedulePoll(fsPath, f);
+      }
       refreshUi();
     } finally {
       f.resolving = false;
@@ -160,13 +196,25 @@ function activate(context) {
   };
 
   const rescan = () => {
-    const open = new Set(
-      (vscode.workspace.workspaceFolders ?? []).map((w) => w.uri.fsPath),
-    );
-    for (const fsPath of open) {
+    const folderList = vscode.workspace.workspaceFolders ?? [];
+    const open = new Set(folderList.map((w) => w.uri.fsPath));
+    for (const w of folderList) {
+      const fsPath = w.uri.fsPath;
       if (!folders.has(fsPath)) {
+        const distroHint = extractWslDistroFromAuthority(w.uri.authority);
+        if (distroHint) {
+          output.appendLine(
+            `${fsPath}: WSL distro from workspace: ${distroHint}`,
+          );
+        }
         folders.set(fsPath, {
           sessionId: null,
+          distroHint,
+          // .fsPath is a Windows-style path on Windows+WSL2, meaningless to
+          // nas running inside WSL. .path is always POSIX per the URI spec
+          // (an official, stable part of the vscode.Uri API), so it's what
+          // nas actually needs regardless of platform.
+          workspacePath: w.uri.path,
           watchState: makeWatchState(),
           watchers: [],
           pollTimer: null,
@@ -193,6 +241,10 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(rescan),
     vscode.commands.registerCommand("nas-approval.refresh", () => {
+      // gaveUp と一緒に WSL 解決キャッシュも捨てないと、activate 時点で
+      // 失敗した自動検出 (distro に nas が無かった等) が Refresh 後も
+      // キャッシュに残って再試行されない。
+      clearResolvedCommandCache();
       for (const f of folders.values()) f.gaveUp = false;
       rescan();
     }),
@@ -206,7 +258,15 @@ function activate(context) {
         getCards: collectCards,
         onDecision: async (msg) => {
           const argv = decisionArgv(msg); // 検証失敗は throw → カードにエラー表示
-          await runNas(nasPath(), argv);
+          const owner = [...folders.values()].find(
+            (f) => f.sessionId === msg.sessionId,
+          );
+          const command = await resolveNasCommand(
+            nasPath(),
+            owner?.distroHint,
+            (m) => output.appendLine(m),
+          );
+          await runNas(command, argv);
         },
       });
       panel.update(cards);

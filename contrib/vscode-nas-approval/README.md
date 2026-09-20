@@ -1,8 +1,7 @@
 # nas-approval
 
 Routes nas Dev Container approval requests (hostexec / network) into the
-attached VS Code window. Active only when `vscode.env.remoteName` is
-`dev-container` and the workspace is registered with `nas devcontainer`.
+attached VS Code window, for workspaces registered with `nas devcontainer`.
 
 ## Install (release vsix)
 
@@ -41,4 +40,12 @@ Copy this directory to
 
 ## Settings
 
-- `nas-approval.nasPath` — path to the `nas` binary (default: `nas`).
+- `nas-approval.nasPath` — command used to run `nas` (default: `nas`, found
+  via PATH). Can be a full command line rather than just a path, so `nas`
+  can be reached through another layer when it isn't on this machine. On
+  Windows with `nas` in WSL2, this is attempted automatically (best effort);
+  if that doesn't work, set it explicitly:
+
+  ```json
+  "nas-approval.nasPath": "wsl.exe -d <DISTRO> nas"
+  ```

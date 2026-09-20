@@ -32,7 +32,7 @@
         "nas-approval.nasPath": {
           "type": "string",
           "default": "nas",
-          "description": "Path to the nas binary"
+          "description": "Command used to run nas, split on whitespace. Leave as \"nas\" to auto-detect on Windows+WSL2; only set this if that fails, e.g. 'wsl.exe -d <DISTRO> nas'"
         }
       }
     }
