@@ -14,7 +14,9 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a # v13
 
       - name: Install dependencies
-        run: nix develop -c bun install --frozen-lockfile
+        run: |
+          nix develop -c bun install --frozen-lockfile
+          nix develop -c bun run vendor
 
       - name: Documentation checks
         run: |
