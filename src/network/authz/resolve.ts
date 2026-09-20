@@ -71,9 +71,12 @@ import {
 export interface ResolvedGraphql {
   readonly at: string;
   readonly operations: readonly GraphqlOperation[];
-  /** null は「制約しない」。 */
-  readonly rootFields: readonly string[] | null;
-  readonly arguments: Readonly<Record<string, readonly string[]>>;
+  /** 取得を許す末端の経路。必須・非空なので null にはならない。 */
+  readonly fieldPaths: readonly string[];
+  /** 経路 → 引数名 → 許す文字列。制約が無いときは空のオブジェクト。 */
+  readonly fieldArguments: Readonly<
+    Record<string, Readonly<Record<string, readonly string[]>>>
+  >;
 }
 
 /**
@@ -342,9 +345,14 @@ function toResolvedGraphql(
   return {
     at: graphql.at,
     operations: [...graphql.operations],
-    rootFields: graphql.rootFields === null ? null : [...graphql.rootFields],
-    arguments: Object.fromEntries(
-      [...graphql.argumentValues].map(([name, values]) => [name, [...values]]),
+    fieldPaths: [...graphql.fieldPaths],
+    fieldArguments: Object.fromEntries(
+      [...graphql.fieldArguments].map(([path, args]) => [
+        path,
+        Object.fromEntries(
+          [...args].map(([name, values]) => [name, [...values]]),
+        ),
+      ]),
     ),
   };
 }
@@ -366,10 +374,8 @@ export function resolvedBodyMatch(match: ResolvedMatch): BodyMatch | undefined {
           graphql: {
             at: graphql.at,
             operations: graphql.operations,
-            ...(graphql.rootFields === null
-              ? {}
-              : { rootFields: graphql.rootFields }),
-            arguments: graphql.arguments,
+            fieldPaths: graphql.fieldPaths,
+            fieldArguments: graphql.fieldArguments,
           },
         }),
   };

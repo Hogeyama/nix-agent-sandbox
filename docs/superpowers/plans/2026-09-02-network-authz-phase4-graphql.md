@@ -1,5 +1,18 @@
 # 段階 4: GraphQL
 
+> **履歴。これは現在の実装手順ではない。**
+> この計画が実装した GraphQL の語彙 (`rootFields`、文書全域の `arguments`、
+> 表示名 `rootField:<name>` / `argument:<name>=...`、文書全域の
+> `unresolvedArguments`) は、
+> [GraphQL の取得経路を限定する](../specs/2026-09-20-graphql-field-path-policy-design.md)
+> と
+> [その実装計画](2026-09-20-graphql-field-path-policy.md)
+> が置き換えた。現在の設定は必須の `fieldPaths` (許可する末端の完全経路) と
+> 経路ごとの `fieldArguments` で、旧キーは設定エラーになる。
+> 本書は当時の判断の記録として残す。graphql-core の vendoring、名前のない
+> 省略形と fragment の扱い、変数の解決規則、承認を 1 リクエスト限りにする
+> 理屈は現在も引き継いでいる。
+
 ## このドキュメントの読み方
 
 新しいセッションへの引き継ぎである。前提知識を持たない状態で読めるように書いてある。

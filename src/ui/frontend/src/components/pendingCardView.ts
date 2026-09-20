@@ -163,8 +163,8 @@ export function formatBodyDiagnostic(diagnostic: BodyDiagnostic): string {
       return `JSON pointer ${diagnostic.pointer} did not hold a GraphQL document this rule could analyze.`;
     case "graphql-query-string":
       return `The request URL had a query string, which the server may read the GraphQL document or variables from, so the GraphQL condition on ${diagnostic.pointer} could not be decided.`;
-    case "graphql-unresolved-argument":
-      return `GraphQL argument ${diagnostic.argument} (document at ${diagnostic.pointer}) had a value that did not resolve to a string.`;
+    case "graphql-unresolved-field-argument":
+      return `GraphQL argument ${diagnostic.fieldPath}@${diagnostic.argument} (document at ${diagnostic.pointer}) had a value that did not resolve to a string.`;
   }
 }
 

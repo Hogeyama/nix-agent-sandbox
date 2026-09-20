@@ -5,6 +5,7 @@ import {
   githubGraphqlExample,
   githubPathsExample,
 } from "./examples_fixture.ts";
+import type { GraphqlMatch } from "./types.ts";
 import { detectLegacyIdentifiers, validateAuthzConfig } from "./validate.ts";
 
 function errorsOf(config: AuthzConfig): readonly string[] {
@@ -531,20 +532,22 @@ describe("GraphQL 条件の重なり", () => {
     });
   }
 
-  test("rootFields が交差してどちらも包含しなければエラーになり、証人に document が載る", () => {
+  const VIEWER = "/viewer/login";
+  const REPO = "/repository/nameWithOwner";
+  const ORG = "/organization/login";
+
+  test("許可末端が交差してどちらも包含しなければエラーになり、証人に document が載る", () => {
     const message = joined(
       twoGraphqlRules(
-        { operations: ["query"], rootFields: ["repository", "viewer"] },
-        { operations: ["query"], rootFields: ["viewer", "organization"] },
+        { operations: ["query"], fieldPaths: [REPO, VIEWER] },
+        { operations: ["query"], fieldPaths: [VIEWER, ORG] },
       ),
     );
     expect(message).toContain(
       "ルール api.read と api.other の受理集合が交差します",
     );
-    // 共通の root field を持つ document が、at の位置に置かれて現れる。
-    expect(message).toContain(
-      'ボディ: {"query":"query { viewer { __typename } }"}',
-    );
+    // 共通の末端へ至る鎖を持つ document が、at の位置に置かれて現れる。
+    expect(message).toContain('ボディ: {"query":"query { viewer { login } }"}');
     expect(message).toContain('overrides { "read" }');
   });
 
@@ -553,23 +556,31 @@ describe("GraphQL 条件の重なり", () => {
       twoGraphqlRules(
         {
           operations: ["query"],
-          rootFields: ["repository", "viewer"],
-          arguments: { owner: ["my-org"] },
+          fieldPaths: [REPO, VIEWER],
+          fieldArguments: { "/repository": { owner: ["my-org"] } },
         },
-        { operations: ["query"], rootFields: ["viewer", "organization"] },
+        { operations: ["query"], fieldPaths: [VIEWER, ORG] },
       ),
     );
     expect(message).toContain(
-      'api.read   POST  /graphql  body json graphql /query operations=query rootFields=repository|viewer arguments.owner="my-org"',
+      'api.read   POST  /graphql  body json graphql /query operations=query fieldPaths=/repository/nameWithOwner|/viewer/login fieldArguments./repository.owner="my-org"',
     );
     expect(message).toContain(
-      "api.other  POST  /graphql  body json graphql /query operations=query rootFields=viewer|organization",
+      "api.other  POST  /graphql  body json graphql /query operations=query fieldPaths=/viewer/login|/organization/login",
     );
   });
 
   test("at が異なる 2 条件は交差し、どちらも包含しないので overrides が要る", () => {
-    const read = { at: "/query", operations: ["query" as const] };
-    const other = { at: "/doc", operations: ["query" as const] };
+    const read = {
+      at: "/query",
+      operations: ["query" as const],
+      fieldPaths: [VIEWER],
+    };
+    const other = {
+      at: "/doc",
+      operations: ["query" as const],
+      fieldPaths: [ORG],
+    };
 
     const message = joined(twoGraphqlRules(read, other));
     expect(message).toContain(
@@ -577,7 +588,7 @@ describe("GraphQL 条件の重なり", () => {
     );
     // それぞれの位置に別の document を置いた 1 つのボディが両方を満たす。
     expect(message).toContain(
-      'ボディ: {"query":"query { field { __typename } }","doc":"query { field { __typename } }"}',
+      'ボディ: {"query":"query { viewer { login } }","doc":"query { organization { login } }"}',
     );
 
     expect(errorsOf(twoGraphqlRules(read, other, { other: ["read"] }))).toEqual(
@@ -588,46 +599,86 @@ describe("GraphQL 条件の重なり", () => {
   test("at が異なれば operations が素でも交差する", () => {
     const message = joined(
       twoGraphqlRules(
-        { at: "/query", operations: ["query"] },
-        { at: "/doc", operations: ["mutation"] },
+        { at: "/query", operations: ["query"], fieldPaths: [VIEWER] },
+        { at: "/doc", operations: ["mutation"], fieldPaths: [ORG] },
       ),
     );
     expect(message).toContain(
-      'ボディ: {"query":"query { field { __typename } }","doc":"mutation { field { __typename } }"}',
+      'ボディ: {"query":"query { viewer { login } }","doc":"mutation { organization { login } }"}',
     );
   });
 
-  test("arguments の値集合が素でも交差し、証人は引数を持たない document になる", () => {
+  test("引数の値集合が素でも共通末端があれば交差する", () => {
+    // `/organization` の login は矛盾するが、その経路を通らない `/viewer/login`
+    // なら両方を満たす。引数の矛盾だけから非交差を推測しない。
     const message = joined(
       twoGraphqlRules(
-        { operations: ["query"], arguments: { owner: ["a"] } },
-        { operations: ["query"], arguments: { owner: ["b"] } },
+        {
+          operations: ["query"],
+          fieldPaths: [VIEWER, ORG],
+          fieldArguments: { "/organization": { login: ["a"] } },
+        },
+        {
+          operations: ["query"],
+          fieldPaths: [VIEWER, ORG],
+          fieldArguments: { "/organization": { login: ["b"] } },
+        },
       ),
     );
     expect(message).toContain("受理集合が交差します");
-    expect(message).toContain(
-      'ボディ: {"query":"query { field { __typename } }"}',
+    expect(message).toContain('ボディ: {"query":"query { viewer { login } }"}');
+  });
+
+  test("証人を作れない交差では、例を省いたエラーになる", () => {
+    // 共通末端が矛盾する引数を必ず通る組。交差の否定ではないので、エラー自体は
+    // 出したうえで例だけを落とす。
+    const message = joined(
+      twoGraphqlRules(
+        {
+          operations: ["query"],
+          fieldPaths: [ORG],
+          fieldArguments: { "/organization": { login: ["a"] } },
+        },
+        {
+          operations: ["query"],
+          fieldPaths: [ORG],
+          fieldArguments: { "/organization": { login: ["b"] } },
+        },
+      ),
     );
+    expect(message).toContain("受理集合が交差します");
+    expect(message).not.toContain("両方に一致するリクエストの例");
   });
 
   test("包含関係にある graphql 条件は overrides なしで共存できる", () => {
     for (const [narrow, wide] of [
-      [{ operations: ["query"] }, { operations: ["query", "mutation"] }],
       [
-        { operations: ["query"], rootFields: ["viewer"] },
-        { operations: ["query"], rootFields: ["viewer", "repository"] },
+        { operations: ["query"], fieldPaths: [VIEWER] },
+        { operations: ["query", "mutation"], fieldPaths: [VIEWER] },
       ],
       [
-        { operations: ["query"], rootFields: ["viewer"] },
-        { operations: ["query"] },
+        { operations: ["query"], fieldPaths: [VIEWER] },
+        { operations: ["query"], fieldPaths: [VIEWER, REPO] },
       ],
       [
-        { operations: ["query"], arguments: { owner: ["my-org"] } },
-        { operations: ["query"], arguments: { owner: ["my-org", "other"] } },
+        {
+          operations: ["query"],
+          fieldPaths: [REPO],
+          fieldArguments: { "/repository": { owner: ["my-org"] } },
+        },
+        {
+          operations: ["query"],
+          fieldPaths: [REPO],
+          fieldArguments: { "/repository": { owner: ["my-org", "other"] } },
+        },
       ],
       [
-        { operations: ["query"], arguments: { owner: ["my-org"] } },
-        { operations: ["query"] },
+        {
+          operations: ["query"],
+          fieldPaths: [REPO],
+          fieldArguments: { "/repository": { owner: ["my-org"] } },
+        },
+        { operations: ["query"], fieldPaths: [REPO] },
       ],
     ] as const satisfies readonly (readonly [
       GraphqlCondition,
@@ -645,7 +696,10 @@ describe("GraphQL 条件の重なり", () => {
             match: {
               methods: ["POST"],
               paths: ["/graphql"],
-              body: { format: "json", graphql: { operations: ["query"] } },
+              body: {
+                format: "json",
+                graphql: { operations: ["query"], fieldPaths: [VIEWER] },
+              },
             },
             onMatch: "allow",
           },
@@ -663,20 +717,29 @@ describe("GraphQL 条件の重なり", () => {
   });
 
   test("operations が素な 2 条件は交差しないので、overrides を書くとエラーになる", () => {
-    const read = { operations: ["query" as const] };
-    const write = { operations: ["mutation" as const] };
+    const read = { operations: ["query" as const], fieldPaths: [VIEWER] };
+    const write = { operations: ["mutation" as const], fieldPaths: [VIEWER] };
     expect(errorsOf(twoGraphqlRules(read, write))).toEqual([]);
     expect(joined(twoGraphqlRules(read, write, { read: ["other"] }))).toContain(
       "交差しない相手",
     );
   });
 
-  test("rootFields が素な 2 条件は交差しない", () => {
+  test("許可末端が素な 2 条件は交差しない", () => {
     expect(
       errorsOf(
         twoGraphqlRules(
-          { operations: ["query"], rootFields: ["viewer"] },
-          { operations: ["query"], rootFields: ["repository"] },
+          { operations: ["query"], fieldPaths: [VIEWER] },
+          { operations: ["query"], fieldPaths: [REPO] },
+        ),
+      ),
+    ).toEqual([]);
+    // 接頭辞を共有していても末端が違えば交差しない。
+    expect(
+      errorsOf(
+        twoGraphqlRules(
+          { operations: ["query"], fieldPaths: ["/repository/url"] },
+          { operations: ["query"], fieldPaths: [REPO] },
         ),
       ),
     ).toEqual([]);
@@ -849,7 +912,13 @@ describe("match の構文", () => {
             a: {
               match: {
                 paths: ["/a"],
-                body: { format, graphql: { operations: ["query"] } },
+                body: {
+                  format,
+                  graphql: {
+                    operations: ["query"],
+                    fieldPaths: ["/viewer/login"],
+                  },
+                },
               },
               onMatch: "allow",
             },
@@ -869,8 +938,8 @@ describe("match の構文", () => {
               format: "json",
               graphql: {
                 operations: [],
-                rootFields: [],
-                arguments: { owner: [] },
+                fieldPaths: [],
+                fieldArguments: { "/repository": { owner: [] } },
               },
             },
           },
@@ -879,11 +948,172 @@ describe("match の構文", () => {
       }),
     );
     expect(message).toContain("match.body.graphql.operations が空の Listing");
-    expect(message).toContain("match.body.graphql.rootFields が空の Listing");
+    expect(message).toContain("match.body.graphql.fieldPaths が空の Listing");
     expect(message).toContain(
-      "match.body.graphql.arguments の owner が空の Listing",
+      "match.body.graphql.fieldArguments の /repository の owner が空の Listing",
     );
     expect(message).toContain("決して発火しません");
+  });
+
+  test("graphql の fieldPaths は必須である", () => {
+    // 経路を制約しない GraphQL 条件は提供しない。省略を「制約なし」に倒すと、
+    // root しか見ていなかった旧条件と同じ横断を自動許可してしまう。
+    for (const fieldPaths of [undefined, null]) {
+      const message = joined(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                graphql: {
+                  operations: ["query"],
+                  fieldPaths,
+                } as unknown as GraphqlMatch,
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      );
+      expect(message).toContain("match.body.graphql.fieldPaths がありません");
+    }
+  });
+
+  test("旧 rootFields / 全域 arguments は未知のキーとして拒否する", () => {
+    // 黙って無視すると制約が落ちる。自動変換もしない。旧 rootFields が許して
+    // いた「その root の下の任意の取得」は経路の集合に書き直せない。
+    const message = joined(
+      oneRule({
+        a: {
+          match: {
+            paths: ["/a"],
+            body: {
+              format: "json",
+              graphql: {
+                operations: ["query"],
+                fieldPaths: ["/viewer/login"],
+                rootFields: ["viewer"],
+                arguments: { owner: ["my-org"] },
+              } as unknown as GraphqlMatch,
+            },
+          },
+          onMatch: "allow",
+        },
+      }),
+    );
+    expect(message).toContain(
+      'match.body.graphql に未知のキー "rootFields" があります',
+    );
+    expect(message).toContain(
+      'match.body.graphql に未知のキー "arguments" があります',
+    );
+    expect(message).toContain(
+      "指定できるのは at, operations, fieldPaths, fieldArguments です",
+    );
+  });
+
+  test("fieldPaths の文法に反する経路を拒否する", () => {
+    for (const path of [
+      "/repository/**",
+      "/repository/*",
+      "/repository/",
+      "/repository//body",
+      "/repository~1issues",
+      "repository",
+      "/",
+      "",
+      "/repository/0",
+    ]) {
+      const message = joined(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                graphql: { operations: ["query"], fieldPaths: [path] },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      );
+      expect([
+        path,
+        message.includes(
+          `match.body.graphql.fieldPaths の ${JSON.stringify(path)} は GraphQL の選択経路ではありません`,
+        ),
+      ]).toEqual([path, true]);
+    }
+  });
+
+  test("fieldArguments のキーは許可末端かその途中でなければならない", () => {
+    const message = joined(
+      oneRule({
+        a: {
+          match: {
+            paths: ["/a"],
+            body: {
+              format: "json",
+              graphql: {
+                operations: ["query"],
+                fieldPaths: ["/repository/issues/nodes/body"],
+                fieldArguments: {
+                  // 許可末端の下。この経路の field は現れ得ない。
+                  "/repository/issues/nodes/body/text": { owner: ["x"] },
+                  // 別の root。
+                  "/organization": { login: ["x"] },
+                  // 文法に反するキー。
+                  "/repository/**": { owner: ["x"] },
+                  // 空の Mapping。
+                  "/repository/issues": {},
+                  // 引数名が GraphQL の名前でない。
+                  "/repository": { "owner ": ["x"] },
+                },
+              },
+            },
+          },
+          onMatch: "allow",
+        },
+      }),
+    );
+    for (const key of [
+      '"/repository/issues/nodes/body/text" は fieldPaths のどの末端でも途中でもありません',
+      '"/organization" は fieldPaths のどの末端でも途中でもありません',
+      '"/repository/**" は GraphQL の選択経路ではありません',
+      "/repository/issues が空の Mapping です",
+      '"owner " は GraphQL の名前ではありません',
+    ]) {
+      expect(message).toContain(key);
+    }
+  });
+
+  test("許可末端そのものも途中の経路も fieldArguments のキーにできる", () => {
+    expect(
+      errorsOf(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                graphql: {
+                  operations: ["query"],
+                  fieldPaths: ["/repository/issues/nodes/body"],
+                  fieldArguments: {
+                    "/repository": { owner: ["my-org"] },
+                    "/repository/issues": { first: ["10"] },
+                    "/repository/issues/nodes/body": { _x9: ["y"] },
+                  },
+                },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      ),
+    ).toEqual([]);
   });
 
   test("graphql の at は JSON Pointer でなければならない", () => {
@@ -894,14 +1124,22 @@ describe("match の構文", () => {
             paths: ["/a"],
             body: {
               format: "json",
-              graphql: { at: "query", operations: ["query"] },
+              graphql: {
+                at: "query",
+                operations: ["query"],
+                fieldPaths: ["/viewer/login"],
+              },
             },
           },
           onMatch: "allow",
           expect: [
             {
               kind: "body",
-              graphql: { at: "/bad~2", operations: ["query"] },
+              graphql: {
+                at: "/bad~2",
+                operations: ["query"],
+                fieldPaths: ["/viewer/login"],
+              },
             },
           ],
         },
@@ -1224,14 +1462,19 @@ describe("受理条件", () => {
           a: {
             match: { paths: ["/a"], body: { format: "json" } },
             onMatch: "allow",
-            expect: [{ kind: "body", graphql: { operations: [] } }],
+            expect: [
+              {
+                kind: "body",
+                graphql: { operations: [], fieldPaths: ["/viewer/login"] },
+              },
+            ],
           },
         }),
       ),
     ).toContain("operations");
   });
 
-  test("graphql の arguments のエントリが空だとエラーになる", () => {
+  test("graphql の fieldArguments のエントリが空だとエラーになる", () => {
     expect(
       joined(
         oneRule({
@@ -1241,13 +1484,19 @@ describe("受理条件", () => {
             expect: [
               {
                 kind: "body",
-                graphql: { operations: ["query"], arguments: { login: [] } },
+                graphql: {
+                  operations: ["query"],
+                  fieldPaths: ["/organization/login"],
+                  fieldArguments: { "/organization": { login: [] } },
+                },
               },
             ],
           },
         }),
       ),
-    ).toContain("login");
+    ).toContain(
+      "expect[0] の graphql.fieldArguments の /organization の login",
+    );
   });
 
   test("UnionShape の allowed が空だとエラーになる", () => {
@@ -1568,7 +1817,13 @@ describe("設定の警告", () => {
           match: {
             methods: ["POST"],
             paths: ["/graphql"],
-            body: { format: "json", graphql: { operations: ["query"] } },
+            body: {
+              format: "json",
+              graphql: {
+                operations: ["query"],
+                fieldPaths: ["/viewer/login"],
+              },
+            },
           },
           onMatch: "allow",
         },

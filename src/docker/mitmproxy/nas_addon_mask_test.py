@@ -900,8 +900,8 @@ class AuthzDocumentContractTest(unittest.TestCase):
         condition = {
             "at": "/query",
             "operations": ["query"],
-            "rootFields": None,
-            "arguments": {},
+            "fieldPaths": ["/repository/id"],
+            "fieldArguments": {},
         }
         condition.update(overrides)
         return condition
@@ -910,8 +910,13 @@ class AuthzDocumentContractTest(unittest.TestCase):
         document = copy.deepcopy(self.fixture)
         rule = self._messages_rule(document)
         rule["match"]["graphql"] = self._graphql_condition(
-            rootFields=["repository", "_node2"],
-            arguments={"owner": ["my-org"], "_after9": ["x"]},
+            fieldPaths=["/repository/_node2/id", "/_node2/x"],
+            fieldArguments={
+                # A leaf and a path on the way to one are both keys the
+                # host may write.
+                "/repository": {"owner": ["my-org"], "_after9": ["x"]},
+                "/_node2/x": {"first": ["10"]},
+            },
         )
         rule["expect"].append({
             "kind": "body",
@@ -925,28 +930,64 @@ class AuthzDocumentContractTest(unittest.TestCase):
         self.assertEqual(self._load(), document)
 
     def test_rejects_a_graphql_condition_it_cannot_evaluate(self):
+        # The key set is exact, so the pre-field-path shape is refused here
+        # exactly as an addon that predates it refuses this one: the contract
+        # version stays 1 but is redefined, and a mixed pair does not start.
+        legacy = {
+            "at": "/query", "operations": ["query"],
+            "rootFields": ["repository"], "arguments": {"owner": ["my-org"]},
+        }
         cases = [
             ("not an object", ["query"]),
-            ("missing key", {"at": "/query", "operations": ["query"],
-                             "arguments": {}}),
+            ("the pre-field-path shape", legacy),
+            ("the pre-field-path keys beside the new ones",
+             {**self._graphql_condition(), **legacy}),
+            ("missing fieldPaths", {"at": "/query", "operations": ["query"],
+                                    "fieldArguments": {}}),
+            ("null fieldPaths", self._graphql_condition(fieldPaths=None)),
             ("unknown key", {**self._graphql_condition(), "maxDepth": 3}),
             ("bad at", self._graphql_condition(at="query")),
             ("empty operations", self._graphql_condition(operations=[])),
             ("unknown operation",
              self._graphql_condition(operations=["query", "fragment"])),
-            ("empty rootFields", self._graphql_condition(rootFields=[])),
-            ("non-string root field",
-             self._graphql_condition(rootFields=[1])),
-            ("root field that is not a GraphQL name",
-             self._graphql_condition(rootFields=["repository "])),
-            ("arguments not an object",
-             self._graphql_condition(arguments=[])),
+            ("empty fieldPaths", self._graphql_condition(fieldPaths=[])),
+            ("non-string field path", self._graphql_condition(fieldPaths=[1])),
+            ("relative field path",
+             self._graphql_condition(fieldPaths=["repository/id"])),
+            ("wildcard field path",
+             self._graphql_condition(fieldPaths=["/repository/**"])),
+            ("trailing slash",
+             self._graphql_condition(fieldPaths=["/repository/"])),
+            ("empty element",
+             self._graphql_condition(fieldPaths=["/repository//id"])),
+            ("JSON Pointer escape",
+             self._graphql_condition(fieldPaths=["/repository~1id"])),
+            ("element that is not a GraphQL name",
+             self._graphql_condition(fieldPaths=["/1repository"])),
+            ("fieldArguments not an object",
+             self._graphql_condition(fieldArguments=[])),
+            ("fieldArguments key that is not a path",
+             self._graphql_condition(
+                 fieldArguments={"repository": {"owner": ["my-org"]}})),
+            ("fieldArguments key off the allowed paths",
+             self._graphql_condition(
+                 fieldArguments={"/other": {"owner": ["my-org"]}})),
+            ("fieldArguments key past an allowed leaf",
+             self._graphql_condition(
+                 fieldArguments={"/repository/id/x": {"o": ["v"]}})),
+            ("empty argument mapping",
+             self._graphql_condition(fieldArguments={"/repository": {}})),
+            ("argument mapping not an object",
+             self._graphql_condition(fieldArguments={"/repository": []})),
             ("empty argument set",
-             self._graphql_condition(arguments={"owner": []})),
+             self._graphql_condition(
+                 fieldArguments={"/repository": {"owner": []}})),
             ("argument key that is not a GraphQL name",
-             self._graphql_condition(arguments={"owner ": ["my-org"]})),
+             self._graphql_condition(
+                 fieldArguments={"/repository": {"owner ": ["my-org"]}})),
             ("non-string argument value",
-             self._graphql_condition(arguments={"owner": [1]})),
+             self._graphql_condition(
+                 fieldArguments={"/repository": {"owner": [1]}})),
         ]
         for name, condition in cases:
             for side in ("match", "expect"):
@@ -3860,7 +3901,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         rule = _messages_rule()
         condition = {
             "at": "/query", "operations": ["query"],
-            "rootFields": ["viewer"], "arguments": {},
+            "fieldPaths": ["/viewer/login"], "fieldArguments": {},
         }
         if condition_in == "match":
             rule["match"]["graphql"] = condition

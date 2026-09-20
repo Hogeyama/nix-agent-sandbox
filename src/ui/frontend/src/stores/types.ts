@@ -54,7 +54,12 @@ export type BodyDiagnostic =
   | { code: "non-scalar-at-pointer"; pointer: string }
   | { code: "graphql-unparseable"; pointer: string }
   | { code: "graphql-query-string"; pointer: string }
-  | { code: "graphql-unresolved-argument"; pointer: string; argument: string };
+  | {
+      code: "graphql-unresolved-field-argument";
+      pointer: string;
+      fieldPath: string;
+      argument: string;
+    };
 
 // Metadata-only result of the opt-in raw request body audit. The raw bytes
 // never travel in pending or audit-list payloads.

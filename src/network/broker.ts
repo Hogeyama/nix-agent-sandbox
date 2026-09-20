@@ -1497,23 +1497,23 @@ function violationNeedsApproval(
  * `/owner` が無いことを見ていないからである。
  *
  * 1 件を承認しても他のリクエストに広げてはならない違反 (許されない GraphQL
- * operation と root field、解析できない GraphQL document、解決できない GraphQL 引数、
+ * operation と取得経路、経路に紐づく引数、解析できない GraphQL document、
  * GraphQL 条件を判定できなくする URL のクエリ文字列) には、addon が
  * リクエストごとの UUID を値として載せる。鍵はそのリクエストにしか
  * 一致しないので、ここで特別扱いは要らない。`operation:mutation` を固定の値に
  * すると、1 件の mutation を承認しただけで、以後のあらゆる mutation
  * (`deleteRepository` も) がセッションの間は確認なしに通る。「読み取り以外は
- * 人に回す」というルールの意図が 1 回の承認で消える。`rootField:node` も
- * 同じで、1 件の `node(id:)` の承認が、何を読むか見えない以後のあらゆる
- * `node(id:)` を通す。
+ * 人に回す」というルールの意図が 1 回の承認で消える。
+ * `fieldPath:/user/starredRepositories/nodes/object/text` も同じで、1 件の
+ * 承認が、以後同じ経路を使うあらゆる repo・あらゆる子選択を通す。
  *
  * その代わり、この違反レコードについては承認だけでなく拒否も覚えられない。
  * `deniedViolations` の鍵も、直近の拒否を覚える `negativeCache` の鍵
  * (`violationGroupKey`、まだ答えの無い違反の鍵を束ねたもの) も UUID を含むので、
  * 次のリクエストには二度と一致しない。そのため、
  *
- * - 許されない operation や root field、解析できない document、解決できない引数、
- *   クエリ文字列を含むリクエストは、再送のたびに新しいカードと通知になる。
+ * - 許されない operation や取得経路、解析できない document、解決できない
+ *   経路引数、クエリ文字列を含むリクエストは、再送のたびに新しいカードと通知になる。
  * - 答えを待つ間に同じ document が重ねて届いても 1 枚のカードに畳まれない。
  *   束ねる鍵が UUID で分かれるので、同じリクエストに並ぶ通常の違反ごと
  *   別のカードになる。

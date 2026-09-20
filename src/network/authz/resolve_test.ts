@@ -682,8 +682,14 @@ describe("GraphQL 条件", () => {
                   format: "json",
                   graphql: {
                     operations: ["query", "query"],
-                    rootFields: ["repository", "viewer", "viewer"],
-                    arguments: { owner: ["my-org", "my-org"] },
+                    fieldPaths: [
+                      "/repository/id",
+                      "/repository/id",
+                      "/viewer/login",
+                    ],
+                    fieldArguments: {
+                      "/repository": { owner: ["my-org", "my-org"] },
+                    },
                   },
                 },
               },
@@ -692,7 +698,11 @@ describe("GraphQL 条件", () => {
               expect: [
                 {
                   kind: "body",
-                  graphql: { at: "/q", operations: ["query"] },
+                  graphql: {
+                    at: "/q",
+                    operations: ["query"],
+                    fieldPaths: ["/viewer/login"],
+                  },
                 },
                 { kind: "body", equals: { "/variables/o": "my-org" } },
               ],
@@ -720,8 +730,8 @@ describe("GraphQL 条件", () => {
     expect(rule?.match.graphql).toEqual({
       at: "/query",
       operations: ["query"],
-      rootFields: ["repository", "viewer"],
-      arguments: { owner: ["my-org"] },
+      fieldPaths: ["/repository/id", "/viewer/login"],
+      fieldArguments: { "/repository": { owner: ["my-org"] } },
     });
   });
 
@@ -741,8 +751,8 @@ describe("GraphQL 条件", () => {
         graphql: {
           at: "/q",
           operations: ["query"],
-          rootFields: null,
-          arguments: {},
+          fieldPaths: ["/viewer/login"],
+          fieldArguments: {},
         },
       },
       {
@@ -863,7 +873,10 @@ describe("GraphQL 条件の評価順", () => {
   test("graphql 条件を持つルールは、後に宣言しても format だけのルールより先に評価する", () => {
     const document = scopeOf({
       any: graphqlRule(undefined, "review"),
-      read: graphqlRule({ operations: ["query"] }, "allow"),
+      read: graphqlRule(
+        { operations: ["query"], fieldPaths: ["/viewer/login"] },
+        "allow",
+      ),
     });
     expect(post(document, { query: "{ viewer { login } }" })).toEqual([
       "gh.read",
@@ -875,14 +888,17 @@ describe("GraphQL 条件の評価順", () => {
     ]);
   });
 
-  test("狭い rootFields を先に評価する", () => {
+  test("狭い fieldPaths を先に評価する", () => {
     const document = scopeOf({
       reads: graphqlRule(
-        { operations: ["query"], rootFields: ["viewer", "repository"] },
+        {
+          operations: ["query"],
+          fieldPaths: ["/viewer/login", "/repository/id"],
+        },
         "allow",
       ),
       viewer: graphqlRule(
-        { operations: ["query"], rootFields: ["viewer"] },
+        { operations: ["query"], fieldPaths: ["/viewer/login"] },
         "deny",
       ),
     });
@@ -895,11 +911,18 @@ describe("GraphQL 条件の評価順", () => {
     ).toEqual(["gh.reads", "allow"]);
   });
 
-  test("arguments を縛るルールを、縛らないルールより先に評価する", () => {
+  test("fieldArguments を縛るルールを、縛らないルールより先に評価する", () => {
     const document = scopeOf({
-      "any-owner": graphqlRule({ operations: ["query"] }, "review"),
+      "any-owner": graphqlRule(
+        { operations: ["query"], fieldPaths: ["/repository/id"] },
+        "review",
+      ),
       mine: graphqlRule(
-        { operations: ["query"], arguments: { owner: ["my-org"] } },
+        {
+          operations: ["query"],
+          fieldPaths: ["/repository/id"],
+          fieldArguments: { "/repository": { owner: ["my-org"] } },
+        },
         "allow",
       ),
     });
@@ -920,17 +943,30 @@ describe("GraphQL 条件の評価順", () => {
       doc: "{ viewer { login } }",
     };
     const ats = ["/query", "/doc"];
+    const leaves = ["/viewer/login"];
     const forward = scopeOf({
-      query: graphqlRule({ operations: ["query"] }, "allow"),
-      doc: graphqlRule({ at: "/doc", operations: ["query"] }, "deny", [
-        "query",
-      ]),
+      query: graphqlRule(
+        { operations: ["query"], fieldPaths: leaves },
+        "allow",
+      ),
+      doc: graphqlRule(
+        { at: "/doc", operations: ["query"], fieldPaths: leaves },
+        "deny",
+        ["query"],
+      ),
     });
     expect(post(forward, both, ats)).toEqual(["gh.doc", "deny"]);
 
     const reversed = scopeOf({
-      query: graphqlRule({ operations: ["query"] }, "allow", ["doc"]),
-      doc: graphqlRule({ at: "/doc", operations: ["query"] }, "deny"),
+      query: graphqlRule(
+        { operations: ["query"], fieldPaths: leaves },
+        "allow",
+        ["doc"],
+      ),
+      doc: graphqlRule(
+        { at: "/doc", operations: ["query"], fieldPaths: leaves },
+        "deny",
+      ),
     });
     expect(post(reversed, both, ats)).toEqual(["gh.query", "allow"]);
   });

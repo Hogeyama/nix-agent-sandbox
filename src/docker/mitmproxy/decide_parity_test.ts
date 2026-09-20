@@ -16,6 +16,12 @@ import { Buffer } from "node:buffer";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import type { AuthzConfig } from "../../network/authz/config.ts";
+import {
+  GRAPHQL_TABLE_CASES,
+  GRAPHQL_TABLE_LIMITS,
+  type GraphqlTruth,
+  SPEC_GRAPHQL_CONDITION,
+} from "../../network/authz/examples_fixture.ts";
 import { buildGraphqlDocuments } from "../../network/authz/graphql.ts";
 import { normalizeBody } from "../../network/authz/relation.ts";
 import {
@@ -87,6 +93,9 @@ interface SerializedDecisionCase {
  *   両方が判定不能になる document では、どちらで打ち切るか (review か deny か)
  *   が評価順を映す。
  */
+/** `mutations` の token 予算だけを越えさせるための 60 個の末端名。 */
+const MANY_FIELD_NAMES = Array.from({ length: 60 }, (_, i) => `f${i}`);
+
 const CONFIG: AuthzConfig = {
   network: {
     fallback: "review",
@@ -204,8 +213,17 @@ const CONFIG: AuthzConfig = {
                 format: "json",
                 graphql: {
                   operations: ["query"],
-                  rootFields: ["repository", "viewer"],
-                  arguments: { owner: ["my-org"] },
+                  fieldPaths: [
+                    "/viewer/login",
+                    "/viewer/a/b/c",
+                    "/repository/id",
+                    "/repository/issues/totalCount",
+                    // `query-over-mutations-tokens` を read で真にするための
+                    // 末端。mutations の token 予算を越える document が、
+                    // read 自身の予算では読み切れることを見る。
+                    ...MANY_FIELD_NAMES.map((name) => `/viewer/${name}`),
+                  ],
+                  fieldArguments: { "/repository": { owner: ["my-org"] } },
                 },
               },
             },
@@ -217,7 +235,13 @@ const CONFIG: AuthzConfig = {
             match: {
               methods: ["POST"],
               paths: ["/graphql"],
-              body: { format: "json", graphql: { operations: ["mutation"] } },
+              body: {
+                format: "json",
+                graphql: {
+                  operations: ["mutation"],
+                  fieldPaths: ["/addStar/id", "/a/b/c/d/e"],
+                },
+              },
             },
             onMatch: "review",
             onIndeterminate: "deny",
@@ -232,6 +256,26 @@ const CONFIG: AuthzConfig = {
               body: { format: "json" },
             },
             onMatch: "deny",
+          },
+        },
+      },
+      // `graphql_acceptance_test.ts` の期待表と**同じ**条件・同じ予算。
+      // 向こうは addon の中の真理値と違反を見るが、ここではホストの `decide`
+      // と addon の `_decide` が同じ document・同じ variables・同じ limits で
+      // 同じルールを選ぶことを見る。片方だけが経路を評価していれば割れる。
+      graphqlTable: {
+        targets: ["graphql-table.example"],
+        fallback: "deny",
+        rules: {
+          read: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: { format: "json", graphql: SPEC_GRAPHQL_CONDITION },
+            },
+            onMatch: "allow",
+            onIndeterminate: "review",
+            limits: { ...GRAPHQL_TABLE_LIMITS },
           },
         },
       },
@@ -464,15 +508,15 @@ const GRAPHQL_READ =
 const GRAPHQL_DEFAULT =
   'query($o: String = "my-org") { repository(owner: $o, name: "x") { id } }';
 
-const MANY_FIELDS = Array.from({ length: 60 }, (_, i) => `f${i}`).join(" ");
+const MANY_FIELDS = MANY_FIELD_NAMES.join(" ");
 
 const GRAPHQL_CASES: readonly DecisionCase[] = [
   graphqlCase("shorthand", { query: "{ viewer { login } }" }),
   graphqlCase("mutation", {
     query: 'mutation { addStar(owner: "my-org") { id } }',
   }),
-  // root の fragment spread を展開しないと rootFields が空になり、node が
-  // rootFields の制約をすり抜ける。
+  // root の fragment spread を展開しないと出現が 1 つも取れず、node が
+  // fieldPaths の制約をすり抜ける。
   graphqlCase("root-fragment-spread", {
     query: 'query { ...f } fragment f on Query { node(id: "1") { id } }',
   }),
@@ -590,6 +634,24 @@ const GRAPHQL_CASES: readonly DecisionCase[] = [
     "/graphql?",
   ),
 ];
+
+/** 期待表の document を `graphqlTable` スコープへ流す形。 */
+const GRAPHQL_TABLE_DECISION_CASES: readonly DecisionCase[] =
+  GRAPHQL_TABLE_CASES.map((case_) => ({
+    name: `table-${case_.name}`,
+    host: "graphql-table.example",
+    port: 443,
+    method: "POST",
+    path: case_.path ?? "/graphql",
+    body: body(case_.name, JSON.stringify(case_.body), true),
+  }));
+
+/** 期待表の真理値が `graphqlTable` スコープの決定として見える形。 */
+const TABLE_DECISION: Readonly<Record<GraphqlTruth, readonly string[]>> = {
+  true: ["graphqlTable.read", "allow", "rule"],
+  false: ["graphqlTable.$fallback", "deny", "scope-fallback"],
+  indeterminate: ["graphqlTable.read", "review", "indeterminate"],
+};
 
 function requestBody(
   bodyCase: BodyCase,
@@ -818,6 +880,7 @@ test.skipIf(!python3 || !vendoredDeps)(
     }
     cases.push(...VALUE_CASES);
     cases.push(...GRAPHQL_CASES);
+    cases.push(...GRAPHQL_TABLE_DECISION_CASES);
     cases.push(
       {
         name: "websocket-allow-scope-reaches-review-rule",
@@ -997,7 +1060,7 @@ test("GraphQL documents select the rule the spec says they select", () => {
   }
   // mutation は read にとって偽で、mutations が選ぶ。
   expect(decided("mutation")).toEqual(["graphql.mutations", "review", "rule"]);
-  // root の fragment spread は展開され、node が rootFields に無いので偽。
+  // root の fragment spread は展開され、node の経路が fieldPaths に無いので偽。
   expect(decided("root-fragment-spread")).toEqual([
     "graphql.any",
     "deny",
@@ -1050,4 +1113,31 @@ test("GraphQL documents select the rule the spec says they select", () => {
     "allow",
     "rule",
   ]);
+});
+
+/**
+ * 期待表の `match` 列を、ホストの `decide` の上でも固定する。
+ *
+ * addon 側は `graphql_acceptance_test.ts` が同じ表で固定し、上の突き合わせが
+ * この 2 つを縛る。両者が同じように間違うことだけが残る危険なので、答えは
+ * 仕様の表からしか来ないようにしてある。
+ */
+test("the expectation table's match column holds on the host resolver too", () => {
+  const resolved = resolveAuthzConfig(CONFIG);
+  const document = resolved.document;
+  if (document === null) throw new Error("unresolvable fixture config");
+  const byName = new Map(
+    GRAPHQL_TABLE_DECISION_CASES.map((case_) => [case_.name, case_]),
+  );
+  for (const case_ of GRAPHQL_TABLE_CASES) {
+    const decisionCase = byName.get(`table-${case_.name}`);
+    if (decisionCase === undefined) throw new Error(`missing ${case_.name}`);
+    const { decision } = decideCase(document, decisionCase);
+    expect([
+      case_.name,
+      decision.ruleId,
+      decision.action,
+      decision.reason,
+    ]).toEqual([case_.name, ...TABLE_DECISION[case_.matchTruth]]);
+  }
 });

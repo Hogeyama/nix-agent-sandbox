@@ -234,13 +234,18 @@ function bodyExpectTarget(): InspectionTarget {
                   kind: "body",
                   graphql: {
                     operations: ["query"],
-                    arguments: { owner: ["my-org"] },
+                    fieldPaths: ["/repository/issues/nodes/body"],
+                    fieldArguments: { "/repository": { owner: ["my-org"] } },
                   },
                   onViolation: "review",
                 },
                 {
                   kind: "body",
-                  graphql: { at: "/extra", operations: ["query"] },
+                  graphql: {
+                    at: "/extra",
+                    operations: ["query"],
+                    fieldPaths: ["/viewer/login"],
+                  },
                   onViolation: "review",
                 },
               ],
@@ -267,7 +272,9 @@ test.skipIf(!python3 || !vendoredDeps)(
     const target = bodyExpectTarget();
     const requestBody = JSON.stringify({
       tier: "bronze",
-      query: "mutation($o: String!) { deleteRepository(owner: $o) }",
+      query:
+        "mutation($o: String!) { hidden_alias: deleteRepository(owner: $o) " +
+        "repository(owner: $o) { id } }",
       extra: "query {",
     });
     const first = await messagesFor(requestBody, target);
@@ -319,7 +326,25 @@ test.skipIf(!python3 || !vendoredDeps)(
         "schema-mismatch",
         "/query",
         "<uuid>",
-        "argument:owner=(unresolved)",
+        "fieldPath:/deleteRepository",
+        null,
+      ],
+      [
+        1,
+        "body",
+        "schema-mismatch",
+        "/query",
+        "<uuid>",
+        "fieldPath:/repository/id",
+        null,
+      ],
+      [
+        1,
+        "body",
+        "schema-mismatch",
+        "/query",
+        "<uuid>",
+        "fieldArgument:/repository@owner=(unresolved)",
         null,
       ],
       [
@@ -341,13 +366,14 @@ test.skipIf(!python3 || !vendoredDeps)(
       findingsOf(message)
         .map((finding) => finding.value)
         .filter((value) => value !== null && UUID.test(value));
-    expect(uuids(first.review)).toHaveLength(3);
-    expect(new Set(uuids(first.review)).size).toBe(3);
-    expect(uuids(second.review)).toHaveLength(3);
+    expect(uuids(first.review)).toHaveLength(5);
+    expect(new Set(uuids(first.review)).size).toBe(5);
+    expect(uuids(second.review)).toHaveLength(5);
     for (const value of uuids(second.review)) {
       expect(uuids(first.review)).not.toContain(value);
     }
-    // document の本文は、どの電文にも載らない。
+    // 違反した取得経路は label に載るが、document の本文そのもの・alias・
+    // 引数の実値・parser の例外文は、どの電文にも載らない。
     for (const message of [
       first.authorize,
       first.review,
@@ -357,7 +383,8 @@ test.skipIf(!python3 || !vendoredDeps)(
       second.outcome,
     ]) {
       const text = JSON.stringify(message);
-      expect(text).not.toContain("deleteRepository");
+      expect(text).not.toContain("hidden_alias");
+      expect(text).not.toContain("mutation($o");
       expect(text).not.toContain("query {");
     }
   },

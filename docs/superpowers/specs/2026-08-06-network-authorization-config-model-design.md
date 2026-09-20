@@ -20,6 +20,18 @@ host 側で 1 度だけ解決する構成は引き継ぐ。
 
 互換のための別名は用意しない。既存の `config.pkl` は書き換えを要する。
 
+**本書の GraphQL 条件の語彙は
+[GraphQL の取得経路を限定する](2026-09-20-graphql-field-path-policy-design.md)
+が置き換えた。** `GraphqlMatch.rootFields` と文書全域の `arguments` は削除され、
+必須の `fieldPaths` (許可する末端の完全経路) と経路ごとの `fieldArguments` に
+なっている。違反レコードの表示名も `rootField:<name>` / `argument:<name>=...`
+から `fieldPath:<path>` / `fieldArgument:<path>@<name>=...` に変わり、GraphQL の
+違反はすべてそのリクエスト限りの承認になる。本書の GraphQL に関する記述
+(「GraphQL に対する対象の限定」、「違反レコード」と「承認の単位」の GraphQL の
+段落、「段階 4: GraphQL」、「記述例」の要件 1) は**当時の設計の履歴**であり、
+現在の規則ではない。それ以外の章 (スコープ、選択規則、受理条件、予算、承認、
+設定エラー) は本書が正本のままである。
+
 ## 満たす要件
 
 1. 単一パスの中身で分岐する。 `POST /graphql` に対し、読み取り専用の操作で
@@ -417,6 +429,14 @@ capture の値をボディ条件の右辺に置くことはできない。`/vari
 比較が単純な含意判定で済まなくなる。
 
 ### GraphQL に対する対象の限定
+
+> **履歴。** この節が定める `rootFields` と文書全域の `arguments` は
+> [GraphQL の取得経路を限定する](2026-09-20-graphql-field-path-policy-design.md)
+> が置き換えた。現在は許可した末端フィールドへの完全経路 (`fieldPaths`) と、
+> その経路の出現ごとの引数条件 (`fieldArguments`) で絞る。下で「設定では
+> 閉じられない」としているグラフ横断 (`forks`、star 経由の第三者リポジトリ)
+> は、経路を列挙する形にしたことで閉じられるようになった。脅威の見立てと、
+> 対象が静的に見えるかどうかの表は今も有効である。
 
 GraphQL API では「そのリクエストが何を読むか」がパスにもホストにも現れない。`/graphql`
 1 本に対して、読む対象は document の中にある。この節は、そこにどこまで制約を掛けられるか
@@ -922,6 +942,13 @@ Pointer は設定から取った文字列で、ボディ由来ではないので
 
 **GraphQL の許されない operation と root field、解析できない document、解決できない
 引数、URL のクエリ文字列は、1 リクエストずつ承認する。**
+（履歴。「許されない root field」は
+[GraphQL の取得経路を限定する](2026-09-20-graphql-field-path-policy-design.md)
+で「許可していない取得経路の末端」に置き換わり、表示名は `fieldPath:<path>` と
+`fieldArgument:<path>@<name>=(missing|unresolved|not-allowed)` になった。
+下で「`violation` の粒度で覚えられる」としている `argument:<name>=<value>` は
+無くなり、GraphQL の違反はすべて 1 リクエスト限りである。1 リクエストずつに
+する理由と仕組みは変わっていない。）
 `BodyExpect` の `graphql` 条件の違反レコードのうち、`operations` に無い種別の operation を含む
 違反レコード、`rootFields` に無い root field を含む違反レコード、document を解析できなかった違反レコード、
 名前を挙げた引数を解決できなかった違反レコード、URL がクエリ文字列を持つために document を
@@ -1605,6 +1632,12 @@ preset の `onViolation` を `review` に切り替えるのはこの段階であ
 
 ### 段階 4: GraphQL
 
+> **履歴。** ここに挙げた `GraphqlMatch`（`operations` / `rootFields` /
+> `arguments`）は
+> [GraphQL の取得経路を限定する](2026-09-20-graphql-field-path-policy-design.md)
+> が置き換えた。graphql-core の vendoring と `parse()` の前提、名前のない
+> 省略形や fragment の扱い、変数解決の規則はそのまま使っている。
+
 - graphql-core の vendoring と、`parse()` による document の解析
 - `GraphqlMatch`（`operations` / `rootFields` / `arguments`）を `match.body` と
   `BodyExpect` の両方で有効にする
@@ -1679,6 +1712,14 @@ vendor ツリーそのものは git に入れない。`vendor/` は gitignore �
 ## 記述例
 
 ### 要件 1: GraphQL の読み取りだけ自動許可する
+
+> **履歴。この設定は現在の Schema.pkl では書けない。** 全域 `arguments` は
+> [GraphQL の取得経路を限定する](2026-09-20-graphql-field-path-policy-design.md)
+> が削除し、必須の `fieldPaths` と経路ごとの `fieldArguments` に置き換えた。
+> 現在の書き方はその文書の「設定管理者が書くもの」にある。以下は `match` と
+> `expect` の使い分け、`onIndeterminate`、`BodyExpect` の働きを示す例として
+> 残す。末尾が述べている「`owner` / `login` を名前だけで照合する」「入口を
+> 絞っても他の組織に届く」という限界は、経路の許可制に移ったことで解消した。
 
 ```pkl
 scopes {

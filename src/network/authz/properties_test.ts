@@ -13,6 +13,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { graphqlPathChain } from "./graphql_selection.ts";
 import {
   type CompiledMatch,
   compileMatch,
@@ -24,6 +25,8 @@ import { compareSpecificity } from "./specificity.ts";
 import type {
   AuthzRequest,
   BodyMatch,
+  GraphqlDocument,
+  GraphqlFieldOccurrence,
   GraphqlOperation,
   JsonScalar,
   Match,
@@ -62,8 +65,21 @@ const POINTERS = ["/a", "/b", "/meta/kind"] as const;
 const POINTER_VALUES: readonly JsonScalar[] = [1, 2, "x"];
 const GRAPHQL_AT = ["/query", "/q2"] as const;
 const OPERATIONS: readonly GraphqlOperation[] = ["query", "mutation"];
-const ROOT_FIELDS = ["f", "g"] as const;
+const FIELD_PATHS = ["/f/x", "/f/y", "/g/x"] as const;
 const ARGUMENT_VALUES = ["v1", "v2"] as const;
+
+/** `/f/x` → `/f`。引数条件のキーは許可末端の途中の経路でなければならない。 */
+function rootOf(path: string): string {
+  return path.slice(0, path.indexOf("/", 1));
+}
+
+function genFieldArguments(
+  rng: Rng,
+  fieldPaths: readonly string[],
+): Record<string, Record<string, readonly string[]>> {
+  const root = rootOf(pick(rng, fieldPaths));
+  return { [root]: { login: pickSome(rng, ARGUMENT_VALUES) } };
+}
 
 function genPathPattern(rng: Rng): string {
   const length = 1 + Math.floor(rng() * 3);
@@ -101,13 +117,14 @@ function genBody(rng: Rng): BodyMatch | undefined {
     body.oneOf = oneOf;
   }
   if (rng() < 0.4) {
-    const args: Record<string, readonly string[]> = {};
-    if (rng() < 0.5) args.login = pickSome(rng, ARGUMENT_VALUES);
+    const fieldPaths = pickSome(rng, FIELD_PATHS);
     body.graphql = {
       at: pick(rng, GRAPHQL_AT),
       operations: pickSome(rng, OPERATIONS),
-      ...(rng() < 0.5 ? { rootFields: pickSome(rng, ROOT_FIELDS) } : {}),
-      arguments: args,
+      fieldPaths,
+      ...(rng() < 0.5
+        ? { fieldArguments: genFieldArguments(rng, fieldPaths) }
+        : {}),
     };
   }
   return body as BodyMatch;
@@ -219,18 +236,15 @@ function mutateBody(
     case 1:
       return {
         ...body,
-        graphql: {
-          ...graphql,
-          rootFields: rng() < 0.3 ? undefined : pickSome(rng, ROOT_FIELDS),
-        },
+        graphql: { ...graphql, fieldPaths: pickSome(rng, FIELD_PATHS) },
       };
     default:
       return {
         ...body,
         graphql: {
           ...graphql,
-          arguments:
-            rng() < 0.3 ? {} : { login: pickSome(rng, ARGUMENT_VALUES) },
+          fieldArguments:
+            rng() < 0.3 ? {} : genFieldArguments(rng, graphql.fieldPaths),
         },
       };
   }
@@ -286,7 +300,32 @@ function requestPaths(): readonly string[] {
   return paths;
 }
 
-const DOCUMENT_TEXT = "query { f { __typename } }";
+const DOCUMENT_TEXT = "query { f { x } }";
+
+/**
+ * 許可末端へ至る鎖をそのまま出現の列にする。引数は鎖の根に置く。
+ *
+ * 条件側の `fieldArguments` のキーも根なので、出現ごとの引数検査がそのまま効く。
+ */
+function facts(
+  operations: readonly GraphqlOperation[],
+  leaves: readonly string[],
+  argumentValues: Readonly<Record<string, string>> = {},
+  unresolvedArguments: readonly string[] = [],
+): GraphqlDocument {
+  const fields: GraphqlFieldOccurrence[] = [];
+  for (const leaf of leaves) {
+    for (const path of graphqlPathChain(leaf)) {
+      fields.push({
+        path,
+        leaf: path === leaf,
+        argumentValues: path === rootOf(leaf) ? argumentValues : {},
+        unresolvedArguments: path === rootOf(leaf) ? unresolvedArguments : [],
+      });
+    }
+  }
+  return { operations, fields };
+}
 
 const REQUEST_BODIES: readonly RequestBody[] = [
   { kind: "absent" },
@@ -304,63 +343,47 @@ const REQUEST_BODIES: readonly RequestBody[] = [
   {
     kind: "json",
     value: { query: DOCUMENT_TEXT },
-    documents: {
-      "/query": {
-        operations: ["query"],
-        rootFields: ["f"],
-        argumentValues: { login: ["v1"] },
-        unresolvedArguments: [],
-      },
-    },
+    documents: { "/query": facts(["query"], ["/f/x"], { login: "v1" }) },
   },
   {
     kind: "json",
     value: { query: DOCUMENT_TEXT },
-    documents: {
-      "/query": {
-        operations: ["mutation"],
-        rootFields: ["g"],
-        argumentValues: { login: ["v2"] },
-        unresolvedArguments: [],
-      },
-    },
+    documents: { "/query": facts(["mutation"], ["/g/x"], { login: "v2" }) },
   },
   {
     kind: "json",
     value: { query: DOCUMENT_TEXT, a: 1 },
     documents: {
-      "/query": {
-        operations: ["query", "mutation"],
-        rootFields: ["f", "g"],
-        argumentValues: {},
-        unresolvedArguments: [],
-      },
+      "/query": facts(["query", "mutation"], ["/f/x", "/g/x"]),
     },
+  },
+  {
+    kind: "json",
+    value: { query: DOCUMENT_TEXT },
+    documents: { "/query": facts(["query"], ["/f/y"], { login: "v1" }) },
+  },
+  // 許可され得ない末端。どの条件でも偽になる。
+  {
+    kind: "json",
+    value: { query: DOCUMENT_TEXT },
+    documents: { "/query": facts(["query"], ["/f/z"]) },
+  },
+  // 許可末端の途中で止まった選択。末端としては完全一致しないので偽になる。
+  {
+    kind: "json",
+    value: { query: DOCUMENT_TEXT },
+    documents: { "/query": facts(["query"], ["/f"]) },
   },
   // login が変数で与えられ解決できない。login を縛る条件は判定不能になる。
   {
     kind: "json",
     value: { query: DOCUMENT_TEXT },
-    documents: {
-      "/query": {
-        operations: ["query"],
-        rootFields: ["f"],
-        argumentValues: {},
-        unresolvedArguments: ["login"],
-      },
-    },
+    documents: { "/query": facts(["query"], ["/f/x"], {}, ["login"]) },
   },
   {
     kind: "json",
     value: { q2: DOCUMENT_TEXT },
-    documents: {
-      "/q2": {
-        operations: ["query"],
-        rootFields: ["f"],
-        argumentValues: {},
-        unresolvedArguments: [],
-      },
-    },
+    documents: { "/q2": facts(["query"], ["/f/x"], { login: "v1" }) },
   },
 ];
 
@@ -488,18 +511,31 @@ describe("交差と包含のプロパティ", () => {
   test("証人の妥当性: 交差すると判定したら、構成した証人が両方に一致する", () => {
     const rng = makeRng(6);
     let witnesses = 0;
+    let unwitnessed = 0;
     for (let index = 0; index < PAIR_COUNT; index++) {
       const [a, b] = genPair(rng);
       if (!matchesIntersect(a.compiled, b.compiled)) continue;
       const witness = matchIntersectionWitness(a.compiled, b.compiled);
+      // 交差判定は引数の矛盾を非交差の根拠にしないので、交差すると判定した
+      // 組でも証人を作れないことがある。その場合は「両方が受理する例は
+      // 本当に存在しない」ことを、生成した世界の全リクエストで確かめる。
+      // 証人の探索は共通末端をすべて試すので、どれかで両方を満たせるなら
+      // 必ず作れている。
       if (witness === null) {
-        throw new Error(
-          [
-            "交差すると判定したのに証人を構成できない",
-            `A: ${describeSample(a)}`,
-            `B: ${describeSample(b)}`,
-          ].join("\n"),
-        );
+        unwitnessed++;
+        for (const request of REQUESTS) {
+          if (!accepts(a.compiled, request)) continue;
+          if (!accepts(b.compiled, request)) continue;
+          throw new Error(
+            [
+              "証人を作れないと判断したのに両方が受理するリクエストがある",
+              `A: ${describeSample(a)}`,
+              `B: ${describeSample(b)}`,
+              `両方が受理: ${describeRequestValue(request)}`,
+            ].join("\n"),
+          );
+        }
+        continue;
       }
       witnesses++;
       if (accepts(a.compiled, witness) && accepts(b.compiled, witness))
@@ -514,5 +550,9 @@ describe("交差と包含のプロパティ", () => {
       );
     }
     expect(witnesses).toBeGreaterThan(10);
+    // 「証人なし」の枝はこの生成器ではほとんど出ない (同じ `at` で同じ経路に
+    // 素な引数集合を持ち、かつ共通末端がすべてその下にある組が要る)。回数は
+    // 主張せず、witness_test.ts の個別ケースで固定する。
+    expect(unwitnessed).toBeGreaterThanOrEqual(0);
   });
 });

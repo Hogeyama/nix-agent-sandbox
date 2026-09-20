@@ -306,8 +306,9 @@ class UnionShape extends Expect {
 ///
 /// `equals` / `oneOf` は、Pointer の対象が無い・スカラーでない・値が集合に無い、の
 /// いずれも違反になる。`graphql` は、document を解析できない (対象が無い・文字列で
-/// ない・壊れている・予算を超える) ことも、名指しした引数の値を解決できないことも
-/// 違反になる。
+/// ない・壊れている・予算を超える) ことも、許可していない末端を取得することも、
+/// 名指しした引数が欠けている・値が許可外・値を解決できないことも違反になる。
+/// 経路と引数の違反はそのリクエストにだけ有効な承認になる (毎回 UUID を作る)。
 class BodyExpect extends Expect {
   kind = "body"
 
@@ -342,18 +343,21 @@ class BodyMatch {
   graphql: GraphqlMatch?
 }
 
-/// GraphQL document に対する条件。3 つの制約はいずれも集合の包含である。
+/// GraphQL document に対する条件。operations・fieldPaths・fieldArguments の
+/// 3 つはすべて AND である。
 ///
 /// document は解析して判定する。名前のない省略形 `{ ... }` は `query` として扱う。
-/// root の inline fragment と fragment spread は展開して root field を数える。
+/// alias は捨て、named / inline fragment は使用位置の経路を引き継いで全階層で展開し、
+/// 型条件は経路要素にしない。`@skip` / `@include` の条件に関係なく両方の選択を検査し、
+/// それ以外の directive があれば解析結果を判定不能にする。
 ///
 /// 同じ host・method・path にこの条件を使う候補ルールがあるリクエストは、ルール選択の
 /// 前に UTF-8 の `application/json` ボディを要求する。Content-Type は 1 個のみで、
 /// パラメータは省略または `charset=utf-8` のみ。欠落・重複・他形式は fallback や
 /// 人間の承認に回さず拒否する。match と expect の両方に適用する。
 ///
-/// これは読む対象の削減であって境界ではない。許可した入口から GraphQL のグラフを
-/// 辿れば、他の対象に到達できる。
+/// これは読む対象の削減であって境界ではない。許可した末端へ至る経路の途中にある
+/// field は通過できるが、その field の別の子を取得する権限にはならない。
 class GraphqlMatch {
   /// document を運ぶフィールドの JSON Pointer。変数はこの Pointer の親にある
   /// `variables` から引く (`{ "query": ..., "variables": {...} }` の形)。
@@ -363,17 +367,31 @@ class GraphqlMatch {
   /// ときだけ成り立つ。
   operations: Listing<"query"|"mutation"|"subscription">
 
-  /// 許す root field 名。すべての operation の直下のフィールドがこの集合に含まれる
-  /// ときだけ成り立つ。省略時は制約しない。
-  rootFields: Listing<String>?
-
-  /// 引数名ごとに許す文字列の集合。document 中に現れるその名前の引数の値が、すべて
-  /// この集合に含まれるときだけ成り立つ。引数が現れることは要求しない。
+  /// 取得を許す**末端**フィールドの経路。必須・非空。
   ///
-  /// 変数で与えられた引数は `variables` の値で評価する。値を文字列に解決できない
-  /// 出現 (`variables` に無い、文字列でない、文字列以外のリテラル) は、`match` では
-  /// 判定不能、`expect` では違反になる。ここで名指ししない引数は判定に関与しない。
-  arguments: Mapping<String, Listing<String>> = new {}
+  /// `/` 始まりで、各要素は GraphQL の Name (`[_A-Za-z][_0-9A-Za-z]*`)。
+  /// JSON Pointer ではないので index も escape も持たず、alias・型名も含めない。
+  /// `*` / `**`、空要素、末尾の `/`、空文字列は設定エラーになる。
+  ///
+  /// 判定は出現ごとに行う。子の selection set を持たない field はこの Listing に
+  /// 完全一致する必要があり、子を持つ field は許可経路の**真の接頭辞**でなければ
+  /// ならない。`/repository/issues/nodes/body` を許しても、`/repository` 自体や
+  /// その下の任意の field を取得する権限にはならない。許可経路の部分集合で構成した
+  /// query は許す。経路を制約しない GraphQL 条件は書けない。
+  fieldPaths: Listing<String>
+
+  /// 経路ごとの必須引数。「フィールド経路 → 引数名 → 許す文字列」。省略時は制約
+  /// しない。キーは `fieldPaths` の許可末端か、その途中の経路でなければならない。
+  ///
+  /// その経路の field が document に現れたとき、名指しした引数が**その出現に存在し**、
+  /// 解決後の文字列が集合に含まれることを要求する。field 自体の出現は要求しない。
+  /// 別の field や別の出現にある同名の引数では満たせない。
+  ///
+  /// 変数で与えられた引数は `variables` (無いか null ならその出現を含む operation の
+  /// 既定値) で評価する。値を文字列に解決できない出現 (`variables` に無い、文字列で
+  /// ない、文字列以外のリテラル) は、`match` では判定不能、`expect` では違反になる。
+  /// ここで名指ししない引数は判定に関与しない。
+  fieldArguments: Mapping<String, Mapping<String, Listing<String>>> = new {}
 }
 
 /// そのルールがリクエストを引き受けるかどうかを決める条件。

@@ -10,6 +10,7 @@
  * A が真を返すリクエストでは B も真を返す」がプロパティテストの内容である。
  */
 
+import { selectionSatisfies } from "./graphql_selection.ts";
 import { compiledPathMatches } from "./pattern.ts";
 import type {
   CompiledMatch,
@@ -161,41 +162,33 @@ function evaluateGraphql(
   return satisfiesDocument(condition, document);
 }
 
+/**
+ * `operations` と経路条件の AND。
+ *
+ * 経路と経路別の引数は `selectionSatisfies` が出現ごとに決める。ここが足すのは
+ * operation の集合の検査と、判定不能を偽より優先する合成だけである。経路が偽に
+ * なっても引数の走査を打ち切らないのは `selectionSatisfies` の中の話だが、
+ * 同じ理由でここも operation が偽だからといって経路の評価を飛ばさない。飛ばすと
+ * 「未解決の引数を持つ document」が偽になり、壊れた変数を送るだけでより広い
+ * ルールへ落とせる fail-open になる。
+ *
+ * `operations` が空の facts は有効な document から作れない (実行可能な document は
+ * 最低 1 つの operation を持つ)。手書き・旧形式の facts を空集合として黙って
+ * 通さないために、判定不能に倒す。
+ */
 function satisfiesDocument(
   condition: NormalizedGraphql,
   document: GraphqlDocument,
 ): Truth {
-  let indeterminate = false;
-  let determinedFalse = false;
-
+  const selection = selectionSatisfies(condition, document);
+  if (selection === "indeterminate") return "indeterminate";
+  if (!Array.isArray(document.operations) || document.operations.length === 0) {
+    return "indeterminate";
+  }
   if (!document.operations.every((op) => condition.operations.includes(op))) {
-    determinedFalse = true;
+    return "false";
   }
-  const rootFields = condition.rootFields;
-  if (rootFields !== null) {
-    if (!document.rootFields.every((field) => rootFields.includes(field))) {
-      determinedFalse = true;
-    }
-  }
-  // 「この名前の引数が現れるなら、その値はこの集合に含まれる」。引数が 1 つも
-  // 現れない document では制約が空になるので真である。名指しした引数が 1 つ
-  // でも解決不能なら判定不能である — 偽に倒すと、壊れた変数を送るだけでより
-  // 広いルールへ落とせる fail-open になる。
-  for (const [name, allowed] of condition.argumentValues) {
-    if (document.unresolvedArguments.includes(name)) {
-      indeterminate = true;
-      continue;
-    }
-    const observed = document.argumentValues[name];
-    if (observed === undefined) continue;
-    if (!observed.every((value) => allowed.includes(value))) {
-      determinedFalse = true;
-    }
-  }
-
-  // 判定不能を偽より優先する。真になれない候補で評価を打ち切らせるためである。
-  if (indeterminate) return "indeterminate";
-  return determinedFalse ? "false" : "true";
+  return selection;
 }
 
 /** リクエストのパスが空でないクエリ文字列 (`?` の後に 1 文字以上) を持つか。 */

@@ -137,8 +137,17 @@ export type BodyDiagnostic =
    * 載らない。
    */
   | { code: "graphql-query-string"; pointer: string }
-  /** `argument` は条件が名指しした引数名。値は載らない。 */
-  | { code: "graphql-unresolved-argument"; pointer: string; argument: string };
+  /**
+   * 条件が名指しした引数の値が、その出現で文字列に解決できなかった。
+   * `fieldPath` と `argument` はどちらも設定に書かれた文字列であり、document の
+   * 本文・alias・引数の実値は載らない。欠けている必須引数は偽なのでここに来ない。
+   */
+  | {
+      code: "graphql-unresolved-field-argument";
+      pointer: string;
+      fieldPath: string;
+      argument: string;
+    };
 
 export interface AuthorizeRequest {
   version: 1;
@@ -254,8 +263,8 @@ export interface ViolationFinding {
    * 同じ値が同じ承認になる。
    *
    * 承認を他のリクエストへ広げてはならない事実 (許されない GraphQL
-   * operation と root field、解析できない GraphQL document、解決できない
-   * GraphQL 引数、URL のクエリ文字列) では、addon がリクエストごとに作る UUID が入る。何が違反したかは
+   * operation と取得経路、経路に紐づく引数、解析できない GraphQL document、
+   * URL のクエリ文字列) では、addon がリクエストごとに作る UUID が入る。何が違反したかは
    * `label` が言う。
    */
   value: string | null;
@@ -263,8 +272,9 @@ export interface ViolationFinding {
    * 表示名。あるとき、承認 UI と監査ログは `value` の代わりにこれを出す。
    *
    * 値が UUID の違反レコードが、違反した事実を短い定まった語で書いたもの
-   * (`operation:mutation`、`rootField:node`、`document:(unanalysable)`、
-   * `document:(query-string)`、`argument:owner=(unresolved)`) である。
+   * (`operation:mutation`、`fieldPath:/repository/forks/nodes/nameWithOwner`、
+   * `document:(unanalysable)`、`document:(query-string)`、
+   * `fieldArgument:/repository@owner=(unresolved)`) である。
    * UUID は同一性のためだけにあり、読む人には何も言わないからである。
    * 承認の同一性には入らない。それ以外の違反レコードでは null。
    */
@@ -613,10 +623,16 @@ function isBodyDiagnostic(value: unknown): value is BodyDiagnostic {
         hasExactFields(diagnostic, ["code", "pointer"]) &&
         typeof diagnostic.pointer === "string"
       );
-    case "graphql-unresolved-argument":
+    case "graphql-unresolved-field-argument":
       return (
-        hasExactFields(diagnostic, ["code", "pointer", "argument"]) &&
+        hasExactFields(diagnostic, [
+          "code",
+          "pointer",
+          "fieldPath",
+          "argument",
+        ]) &&
         typeof diagnostic.pointer === "string" &&
+        typeof diagnostic.fieldPath === "string" &&
         typeof diagnostic.argument === "string"
       );
     default:

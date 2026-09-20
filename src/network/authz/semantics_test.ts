@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { graphqlPathChain } from "./graphql_selection.ts";
 import { type CompiledMatch, compileMatch } from "./relation.ts";
 import { evaluateBody, evaluateMatch } from "./semantics.ts";
-import type { Match, RequestBody } from "./types.ts";
+import type { GraphqlDocument, Match, RequestBody } from "./types.ts";
 
 function compile(match: Match): CompiledMatch {
   const compiled = compileMatch(match);
@@ -122,37 +123,58 @@ describe("graphql 条件の意味", () => {
       format: "json",
       graphql: {
         operations: ["query"],
-        rootFields: ["organization"],
-        arguments: { login: ["my-org"] },
+        fieldPaths: ["/organization/login"],
+        fieldArguments: { "/organization": { login: ["my-org"] } },
       },
     },
   });
 
+  /** 末端に至る鎖を 1 本だけ持つ facts。引数は鎖の根に置く。 */
+  const document = (
+    operations: readonly ("query" | "mutation")[],
+    leaf: string,
+    argumentValues: Readonly<Record<string, string>> = {},
+    unresolvedArguments: readonly string[] = [],
+  ): GraphqlDocument => {
+    const paths = graphqlPathChain(leaf);
+    return {
+      operations,
+      fields: paths.map((path, index) => ({
+        path,
+        leaf: index === paths.length - 1,
+        argumentValues: index === 0 ? argumentValues : {},
+        unresolvedArguments: index === 0 ? unresolvedArguments : [],
+      })),
+    };
+  };
+
   const withDocument = (
     operations: readonly ("query" | "mutation")[],
-    rootFields: readonly string[],
-    argumentValues: Record<string, readonly string[]>,
+    leaf: string,
+    argumentValues: Readonly<Record<string, string>> = {},
     unresolvedArguments: readonly string[] = [],
   ): RequestBody => ({
     kind: "json",
     value: { query: "..." },
     documents: {
-      "/query": { operations, rootFields, argumentValues, unresolvedArguments },
+      "/query": document(operations, leaf, argumentValues, unresolvedArguments),
     },
   });
 
-  test("すべての operation と root field が集合に含まれるときだけ真になる", () => {
+  const ok = { login: "my-org" };
+
+  test("operations と経路の AND がそろったときだけ真になる", () => {
     expect(
       evaluateMatch(
         match,
-        request(withDocument(["query"], ["organization"], {}), "/graphql"),
+        request(withDocument(["query"], "/organization/login", ok), "/graphql"),
       ),
     ).toBe("true");
     expect(
       evaluateMatch(
         match,
         request(
-          withDocument(["query", "mutation"], ["organization"], {}),
+          withDocument(["query", "mutation"], "/organization/login", ok),
           "/graphql",
         ),
       ),
@@ -160,26 +182,23 @@ describe("graphql 条件の意味", () => {
     expect(
       evaluateMatch(
         match,
-        request(withDocument(["query"], ["search"], {}), "/graphql"),
+        request(withDocument(["query"], "/organization/name", ok), "/graphql"),
       ),
     ).toBe("false");
   });
 
-  test("その名前の引数が現れないなら制約は空になり真である", () => {
+  test("必須引数が無い・許可外なら偽である", () => {
     expect(
       evaluateMatch(
         match,
-        request(
-          withDocument(["query"], ["organization"], { owner: ["other"] }),
-          "/graphql",
-        ),
+        request(withDocument(["query"], "/organization/login"), "/graphql"),
       ),
-    ).toBe("true");
+    ).toBe("false");
     expect(
       evaluateMatch(
         match,
         request(
-          withDocument(["query"], ["organization"], { login: ["other"] }),
+          withDocument(["query"], "/organization/login", { login: "other" }),
           "/graphql",
         ),
       ),
@@ -193,16 +212,17 @@ describe("graphql 条件の意味", () => {
       evaluateMatch(
         match,
         request(
-          withDocument(["query"], ["organization"], {}, ["login"]),
+          withDocument(["query"], "/organization/login", {}, ["login"]),
           "/graphql",
         ),
       ),
     ).toBe("indeterminate");
+    // operation も経路も偽だが、未解決の引数があるので判定不能が勝つ。
     expect(
       evaluateMatch(
         match,
         request(
-          withDocument(["mutation"], ["other"], {}, ["login"]),
+          withDocument(["mutation"], "/organization/name", {}, ["login"]),
           "/graphql",
         ),
       ),
@@ -214,11 +234,37 @@ describe("graphql 条件の意味", () => {
       evaluateMatch(
         match,
         request(
-          withDocument(["query"], ["organization"], {}, ["first"]),
+          withDocument(["query"], "/organization/login", ok, ["first"]),
           "/graphql",
         ),
       ),
     ).toBe("true");
+  });
+
+  test("有効な facts を持たない document は判定不能である", () => {
+    // 末端も operation も持たない facts は実在の document から作れない。
+    // 空集合として黙って真にすると、旧形式や壊れた facts が自動許可になる。
+    for (const facts of [
+      { operations: ["query"], fields: [] } as GraphqlDocument,
+      {
+        operations: [],
+        fields: document(["query"], "/organization/login", ok).fields,
+      } as GraphqlDocument,
+    ]) {
+      expect(
+        evaluateMatch(
+          match,
+          request(
+            {
+              kind: "json",
+              value: { query: "..." },
+              documents: { "/query": facts },
+            },
+            "/graphql",
+          ),
+        ),
+      ).toBe("indeterminate");
+    }
   });
 
   test("at の対象が document として読めないなら判定不能である", () => {
@@ -246,7 +292,7 @@ describe("graphql 条件の意味", () => {
       "/graphql?unrelated=1",
     ]) {
       for (const body of [
-        withDocument(["query"], ["organization"], {}),
+        withDocument(["query"], "/organization/login", ok),
         { kind: "json", value: {} } as const,
       ]) {
         expect(evaluateBody(match.body, body, path)).toBe("indeterminate");
@@ -256,12 +302,11 @@ describe("graphql 条件の意味", () => {
     expect(
       evaluateBody(
         match.body,
-        withDocument(["query"], ["organization"], {}),
+        withDocument(["query"], "/organization/login", ok),
         "/graphql?",
       ),
     ).toBe("true");
   });
-
   test("クエリ文字列は graphql 以外のボディ条件に関与しない", () => {
     const tier = compile({
       paths: ["/graphql"],

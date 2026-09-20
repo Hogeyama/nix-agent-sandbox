@@ -37,6 +37,10 @@ import {
   type ScopeConfig,
   type SecretDisposition,
 } from "./config.ts";
+import {
+  graphqlPathPrefixes,
+  isGraphqlFieldPath,
+} from "./graphql_selection.ts";
 import { parsePathPattern } from "./pattern.ts";
 import {
   type CompiledMatch,
@@ -54,7 +58,7 @@ import {
   compareTargetSpecificity,
   precedenceOrder,
 } from "./specificity.ts";
-import type { Target } from "./types.ts";
+import type { GraphqlMatch, Target } from "./types.ts";
 import {
   describeRequest,
   describeTargetAddress,
@@ -377,6 +381,38 @@ function checkBodyConditions(
 
   const graphql = body.graphql;
   if (graphql === undefined) return broken;
+  checkGraphqlCondition(fail, graphql, never);
+  return broken;
+}
+
+/** `GraphqlMatch` が持てるキー。これ以外は綴り違いか旧形式である。 */
+const GRAPHQL_KEYS: ReadonlySet<string> = new Set([
+  "at",
+  "operations",
+  "fieldPaths",
+  "fieldArguments",
+]);
+
+/**
+ * GraphQL 条件の形を検査する。`match.body.graphql` と `BodyExpect.graphql` で
+ * 同じ検査を使う。片方だけが新しい語彙を受け入れると、同じ設定が match では
+ * 拒まれ expect では通るといった食い違いが生まれる。
+ *
+ * 旧 `rootFields` / 全域 `arguments` は「未知のキー」として拒む。読み替えも補完も
+ * しない。自動変換は、旧 `rootFields` が許していた「その root の下の任意の取得」を
+ * 経路の集合として書き直せないので、黙って広い許可を作ってしまう。
+ */
+function checkGraphqlCondition(
+  fail: (message: string) => void,
+  graphql: GraphqlMatch,
+  never: string,
+): void {
+  for (const key of Object.keys(graphql)) {
+    if (GRAPHQL_KEYS.has(key)) continue;
+    fail(
+      `graphql に未知のキー ${JSON.stringify(key)} があります。指定できるのは ${[...GRAPHQL_KEYS].join(", ")} です。`,
+    );
+  }
   if (graphql.at !== undefined && !isValidJsonPointer(graphql.at)) {
     fail(
       `graphql.at の ${graphql.at} は RFC 6901 JSON Pointer として不正です。`,
@@ -387,31 +423,61 @@ function checkBodyConditions(
       `graphql.operations が空の Listing です。受理集合が空になり、${never}。`,
     );
   }
-  if (graphql.rootFields !== undefined && graphql.rootFields.length === 0) {
+
+  // `fieldPaths` は必須・非空。経路を制約しない GraphQL 条件は提供しない。
+  // 省略を「制約なし」に倒すと、root だけを見ていた旧条件と同じ横断を許す。
+  const fieldPaths = graphql.fieldPaths as readonly string[] | null | undefined;
+  if (fieldPaths === undefined || fieldPaths === null) {
     fail(
-      `graphql.rootFields が空の Listing です。受理集合が空になり、${never}。`,
+      "graphql.fieldPaths がありません。取得を許す末端の経路は必須です。経路を制約しない GraphQL 条件は書けません。",
+    );
+  } else if (fieldPaths.length === 0) {
+    fail(
+      `graphql.fieldPaths が空の Listing です。受理集合が空になり、${never}。`,
     );
   }
-  for (const field of graphql.rootFields ?? []) {
-    if (!isGraphqlName(field)) {
+  for (const path of fieldPaths ?? []) {
+    if (isGraphqlFieldPath(path)) continue;
+    fail(
+      `graphql.fieldPaths の ${JSON.stringify(path)} は GraphQL の選択経路ではありません。` +
+        ` "/" 始まりで、各要素が GraphQL の名前である必要があります。ワイルドカード、空の要素、末尾の "/"、JSON Pointer の escape は書けません。`,
+    );
+  }
+
+  // `fieldArguments` のキーは、許可末端そのものか、その途中の経路でなければ
+  // ならない。どちらでもない経路の field はこの条件の下では現れ得ないので、
+  // そこに書いた引数条件は何も制約しない。
+  const leaves = new Set((fieldPaths ?? []).filter(isGraphqlFieldPath));
+  const prefixes = graphqlPathPrefixes(leaves);
+  for (const [path, args] of Object.entries(graphql.fieldArguments ?? {})) {
+    if (!isGraphqlFieldPath(path)) {
       fail(
-        `graphql.rootFields の ${JSON.stringify(field)} は GraphQL の名前ではありません。document に現れ得ないので、この要素は何も許しません。`,
+        `graphql.fieldArguments のキー ${JSON.stringify(path)} は GraphQL の選択経路ではありません。document に現れ得ないので、このキーの制約は何も制約しません。`,
       );
+    } else if (!leaves.has(path) && !prefixes.has(path)) {
+      fail(
+        `graphql.fieldArguments のキー ${JSON.stringify(path)} は fieldPaths のどの末端でも途中でもありません。この経路の field は許されないので、このキーの制約は何も制約しません。`,
+      );
+    }
+    const names = Object.entries(args ?? {});
+    if (names.length === 0) {
+      fail(
+        `graphql.fieldArguments の ${path} が空の Mapping です。引数を 1 つも要求しないので、書いた意図が失われます。`,
+      );
+    }
+    for (const [name, values] of names) {
+      if (!isGraphqlName(name)) {
+        fail(
+          `graphql.fieldArguments の ${path} のキー ${JSON.stringify(name)} は GraphQL の名前ではありません。document に現れ得ないので、この引数は決して満たせません。`,
+        );
+      }
+      if (values.length === 0) {
+        fail(
+          `graphql.fieldArguments の ${path} の ${name} が空の Listing です。受理集合が空になり、${never}。`,
+        );
+      }
     }
   }
-  for (const [name, values] of Object.entries(graphql.arguments ?? {})) {
-    if (!isGraphqlName(name)) {
-      fail(
-        `graphql.arguments のキー ${JSON.stringify(name)} は GraphQL の名前ではありません。document に現れ得ないので、このキーの制約は何も制約しません。`,
-      );
-    }
-    if (values.length === 0) {
-      fail(
-        `graphql.arguments の ${name} が空の Listing です。受理集合が空になり、${never}。`,
-      );
-    }
-  }
-  return broken;
 }
 
 function isValidJsonPointer(pointer: string): boolean {
@@ -999,13 +1065,13 @@ function describeBodyCondition(body: NormalizedBody): string {
       `graphql ${graphql.at === "" ? "(root)" : graphql.at}`,
       `operations=${graphql.operations.join("|")}`,
     );
-    if (graphql.rootFields !== null) {
-      parts.push(`rootFields=${graphql.rootFields.join("|")}`);
-    }
-    for (const [name, values] of graphql.argumentValues) {
-      parts.push(
-        `arguments.${name}=${values.map((value) => JSON.stringify(value)).join("|")}`,
-      );
+    parts.push(`fieldPaths=${graphql.fieldPaths.join("|")}`);
+    for (const [path, args] of graphql.fieldArguments) {
+      for (const [name, values] of args) {
+        parts.push(
+          `fieldArguments.${path}.${name}=${values.map((value) => JSON.stringify(value)).join("|")}`,
+        );
+      }
     }
   }
   return parts.join(" ");

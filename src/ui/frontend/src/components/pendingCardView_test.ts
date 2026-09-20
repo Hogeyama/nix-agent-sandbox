@@ -158,15 +158,16 @@ describe("formatBodyDiagnostic", () => {
     );
   });
 
-  test("names the constrained argument, not its value, when it does not resolve", () => {
+  test("names the constrained path and argument, not its value, when it does not resolve", () => {
     expect(
       formatBodyDiagnostic({
-        code: "graphql-unresolved-argument",
+        code: "graphql-unresolved-field-argument",
         pointer: "/query",
+        fieldPath: "/repository",
         argument: "owner",
       }),
     ).toBe(
-      "GraphQL argument owner (document at /query) had a value that did not resolve to a string.",
+      "GraphQL argument /repository@owner (document at /query) had a value that did not resolve to a string.",
     );
   });
 });

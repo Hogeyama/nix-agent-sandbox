@@ -18,8 +18,12 @@
  * - 同じ名前の fragment を 2 度定義する
  * - 1 つの operation が同じ名前の変数を 2 度宣言する
  * - 未定義の fragment 名を spread する、または spread が循環する
- * - operation ごとに到達する fragment を展開した量が `limits.maxNodes` を
- *   超える (`fragmentReachers` を参照)
+ * - 全 operation から fragment を使用位置で展開した量が `limits.maxNodes` を
+ *   超える、または展開後の field の入れ子が `limits.maxDepth` を超える
+ *   (`collectSelectionFacts` を参照)
+ * - 到達する operation・変数定義・field・fragment に `@skip` / `@include`
+ *   以外の directive がある
+ * - 到達する 1 つの field が同じ名前の引数を 2 度持つ
  *
  * 深さは `SelectionSet` / `ListValue` / `ObjectValue` の入れ子の最大段数とし、
  * document 直下を 0 とする。この 3 種は graphql-js と graphql-core の AST に
@@ -40,7 +44,12 @@ import {
   visit,
 } from "graphql";
 import { resolvePointer } from "./semantics.ts";
-import type { GraphqlDocument, GraphqlOperation, JsonValue } from "./types.ts";
+import type {
+  GraphqlDocument,
+  GraphqlFieldOccurrence,
+  GraphqlOperation,
+  JsonValue,
+} from "./types.ts";
 
 export interface GraphqlParseLimits {
   /** 解析に使う token 数の天井 (`maxNodes` の GraphQL 版)。 */
@@ -54,10 +63,10 @@ export interface GraphqlParseLimits {
  *
  * `variables` は `$v` の解決に使う JSON 値 (通常はリクエストオブジェクトの
  * `variables` メンバ)。undefined はメンバが無いこと、null は JSON の null を
- * 表す。どちらか、またはキー `v` を持たないオブジェクトなら operation の
- * 宣言する既定値を使う。オブジェクトでない `variables` の下の変数と、値が
- * 文字列にならない変数は解決不能として `unresolvedArguments` に載る (規則は
- * `resolveArgumentValue`)。
+ * 表す。どちらか、またはキー `v` を持たないオブジェクトなら、その出現を含む
+ * operation が宣言する既定値を使う。オブジェクトでない `variables` の下の
+ * 変数と、値が文字列にならない変数は、その出現の `unresolvedArguments` に
+ * 載る (規則は `resolveArgumentValue`)。
  */
 export function parseGraphqlFacts(
   text: string,
@@ -94,14 +103,10 @@ export function parseGraphqlFacts(
   // 通す理由がないので「解析できない」とする。
   if (operations.length === 0) return null;
   if (!spreadsAreValid(document, fragments)) return null;
-  const reachers = fragmentReachers(document, fragments, limits.maxNodes);
-  if (reachers === null) return null;
+  const fields = collectSelectionFacts(document, fragments, variables, limits);
+  if (fields === null) return null;
 
-  return {
-    operations: [...new Set(operations)],
-    rootFields: [...collectRootFields(document, fragments)],
-    ...collectArguments(document, reachers, variables),
-  };
+  return { operations: [...new Set(operations)], fields };
 }
 
 /**
@@ -224,33 +229,110 @@ function spreadNames(node: ASTNode): readonly string[] {
   return names;
 }
 
+/** 検査が意味を決められる directive。他は document 全体を解析不能にする。 */
+const KNOWN_DIRECTIVES: ReadonlySet<string> = new Set(["skip", "include"]);
+
 /**
- * 各 operation 直下のフィールド名の全体。root の inline fragment と fragment
- * spread は同一 document 内の定義を引いて展開する。root より深い位置の
- * fragment は展開しない (root field 名に関与しないため)。
- *
- * 同じ fragment は高々 1 度展開する。root に同じ fragment が 2 度現れても
- * 得る名前は同じであり、これで連鎖・再帰の展開が有限回で終わることが
- * 保証される (循環は `spreadsAreValid` で既に退けてある)。
+ * 出現 1 件が予算 1 で保持してよい経路のバイト数。`collectSelectionFacts` の
+ * 経路課金の単位であり、Python 側の `_GRAPHQL_PATH_CHARGE_UNIT` と同じ値で
+ * なければならない (課金が違えば同じ document で片側だけが null になる)。
+ * GraphQL の Name は `[_A-Za-z][_0-9A-Za-z]*` の ASCII なので、経路の
+ * 文字数 = UTF-16 単位数 = バイト数であり、両側の `length` / `len` は一致する。
  */
-function collectRootFields(
+const PATH_CHARGE_UNIT = 64;
+
+/**
+ * 全 operation の selection を使用位置で展開し、field の出現を 1 件ずつ
+ * document 順 (operation の定義順・selection の記述順・親が子より先) で返す。
+ * 展開しきれない document は null (解析できない) であり、途中までの出現を
+ * 返さない。
+ *
+ * fragment 名で「展開済み」と扱ってはならない。同じ fragment が別の親の下に
+ * 現れれば、その使用位置の経路で改めて検査する必要がある (spec「Alias、
+ * fragment、operation」)。循環は `spreadsAreValid` が既に退けてあるので展開は
+ * 停止するが、ダイヤモンド状の spread は展開量が入力の大きさに対して指数的に
+ * なり得る。そこで予算を持つ。`limits.maxNodes` を document 全体の上限として、
+ * 次のそれぞれを 1 として課金する。重複をまとめる前に課金するので、展開が
+ * 爆発する document は出現を作り切る前に null になる。
+ *
+ * - 取り出した selection (field / inline fragment / fragment spread) 1 つ
+ * - 走査した directive 1 つ (operation・変数定義・selection・使用される
+ *   fragment 定義のいずれに付いていても、到達するたびに)
+ * - 評価した引数の出現 1 つ
+ * - 出現に載せる経路の `PATH_CHARGE_UNIT` バイト (`floor(len / 64)`)
+ *
+ * 前半 2 つと後半 2 つは、どちらも「1 課金の裏で任意量の仕事をさせない」
+ * ための課金である。ここで課金しないと次が成り立ってしまう:
+ * directive は 1 つの visit がいくつでも走査でき、しかも spread で同じ
+ * ノードに何度到達しても走査し直す。経路は Name が 1 token でいくら長くも
+ * できるので、出現ごとに新しく作る文字列の長さが body の大きさだけで決まる。
+ * どちらも小さな body で大量の CPU / メモリを使わせる道になる。
+ *
+ * この課金が保証する不変条件 (どちらも document 1 件・解析 1 回あたり):
+ *
+ * - 走査する directive の総数 ≤ `maxNodes`。
+ * - 作って保持する経路の総バイト数 ≤ `PATH_CHARGE_UNIT` × `maxNodes`
+ *   (出現 1 件の課金は `1 + floor(len/64) ≥ len/64`)。既定値では
+ *   200_000 × 64 = 12.8 MB が上限。
+ *
+ * 展開後の field の入れ子段数にも `limits.maxDepth` を適用する (fragment
+ * 越しの深さは token 数や AST の段数では抑えられない)。
+ */
+function collectSelectionFacts(
   document: DocumentNode,
   fragments: ReadonlyMap<string, FragmentDefinitionNode>,
-): ReadonlySet<string> {
-  const fields = new Set<string>();
-  const expanded = new Set<string>();
-  // document 順を保つため、深さ優先で位置ごとに進める反復イテレーション。
+  variables: JsonValue | undefined,
+  limits: GraphqlParseLimits,
+): readonly GraphqlFieldOccurrence[] | null {
   interface Frame {
     selections: readonly SelectionNode[];
     index: number;
+    /** この selection の親 field までの経路 (root なら空文字列)。 */
+    path: string;
+    /** 親 field の入れ子段数 (root 直下の field が 1 になる)。 */
+    depth: number;
+    /** この使用位置を含む operation の変数の既定値。 */
+    defaults: VariableDefaults;
   }
+
+  const fields: GraphqlFieldOccurrence[] = [];
   const stack: Frame[] = [];
-  for (const definition of document.definitions) {
-    if (definition.kind === Kind.OPERATION_DEFINITION) {
-      stack.push({ selections: definition.selectionSet.selections, index: 0 });
+  let charged = 0;
+  /**
+   * directive を 1 つずつ課金しながら既知かどうかを見る。false は「未知の
+   * directive がある」か「予算超過」で、どちらも文書全体が null なので
+   * 呼び出し側は区別しない。
+   */
+  const chargeDirectives = (
+    directives:
+      | readonly { readonly name: { readonly value: string } }[]
+      | undefined,
+  ): boolean => {
+    for (const directive of directives ?? []) {
+      charged += 1;
+      if (charged > limits.maxNodes) return false;
+      if (!KNOWN_DIRECTIVES.has(directive.name.value)) return false;
     }
+    return true;
+  };
+
+  for (const definition of document.definitions) {
+    if (definition.kind !== Kind.OPERATION_DEFINITION) continue;
+    if (!chargeDirectives(definition.directives)) return null;
+    for (const variable of definition.variableDefinitions ?? []) {
+      if (!chargeDirectives(variable.directives)) return null;
+    }
+    stack.push({
+      selections: definition.selectionSet.selections,
+      index: 0,
+      path: "",
+      depth: 0,
+      defaults: variableDefaults(definition),
+    });
   }
+  // 反復スタックの先頭から処理するので、document 順に並べるには逆順に積む。
   stack.reverse();
+
   while (stack.length > 0) {
     const frame = stack[stack.length - 1] as Frame;
     if (frame.index >= frame.selections.length) {
@@ -259,18 +341,87 @@ function collectRootFields(
     }
     const selection = frame.selections[frame.index] as SelectionNode;
     frame.index += 1;
+    charged += 1;
+    if (charged > limits.maxNodes) return null;
+    if (!chargeDirectives(selection.directives)) return null;
+
     if (selection.kind === Kind.FIELD) {
-      fields.add(selection.name.value);
-    } else if (selection.kind === Kind.INLINE_FRAGMENT) {
-      stack.push({ selections: selection.selectionSet.selections, index: 0 });
-    } else {
-      const name = selection.name.value;
-      if (expanded.has(name)) continue;
-      expanded.add(name);
-      const fragment = fragments.get(name);
-      if (fragment !== undefined) {
-        stack.push({ selections: fragment.selectionSet.selections, index: 0 });
+      const depth = frame.depth + 1;
+      if (depth > limits.maxDepth) return null;
+      // alias は捨て、実際に取得される field 名だけを経路にする。
+      const path = `${frame.path}/${selection.name.value}`;
+      // 経路は出現ごとに新しく作る文字列で、そのまま出現に載る。GraphQL の
+      // Name はどれだけ長くても 1 token なので、visit 1 件 = 1 課金のままだと
+      // 小さな body で巨大な文字列を何万個も作らせることができる。長さに
+      // 応じて課金し、保持する経路の総量を予算で縛る (上の不変条件)。
+      charged += Math.floor(path.length / PATH_CHARGE_UNIT);
+      if (charged > limits.maxNodes) return null;
+      const argumentValues = new Map<string, string>();
+      const unresolvedArguments: string[] = [];
+      // 重複判定は補助の Set で行う (順序を持つ配列/Map への線形走査だと
+      // 1 field に N 個の引数がある document が O(N²) になる)。この Set は
+      // 出力に載らず、出力順は argumentValues (Map) / unresolvedArguments
+      // (配列) それぞれの追加順のまま変わらない。
+      const seenArgumentNames = new Set<string>();
+      for (const argument of selection.arguments ?? []) {
+        charged += 1;
+        if (charged > limits.maxNodes) return null;
+        const name = argument.name.value;
+        // 同じ名前の引数を 2 度持つ field は GraphQL として不正であり
+        // (UniqueArgumentNames)、どちらの値で実行されるか検査側で決め
+        // られないので解析できない。
+        if (seenArgumentNames.has(name)) return null;
+        seenArgumentNames.add(name);
+        const value = resolveArgumentValue(
+          argument.value,
+          variables,
+          frame.defaults,
+        );
+        if (value === undefined) unresolvedArguments.push(name);
+        else argumentValues.set(name, value);
       }
+      fields.push({
+        path,
+        leaf: selection.selectionSet === undefined,
+        // `argumentValues` を Map に集めて `Object.fromEntries` で書き出す
+        // ことで、引数名 `__proto__` も他の名前と同様のプレーンな own
+        // property になる (`{}` へのブラケット代入だと setter を踏んで
+        // 消える)。GraphQL の Name は `__proto__` を含め任意の識別子なので、
+        // これはリクエストが制御できる入力である。
+        argumentValues: Object.fromEntries(argumentValues),
+        unresolvedArguments,
+      });
+      if (selection.selectionSet !== undefined) {
+        stack.push({
+          selections: selection.selectionSet.selections,
+          index: 0,
+          path,
+          depth,
+          defaults: frame.defaults,
+        });
+      }
+    } else if (selection.kind === Kind.INLINE_FRAGMENT) {
+      // 型条件は経路の要素にならない。スキーマを持たないので、実行され
+      // ない分岐だと推測して除外もしない。
+      stack.push({
+        selections: selection.selectionSet.selections,
+        index: 0,
+        path: frame.path,
+        depth: frame.depth,
+        defaults: frame.defaults,
+      });
+    } else {
+      const fragment = fragments.get(selection.name.value);
+      // 未定義の spread は `spreadsAreValid` が既に退けてある。
+      if (fragment === undefined) return null;
+      if (!chargeDirectives(fragment.directives)) return null;
+      stack.push({
+        selections: fragment.selectionSet.selections,
+        index: 0,
+        path: frame.path,
+        depth: frame.depth,
+        defaults: frame.defaults,
+      });
     }
   }
   return fields;
@@ -306,117 +457,6 @@ function variableDefaults(
 }
 
 /**
- * fragment 名ごとに、その fragment に (spread を推移的に辿って) 到達する
- * operation の変数の既定値を、operation の document 順に並べて返す。
- *
- * 変数は operation ごとに定まるので、複数の operation から使われる fragment の
- * 引数は operation ごとに評価し直す必要がある。その評価と到達の走査の量は
- * operation 数と fragment の大きさの積になり得るので、各 operation が到達する
- * fragment 1 つにつき「1 + その fragment の引数ノード数 + その fragment が
- * spread する相異なる fragment の数」を数え、合計が `maxNodes` を超えたら
- * null (解析できない) を返す。spread 先は fragment ごとに重複を除いてから
- * 数えて辿るので、1 回の訪問の仕事はその訪問の課金を超えない。これで走査と
- * 評価の総量が、operation 自身の大きさ (token 数で抑えられる) と `maxNodes`
- * の和で抑えられる。
- */
-function fragmentReachers(
-  document: DocumentNode,
-  fragments: ReadonlyMap<string, FragmentDefinitionNode>,
-  maxNodes: number,
-): ReadonlyMap<string, readonly VariableDefaults[]> | null {
-  const adjacency = new Map<string, readonly string[]>();
-  const argumentCounts = new Map<string, number>();
-  for (const [name, fragment] of fragments) {
-    adjacency.set(name, [...new Set(spreadNames(fragment))]);
-    argumentCounts.set(name, countArguments(fragment));
-  }
-  const reachers = new Map<string, VariableDefaults[]>();
-  let charged = 0;
-  for (const definition of document.definitions) {
-    if (definition.kind !== Kind.OPERATION_DEFINITION) continue;
-    const defaults = variableDefaults(definition);
-    const seen = new Set<string>();
-    const stack = [...new Set(spreadNames(definition))];
-    while (stack.length > 0) {
-      const name = stack.pop() as string;
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const edges = adjacency.get(name) ?? [];
-      charged += 1 + (argumentCounts.get(name) ?? 0) + edges.length;
-      if (charged > maxNodes) return null;
-      const list = reachers.get(name);
-      if (list === undefined) reachers.set(name, [defaults]);
-      else list.push(defaults);
-      for (const next of edges) {
-        if (!seen.has(next)) stack.push(next);
-      }
-    }
-  }
-  return reachers;
-}
-
-function countArguments(node: ASTNode): number {
-  let count = 0;
-  visit(node, {
-    Argument() {
-      count += 1;
-    },
-  });
-  return count;
-}
-
-/**
- * document 中のすべての引数ノード (フィールド引数・directive 引数、深さを
- * 問わず、fragment definition 内も含む) を名前ごとに集める。値が文字列に
- * 解決できた出現は `argumentValues` に、1 つでも解決できなかった出現を持つ
- * 名前は `unresolvedArguments` に載る。両方に載る名前もあり得る。
- *
- * operation 内の引数はその operation の変数の既定値で評価する。fragment 内の
- * 引数は、到達する operation ごとに (document 順に) 評価し、その結果を
- * すべて集める。どの operation からも到達しない fragment の引数は既定値を
- * 持たないものとして `variables` だけで評価する。どの operation が実行
- * されるか (`operationName`) には依存しない。
- */
-function collectArguments(
-  document: DocumentNode,
-  reachers: ReadonlyMap<string, readonly VariableDefaults[]>,
-  variables: JsonValue | undefined,
-): {
-  readonly argumentValues: Readonly<Record<string, readonly string[]>>;
-  readonly unresolvedArguments: readonly string[];
-} {
-  const resolved = new Map<string, Set<string>>();
-  const unresolved = new Set<string>();
-  const unreachable: readonly (VariableDefaults | undefined)[] = [undefined];
-  for (const definition of document.definitions) {
-    let contexts = unreachable;
-    if (definition.kind === Kind.OPERATION_DEFINITION) {
-      contexts = [variableDefaults(definition)];
-    } else if (definition.kind === Kind.FRAGMENT_DEFINITION) {
-      contexts = reachers.get(definition.name.value) ?? unreachable;
-    }
-    visit(definition, {
-      Argument(node) {
-        const name = node.name.value;
-        for (const defaults of contexts) {
-          const value = resolveArgumentValue(node.value, variables, defaults);
-          if (value === undefined) {
-            unresolved.add(name);
-            continue;
-          }
-          const values = resolved.get(name);
-          if (values === undefined) resolved.set(name, new Set([value]));
-          else values.add(value);
-        }
-      },
-    });
-  }
-  const argumentValues: Record<string, readonly string[]> = {};
-  for (const [name, values] of resolved) argumentValues[name] = [...values];
-  return { argumentValues, unresolvedArguments: [...unresolved] };
-}
-
-/**
  * 引数の値を文字列に解決する。文字列リテラルはそのまま。`$v` は
  * `variables` の形で決まる:
  *
@@ -432,7 +472,7 @@ function collectArguments(
 function resolveArgumentValue(
   value: ValueNode,
   variables: JsonValue | undefined,
-  defaults: VariableDefaults | undefined,
+  defaults: VariableDefaults,
 ): string | undefined {
   if (value.kind === Kind.STRING) return value.value;
   if (value.kind !== Kind.VARIABLE) return undefined;
@@ -451,6 +491,6 @@ function resolveArgumentValue(
       return typeof provided === "string" ? provided : undefined;
     }
   }
-  const fallback = defaults?.get(name);
+  const fallback = defaults.get(name);
   return fallback?.kind === Kind.STRING ? fallback.value : undefined;
 }

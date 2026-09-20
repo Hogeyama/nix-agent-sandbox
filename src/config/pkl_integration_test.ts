@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
+import { resolveAuthzConfig } from "../network/authz/resolve.ts";
 import { loadConfig } from "./load.ts";
 import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
 
@@ -586,3 +587,164 @@ profiles {
     },
   );
 }
+
+/**
+ * spec「設定管理者が書くもの」の Pkl 例を実際に評価し、解決済みドキュメントまで
+ * 新しい語彙が欠けずに届くことを確かめる。
+ *
+ * Pkl → loadConfig → resolveAuthzConfig の 3 段のどこか 1 つが旧語彙のままだと
+ * 制約は黙って落ちる。wire に載る JSON をここで固定するのは、addon がキーの
+ * 過不足を検証する相手がこの JSON だからである。
+ */
+test.skipIf(!hasPkl)(
+  "pkl: GraphQL の経路条件が解決済みドキュメントまで欠けずに届く",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["github"] {
+          targets { "api.github.com" }
+          fallback = "review"
+          rules {
+            ["graphql.read"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body { format = "json" }
+              }
+              onMatch = "allow"
+              onIndeterminate = "review"
+              expect {
+                new BodyExpect {
+                  graphql {
+                    operations { "query" }
+                    fieldPaths {
+                      "/repository/nameWithOwner"
+                      "/repository/issues/nodes/body"
+                      "/repository/issues/nodes/comments/nodes/body"
+                      "/repository/issues/pageInfo/endCursor"
+                      "/repository/issues/pageInfo/hasNextPage"
+                      "/repository/object/text"
+                      "/organization/login"
+                      "/organization/membersWithRole/nodes/login"
+                    }
+                    fieldArguments {
+                      ["/repository"] { ["owner"] { "my-org" } }
+                      ["/organization"] { ["login"] { "my-org" } }
+                    }
+                  }
+                  onViolation = "review"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-graphql-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const profile = (await loadConfig({ startDir: tmpDir })).profiles.dev;
+      const outcome = resolveAuthzConfig({
+        secrets: profile.secrets,
+        mask: profile.mask,
+        network: profile.network,
+      });
+      expect(outcome.diagnostics).toEqual([]);
+      const expects = outcome.document?.scopes[0]?.rules[0]?.expect;
+      // JSON へ往復させる。ファイルに書いて addon が読む形そのものを見る。
+      expect(JSON.parse(JSON.stringify(expects))).toEqual([
+        {
+          kind: "body",
+          onViolation: "review",
+          equals: {},
+          oneOf: {},
+          graphql: {
+            at: "/query",
+            operations: ["query"],
+            fieldPaths: [
+              "/repository/nameWithOwner",
+              "/repository/issues/nodes/body",
+              "/repository/issues/nodes/comments/nodes/body",
+              "/repository/issues/pageInfo/endCursor",
+              "/repository/issues/pageInfo/hasNextPage",
+              "/repository/object/text",
+              "/organization/login",
+              "/organization/membersWithRole/nodes/login",
+            ],
+            fieldArguments: {
+              "/repository": { owner: ["my-org"] },
+              "/organization": { login: ["my-org"] },
+            },
+          },
+        },
+      ]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+/**
+ * 旧語彙は Pkl の時点で止める。`rootFields` / 全域 `arguments` は
+ * `GraphqlMatch` に存在しないので、Schema.pkl の型検査が読み替えも補完もせずに
+ * 落とす。TypeScript の検査まで降りてこない層でも塞がっていることを見る。
+ */
+test.skipIf(!hasPkl)(
+  "pkl: 旧 rootFields / 全域 arguments を Schema.pkl が拒む",
+  async () => {
+    for (const legacy of [
+      'rootFields { "repository" }',
+      'arguments { ["owner"] { "my-org" } }',
+    ]) {
+      const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["github"] {
+          targets { "api.github.com" }
+          rules {
+            ["graphql"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body {
+                  format = "json"
+                  graphql {
+                    operations { "query" }
+                    fieldPaths { "/viewer/login" }
+                    ${legacy}
+                  }
+                }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-graphql-old-"));
+      try {
+        await setupNasDir(tmpDir, configPkl);
+        await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
+          /pkl eval exited with code/,
+        );
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    }
+  },
+);

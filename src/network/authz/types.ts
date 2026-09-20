@@ -30,15 +30,29 @@ export interface GraphqlMatch {
   readonly at?: string;
   /** 許す operation の種別。 */
   readonly operations: readonly GraphqlOperation[];
-  /** 許す root field 名。省略時は制約しない。 */
-  readonly rootFields?: readonly string[];
   /**
-   * 引数名ごとに許す文字列の集合。省略時は制約しない。変数参照の引数は兄弟の
-   * `variables` (無いか null ならその operation の既定値) で解決し、
-   * `variables` がオブジェクトでも null でもなければ解決できない (規則は
+   * 取得を許す**末端**フィールドの経路。必須・非空。
+   *
+   * `/` 始まりで、各要素は GraphQL の Name (`[_A-Za-z][_0-9A-Za-z]*`)。
+   * JSON Pointer ではないので escape も index も持たず、alias と型条件も含まない
+   * (`graphql_selection.ts` の `isGraphqlFieldPath`)。子を持つ field はここに
+   * 挙げた経路の真の接頭辞でなければならず、子を持たない field は完全一致を
+   * 要する。`*` / `**` は無い。経路を制約しない GraphQL 条件は提供しない。
+   */
+  readonly fieldPaths: readonly string[];
+  /**
+   * 経路ごとの必須引数。「フィールド経路 → 引数名 → 許す文字列」。省略時は
+   * 制約しない。キーは許可末端かその途中の経路でなければならない。
+   *
+   * その経路の field が現れたとき、名指しした引数が**その出現に存在し**、解決後の
+   * 文字列が集合に含まれることを要求する。field 自体の出現は要求しない。変数参照の
+   * 引数は兄弟の `variables` (無いか null ならその出現を含む operation の既定値) で
+   * 解決し、`variables` がオブジェクトでも null でもなければ解決できない (規則は
    * `graphql.ts` の `resolveArgumentValue`)。
    */
-  readonly arguments?: Readonly<Record<string, readonly string[]>>;
+  readonly fieldArguments?: Readonly<
+    Record<string, Readonly<Record<string, readonly string[]>>>
+  >;
 }
 
 export interface BodyMatch {
@@ -88,20 +102,36 @@ export type RequestBody =
     };
 
 /**
+ * GraphQL document 中の field の 1 つの出現 (fragment を使用位置で展開した後)。
+ *
+ * 同じ経路の出現もまとめずに 1 件ずつ持つ。引数は出現ごと・その出現を含む
+ * operation の文脈 (変数の既定値) で解決する。
+ */
+export interface GraphqlFieldOccurrence {
+  /**
+   * operation の root からの field 名の経路 (`/repository/issues/nodes`)。
+   * alias・型条件・fragment 名は含まない。
+   */
+  readonly path: string;
+  /** 子の selection set を持たない field か。 */
+  readonly leaf: boolean;
+  /** この出現で文字列に解決できた引数 (引数名 → 値)。 */
+  readonly argumentValues: Readonly<Record<string, string>>;
+  /** この出現で文字列に解決できなかった引数名 (記述順)。 */
+  readonly unresolvedArguments: readonly string[];
+}
+
+/**
  * GraphQL document から判定に必要な事実だけを取り出したもの。
  *
- * `operations` と `rootFields` は空にならない。実行可能な document は
- * 最低 1 つの operation を持ち、operation は最低 1 つの root field を持つ。
- * この前提が `operations` / `rootFields` の互いに素な集合を「交差しない」と
- * 結論してよい根拠になっている (relation.ts を参照)。
+ * `operations` と `fields` は空にならない。実行可能な document は最低 1 つの
+ * operation を持ち、selection set は空にならないので末端の field を最低 1 つ
+ * 持つ。`fields` は operation の定義順、各 selection の記述順の深さ優先
+ * (親が子より先) に並ぶ。
  */
 export interface GraphqlDocument {
   readonly operations: readonly GraphqlOperation[];
-  readonly rootFields: readonly string[];
-  /** 引数名 → document 中に現れたその引数の値の全体。 */
-  readonly argumentValues: Readonly<Record<string, readonly string[]>>;
-  /** 値を文字列に解決できなかった出現を 1 つ以上持つ引数名。 */
-  readonly unresolvedArguments: readonly string[];
+  readonly fields: readonly GraphqlFieldOccurrence[];
 }
 
 export type HostPattern =

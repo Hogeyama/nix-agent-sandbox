@@ -602,10 +602,19 @@ profiles {
                 new BodyExpect {
                   graphql {
                     operations { "query" }
-                    rootFields { "repository"; "viewer" }
-                    arguments {
-                      ["owner"] { "my-org" }
-                      ["login"] { "my-org" }
+                    fieldPaths {
+                      "/repository/nameWithOwner"
+                      "/repository/issues/nodes/body"
+                      "/repository/issues/nodes/comments/nodes/body"
+                      "/repository/issues/pageInfo/endCursor"
+                      "/repository/issues/pageInfo/hasNextPage"
+                      "/repository/object/text"
+                      "/organization/login"
+                      "/organization/membersWithRole/nodes/login"
+                    }
+                    fieldArguments {
+                      ["/repository"] { ["owner"] { "my-org" } }
+                      ["/organization"] { ["login"] { "my-org" } }
                     }
                   }
                   onViolation = "review"
@@ -618,7 +627,11 @@ profiles {
                 paths { "/graphql" }
                 body {
                   format = "json"
-                  graphql { at = "/query"; operations { "mutation" } }
+                  graphql {
+                    at = "/query"
+                    operations { "mutation" }
+                    fieldPaths { "/addStar/clientMutationId" }
+                  }
                 }
               }
               onMatch = "deny"
@@ -642,8 +655,20 @@ profiles {
           graphql: {
             at: "/query",
             operations: ["query"],
-            rootFields: ["repository", "viewer"],
-            arguments: { owner: ["my-org"], login: ["my-org"] },
+            fieldPaths: [
+              "/repository/nameWithOwner",
+              "/repository/issues/nodes/body",
+              "/repository/issues/nodes/comments/nodes/body",
+              "/repository/issues/pageInfo/endCursor",
+              "/repository/issues/pageInfo/hasNextPage",
+              "/repository/object/text",
+              "/organization/login",
+              "/organization/membersWithRole/nodes/login",
+            ],
+            fieldArguments: {
+              "/repository": { owner: ["my-org"] },
+              "/organization": { login: ["my-org"] },
+            },
           },
         },
       ]);
@@ -651,7 +676,12 @@ profiles {
         format: "json",
         equals: {},
         oneOf: {},
-        graphql: { at: "/query", operations: ["mutation"], arguments: {} },
+        graphql: {
+          at: "/query",
+          operations: ["mutation"],
+          fieldPaths: ["/addStar/clientMutationId"],
+          fieldArguments: {},
+        },
       });
     });
   },

@@ -171,7 +171,12 @@ const validBodyDiagnostics = [
   { code: "non-scalar-at-pointer", pointer: "/messages/0/content" },
   { code: "graphql-unparseable", pointer: "/query" },
   { code: "graphql-query-string", pointer: "/query" },
-  { code: "graphql-unresolved-argument", pointer: "/query", argument: "owner" },
+  {
+    code: "graphql-unresolved-field-argument",
+    pointer: "/query",
+    fieldPath: "/repository",
+    argument: "owner",
+  },
 ] as const;
 
 for (const diagnostic of validBodyDiagnostics) {
@@ -268,9 +273,34 @@ const invalidBodyDiagnostics = [
     },
   ],
   [
-    "an unresolved-argument diagnostic without its argument",
+    "an unresolved-field-argument diagnostic without its field path",
     {
-      "policy.json": { code: "graphql-unresolved-argument", pointer: "/query" },
+      "policy.json": {
+        code: "graphql-unresolved-field-argument",
+        pointer: "/query",
+        argument: "owner",
+      },
+    },
+  ],
+  [
+    "an unresolved-field-argument diagnostic without its argument",
+    {
+      "policy.json": {
+        code: "graphql-unresolved-field-argument",
+        pointer: "/query",
+        fieldPath: "/repository",
+      },
+    },
+  ],
+  // 旧診断は未知の variant として拒む。読み替えも補完もしない。
+  [
+    "the pre-field-path unresolved-argument diagnostic",
+    {
+      "policy.json": {
+        code: "graphql-unresolved-argument",
+        pointer: "/query",
+        argument: "owner",
+      },
     },
   ],
 ] as const;

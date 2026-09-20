@@ -204,7 +204,7 @@ _LIMIT_CEILINGS = {
 _ACTIONS = frozenset(("allow", "review", "deny"))
 _BODY_FORMATS = frozenset(("none", "json", "opaque"))
 _GRAPHQL_CONDITION_KEYS = frozenset((
-    "at", "operations", "rootFields", "arguments",
+    "at", "operations", "fieldPaths", "fieldArguments",
 ))
 _GRAPHQL_OPERATIONS = frozenset(("query", "mutation", "subscription"))
 _VIOLATION_ACTIONS = frozenset(("deny", "review", "allow"))
@@ -449,20 +449,30 @@ def _is_valid_value_conditions(equals: object, one_of: object) -> bool:
 
 
 def _is_valid_graphql_condition(value: object) -> bool:
-    """A graphql condition as the host resolves it: `at` defaulted, sets
-    deduplicated, and every key present (`rootFields` null when it does not
-    constrain). An empty set would make the condition unsatisfiable, and a
-    root field or argument name that is not a GraphQL Name can never occur
-    in a document; the host refuses both at session start, so one arriving
-    here is not a document the host wrote."""
+    """A graphql condition as the host resolves it: `at` defaulted, the sets
+    deduplicated, and all four keys present. The key set is exact, so the
+    pre-field-path shape (`rootFields` / global `arguments`) is refused here
+    just as this shape is refused by an addon that predates it: the contract
+    version stays 1 but is redefined, and a mixed pair must not start a
+    session.
+
+    The grammar mirrors `checkGraphqlCondition` in
+    src/network/authz/validate.ts. An empty `operations` / `fieldPaths` /
+    allowed-value set would make the condition unsatisfiable; `fieldPaths` is
+    required because a GraphQL condition that does not constrain the
+    selection is not offered; a path that is not a selection path and an
+    argument name that is not a GraphQL Name can never occur in a document;
+    and a `fieldArguments` key that is neither an allowed leaf nor on the way
+    to one constrains nothing. The host refuses all of these at session
+    start, so one arriving here is not a document the host wrote."""
     if value is None:
         return True
     if not _has_exact_keys(value, _GRAPHQL_CONDITION_KEYS):
         return False
     operations = value["operations"]
-    root_fields = value["rootFields"]
-    arguments = value["arguments"]
-    return (
+    field_paths = value["fieldPaths"]
+    field_arguments = value["fieldArguments"]
+    if not (
         _is_valid_json_pointer(value["at"])
         and isinstance(operations, list)
         and len(operations) > 0
@@ -470,15 +480,18 @@ def _is_valid_graphql_condition(value: object) -> bool:
             isinstance(op, str) and op in _GRAPHQL_OPERATIONS
             for op in operations
         )
-        and (
-            root_fields is None
-            or (
-                isinstance(root_fields, list)
-                and len(root_fields) > 0
-                and all(_is_graphql_name(field) for field in root_fields)
-            )
-        )
+        and isinstance(field_paths, list)
+        and len(field_paths) > 0
+        and all(_is_graphql_field_path(path) for path in field_paths)
+        and isinstance(field_arguments, dict)
+    ):
+        return False
+    reachable = set(field_paths) | _graphql_path_prefixes(field_paths)
+    return all(
+        _is_graphql_field_path(path)
+        and path in reachable
         and isinstance(arguments, dict)
+        and len(arguments) > 0
         and all(
             _is_graphql_name(name)
             and isinstance(allowed, list)
@@ -486,14 +499,40 @@ def _is_valid_graphql_condition(value: object) -> bool:
             and all(isinstance(item, str) for item in allowed)
             for name, allowed in arguments.items()
         )
+        for path, arguments in field_arguments.items()
     )
 
 
 _GRAPHQL_NAME = re.compile(r"[_A-Za-z][_0-9A-Za-z]*")
+# Mirrors FIELD_PATH in src/network/authz/graphql_selection.ts: one or more
+# `/` + GraphQL Name. No wildcard, no empty element, no trailing `/`, no
+# JSON Pointer escape, and case matters.
+_GRAPHQL_FIELD_PATH = re.compile(r"(?:/[A-Za-z_][0-9A-Za-z_]*)+")
 
 
 def _is_graphql_name(value: object) -> bool:
     return isinstance(value, str) and _GRAPHQL_NAME.fullmatch(value) is not None
+
+
+def _is_graphql_field_path(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and _GRAPHQL_FIELD_PATH.fullmatch(value) is not None
+    )
+
+
+def _graphql_path_prefixes(field_paths) -> set:
+    """The *proper* prefixes of the allowed leaves, i.e. the paths a field
+    with children may sit on. A leaf itself is not one: allowing
+    `/repository/issues/nodes/body` does not allow fetching other children of
+    `/repository`. Mirrors graphqlPathPrefixes."""
+    prefixes: set = set()
+    for leaf in field_paths:
+        end = leaf.find("/", 1)
+        while end != -1:
+            prefixes.add(leaf[:end])
+            end = leaf.find("/", end + 1)
+    return prefixes
 
 
 def _is_valid_limits(value: object) -> bool:
@@ -1763,39 +1802,42 @@ def _evaluate_body_expect(
     ends in its closing quote and a cut one in its digest), so no two
     (Pointer, outcome) pairs spell the same value.
 
-    GraphQL findings carry a short canonical fact (`rootField:node`,
-    `argument:owner=other-org`) and never an excerpt of the document: the
-    document is request text, and the approval card and the audit log get
-    only the fact that was refused. The document is analysed under this
-    rule's own limits, through the same per-request memo selection used.
+    GraphQL findings carry a short canonical fact
+    (`fieldPath:/repository/issues/nodes/body`,
+    `fieldArgument:/repository@owner=(not-allowed)`) and never an excerpt of
+    the document: the document is request text, and the approval card and the
+    audit log get only the fact that was refused. The document is analysed
+    under this rule's own limits, through the same per-request memo selection
+    used.
 
-    Four GraphQL facts do not name a value an approval could stand for: a
-    refused operation kind, a refused root field, a document that cannot be
-    analysed (kind `body-unavailable`) and a named argument whose value does
-    not resolve. Approving one mutation says nothing about another, and
-    approving one such document says nothing about a different one. A root
-    field is left out of `rootFields` (`search`, `node`) because what it
-    reads is not visible in the document, so approving one `node(id:)` says
-    nothing about the next either; widening root fields belongs in the
-    rule's `rootFields`, not in a session approval. Yet a fixed value
-    would make every later occurrence the same approval identity (rule,
-    expect position, value): one approval of `operation:mutation` would
-    then let every later mutation, `deleteRepository` included, through for
-    the rest of the session, which undoes the point of sending everything
-    but reads to a human; one approval of `rootField:node` would let every
-    later `node(id:)`, whatever it fetches, through; one approval would
-    cover any unanalysable
-    document, including a mutation nested past `maxDepth`; and
-    `argument:owner=(unresolved)` would also collide with a literal argument
-    spelled `(unresolved)`. So each of these carries a fresh random UUID as
-    its value, drawn once per fact per request, and an approval covers that
-    request only. What was refused is carried in the finding's `label`
-    instead (`operation:mutation`, `rootField:node`,
-    `document:(unanalysable)`, `argument:owner=(unresolved)`), which is
-    display text and not part of any identity; the excerpt stays null, as
-    for every other GraphQL finding. Only `argument:<name>=<value>`, a
-    literal value outside the allowed set, stays a fixed, rememberable
-    value.
+    No GraphQL fact names a value an approval could stand for, so every
+    GraphQL finding here carries a fresh random UUID as its value and an
+    approval of it covers that one request only. A fixed value would make
+    every later occurrence the same approval identity (rule, expect position,
+    value): one approval of `operation:mutation` would let every later
+    mutation, `deleteRepository` included, through for the rest of the
+    session; one approval of a refused selection path would let every later
+    request that walks it through, whatever repository or child selection it
+    reaches, which is exactly what the path condition exists to stop (spec,
+    A13); one approval would cover any unanalysable document, including a
+    mutation nested past `maxDepth`; and an argument fact spelled with a
+    fixed value would collide with a literal argument of the same spelling.
+    What was refused is carried in the finding's `label` instead
+    (`operation:mutation`, `document:(unanalysable)`, `fieldPath:<path>`,
+    `fieldArgument:<path>@<name>=(missing|unresolved|not-allowed)`), which is
+    display text and not part of any identity; the excerpt stays null.
+
+    The refused value of an argument is deliberately not in the label: the
+    argument fact names the reason only, so that the request's own strings
+    stay out of the approval card and the audit log. The paths and argument
+    names in a label come from the rule, but they still go through the mask
+    and the length cut like every other label.
+
+    A path violation is recorded once per refused leaf path, and an argument
+    violation once per (path, argument, reason): the occurrences are all
+    checked, and only the display is folded. Finding a refused prefix does
+    not stop the scan, so the other leaves of the same document are still
+    reported, up to `MAX_FINDINGS_PER_EXPECT`.
 
     A request whose URL has a query string (`query_string`) is one more such
     fact, and the only GraphQL finding it gets: the server may take the
@@ -1863,7 +1905,7 @@ def _evaluate_body_expect(
     elif condition is not None:
         at = condition["at"]
         _target, facts = _graphql_facts_at(parsed, at, limits, memo)
-        if facts is None:
+        if not _graphql_facts_are_valid(facts):
             record(
                 at, str(uuid.uuid4()), kind=FINDING_BODY_UNAVAILABLE,
                 label="document:(unanalysable)",
@@ -1877,35 +1919,8 @@ def _evaluate_body_expect(
                         at, str(uuid.uuid4()),
                         label=f"operation:{operation}",
                     )
-            # `rootFields` names each field once, so this is one finding, and
-            # one UUID, per refused root field per request.
-            root_fields = condition["rootFields"]
-            if root_fields is not None:
-                for field in facts["rootFields"]:
-                    if field not in root_fields:
-                        record(
-                            at, str(uuid.uuid4()),
-                            label=f"rootField:{field}",
-                        )
-            refused = []
-            unresolved = []
-            for name, allowed in condition["arguments"].items():
-                if name in facts["unresolvedArguments"]:
-                    unresolved.append(name)
-                refused.extend(
-                    f"argument:{name}={value}"
-                    for value in facts["argumentValues"].get(name, [])
-                    if value not in allowed
-                )
-            for value in refused:
-                record(at, _mask_json_string(value, patterns)[0])
-            # `unresolvedArguments` names each argument once, so this is one
-            # finding, and one UUID, per argument per request.
-            for name in unresolved:
-                record(
-                    at, str(uuid.uuid4()),
-                    label=f"argument:{name}=(unresolved)",
-                )
+            for label in _graphql_selection_violations(condition, facts):
+                record(at, str(uuid.uuid4()), label=label)
 
     if dropped:
         findings.append(_expect_finding(
@@ -2628,8 +2643,11 @@ def _evaluate_body_match_with_diagnostic(
 # - it defines two fragments with the same name
 # - an operation declares the same variable twice
 # - it spreads an undefined fragment, or fragment spreads form a cycle
-# - expanding, for each operation, every fragment it reaches costs more than
-#   maxNodes (see _graphql_fragment_reachers)
+# - expanding every operation's selection, with each fragment expanded at
+#   each use, costs more than maxNodes, or nests fields deeper than maxDepth
+#   (see _collect_graphql_selection)
+# - a directive other than @skip / @include is reachable
+# - one reachable field carries the same argument name twice
 #
 # Depth is the deepest nesting of SelectionSet / ListValue / ObjectValue
 # nodes counted from the document (depth 0), continuing through any other
@@ -2649,28 +2667,43 @@ _GRAPHQL_DEPTH_NODES = (
 
 _NO_GRAPHQL_VARIABLES = object()
 
+# Directives whose meaning the check can decide: both branches of a @skip or
+# @include are examined, so the condition does not change what is fetched.
+_KNOWN_GRAPHQL_DIRECTIVES = frozenset(("skip", "include"))
+
+# Path bytes one occurrence may hold per unit of budget, the charging unit of
+# _collect_graphql_selection. It must equal PATH_CHARGE_UNIT in
+# src/network/authz/graphql.ts: a different charge makes one side return None
+# for a document the other side accepts. A GraphQL Name is ASCII
+# ([_A-Za-z][_0-9A-Za-z]*), so a path's character count, UTF-16 unit count and
+# byte count are the same number and Python len() matches JavaScript .length.
+_GRAPHQL_PATH_CHARGE_UNIT = 64
+
 
 class _GraphqlParsed:
     """The variable-independent part of one parsed document.
 
-    Kept in the per-request memo under (text, max_tokens). maxDepth and the
-    variables differ between rules and `at` positions, so they are applied
-    on each lookup rather than baked into the cached value."""
+    Kept in the per-request memo under (text, max_tokens). maxDepth, the
+    limits the selection walk spends, and the variables differ between rules
+    and `at` positions, so the fields are built on each lookup
+    (_collect_graphql_selection) rather than cached here: a resolved field
+    belongs to one set of variables and one candidate's limits, and sharing
+    it by document text alone would answer a rule with another rule's
+    facts."""
 
     __slots__ = (
-        "depth", "valid", "operations", "root_fields", "arguments",
+        "depth", "valid", "operations", "operation_nodes", "fragments",
     )
 
-    def __init__(self, depth, valid, operations, root_fields, arguments):
+    def __init__(self, depth, valid, operations, operation_nodes, fragments):
         self.depth = depth
         self.valid = valid
+        # Operation kinds, deduplicated in document order.
         self.operations = operations
-        self.root_fields = root_fields
-        # (name, value node, contexts) for every argument node, in source
-        # order. contexts lists the variable defaults of each operation the
-        # node is evaluated under (see _graphql_fragment_reachers); a node in
-        # a fragment no operation reaches has the single context None.
-        self.arguments = arguments
+        # The operation definition nodes and fragment name -> definition, the
+        # unresolved structure the selection walk expands.
+        self.operation_nodes = operation_nodes
+        self.fragments = fragments
 
 
 def _graphql_children(node) -> list:
@@ -2690,11 +2723,10 @@ def _graphql_children(node) -> list:
 
 
 def _walk_graphql_definition(definition):
-    """Return (depth, argument nodes, fragment spread names) under one
-    definition. A definition itself is not a depth node, so walking each
-    definition from 0 equals walking the document from 0."""
+    """Return (depth, fragment spread names) under one definition. A
+    definition itself is not a depth node, so walking each definition from 0
+    equals walking the document from 0."""
     deepest = 0
-    arguments = []
     spreads = []
     stack = [(definition, 0)]
     while stack:
@@ -2703,17 +2735,11 @@ def _walk_graphql_definition(definition):
             depth += 1
             if depth > deepest:
                 deepest = depth
-        if isinstance(node, graphql.language.ArgumentNode):
-            arguments.append(node)
-        elif isinstance(node, graphql.language.FragmentSpreadNode):
+        if isinstance(node, graphql.language.FragmentSpreadNode):
             spreads.append(node.name.value)
         for child in _graphql_children(node):
             stack.append((child, depth))
-    # graphql-core's node `keys` do not follow source order (a field lists
-    # its directives before its arguments), so order by source position to
-    # get document order the way graphql-js's visitor yields it.
-    arguments.sort(key=lambda argument: argument.loc.start)
-    return deepest, arguments, spreads
+    return deepest, spreads
 
 
 def _graphql_spreads_are_valid(
@@ -2749,16 +2775,84 @@ def _graphql_spreads_are_valid(
     return True
 
 
-def _graphql_root_fields(operations: list, fragments: dict) -> list:
-    """Field names directly under each operation, expanding root inline
-    fragments and fragment spreads (each fragment at most once). Fragments
-    deeper than the root are not expanded: they name no root field."""
-    fields = {}
-    expanded = set()
-    stack = [
-        [operation.selection_set.selections, 0]
-        for operation in reversed(operations)
-    ]
+def _collect_graphql_selection(
+    operation_nodes: list, fragments: dict, variables, limits: dict,
+):
+    """Every field occurrence of the document, expanded at its use, in
+    document order (operation definition order, selection source order,
+    parent before child); None when the document cannot be walked.
+
+    A fragment name must not be treated as "already expanded": the same
+    fragment under another parent is another path and has to be checked
+    there too (spec, "Alias、fragment、operation"). Cycles are already
+    refused (_graphql_spreads_are_valid) so the walk terminates, but
+    diamond-shaped spreads expand exponentially in the size of the input.
+    Hence the budget, with maxNodes as the cap for the whole document and 1
+    charged for each of:
+
+    - one selection taken off the stack (field, inline fragment, spread);
+    - one directive scanned, wherever it sits (operation, variable
+      definition, selection, or a fragment definition being used) and every
+      time that node is reached again;
+    - one argument occurrence evaluated;
+    - _GRAPHQL_PATH_CHARGE_UNIT bytes of the path stored on an occurrence,
+      i.e. len(path) // 64.
+
+    Charging before duplicates are folded is what stops a document that
+    explodes. The last two items exist so that no unit of budget can buy an
+    unbounded amount of work: a single visit may carry any number of
+    directives and rescans them every time a spread reaches the node again,
+    and a Name is one token however long, so the per-occurrence path string
+    would otherwise be bounded only by the body limit. Either one turns a
+    small body into large CPU or memory use in this process.
+
+    The invariants this buys, per document per analysis:
+
+    - directives scanned <= maxNodes;
+    - total path bytes built and held <= 64 * maxNodes,
+      because one occurrence is charged 1 + len(path)//64 >= len(path)/64
+      (12.8 MB at the default maxNodes of 200_000).
+
+    maxDepth applies to the nesting of the expanded fields as well: depth
+    through fragments is bounded neither by the token count nor by the AST
+    nesting. Mirrors collectSelectionFacts."""
+    max_nodes = limits["maxNodes"]
+    max_depth = limits["maxDepth"]
+    fields = []
+    charged = 0
+
+    def charge_directives(node) -> bool:
+        """Charge and check the directives of one node. False means either
+        an unknown directive (its meaning is not known here, so what the
+        document fetches is not known either) or an exhausted budget; both
+        make the whole document unparseable, so callers do not tell them
+        apart."""
+        nonlocal charged
+        for directive in node.directives or ():
+            charged += 1
+            if charged > max_nodes:
+                return False
+            if directive.name.value not in _KNOWN_GRAPHQL_DIRECTIVES:
+                return False
+        return True
+
+    # Frames of (selections, index, path, depth, defaults): the path and the
+    # variable defaults of the operation this use sits in.
+    stack = []
+    for operation in operation_nodes:
+        if not charge_directives(operation):
+            return None
+        for variable in operation.variable_definitions or ():
+            if not charge_directives(variable):
+                return None
+        stack.append([
+            operation.selection_set.selections, 0, "", 0,
+            _graphql_variable_defaults(operation),
+        ])
+    # The iterative stack is taken from the top, so document order needs it
+    # pushed in reverse.
+    stack.reverse()
+
     while stack:
         frame = stack[-1]
         if frame[1] >= len(frame[0]):
@@ -2766,19 +2860,80 @@ def _graphql_root_fields(operations: list, fragments: dict) -> list:
             continue
         selection = frame[0][frame[1]]
         frame[1] += 1
+        charged += 1
+        if charged > max_nodes:
+            return None
+        if not charge_directives(selection):
+            return None
+
         if isinstance(selection, graphql.language.FieldNode):
-            fields[selection.name.value] = None
+            depth = frame[3] + 1
+            if depth > max_depth:
+                return None
+            # The alias is dropped: the path names the field that is fetched.
+            path = frame[2] + "/" + selection.name.value
+            # The path is a fresh string per occurrence and is stored on it.
+            # A Name is one token however long, so at 1 charge per visit a
+            # small body could build tens of thousands of huge strings.
+            # Charging by length bounds what is held (see the invariants).
+            charged += len(path) // _GRAPHQL_PATH_CHARGE_UNIT
+            if charged > max_nodes:
+                return None
+            argument_values = {}
+            unresolved = []
+            # Duplicate detection uses this auxiliary set, not a scan of
+            # `unresolved`: that list is ordered for output only, and
+            # scanning it per argument makes one field with N arguments cost
+            # O(N^2).
+            seen = set()
+            for argument in selection.arguments or ():
+                charged += 1
+                if charged > max_nodes:
+                    return None
+                name = argument.name.value
+                # Two arguments of one name on a field are invalid GraphQL
+                # (UniqueArgumentNames) and the check cannot decide which
+                # value would run, so the document is unparseable.
+                if name in seen:
+                    return None
+                seen.add(name)
+                resolved = _resolve_graphql_argument(
+                    argument.value, variables, frame[4]
+                )
+                if resolved is None:
+                    unresolved.append(name)
+                else:
+                    argument_values[name] = resolved
+            fields.append({
+                "path": path,
+                "leaf": selection.selection_set is None,
+                "argumentValues": argument_values,
+                "unresolvedArguments": unresolved,
+            })
+            if selection.selection_set is not None:
+                stack.append([
+                    selection.selection_set.selections, 0, path, depth,
+                    frame[4],
+                ])
         elif isinstance(selection, graphql.language.InlineFragmentNode):
-            stack.append([selection.selection_set.selections, 0])
-        elif isinstance(selection, graphql.language.FragmentSpreadNode):
-            name = selection.name.value
-            if name in expanded:
-                continue
-            expanded.add(name)
-            fragment = fragments.get(name)
-            if fragment is not None:
-                stack.append([fragment.selection_set.selections, 0])
-    return list(fields)
+            # A type condition is not a path element, and without a schema
+            # no branch is assumed not to run.
+            stack.append([
+                selection.selection_set.selections, 0, frame[2], frame[3],
+                frame[4],
+            ])
+        else:
+            fragment = fragments.get(selection.name.value)
+            # An undefined spread is already refused above.
+            if fragment is None:
+                return None
+            if not charge_directives(fragment):
+                return None
+            stack.append([
+                fragment.selection_set.selections, 0, frame[2], frame[3],
+                frame[4],
+            ])
+    return fields
 
 
 def _graphql_variable_defaults(operation) -> dict:
@@ -2805,48 +2960,6 @@ def _graphql_declares_variable_twice(operation) -> bool:
     return False
 
 
-def _graphql_fragment_reachers(
-    operations: list, operation_spreads: list, fragment_spreads: dict,
-    fragment_argument_counts: dict, max_tokens: int,
-) -> Optional[dict]:
-    """Fragment name -> the variable defaults of every operation that
-    reaches it through spreads, in operation document order; None when the
-    expansion is over budget.
-
-    Variables belong to an operation, so an argument in a fragment several
-    operations use is evaluated once per operation. That work, and the walk
-    that finds it, is the product of operations and fragment size, so each
-    (operation, reached fragment) pair is charged 1 + the fragment's
-    argument count + the number of distinct fragments it spreads, and a
-    document whose charge exceeds maxNodes is unparseable. Spread targets
-    are deduplicated per fragment before they are charged and followed, so
-    no visit does more work than it is charged. Mirrors fragmentReachers."""
-    fragment_edges = {
-        name: list(dict.fromkeys(spreads))
-        for name, spreads in fragment_spreads.items()
-    }
-    reachers = {}
-    charged = 0
-    for operation, spreads in zip(operations, operation_spreads):
-        defaults = _graphql_variable_defaults(operation)
-        seen = set()
-        stack = list(dict.fromkeys(spreads))
-        while stack:
-            name = stack.pop()
-            if name in seen:
-                continue
-            seen.add(name)
-            edges = fragment_edges.get(name, ())
-            charged += 1 + fragment_argument_counts.get(name, 0) + len(edges)
-            if charged > max_tokens:
-                return None
-            reachers.setdefault(name, []).append(defaults)
-            for following in edges:
-                if following not in seen:
-                    stack.append(following)
-    return reachers
-
-
 def _parse_graphql_document(text: str, max_tokens: int):
     """Parse and summarise one document; None when it does not parse."""
     try:
@@ -2855,24 +2968,17 @@ def _parse_graphql_document(text: str, max_tokens: int):
         return None
 
     depth = 0
-    walked = []
     all_spreads = []
     operations = []
-    operation_spreads = []
     fragments = {}
     fragment_spreads = {}
-    fragment_argument_counts = {}
     duplicate_fragment = False
     for definition in document.definitions:
-        definition_depth, definition_arguments, spreads = (
-            _walk_graphql_definition(definition)
-        )
+        definition_depth, spreads = _walk_graphql_definition(definition)
         depth = max(depth, definition_depth)
-        walked.append((definition, definition_arguments))
         all_spreads.extend(spreads)
         if isinstance(definition, graphql.language.OperationDefinitionNode):
             operations.append(definition)
-            operation_spreads.append(spreads)
         elif isinstance(definition, graphql.language.FragmentDefinitionNode):
             name = definition.name.value
             # Two fragments of one name are invalid GraphQL
@@ -2882,7 +2988,6 @@ def _parse_graphql_document(text: str, max_tokens: int):
                 duplicate_fragment = True
             fragments[name] = definition
             fragment_spreads[name] = spreads
-            fragment_argument_counts[name] = len(definition_arguments)
 
     valid = (
         bool(operations)
@@ -2890,28 +2995,6 @@ def _parse_graphql_document(text: str, max_tokens: int):
         and not any(map(_graphql_declares_variable_twice, operations))
         and _graphql_spreads_are_valid(all_spreads, fragment_spreads)
     )
-    reachers = {}
-    if valid:
-        found = _graphql_fragment_reachers(
-            operations, operation_spreads, fragment_spreads,
-            fragment_argument_counts, max_tokens,
-        )
-        if found is None:
-            valid = False
-        else:
-            reachers = found
-    unreachable = [None]
-    arguments = []
-    for definition, definition_arguments in walked:
-        contexts = unreachable
-        if isinstance(definition, graphql.language.OperationDefinitionNode):
-            contexts = [_graphql_variable_defaults(definition)]
-        elif isinstance(definition, graphql.language.FragmentDefinitionNode):
-            contexts = reachers.get(definition.name.value, unreachable)
-        arguments.extend(
-            (argument.name.value, argument.value, contexts)
-            for argument in definition_arguments
-        )
     return _GraphqlParsed(
         depth=depth,
         valid=valid,
@@ -2919,10 +3002,8 @@ def _parse_graphql_document(text: str, max_tokens: int):
         operations=list(dict.fromkeys(
             operation.operation.value for operation in operations
         )),
-        root_fields=(
-            _graphql_root_fields(operations, fragments) if valid else []
-        ),
-        arguments=arguments,
+        operation_nodes=operations,
+        fragments=fragments,
     )
 
 
@@ -2940,7 +3021,9 @@ def _resolve_graphql_argument(value, variables, defaults) -> Optional[str]:
       JSON), so the value the operation runs with cannot be known here.
 
     Every other literal and every unresolvable variable is None.
-    `defaults` is None for a fragment no operation reaches."""
+    `defaults` is always the variable-default map of the operation this
+    occurrence sits in (mirrors the TS `resolveArgumentValue`, whose
+    `defaults` parameter is likewise non-optional)."""
     if isinstance(value, graphql.language.StringValueNode):
         return value.value
     if not isinstance(value, graphql.language.VariableNode):
@@ -2952,7 +3035,7 @@ def _resolve_graphql_argument(value, variables, defaults) -> Optional[str]:
         if name in variables:
             provided = variables[name]
             return provided if type(provided) is str else None
-    fallback = None if defaults is None else defaults.get(name)
+    fallback = defaults.get(name)
     if isinstance(fallback, graphql.language.StringValueNode):
         return fallback.value
     return None
@@ -2966,8 +3049,10 @@ def _parse_graphql_facts(
 
     `memo` is a dict owned by one request and keyed by (text, max_tokens):
     rules nearly always share their limits, so one request parses each
-    document once. It must not outlive the request, so that body-derived
-    strings are not kept in the process."""
+    document once. Only the parse is shared; the field occurrences are built
+    here, under this call's variables and this candidate's limits. It must
+    not outlive the request, so that body-derived strings are not kept in
+    the process."""
     max_tokens = limits["maxNodes"]
     key = (text, max_tokens)
     if memo is not None and key in memo:
@@ -2981,23 +3066,12 @@ def _parse_graphql_facts(
     if not parsed.valid:
         return None
 
-    argument_values = {}
-    unresolved = {}
-    for name, value, contexts in parsed.arguments:
-        for defaults in contexts:
-            resolved = _resolve_graphql_argument(value, variables, defaults)
-            if resolved is None:
-                unresolved[name] = None
-                continue
-            argument_values.setdefault(name, {})[resolved] = None
-    return {
-        "operations": list(parsed.operations),
-        "rootFields": list(parsed.root_fields),
-        "argumentValues": {
-            name: list(values) for name, values in argument_values.items()
-        },
-        "unresolvedArguments": list(unresolved),
-    }
+    fields = _collect_graphql_selection(
+        parsed.operation_nodes, parsed.fragments, variables, limits
+    )
+    if fields is None:
+        return None
+    return {"operations": list(parsed.operations), "fields": fields}
 
 
 def _graphql_variables_for(root, at: str):
@@ -3024,34 +3098,126 @@ def _graphql_facts_at(root, at: str, limits: dict, memo: Optional[dict]):
     )
 
 
-def _graphql_satisfies(condition: dict, facts: dict) -> str:
-    indeterminate = False
-    determined_false = False
+def _graphql_facts_are_valid(facts: Optional[dict]) -> bool:
+    """Valid facts carry at least one operation and at least one leaf
+    occurrence. The parser here never produces anything else (an executable
+    document has an operation, and a selection set is never empty), so this
+    guards against facts that did not come from it: an empty `operations`
+    would satisfy two disjoint operation sets at once, and a document with no
+    leaf constrains nothing. Mirrors the same two guards on the host
+    (`selectionSatisfies` and `satisfiesDocument`)."""
+    if facts is None:
+        return False
+    operations = facts.get("operations")
+    fields = facts.get("fields")
+    return (
+        isinstance(operations, list)
+        and len(operations) > 0
+        and isinstance(fields, list)
+        and any(field["leaf"] for field in fields)
+    )
 
+
+def _graphql_selection_satisfies(condition: dict, facts: Optional[dict]) -> str:
+    """Whether every field occurrence satisfies the path condition and the
+    per-path argument condition. Mirrors selectionSatisfies in
+    src/network/authz/graphql_selection.ts.
+
+    The judgement is per occurrence: a field without a selection set must
+    match an allowed leaf exactly, and a field with children must be a proper
+    prefix of one. A named argument must be **present on that occurrence**
+    and resolve to a value in the allowed set.
+
+    Three-valued: a path violation, a missing argument and a value outside
+    the set are false; a named argument that does not resolve to a string on
+    that occurrence is indeterminate; facts that are absent or carry no leaf
+    are indeterminate too (false would let an unanalysable body drop to a
+    broader rule). Indeterminate wins over false, which is why a path
+    violation does not stop the scan."""
+    if not _graphql_facts_are_valid(facts):
+        return "indeterminate"
+    leaves = set(condition["fieldPaths"])
+    prefixes = _graphql_path_prefixes(leaves)
+    field_arguments = condition["fieldArguments"]
+
+    refused = False
+    unknown = False
+    for field in facts["fields"]:
+        path = field["path"]
+        if path not in (leaves if field["leaf"] else prefixes):
+            refused = True
+        values = field["argumentValues"]
+        for name, allowed in field_arguments.get(path, {}).items():
+            if name in field["unresolvedArguments"]:
+                unknown = True
+            elif name not in values or values[name] not in allowed:
+                refused = True
+    if unknown:
+        return "indeterminate"
+    return "false" if refused else "true"
+
+
+def _graphql_selection_violations(condition: dict, facts: dict) -> list:
+    """The labels of every selection violation in the document, in document
+    order: `fieldPath:<path>` for a leaf that is not allowed (and for a
+    field with children that is not on the way to one) and
+    `fieldArgument:<path>@<name>=(missing|unresolved|not-allowed)`.
+
+    Every occurrence is examined — a refused prefix does not end the walk —
+    and only the display is folded: a path appears once however often it is
+    fetched, and an argument once per (path, name, reason). Folding after the
+    walk is what keeps "the same field twice, one of them wrong" a violation.
+
+    A field with children whose path is refused is not reported on its own:
+    its own leaves are refused too (no allowed leaf starts with it), and a
+    selection set is never empty, so reporting the leaves loses nothing and
+    keeps the label a whole fetch path as the spec writes it.
+
+    This is the expect-side counterpart of `_graphql_selection_satisfies`,
+    which decides the same three-valued truth for `match`; it stays separate
+    because match needs a truth value and never builds labels."""
+    leaves = set(condition["fieldPaths"])
+    prefixes = _graphql_path_prefixes(leaves)
+    field_arguments = condition["fieldArguments"]
+    # dicts, not sets: the order of the labels follows the document.
+    refused_paths: dict = {}
+    refused_arguments: dict = {}
+
+    for field in facts["fields"]:
+        path = field["path"]
+        if field["leaf"] and path not in leaves:
+            refused_paths[path] = None
+        values = field["argumentValues"]
+        for name, allowed in field_arguments.get(path, {}).items():
+            if name in field["unresolvedArguments"]:
+                reason = "unresolved"
+            elif name not in values:
+                reason = "missing"
+            elif values[name] not in allowed:
+                reason = "not-allowed"
+            else:
+                continue
+            refused_arguments[(path, name, reason)] = None
+
+    return [f"fieldPath:{path}" for path in refused_paths] + [
+        f"fieldArgument:{path}@{name}=({reason})"
+        for path, name, reason in refused_arguments
+    ]
+
+
+def _graphql_satisfies(condition: dict, facts: dict) -> str:
+    """operations AND the selection condition, with indeterminate winning.
+
+    The selection is evaluated even when the operation kind is already
+    refused: skipping it would turn an unresolved argument into a plain
+    false. Mirrors satisfiesDocument in src/network/authz/semantics.ts."""
+    selection = _graphql_selection_satisfies(condition, facts)
+    if selection == "indeterminate":
+        return "indeterminate"
     allowed_operations = condition["operations"]
     if not all(op in allowed_operations for op in facts["operations"]):
-        determined_false = True
-    root_fields = condition.get("rootFields")
-    if root_fields is not None:
-        if not all(field in root_fields for field in facts["rootFields"]):
-            determined_false = True
-    # "Where an argument of this name appears, its value is in this set."
-    # A named argument with an unresolvable occurrence is indeterminate, not
-    # false: false would let a broken variable drop the request to a broader
-    # rule.
-    for name, allowed in (condition.get("arguments") or {}).items():
-        if name in facts["unresolvedArguments"]:
-            indeterminate = True
-            continue
-        observed = facts["argumentValues"].get(name)
-        if observed is None:
-            continue
-        if not all(value in allowed for value in observed):
-            determined_false = True
-
-    if indeterminate:
-        return "indeterminate"
-    return "false" if determined_false else "true"
+        return "false"
+    return selection
 
 
 def _evaluate_graphql(
@@ -3070,10 +3236,10 @@ def _evaluate_graphql_with_diagnostic(
 ) -> tuple[str, Optional[dict]]:
     """Three-valued evaluation of a graphql body condition.
 
-    `condition` carries `at`, `operations`, and optionally `rootFields`
-    (None: unconstrained) and `arguments` (name -> allowed strings). A
-    missing target is false; a target that is not a document with facts is
-    indeterminate.
+    `condition` carries `at`, `operations`, `fieldPaths` (the allowed leaf
+    selection paths) and `fieldArguments` (path -> argument name -> allowed
+    strings). A missing target is false; a target that is not a document with
+    valid facts is indeterminate.
 
     A request whose URL has a query string (`query_string`) is indeterminate
     before the body is looked at, whether or not the body holds a document:
@@ -3082,27 +3248,35 @@ def _evaluate_graphql_with_diagnostic(
     runs. False in particular would let `?query=mutation...` with an
     unrelated body fall through to a broader rule.
 
-    The diagnostic names only what the rule wrote — its `at` and the argument
-    name it constrains. The document text, a parser message, a resolved
-    value or the query string would put request text on the approval card."""
+    The diagnostic names only what the rule wrote — its `at`, the field path
+    and the argument name it constrains. The document text, a parser message,
+    a resolved value or the query string would put request text on the
+    approval card. A missing required argument is false, not indeterminate,
+    so it never reaches the argument diagnostic."""
     at = condition["at"]
     if query_string:
         return "indeterminate", {"code": "graphql-query-string", "pointer": at}
     target, facts = _graphql_facts_at(parsed_body, at, limits, memo)
     if target is _POINTER_MISSING:
         return "false", None
-    if facts is None:
+    if not _graphql_facts_are_valid(facts):
         return "indeterminate", {"code": "graphql-unparseable", "pointer": at}
     truth = _graphql_satisfies(condition, facts)
     if truth != "indeterminate":
         return truth, None
-    for name in condition.get("arguments") or {}:
-        if name in facts["unresolvedArguments"]:
-            return "indeterminate", {
-                "code": "graphql-unresolved-argument",
-                "pointer": at,
-                "argument": name,
-            }
+    # The first reason in configuration order, then in occurrence order.
+    for path, arguments in condition["fieldArguments"].items():
+        for name in arguments:
+            for field in facts["fields"]:
+                if field["path"] == path and (
+                    name in field["unresolvedArguments"]
+                ):
+                    return "indeterminate", {
+                        "code": "graphql-unresolved-field-argument",
+                        "pointer": at,
+                        "fieldPath": path,
+                        "argument": name,
+                    }
     return "indeterminate", None
 
 

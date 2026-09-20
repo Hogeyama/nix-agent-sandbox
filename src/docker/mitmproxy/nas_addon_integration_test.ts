@@ -12,7 +12,11 @@ import {
 import net from "node:net";
 import path from "node:path";
 import { queryAuditLogs } from "../../audit/store.ts";
-import { githubGraphqlExample } from "../../network/authz/examples_fixture.ts";
+import {
+  githubGraphqlExample,
+  STARRED_CROSSING_QUERY,
+  STARRED_CROSSING_REFUSED_LEAVES,
+} from "../../network/authz/examples_fixture.ts";
 import {
   type ResolvedDocument,
   withoutInjectLiterals,
@@ -1693,10 +1697,11 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
       );
 
       // 引数はリテラルでなく変数で渡す。addon は variables を引いて解決した
-      // 値で arguments を判定するので、これが通れば解決まで働いている。
+      // 値で fieldArguments を判定するので、これが通れば解決まで働いている。
+      // 末端は受け入れ例が許した経路 (`/repository/issues/nodes/body`) に置く。
       const body = JSON.stringify({
         query:
-          'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { nodes { title } } } }',
+          'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { nodes { body } } } }',
         variables: { o: "my-org" },
       });
       const response = await sendGraphql(fixture, proxyPort, body);
@@ -1758,16 +1763,23 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
                 label: "operation:mutation",
                 excerpt: null,
               },
+              {
+                expectKind: "body",
+                kind: "schema-mismatch",
+                label: "fieldPath:/deleteRepository/ok",
+                excerpt: null,
+              },
             ],
           },
         },
         {
           name: "variable resolving to another owner",
-          // other-org は違反レコードの正準形に正当に現れるので、document 側の語で見る。
+          // 許可した末端だけを読むが、入口の owner が許可集合の外にある。
+          // 引数の実値は違反レコードに載らないので、document 側の語で見る。
           bodyMarker: "repository(owner: $o",
           body: JSON.stringify({
             query:
-              'query($o: String!) { repository(owner: $o, name: "x") { id } }',
+              'query($o: String!) { repository(owner: $o, name: "x") { nameWithOwner } }',
             variables: { o: "other-org" },
           }),
           expected: {
@@ -1776,11 +1788,30 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
               {
                 expectKind: "body",
                 kind: "schema-mismatch",
-                value: "argument:owner=other-org",
-                label: null,
+                label: "fieldArgument:/repository@owner=(not-allowed)",
                 excerpt: null,
               },
             ],
+          },
+        },
+        {
+          // spec 冒頭の反例。許可した末端 (Issue 本文・コメント本文・README
+          // 本文) でも、そこへ至る経路が違えば自動許可にならない。3 本の禁止
+          // 末端が別々に出ることを要求する — 1 本に縮めると「メンバー経路を
+          // 丸ごと禁止したから」でも緑になる。
+          name: "the spec's counterexample",
+          // 目印は引数付きの呼び出しにする。引数は違反レコードに載らないので、
+          // 経路の field 名と違って「載っていないこと」を検査できる。
+          bodyMarker: "membersWithRole(first: 10)",
+          body: JSON.stringify({ query: STARRED_CROSSING_QUERY }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: STARRED_CROSSING_REFUSED_LEAVES.map((path) => ({
+              expectKind: "body",
+              kind: "schema-mismatch",
+              label: `fieldPath:${path}`,
+              excerpt: null,
+            })),
           },
         },
         {
@@ -1848,16 +1879,14 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
           state: "pending",
           ...testCase.expected,
         });
-        if (
-          testCase.name === "mutation" ||
-          testCase.name === "unanalysable document" ||
-          testCase.name === "query string"
-        ) {
-          // 同一性はリクエストごとの UUID。承認が別の mutation や別の document
-          // へ広がらない。
-          expect(pending.violations?.[0]?.value ?? "", testCase.name).toMatch(
-            UUID_PATTERN,
-          );
+        // GraphQL の違反はどれも同一性がリクエストごとの UUID なので、承認が
+        // 別の mutation・別の経路・別の document へ広がらない。
+        for (const violation of pending.violations ?? []) {
+          expect(violation.value ?? "", testCase.name).toMatch(UUID_PATTERN);
+        }
+        // 値を覚えられる違反が 1 つも無いので、選べるのは once だけになる。
+        if ((pending.violations?.length ?? 0) > 0) {
+          expect(pending.approvalScopes, testCase.name).toEqual(["once"]);
         }
         // document 本文は確認にも監査にも載らない。載るのは正準形の短い値
         // だけ。目印が送ったボディに実在することを先に確かめ、検査が空振り
@@ -1886,6 +1915,78 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
       // どれも upstream に届いていない。fake upstream は完全なリクエストを
       // 1 本受け取った時点でそれを印字する。
       expect(await dockerLogs(resources.targetName)).not.toContain("POST ");
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+/**
+ * 反例が upstream へ出る回数を数える (spec A1)。
+ *
+ * fake upstream は完全なリクエストを 1 本受け取ったところで印字して終わるので、
+ * `docker logs` に現れる `POST /graphql` の数がそのまま到達数になる。数えるのは
+ * 「承認の前にリクエストが漏れないこと」だけである。この fixture は GitHub では
+ * ないので、レスポンスの GraphQL 的な意味は何も証明しない。
+ */
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: the counterexample reaches upstream only after a once approval",
+  async () => {
+    const resources = protocolResources("nas-gql-upstream");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-gql-upstream-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+      const socketPath = brokerSocketPath(fixture.paths, fixture.sessionId);
+      const body = JSON.stringify({ query: STARRED_CROSSING_QUERY });
+      const upstreamRequests = async () =>
+        (await dockerLogs(resources.targetName)).split("POST /graphql").length -
+        1;
+
+      // 1. 確認を待っているあいだ、upstream には 1 件も出ていない。
+      const denied = sendGraphql(fixture, proxyPort, body);
+      const first = await waitForPendingItem(fixture, "counterexample");
+      expect(first.violations?.map((violation) => violation.label)).toEqual(
+        STARRED_CROSSING_REFUSED_LEAVES.map((path) => `fieldPath:${path}`),
+      );
+      expect(first.approvalScopes).toEqual(["once"]);
+      expect(await upstreamRequests()).toBe(0);
+
+      // 2. deny のあとも 0 件のままである。
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: first.requestId,
+      });
+      expect(await denied).toContain("403");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      expect(await upstreamRequests()).toBe(0);
+
+      // 3. 同じ document を送り直しても承認は使い回せず、改めて確認になる。
+      //    once で通した 1 本だけが upstream に届く。
+      const allowed = sendGraphql(fixture, proxyPort, body);
+      const second = await waitForPendingItem(fixture, "counterexample again");
+      expect(second.requestId).not.toEqual(first.requestId);
+      expect(second.approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: second.requestId,
+        scope: "once",
+      });
+      expect(await allowed).toContain("200 OK");
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "POST /graphql",
+      );
+      expect(upstreamLogs.split("POST /graphql").length - 1).toBe(1);
+      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
     } finally {
       await cleanupProtocolResources(resources);
       await teardownFixture(fixture);

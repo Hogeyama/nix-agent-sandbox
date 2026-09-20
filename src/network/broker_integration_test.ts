@@ -938,7 +938,11 @@ const GRAPHQL_EXPECT_DOCUMENT = documentWithScopes({
           { kind: "body", equals: { "/model": "m" }, onViolation: "review" },
           {
             kind: "body",
-            graphql: { at: "/query", operations: ["query"] },
+            graphql: {
+              at: "/query",
+              operations: ["query"],
+              fieldPaths: ["/a/id"],
+            },
             onViolation: "review",
           },
         ],
@@ -1050,12 +1054,13 @@ test.skipIf(!python3 || !vendoredDeps)(
   },
 );
 
-// 許されない root field も、addon がリクエストごとの UUID を値に置く。
-// `rootField:node` を固定の値にすると、1 件の `node(id:)` の承認が、何を読む
-// か分からない以後のあらゆる `node(id:)` をセッションの間通してしまう。
-// 集合に無い引数値 (`argument:owner=...`) は値が読む対象を名指すので、
-// これまでどおり覚えられる。
-const ROOT_FIELD_EXPECT_DOCUMENT = documentWithScopes({
+// 許されない取得経路も、経路に紐づく引数の違反も、addon がリクエストごとの
+// UUID を値に置く。`fieldPath:/node/id` を固定の値にすると、1 件の `node(id:)`
+// の承認が、何を読むか分からない以後のあらゆる `node(id:)` をセッションの間
+// 通してしまう。経路に紐づく引数も同じで、`/repository` の owner を 1 度
+// 承認したことが、別の repo・別の子選択にまで及んではならない (spec A13)。
+// したがって GraphQL の違反だけを持つカードは `once` しか選べない。
+const FIELD_PATH_EXPECT_DOCUMENT = documentWithScopes({
   policy: {
     targets: ["api.example.com"],
     fallback: "allow",
@@ -1073,8 +1078,8 @@ const ROOT_FIELD_EXPECT_DOCUMENT = documentWithScopes({
             graphql: {
               at: "/query",
               operations: ["query"],
-              rootFields: ["repository"],
-              arguments: { owner: ["my-org"] },
+              fieldPaths: ["/repository/id", "/repository/name"],
+              fieldArguments: { "/repository": { owner: ["my-org"] } },
             },
             onViolation: "review",
           },
@@ -1084,24 +1089,24 @@ const ROOT_FIELD_EXPECT_DOCUMENT = documentWithScopes({
   },
 });
 
-const rootFieldReview = async (requestId: string, query: string) =>
+const fieldPathReview = async (requestId: string, query: string) =>
   review(
     requestId,
-    await addonFindings({ query }, ROOT_FIELD_EXPECT_DOCUMENT),
+    await addonFindings({ query }, FIELD_PATH_EXPECT_DOCUMENT),
     "policy.body",
   );
 
 test.skipIf(!python3 || !vendoredDeps)(
-  "SessionBroker: approving one refused root field does not approve the next",
+  "SessionBroker: approving one refused field path does not approve the next",
   async () => {
     await withReviewBroker(async ({ socketPath }) => {
       const first = sendBrokerRequest<DecisionResponse>(
         socketPath,
-        await rootFieldReview("req-node-first", '{ node(id: "a") { id } }'),
+        await fieldPathReview("req-node-first", '{ node(id: "a") { id } }'),
       );
       const pending = await waitForPending(socketPath);
       expect(pending.items[0].violations?.map((v) => v.label)).toEqual([
-        "rootField:node",
+        "fieldPath:/node/id",
       ]);
       // 覚えても次の node には効かないので、覚える粒度は出さない。
       expect(pending.items[0].approvalScopes).toEqual(["once"]);
@@ -1114,7 +1119,7 @@ test.skipIf(!python3 || !vendoredDeps)(
 
       const second = sendBrokerRequest<DecisionResponse>(
         socketPath,
-        await rootFieldReview("req-node-second", '{ node(id: "b") { id } }'),
+        await fieldPathReview("req-node-second", '{ node(id: "b") { id } }'),
       );
       expect(
         (await waitForPending(socketPath)).items.map((item) => item.requestId),
@@ -1124,65 +1129,249 @@ test.skipIf(!python3 || !vendoredDeps)(
         requestId: "req-node-second",
       });
       expect((await second).decision).toEqual("deny");
-    }, ROOT_FIELD_EXPECT_DOCUMENT);
+    }, FIELD_PATH_EXPECT_DOCUMENT);
   },
 );
 
+// spec A13: 経路違反を once で承認したあと、同じ経路で repo・引数・子選択を
+// 変えて再要求すると、もう一度 review になる。
 test.skipIf(!python3 || !vendoredDeps)(
-  "SessionBroker: approving a card with a root field remembers only the argument value",
+  "SessionBroker: a GraphQL-only card offers once, and the same path is asked again",
   async () => {
     await withReviewBroker(async ({ socketPath }) => {
       const first = sendBrokerRequest<DecisionResponse>(
         socketPath,
-        await rootFieldReview(
-          "req-root-mixed",
+        await fieldPathReview(
+          "req-path-mixed",
           '{ repository(owner: "other-org") { id } node(id: "a") { id } }',
         ),
       );
       const pending = await waitForPending(socketPath);
+      const uuid = expect.stringMatching(/^[0-9a-f-]{36}$/);
       expect(
         pending.items[0].violations?.map((v) => [v.value, v.label]),
       ).toEqual([
-        [expect.stringMatching(/^[0-9a-f-]{36}$/), "rootField:node"],
-        ["argument:owner=other-org", null],
+        [uuid, "fieldPath:/node/id"],
+        [uuid, "fieldArgument:/repository@owner=(not-allowed)"],
       ]);
-      expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
+      // GraphQL の違反しかないカードは、記憶できる値を 1 つも持たない。
+      expect(pending.items[0].approvalScopes).toEqual(["once"]);
       await sendBrokerRequest(socketPath, {
         type: "approve",
-        requestId: "req-root-mixed",
-        scope: "violation",
+        requestId: "req-path-mixed",
+        scope: "once",
       });
       expect((await first).decision).toEqual("allow");
 
-      // 引数値だけなら、もう聞かれない。
-      expect(
-        (
-          await sendBrokerRequest<DecisionResponse>(
-            socketPath,
-            await rootFieldReview(
-              "req-argument-only",
-              '{ repository(owner: "other-org") { name } }',
-            ),
-          )
-        ).decision,
-      ).toEqual("allow");
-
-      // root field は覚えられていないので、もう一度人に聞く。
+      // 同じ経路・同じ owner でも、子選択を変えただけで改めて聞く。
       const second = sendBrokerRequest<DecisionResponse>(
         socketPath,
-        await rootFieldReview("req-node-only", '{ node(id: "b") { id } }'),
+        await fieldPathReview(
+          "req-path-again",
+          '{ repository(owner: "other-org") { name } }',
+        ),
       );
       const again = await waitForPending(socketPath);
       expect(again.items.map((item) => item.requestId)).toEqual([
-        "req-node-only",
+        "req-path-again",
+      ]);
+      expect(again.items[0].violations?.map((v) => v.label)).toEqual([
+        "fieldArgument:/repository@owner=(not-allowed)",
       ]);
       expect(again.items[0].approvalScopes).toEqual(["once"]);
       await sendBrokerRequest(socketPath, {
         type: "deny",
-        requestId: "req-node-only",
+        requestId: "req-path-again",
       });
       expect((await second).decision).toEqual("deny");
-    }, ROOT_FIELD_EXPECT_DOCUMENT);
+    }, FIELD_PATH_EXPECT_DOCUMENT);
+  },
+);
+
+// spec A13 の残り半分。上のテストは「違う要求は別のカードになる」ことを見た。
+// ここは「**同じ**要求をもう一度送っても承認は使い回せない」ことを見る。値が
+// リクエストごとの UUID なので、同一性は本文ではなく要求そのものに紐づく。
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: a once-approved field path is asked again even for the identical request",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const REFUSED = '{ node(id: "a") { id } }';
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await fieldPathReview("req-r1", REFUSED),
+      );
+      const pending = await waitForPending(socketPath);
+      expect(pending.items[0].violations?.map((v) => v.label)).toEqual([
+        "fieldPath:/node/id",
+      ]);
+      // GraphQL の違反しか無いので、覚える粒度は出さない (A13)。
+      expect(pending.items[0].approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-r1",
+        scope: "once",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      // 3 本まとめて送る。バイト単位で同一の再送、同じ経路で引数だけ違う要求、
+      // 同じ入口で子選択だけ違う要求。どれも別々のカードとして残る。
+      const resent = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await fieldPathReview("req-r1-resent", REFUSED),
+      );
+      const otherArgument = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await fieldPathReview("req-r2-argument", '{ node(id: "b") { id } }'),
+      );
+      const otherChild = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await fieldPathReview(
+          "req-r2-child",
+          '{ repository(owner: "other-org") { name } }',
+        ),
+      );
+      const again = await waitForPending(socketPath, 3);
+      expect(again.items.map((item) => item.requestId).sort()).toEqual([
+        "req-r1-resent",
+        "req-r2-argument",
+        "req-r2-child",
+      ]);
+      for (const item of again.items) {
+        expect([item.requestId, item.approvalScopes]).toEqual([
+          item.requestId,
+          ["once"],
+        ]);
+      }
+      // 同じ document の再送でも、違反レコードの値は前回と別の UUID である。
+      const resentValues = again.items
+        .filter((item) => item.requestId === "req-r1-resent")
+        .flatMap((item) => item.violations?.map((v) => v.value) ?? []);
+      expect(resentValues).not.toContain(
+        pending.items[0].violations?.[0]?.value,
+      );
+
+      // 1 枚ずつ答える。片方の答えは他方に及ばない。
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-r1-resent",
+        scope: "once",
+      });
+      for (const requestId of ["req-r2-argument", "req-r2-child"]) {
+        await sendBrokerRequest(socketPath, { type: "deny", requestId });
+      }
+      expect((await resent).decision).toEqual("allow");
+      expect((await otherArgument).decision).toEqual("deny");
+      expect((await otherChild).decision).toEqual("deny");
+    }, FIELD_PATH_EXPECT_DOCUMENT);
+  },
+);
+
+// spec A14: GraphQL の経路引数違反と、値を覚えられる `oneOf` の違反が同じカード
+// に載る場合。`violation` は出るが、覚えられるのは値の側だけである。
+const MIXED_VIOLATION_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "allow",
+    rules: {
+      body: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/body"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+        expect: [
+          {
+            kind: "body",
+            oneOf: { "/tier": ["gold", "silver"] },
+            onViolation: "review",
+          },
+          {
+            kind: "body",
+            graphql: {
+              at: "/query",
+              operations: ["query"],
+              fieldPaths: ["/repository/id"],
+              fieldArguments: { "/repository": { owner: ["my-org"] } },
+            },
+            onViolation: "review",
+          },
+        ],
+      },
+    },
+  },
+});
+
+test.skipIf(!python3 || !vendoredDeps)(
+  "SessionBroker: remembering a mixed card keeps the value violation and not the GraphQL one",
+  async () => {
+    await withReviewBroker(async ({ socketPath }) => {
+      const mixedReview = async (requestId: string, body: unknown) =>
+        review(
+          requestId,
+          await addonFindings(body, MIXED_VIOLATION_DOCUMENT),
+          "policy.body",
+        );
+      const refusedOwner = '{ repository(owner: "other-org") { id } }';
+      const allowedOwner = '{ repository(owner: "my-org") { id } }';
+
+      const first = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await mixedReview("req-mixed-first", {
+          tier: "bronze",
+          query: refusedOwner,
+        }),
+      );
+      const pending = await waitForPending(socketPath);
+      expect(pending.items[0].violations?.map((v) => v.label)).toEqual([
+        null,
+        "fieldArgument:/repository@owner=(not-allowed)",
+      ]);
+      // 覚えられる値が 1 つでもあれば、既存どおり violation も選べる。
+      expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req-mixed-first",
+        scope: "violation",
+      });
+      expect((await first).decision).toEqual("allow");
+
+      // 覚えたのは `/tier` の値だけ。GraphQL の側が満たされていれば通る。
+      expect(
+        (
+          await sendBrokerRequest<DecisionResponse>(
+            socketPath,
+            await mixedReview("req-value-only", {
+              tier: "bronze",
+              query: allowedOwner,
+            }),
+          )
+        ).decision,
+      ).toEqual("allow");
+
+      // GraphQL の違反は覚えられていない。同じ `/tier`、同じ owner、同じ
+      // document を送り直しても、改めて人に聞く。
+      const second = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        await mixedReview("req-graphql-again", {
+          tier: "bronze",
+          query: refusedOwner,
+        }),
+      );
+      const again = await waitForPending(socketPath);
+      expect(again.items.map((item) => item.requestId)).toEqual([
+        "req-graphql-again",
+      ]);
+      expect(again.items[0].violations?.map((v) => v.label)).toEqual([
+        null,
+        "fieldArgument:/repository@owner=(not-allowed)",
+      ]);
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: "req-graphql-again",
+      });
+      expect((await second).decision).toEqual("deny");
+    }, MIXED_VIOLATION_DOCUMENT);
   },
 );
 
