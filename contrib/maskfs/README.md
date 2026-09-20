@@ -15,7 +15,7 @@ chmod +x ~/.local/bin/maskfs
 ```
 
 この URL は常に最新の maskfs を指すので、更新するときも同じコマンドを実行してください。インストール済みのバージョンは `maskfs --version` で、変更点は [CHANGELOG](CHANGELOG.md) で確認できます。
-特定のバージョンに固定したい場合は、URL の `maskfs-latest` を `maskfs-v0.1.0` のようなタグに替えてください（maskfs は nas 本体とは別に `maskfs-v*` タグでリリースしています）。
+特定のバージョンに固定したい場合は、URL の `maskfs-latest` を `maskfs-v0.2.0` のようなタグに替えてください（maskfs は nas 本体とは別に `maskfs-v*` タグでリリースしています）。
 
 ## 前提条件
 
