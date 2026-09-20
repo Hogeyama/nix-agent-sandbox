@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.19.0] - 2026-09-20
+
 ### Added
 
 - **Dev Container Codex**: `nas devcontainer init --profile codex` generates a `.devcontainer` that installs the `openai.chatgpt` extension and points its `chatgpt.cliExecutable` at an in-container wrapper, which resolves the extension-bundled `codex` binary and re-applies the nas environment (env ops, hostexec, observability `-c` config) before launching the app-server. Host `~/.codex` is shared read-write, with `config.toml` overlaid read-only when `agentState.protectSettings` is on, and `up` refuses to start when the profile's agent changed since `init`. Profile `agentArgs` are filtered to `-c`/`--config` key=value pairs for the app-server launch, and dropped args are reported at `init`. Note: `chatgpt.cliExecutable` is a development-only extension hook, so extension updates may change the contract.
+- **Network**: authorize GraphQL requests by exact field path instead of root field or owner alone — a trusted entry point no longer implicitly permits every object reachable through it. Fragments are expanded and aliases ignored when forming paths, and argument requirements bind to each field occurrence so an owner on one field can't satisfy another's restriction. Body-level GraphQL conditions are validated at startup and enforced consistently across rule matching, approval and the mitmproxy addon, with approval identities scoped to the specific path/argument combination so approving one value doesn't cover another.
+
+### Fixed
+
+- **Agents**: protect Claude plugins, skills and hook programs from being modified by a session, not just its settings files. A private writable state root now layers read-only host configuration under writable credentials, history and project state, closing a gap where the shared host state directory left plugin/skill/hook code writable.
+- **Dev Container**: IDE sessions now share the same host mounts as a plain CLI launch — `~/.config/git` (git identity, aliases, signing) is mounted, and a linked worktree gets the main repository root instead of just its own directory. Fixes missing git config in IDE sessions and worktrees outside the repo root failing to start under MaskFs.
+- **Nix build**: `nix run` / the packaged `nas` binary segfaulted on startup under WSL2 (worked on native Linux). Bun 1.3.12–1.3.13's `bun build --compile` output added a `.bun` ELF segment by repurposing `PT_GNU_STACK` into its own `PT_LOAD` ([oven-sh/bun#29963](https://github.com/oven-sh/bun/issues/29963)); WSL2's kernel maps that layout without the trailing page actually backed, and Bun segfaults dereferencing it on startup, before any user code runs. Bump the pinned `nixpkgs` input to pull in `bun` 1.4.2, which carries upstream's fix ([oven-sh/bun#29967](https://github.com/oven-sh/bun/pull/29967)).
 
 ## [0.18.0] - 2026-09-18
 
