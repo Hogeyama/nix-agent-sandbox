@@ -181,10 +181,17 @@ export function parseDevcontainerRegistration(
     ].every((k) => typeof value[k] === "string") ||
     !Array.isArray(value.command) ||
     !value.command.length ||
-    !value.command.every((v) => typeof v === "string")
+    !value.command.every((v) => typeof v === "string") ||
+    // Registrations written before Codex support carry no agent field; only
+    // claude could pass the profile gate then, so absent means claude.
+    (value.agent !== undefined &&
+      !["claude", "copilot", "codex"].includes(String(value.agent)))
   )
     throw new DevcontainerError("invalid devcontainer registration");
-  return value as unknown as DevcontainerRegistration;
+  return {
+    ...(value as unknown as DevcontainerRegistration),
+    agent: (value.agent ?? "claude") as DevcontainerRegistration["agent"],
+  };
 }
 
 export function parseDevcontainerSession(

@@ -9,6 +9,7 @@ const registration: DevcontainerRegistration = {
   workspaceId: "a".repeat(64),
   workspace: "/repo",
   profileName: "claude",
+  agent: "claude",
   configPath: "/repo/.devcontainer/devcontainer.json",
   composePath: "/state/compose.json",
   stateRoot: "/state/workspace",
@@ -61,4 +62,22 @@ test("IDE finalization adds lookup labels and applies each argv/env operation on
     NAS_DEVCONTAINER_ENV_KEYS: "PATH X",
   });
   expect(result.container.env.dynamicOps).toEqual(container.env.dynamicOps);
+});
+
+test("codex devcontainer keeps only -c pairs from profile agentArgs", () => {
+  const codexInput = {
+    ...input,
+    profile: {
+      agent: "codex",
+      agentArgs: ["-c", "model=o4-mini", "--yolo", "prompt"],
+    },
+  } as StageInput;
+  const result = finalizeDevcontainerPlan(codexInput, container, {
+    registration,
+  });
+  expect(result.container.command.extraArgs).toEqual([
+    "already",
+    "-c",
+    "model=o4-mini",
+  ]);
 });

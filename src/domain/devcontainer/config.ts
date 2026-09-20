@@ -1,8 +1,10 @@
+import type { AgentType } from "../../agents/types.ts";
 import type { DevcontainerRegistration } from "./types.ts";
 
 export function renderDevcontainerConfig(
   registration: DevcontainerRegistration,
   remoteUser: string,
+  agent: AgentType,
 ) {
   return {
     name: "nas",
@@ -22,13 +24,22 @@ export function renderDevcontainerConfig(
     userEnvProbe: "loginInteractiveShell",
     shutdownAction: "none",
     customizations: {
-      vscode: {
-        extensions: ["anthropic.claude-code"],
-        settings: {
-          "claudeCode.claudeProcessWrapper":
-            "/usr/local/bin/nas-devcontainer-claude",
-        },
-      },
+      vscode:
+        agent === "codex"
+          ? {
+              extensions: ["openai.chatgpt"],
+              settings: {
+                "chatgpt.cliExecutable":
+                  "/usr/local/bin/nas-devcontainer-codex",
+              },
+            }
+          : {
+              extensions: ["anthropic.claude-code"],
+              settings: {
+                "claudeCode.claudeProcessWrapper":
+                  "/usr/local/bin/nas-devcontainer-claude",
+              },
+            },
     },
   };
 }

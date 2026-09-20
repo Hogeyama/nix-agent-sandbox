@@ -44,6 +44,7 @@ export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
       "devcontainer-exec.sh",
       "devcontainer-idle.sh",
       "devcontainer-claude.sh",
+      "devcontainer-codex.sh",
       "direnv-bootstrap.sh",
       "direnv-lib.sh",
       "nix-direnv.sh",

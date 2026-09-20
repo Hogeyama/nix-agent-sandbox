@@ -15,7 +15,13 @@ import {
 } from "node:fs/promises";
 import * as path from "node:path";
 import { resolveAgentProbes } from "../../agents/registry.ts";
-import type { AgentProbes, ClaudeStatePaths } from "../../agents/types.ts";
+import type {
+  AgentProbes,
+  AgentType,
+  ClaudeStatePaths,
+  CodexStatePaths,
+  DevcontainerAgentState,
+} from "../../agents/types.ts";
 import type {
   EnvConfig,
   ExtraMountConfig,
@@ -511,4 +517,32 @@ export async function ensureDevcontainerClaudeState(
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
   return { claudeDir, claudeJson };
+}
+
+/**
+ * Host Codex state for an IDE session, created when it does not exist yet.
+ * Same contract as ensureDevcontainerClaudeState: Compose refuses to create
+ * a missing bind source, so the directory must exist before the first `up`.
+ */
+export async function ensureDevcontainerCodexState(
+  hostHome: string,
+): Promise<CodexStatePaths> {
+  const codexDir = path.join(hostHome, ".codex");
+  await mkdir(codexDir, { recursive: true, mode: 0o700 });
+  return { codexDir };
+}
+
+/** Agent dispatch for the IDE state ensure; unsupported agents get no state. */
+export async function ensureDevcontainerAgentState(
+  agent: AgentType,
+  hostHome: string,
+): Promise<DevcontainerAgentState> {
+  switch (agent) {
+    case "claude":
+      return { claudeState: await ensureDevcontainerClaudeState(hostHome) };
+    case "codex":
+      return { codexState: await ensureDevcontainerCodexState(hostHome) };
+    default:
+      return {};
+  }
 }

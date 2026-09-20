@@ -1716,9 +1716,11 @@ for (const value of ["~/../outside", "../outside"]) {
 }
 
 const ideMounts = {
-  claudeDir: "/state:$x/claude",
-  claudeJson: "/state:$x/claude.json",
   vscodeDir: "/state:$x/vscode",
+  claudeState: {
+    claudeDir: "/state:$x/claude",
+    claudeJson: "/state:$x/claude.json",
+  },
 };
 test("IDE mounts dedicated state and managed config", () => {
   const { input, mountProbes } = makeInput({
@@ -1726,7 +1728,7 @@ test("IDE mounts dedicated state and managed config", () => {
   });
   const plan = planMount(input, mountProbes, ideMounts);
   expect(plan.containerPatch.mounts).toContainEqual({
-    source: ideMounts.claudeDir,
+    source: ideMounts.claudeState.claudeDir,
     target: `${CONTAINER_HOME}/.claude`,
   });
   expect(plan.containerPatch.mounts).toContainEqual({
@@ -1772,6 +1774,42 @@ test("IDE shares the main repository root of a worktree, same as a plain CLI lau
     target: `${workDir}/.nas`,
     readOnly: true,
   });
+});
+
+test("IDE mounts codex state read-write next to the IDE server dir", () => {
+  const { input, mountProbes } = makeInput({
+    profile: makeProfile({
+      agent: "codex",
+      agentState: { protectSettings: true },
+    }),
+    mountProbes: makeMountProbes({
+      agentProbes: {
+        codexDirExists: true,
+        codexBinPath: "/host/codex",
+        codexCodeModeHostBinPath: null,
+        codexSettingsFiles: ["config.toml"],
+      },
+    }),
+  });
+  const plan = planMount(input, mountProbes, {
+    vscodeDir: "/state:$x/vscode",
+    codexState: { codexDir: "/state:$x/codex" },
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/state:$x/codex",
+    target: `${CONTAINER_HOME}/.codex`,
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/state:$x/codex/config.toml",
+    target: `${CONTAINER_HOME}/.codex/config.toml`,
+    readOnly: true,
+  });
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/state:$x/vscode",
+    target: `${CONTAINER_HOME}/.vscode-server`,
+  });
+  // The host codex binary is deliberately not mounted for IDE sessions.
+  expect(plan.dockerArgs.join(" ")).not.toContain("/host/codex");
 });
 
 test("IDE with maskfs refuses a linked worktree outside the main repository root", () => {

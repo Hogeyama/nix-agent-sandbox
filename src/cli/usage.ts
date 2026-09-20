@@ -170,6 +170,7 @@ Examples:
   nas my-profile -b feature/login       # Create worktree from feature/login
   nas --worktree @                      # Use default profile, base current HEAD
   nas devcontainer init --profile claude
+  nas devcontainer init --profile codex
   nas devcontainer up
   nas devcontainer status --json
   nas devcontainer down

@@ -13,6 +13,7 @@ const registration: DevcontainerRegistration = {
   workspaceId: "workspace-id",
   workspace: "/work",
   profileName: "claude",
+  agent: "claude",
   configPath: "/work/.devcontainer/devcontainer.json",
   composePath: "/state/compose.json",
   stateRoot: "/state/workspace",
@@ -27,7 +28,10 @@ const ready: DevcontainerStatus = {
   diagnostic: null,
 };
 
-function client(calls: string[]): DevcontainerCommandClient {
+function client(
+  calls: string[],
+  droppedAgentArgs: readonly string[] = [],
+): DevcontainerCommandClient {
   return {
     init: async (workspace, profile) => {
       calls.push(`init:${workspace}:${profile}`);
@@ -36,6 +40,7 @@ function client(calls: string[]): DevcontainerCommandClient {
         sharing: [
           { topic: "direnv", detail: "does not evaluate the workspace .envrc" },
         ],
+        droppedAgentArgs,
       };
     },
     up: async (workspace) => {
@@ -67,6 +72,22 @@ test("CLI delegates init and renders the generated entry", async () => {
     expect(printed).toContain(registration.configPath);
     // The IDE never shows the profile, so init is where it has to be said.
     expect(printed).toContain("does not evaluate the workspace .envrc");
+  } finally {
+    log.mockRestore();
+  }
+});
+
+test("CLI warns about profile agentArgs the IDE session cannot use", async () => {
+  const calls: string[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    await runDevcontainerCommand(
+      ["init", "--profile", "codex"],
+      "/work",
+      client(calls, ["--yolo"]),
+    );
+    const printed = log.mock.calls.flat().join("\n");
+    expect(printed).toContain("--yolo");
   } finally {
     log.mockRestore();
   }

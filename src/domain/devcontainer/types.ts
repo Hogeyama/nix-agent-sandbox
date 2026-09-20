@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { AgentType } from "../../agents/types.ts";
 import type { Profile } from "../../config/types.ts";
 export type DevcontainerPhase =
   | "starting"
@@ -11,6 +12,13 @@ export interface DevcontainerRegistration {
   readonly workspaceId: string;
   readonly workspace: string;
   readonly profileName: string;
+  /**
+   * The profile's agent at init time. The generated devcontainer.json bakes
+   * in agent-specific VS Code settings, so `up` compares this against the
+   * current profile instead of silently booting a mismatched container.
+   * Registrations written before Codex support have no field and are claude.
+   */
+  readonly agent: AgentType;
   readonly configPath: string;
   readonly composePath: string;
   readonly stateRoot: string;
@@ -76,6 +84,7 @@ export function emptyRegistration(
     workspaceId: "",
     workspace,
     profileName,
+    agent: "claude",
     configPath: "",
     composePath: "",
     stateRoot: "",

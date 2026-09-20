@@ -62,6 +62,11 @@ export interface BuildAgentObservabilityContainerPatchArgs
   extends BuildObservabilityEnvArgs {
   readonly agentCommand: readonly string[];
   readonly extraArgs: readonly string[];
+  /**
+   * Dev Container (Compose) sessions discard agentCommand and capture only
+   * extraArgs into NAS_AGENT_ARGS, so codex's -c config must ride extraArgs.
+   */
+  readonly devcontainer?: boolean;
 }
 
 /**
@@ -166,10 +171,19 @@ export function buildAgentObservabilityContainerPatch(
     ...(env === null ? {} : { env: { static: env } }),
     ...(args.agent === "codex"
       ? {
-          command: {
-            agentCommand: buildCodexCommand(args.agentCommand, args.port),
-            extraArgs: args.extraArgs,
-          },
+          command: args.devcontainer
+            ? {
+                agentCommand: [...args.agentCommand],
+                extraArgs: [
+                  "-c",
+                  buildCodexTraceExporterConfig({ port: args.port }),
+                  ...args.extraArgs,
+                ],
+              }
+            : {
+                agentCommand: buildCodexCommand(args.agentCommand, args.port),
+                extraArgs: args.extraArgs,
+              },
         }
       : {}),
   };

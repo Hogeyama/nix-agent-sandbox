@@ -26,6 +26,7 @@ export function registrationFixture(): DevcontainerRegistration {
     workspaceId: "a".repeat(64),
     workspace: "/work/a space",
     profileName: "claude",
+    agent: "claude",
     configPath: "/work/a space/.devcontainer/devcontainer.json",
     composePath: "/state/compose.json",
     stateRoot: "/state/dedicated",

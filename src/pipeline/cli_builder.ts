@@ -53,6 +53,7 @@ export function createPreparationPipelineBuilder({
         profile: input.profile,
         profileName: input.profileName,
         sessionId: input.sessionId,
+        devcontainer: devcontainerMounts !== undefined,
       }),
     )
     .add(createProxyStage(input))

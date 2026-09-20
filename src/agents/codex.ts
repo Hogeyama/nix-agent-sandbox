@@ -7,8 +7,9 @@ import {
   CODEX_SETTINGS_FILES,
   existingSettingsFiles,
   settingsMountArgs,
+  settingsMountSpecs,
 } from "./settings_protection.ts";
-import type { AgentConfigResult } from "./types.ts";
+import type { AgentConfigResult, CodexStatePaths } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Probe types & resolver (side-effectful)
@@ -51,6 +52,7 @@ export function resolveCodexProbes(hostHome: string): CodexProbes {
 
 /** configureCodex の入力 */
 export interface CodexConfigInput {
+  readonly codexState?: CodexStatePaths;
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: CodexProbes;
@@ -66,6 +68,30 @@ export function configureCodex(input: CodexConfigInput): AgentConfigResult {
     input;
   const args = [...priorDockerArgs];
   const envVars = { ...priorEnvVars };
+
+  // Dev Container (Compose) path: ~/.codex always mounts — the runtime
+  // creates it on the host first — as structured MountSpecs so colon-bearing
+  // paths survive. The host codex binary is deliberately not mounted; the
+  // devcontainer-codex wrapper execs the extension-bundled binary so the
+  // app-server protocol version always matches the extension.
+  if (input.codexState) {
+    return {
+      dockerArgs: args,
+      envVars,
+      agentCommand: ["codex"],
+      mounts: [
+        {
+          source: input.codexState.codexDir,
+          target: `${containerHome}/.codex`,
+        },
+        ...settingsMountSpecs(
+          input.codexState.codexDir,
+          `${containerHome}/.codex`,
+          input.protectSettings ? probes.codexSettingsFiles : [],
+        ),
+      ],
+    };
+  }
 
   // ~/.codex をマウント（認証情報・設定）
   if (probes.codexDirExists) {

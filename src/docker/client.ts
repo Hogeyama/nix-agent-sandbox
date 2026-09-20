@@ -35,6 +35,7 @@ export const EMBEDDED_ASSET_NAMES = [
   "devcontainer-exec.sh",
   "devcontainer-idle.sh",
   "devcontainer-claude.sh",
+  "devcontainer-codex.sh",
   "direnv-bootstrap.sh",
   "direnv-lib.sh",
   "nix-direnv.sh",

@@ -16,13 +16,22 @@ test("docker.enable is accepted: the DinD sidecar runs outside the agent", () =>
   ).toEqual([]);
 });
 
-test("non-claude agents are rejected", () => {
+test("codex is accepted", () => {
+  expect(
+    validateDevcontainerProfile({
+      ...devcontainerProfile(),
+      agent: "codex",
+    }),
+  ).toEqual([]);
+});
+
+test("copilot is rejected: no devcontainer launch contract exists for it", () => {
   const errors = validateDevcontainerProfile({
     ...devcontainerProfile(),
-    agent: "codex",
+    agent: "copilot",
   });
   expect(errors).toHaveLength(1);
-  expect(errors[0]).toContain("claude");
+  expect(errors[0]).toContain("claude or codex");
 });
 
 test("worktrees are rejected: init must run inside the worktree itself", () => {
