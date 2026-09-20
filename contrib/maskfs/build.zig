@@ -4,10 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const host_target = b.resolveTargetQuery(.{});
+    const version = b.option([]const u8, "version", "Version string shown by --version") orelse "dev";
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", version);
 
     // ── Create shared mask module (for both maskfs and mask-filter to use) ──
     const mask_mod = b.createModule(.{
-        .root_source_file = b.path("../zig/mask.zig"),
+        .root_source_file = b.path("../../src/zig/mask.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -20,6 +24,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     exe_mod.addImport("mask", mask_mod);
+    exe_mod.addOptions("build_options", build_options);
     const exe = b.addExecutable(.{
         .name = "nas-maskfs",
         .root_module = exe_mod,
@@ -29,7 +34,7 @@ pub fn build(b: *std.Build) void {
 
     // ── unit tests (mask.zig は FUSE 非依存) ──
     const mask_test_mod = b.createModule(.{
-        .root_source_file = b.path("../zig/mask.zig"),
+        .root_source_file = b.path("../../src/zig/mask.zig"),
         .target = host_target,
         .optimize = optimize,
     });

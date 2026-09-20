@@ -62,7 +62,7 @@ export function createMaskFsStage(
         if (!binaryPath) {
           return yield* Effect.fail(
             new Error(
-              "[nas] mask: nas-maskfs binary not found. Build it with `cd src/maskfs && zig build` (dev) or reinstall nas (nix).",
+              "[nas] mask: nas-maskfs binary not found. Build it with `cd contrib/maskfs && zig build` (dev) or reinstall nas (nix).",
             ),
           );
         }

@@ -1,0 +1,142 @@
+name: Release maskfs
+
+# maskfs is released separately from nas. To release:
+#   1. set contrib/maskfs/VERSION and add a matching "## [X.Y.Z]" section to
+#      contrib/maskfs/CHANGELOG.md
+#   2. commit, then push the tag maskfs-vX.Y.Z
+# Releases are created with --latest=false so /releases/latest keeps pointing
+# at nas. The same binaries are also uploaded to the rolling "maskfs-latest"
+# release, whose download URL the README uses so it never needs editing.
+#
+# The artifact is the .#maskfs-bundled binary: a self-contained bundle of the
+# `maskfs` wrapper script plus the `nas-maskfs` FUSE engine. It intentionally
+# does NOT bundle fusermount3 — the bundled copy would lose its setuid bit, so
+# the host's fuse3 package must provide it (see contrib/maskfs/README.md).
+
+on:
+  push:
+    tags:
+      - "maskfs-v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag, VERSION and changelog agree
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(tr -d '\n' < contrib/maskfs/VERSION)"
+          if [ "maskfs-v${version}" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match contrib/maskfs/VERSION ($version)"
+            exit 1
+          fi
+          if ! grep -q "^## \[${version}\]" contrib/maskfs/CHANGELOG.md; then
+            echo "::error::contrib/maskfs/CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710
+
+      - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
+
+      - name: Build maskfs bundled binary
+        run: nix build .#maskfs-bundled --out-link result-maskfs --print-build-logs
+
+      - name: Check the binary reports the release version
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          actual="$(./result-maskfs --version)"
+          if [ "$actual" != "nas-maskfs ${VERSION}" ]; then
+            echo "::error::maskfs --version printed '$actual', expected 'nas-maskfs ${VERSION}'"
+            exit 1
+          fi
+
+      - name: Prepare artifact
+        run: |
+          cp -L result-maskfs maskfs-${{ matrix.system }}
+          chmod 755 maskfs-${{ matrix.system }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maskfs-${{ github.ref_name }}_${{ matrix.system }}
+          path: maskfs-${{ matrix.system }}
+
+  release:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' contrib/maskfs/CHANGELOG.md > notes.md
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "maskfs ${VERSION}" \
+            --notes-file notes.md \
+            --latest=false \
+            "maskfs-x86_64-linux" \
+            "maskfs-aarch64-linux"
+
+      - name: Update the rolling maskfs-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          title="maskfs latest (${VERSION})"
+          notes="Always the newest maskfs release, currently ${VERSION}. Use the ${TAG} release to pin this version."
+          if gh release view maskfs-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload maskfs-latest --repo "$GITHUB_REPOSITORY" --clobber \
+              "maskfs-x86_64-linux" \
+              "maskfs-aarch64-linux"
+            gh release edit maskfs-latest --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes"
+            # Keep the tag on the commit the assets were built from, so it never
+            # holds on to an older or rewritten commit.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/maskfs-latest" -f sha="$GITHUB_SHA" -F force=true
+          else
+            gh release create maskfs-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes "$notes" \
+              --latest=false \
+              "maskfs-x86_64-linux" \
+              "maskfs-aarch64-linux"
+          fi

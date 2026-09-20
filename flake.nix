@@ -35,7 +35,7 @@
         b2n = bun2nix.packages.${system}.default;
         bundle-script = nix-bundle-elf.lib.${system}.bundle-script;
 
-        # src/hostexec/intercept, src/maskfs, src/mask-filter は Zig 0.15 の
+        # src/hostexec/intercept, contrib/maskfs, src/mask-filter は Zig 0.15 の
         # API を前提に書かれている。pkgs.zig は nixpkgs 側の alias で、追従する
         # と breaking release でビルドが黙って壊れるため明示的に固定する。
         zig = pkgs.zig_0_15;
@@ -116,17 +116,22 @@
           '';
         };
 
+        # maskfs は nas とは別に maskfs-v* タグでリリースする。バージョンの
+        # 出どころは contrib/maskfs/VERSION だけで、release-maskfs.yml が
+        # タグとの一致を検査する。
+        maskfsVersion = pkgs.lib.removeSuffix "\n" (builtins.readFile ./contrib/maskfs/VERSION);
+
         maskfs = pkgs.stdenv.mkDerivation {
           pname = "nas-maskfs";
-          version = "0.1.0";
+          version = maskfsVersion;
           src = pkgs.lib.fileset.toSource {
-            root = ./src;
+            root = ./.;
             fileset = pkgs.lib.fileset.unions [
-              ./src/maskfs
+              ./contrib/maskfs
               ./src/zig
             ];
           };
-          sourceRoot = "source/maskfs";
+          sourceRoot = "source/contrib/maskfs";
           nativeBuildInputs = [ zig pkgs.pkg-config ];
           buildInputs = [ pkgs.fuse3 ];
           dontConfigure = true;
@@ -135,7 +140,8 @@
             export HOME=$TMPDIR
             zig build \
               --global-cache-dir "$TMPDIR/zig-cache" \
-              -Doptimize=ReleaseSafe
+              -Doptimize=ReleaseSafe \
+              -Dversion=${maskfsVersion}
           '';
           checkPhase = ''
             export HOME=$TMPDIR
@@ -341,7 +347,7 @@
           name = "maskfs";
           paths = [ maskfs ];
           postBuild = ''
-            cp ${./src/maskfs/maskfs} $out/bin/maskfs
+            cp ${./contrib/maskfs/maskfs} $out/bin/maskfs
             chmod +x $out/bin/maskfs
           '';
         };

@@ -15,6 +15,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: maskfs <sourceDir> <mountpoint> --secrets-file <path> [options]
        maskfs --unmount <mountpoint>
+       maskfs --version
 
 Transparently mask secrets in a directory using a FUSE overlay.
 
@@ -23,10 +24,26 @@ Options:
   --write-policy <policy>  readonly (default) or passthrough
   --daemon                 Run in background and exit after mount is ready
   --unmount <mountpoint>   Unmount a previously --daemon-started instance
+  --version                Print the nas-maskfs version
   -h, --help               Show this help
 EOF
   exit 1
 }
+
+# --version mode: delegate to nas-maskfs (resolves the bundled sibling first,
+# then PATH, the same lookup the mount path performs later).
+if [ "${1:-}" = "--version" ]; then
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  nas_maskfs="${script_dir}/nas-maskfs"
+  if [ ! -x "$nas_maskfs" ]; then
+    nas_maskfs="$(command -v nas-maskfs 2>/dev/null || true)"
+  fi
+  if [ -z "$nas_maskfs" ] || [ ! -x "$nas_maskfs" ]; then
+    echo "Error: nas-maskfs not found" >&2
+    exit 1
+  fi
+  exec "$nas_maskfs" --version
+fi
 
 # --unmount mode: early branch
 if [ "${1:-}" = "--unmount" ]; then

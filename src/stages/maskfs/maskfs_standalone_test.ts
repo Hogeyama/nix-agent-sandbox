@@ -16,7 +16,10 @@ import { resolveMaskFsBinPath } from "./maskfs_path.ts";
 const SECRET = "standalone-test-secret"; // 22 bytes
 const MASKED = "*".repeat(22);
 
-const SCRIPT_PATH = path.resolve(import.meta.dirname, "../../maskfs/maskfs");
+const SCRIPT_PATH = path.resolve(
+  import.meta.dirname,
+  "../../../contrib/maskfs/maskfs",
+);
 
 async function fuseUsable(): Promise<boolean> {
   try {

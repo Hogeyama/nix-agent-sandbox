@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const mask = @import("mask");
+const build_options = @import("build_options");
 
 const c = @cImport({
     @cDefine("FUSE_USE_VERSION", "317");
@@ -415,6 +416,12 @@ fn readSecretsFromStdin() ![][]u8 {
 
 pub fn main() !u8 {
     const argv = std.os.argv;
+    if (argv.len >= 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--version")) {
+        try std.fs.File.stdout().writeAll("nas-maskfs ");
+        try std.fs.File.stdout().writeAll(build_options.version);
+        try std.fs.File.stdout().writeAll("\n");
+        return 0;
+    }
     if (argv.len < 4) {
         std.debug.print("usage: nas-maskfs <sourceDir> <mountpoint> --write-policy=readonly|passthrough [--allow-other]\n", .{});
         return 2;
