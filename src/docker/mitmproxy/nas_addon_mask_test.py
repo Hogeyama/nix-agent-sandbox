@@ -736,6 +736,9 @@ class AuthzDocumentContractTest(unittest.TestCase):
     def test_accepts_optional_websocket_policies_and_rejects_invalid_values(self):
         for policy in (None, "allow", "deny"):
             with self.subTest(policy=policy):
+                # 同一パスへの連続した書き直しは、mtime 精度が粗い FS では
+                # _authz_cache に前回の文書が残ったまま読まれることがある。
+                nas_addon._authz_cache.clear()
                 document = copy.deepcopy(self.fixture)
                 if policy is None:
                     self._scope(document).pop("webSocket", None)
