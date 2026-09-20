@@ -18,9 +18,10 @@ test("shell script posts ready and decides on click", () => {
 
 test("shell script persists scope selections across re-renders", () => {
   const html = renderShell("N");
-  // change リスナーが selections[key] に選んだ scope を記録し、render が
-  // selectedScope よりそれを優先する。state メッセージで消えた key は掃除する。
-  expect(html).toContain('addEventListener("change"');
+  // scope チップのクリックが selections[key] に選んだ scope を記録し、
+  // render が selectedScope よりそれを優先する。state メッセージで
+  // 消えた key は掃除する。
+  expect(html).toContain("data-scope");
   expect(html).toContain("selections[");
   expect(html).toContain("selections[c.key] ?? c.selectedScope");
   expect(html).toContain("delete selections[k]");
@@ -31,7 +32,15 @@ test("shell script renders relative elapsed time and refreshes it", () => {
   expect(html).toContain("formatRelativeTime");
   expect(html).toContain("ago");
   expect(html).toContain("setInterval(refreshElapsed, 15000)");
-  expect(html).toContain('class="elapsed"');
+  expect(html).toContain('class="card-time"');
+});
+
+test("violations render as their own blocks like nas ui", () => {
+  const html = renderShell("N");
+  expect(html).toContain("card-violation-value");
+  expect(html).toContain("card-violation-at");
+  expect(html).toContain("card-violation-pointer");
+  expect(html).toContain("card-violation-excerpt");
 });
 
 test("deny button matches nas ui label", () => {

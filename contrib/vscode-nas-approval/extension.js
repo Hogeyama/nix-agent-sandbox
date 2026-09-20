@@ -37,6 +37,51 @@ function activate(context) {
   const folders = new Map();
   let lastTotal = 0;
   let panel = null; // ApprovalsPanel.show() のシングルトン参照
+  let pendingToast = null; // { report(msg), dismiss() } | null
+
+  // showWarningMessage のトーストは拡張側から閉じられず、pending が
+  // 解消した後も "N pending approval(s)" が残り続ける。代わりに通知
+  // プログレスを使い、0 件になった時点・キャンセル・deactivate で
+  // こちらから畳む。Cancel ボタンは「閉じる」の意味で、承認の却下ではない。
+  const showPendingToast = () => {
+    // 既存のトーストがあれば畳んでから出し直す。二重表示と、参照を
+    // 失って畳めなくなるトーストの両方を防ぐ。
+    pendingToast?.dismiss();
+    let reportFn = () => {};
+    let resolveGone = () => {};
+    let lastMessage = "";
+    const gone = new Promise((resolve) => {
+      resolveGone = resolve;
+    });
+    const toast = {
+      // withProgress のコールバックが走るまで report は捨てられるので、
+      // 最後のメッセージを保持してコールバック側で再送する。
+      report: (m) => {
+        lastMessage = m;
+        reportFn(m);
+      },
+      dismiss: () => resolveGone(),
+    };
+    pendingToast = toast;
+    vscode.window
+      .withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "nas: approval requested",
+          cancellable: true,
+        },
+        (progress, token) => {
+          reportFn = (m) => progress.report({ message: m });
+          if (lastMessage) progress.report({ message: lastMessage });
+          token.onCancellationRequested(() => resolveGone());
+          return gone;
+        },
+      )
+      .then(() => {
+        if (pendingToast === toast) pendingToast = null;
+      });
+  };
+  const dismissPendingToast = () => pendingToast?.dismiss();
 
   const collectCards = () => {
     const cards = [];
@@ -68,14 +113,11 @@ function activate(context) {
     } else {
       statusBar.hide();
     }
-    if (total > 0 && lastTotal === 0) {
-      vscode.window
-        .showWarningMessage(`nas: ${total} pending approval(s)`, "Review")
-        .then((pick) => {
-          if (pick === "Review")
-            vscode.commands.executeCommand("nas-approval.review");
-        });
-    }
+    if (total > 0 && lastTotal === 0) showPendingToast();
+    if (total === 0) dismissPendingToast();
+    pendingToast?.report(
+      `${total} pending approval(s) — click the status bar item to review`,
+    );
     lastTotal = total;
     panel?.update(collectCards());
   };
@@ -249,6 +291,8 @@ function activate(context) {
       rescan();
     }),
     vscode.commands.registerCommand("nas-approval.review", () => {
+      // パネルを開いた人はもうトーストを必要としていない。
+      dismissPendingToast();
       const cards = collectCards();
       if (cards.length === 0) {
         vscode.window.showInformationMessage("No pending nas approvals.");
@@ -273,6 +317,7 @@ function activate(context) {
     }),
     {
       dispose: () => {
+        dismissPendingToast();
         for (const f of folders.values()) {
           f.dead = true;
           if (f.pollTimer) clearTimeout(f.pollTimer);

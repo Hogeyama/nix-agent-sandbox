@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- The approvals panel now follows the nas ui pending card layout: session
+  and rule chips, verb + target, the "why" line, request context, scope
+  chips with a per-scope effect line, and Allow/Deny actions. Network
+  violations render as one block each — headline, count, selector,
+  pointer, excerpt — instead of a single dimmed line.
+
+### Fixed
+
+- The "pending approval(s)" notification is dismissed when the pending
+  count reaches zero, when it is cancelled, or when the review panel is
+  opened, instead of lingering after the approvals were resolved
+  elsewhere.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added
