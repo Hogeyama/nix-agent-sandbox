@@ -23,6 +23,16 @@ export interface ProtectedClaudeState {
   }[];
 }
 
+export interface CodexStatePaths {
+  readonly codexDir: string;
+}
+
+/** Host agent state pre-created for a Dev Container session; at most one member is set. */
+export interface DevcontainerAgentState {
+  readonly claudeState?: ClaudeStatePaths;
+  readonly codexState?: CodexStatePaths;
+}
+
 /** configureAgent 系の共通出力 */
 export interface AgentConfigResult {
   readonly mounts?: readonly MountSpec[];
@@ -35,6 +45,7 @@ export interface AgentConfigResult {
 export interface AgentConfigInput {
   readonly claudeState?: ClaudeStatePaths;
   readonly protectedClaudeState?: ProtectedClaudeState;
+  readonly codexState?: CodexStatePaths;
   readonly agent: AgentType;
   readonly mode: AgentMode;
   readonly containerHome: string;
