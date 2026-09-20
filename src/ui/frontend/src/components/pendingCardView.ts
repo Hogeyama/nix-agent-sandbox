@@ -27,6 +27,41 @@ type HostExecMatchMetadata = {
   capability: HostExecCapabilityLike | null;
 };
 
+/**
+ * The headline of one violation on a network card.
+ *
+ * A finding whose value is a per-request UUID (it exists only so an approval
+ * cannot outlive that request) carries a readable `label`; the UUID would say
+ * nothing to the person deciding. A finding with neither falls back to its
+ * kind, because "the body must be empty" has no value to name.
+ */
+export function violationHeadline(violation: {
+  kind: string;
+  value: string | null;
+  label: string | null;
+}): string {
+  return violation.label ?? violation.value ?? violation.kind;
+}
+
+/**
+ * The body location shown under a violation's headline, or `null` for none.
+ *
+ * The head already names the condition's selector (`at`). When the finding
+ * sits exactly where the selector points — every GraphQL finding, a
+ * top-level field — the pointer is the same text again and says nothing new.
+ * It is kept when it is more specific than the selector, such as the concrete
+ * element path of a `UnionShape` finding under a wildcard selector.
+ */
+export function violationPointerLine(violation: {
+  at: string;
+  pointer: string;
+}): string | null {
+  if (violation.pointer === "" || violation.pointer === violation.at) {
+    return null;
+  }
+  return violation.pointer;
+}
+
 /** Present hostexec's wire scopes in the terms a person chooses between. */
 export function hostExecScopeLabel(scope: HostExecApprovalScope): string {
   return scope === "once"
@@ -124,6 +159,12 @@ export function formatBodyDiagnostic(diagnostic: BodyDiagnostic): string {
       return "Request body was empty, but this rule requires JSON.";
     case "non-scalar-at-pointer":
       return `JSON pointer ${diagnostic.pointer} resolved to an object/array, not a scalar.`;
+    case "graphql-unparseable":
+      return `JSON pointer ${diagnostic.pointer} did not hold a GraphQL document this rule could analyze.`;
+    case "graphql-query-string":
+      return `The request URL had a query string, which the server may read the GraphQL document or variables from, so the GraphQL condition on ${diagnostic.pointer} could not be decided.`;
+    case "graphql-unresolved-field-argument":
+      return `GraphQL argument ${diagnostic.fieldPath}@${diagnostic.argument} (document at ${diagnostic.pointer}) had a value that did not resolve to a string.`;
   }
 }
 

@@ -41,9 +41,13 @@ def main() -> int:
             body, limits["maxBodyBytes"], case["carriesBody"]
         )
         body_size = len(body)
+        # One GraphQL memo per request, shared by every candidate, as the
+        # request hook does. Candidates with different budgets must still see
+        # their own analysis through it.
+        graphql_memo: dict = {}
         body_truth = nas_addon._body_truth_table(
             document, host, port, method, path, body_kind,
-            body_size, parsed_body,
+            body_size, parsed_body, graphql_memo,
         )
         decision = nas_addon._decide(
             document, host, port, method, path, body_truth, transport

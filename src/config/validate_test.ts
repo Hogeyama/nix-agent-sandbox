@@ -9,6 +9,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { githubGraphqlExample } from "../network/authz/examples_fixture.ts";
 import type { Config, NetworkConfig, Profile } from "./types.ts";
 import {
   DEFAULT_AGENT_STATE_CONFIG,
@@ -371,6 +372,287 @@ test("validate: rejects a body-shaped expect on a rule that never parses JSON", 
       }),
     ),
   ).toThrow(/format = "json" を要します/);
+});
+
+// GraphQL 条件の誤りは、addon が解決済みドキュメントを拒否する最初のリクエストの
+// 403 ではなく、ここ (セッション開始前) で止まらなければならない。
+
+type RuleSet = NonNullable<NetworkConfig["scopes"][string]["rules"]>;
+
+function graphqlScope(rules: RuleSet): Config {
+  return withScopes({ github: { targets: ["api.github.com"], rules } });
+}
+
+test("validate: accepts the GraphQL read example with its BodyExpect", () => {
+  const example = githubGraphqlExample();
+  const config = withScopes(example.network.scopes, {
+    secrets: example.secrets ?? {},
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+const VIEWER_PATH = "/viewer/login";
+
+for (const format of ["opaque", "none"] as const) {
+  test(`validate: rejects graphql beside body format ${format}`, () => {
+    expect(() =>
+      validateConfig(
+        graphqlScope({
+          read: {
+            match: {
+              paths: ["/graphql"],
+              body: {
+                format,
+                graphql: {
+                  operations: ["query"],
+                  fieldPaths: [VIEWER_PATH],
+                },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      ),
+    ).toThrow(`format = "${format}" に graphql を併記できません`);
+  });
+}
+
+test("validate: rejects a BodyExpect with graphql on a rule that never parses JSON", () => {
+  expect(() =>
+    validateConfig(
+      graphqlScope({
+        read: {
+          match: { paths: ["/graphql"], body: { format: "opaque" } },
+          onMatch: "allow",
+          expect: [
+            {
+              kind: "body",
+              graphql: { operations: ["query"], fieldPaths: [VIEWER_PATH] },
+            },
+          ],
+        },
+      }),
+    ),
+  ).toThrow(/expect\[0\] \(body\) は match\.body\.format = "json" を要します/);
+});
+
+const EMPTY_GRAPHQL_LISTINGS = [
+  ["operations", { operations: [], fieldPaths: [VIEWER_PATH] }],
+  ["fieldPaths", { operations: ["query"], fieldPaths: [] }],
+  [
+    "fieldArguments の /organization の login",
+    {
+      operations: ["query"],
+      fieldPaths: ["/organization/login"],
+      fieldArguments: { "/organization": { login: [] } },
+    },
+  ],
+] as const;
+
+for (const [label, graphql] of EMPTY_GRAPHQL_LISTINGS) {
+  test(`validate: rejects an empty graphql.${label} listing in match`, () => {
+    expect(() =>
+      validateConfig(
+        graphqlScope({
+          read: {
+            match: {
+              paths: ["/graphql"],
+              body: { format: "json", graphql },
+            },
+            onMatch: "allow",
+          },
+        }),
+      ),
+    ).toThrow(`match.body.graphql.${label} が空の Listing です`);
+  });
+
+  test(`validate: rejects an empty graphql.${label} listing in BodyExpect`, () => {
+    expect(() =>
+      validateConfig(
+        graphqlScope({
+          read: {
+            match: { paths: ["/graphql"], body: { format: "json" } },
+            onMatch: "allow",
+            expect: [{ kind: "body", graphql }],
+          },
+        }),
+      ),
+    ).toThrow(`expect[0] の graphql.${label} が空の Listing です`);
+  });
+}
+
+const NON_NAME_GRAPHQL_ENTRIES = [
+  [
+    "fieldPaths entry",
+    { operations: ["query"], fieldPaths: [VIEWER_PATH, "/repository/**"] },
+    'graphql.fieldPaths の "/repository/**" は GraphQL の選択経路ではありません',
+  ],
+  [
+    "fieldArguments argument key",
+    {
+      operations: ["query"],
+      fieldPaths: ["/repository/nameWithOwner"],
+      fieldArguments: { "/repository": { "owner ": ["my-org"] } },
+    },
+    'graphql.fieldArguments の /repository のキー "owner " は GraphQL の名前ではありません',
+  ],
+  [
+    "fieldArguments path key",
+    {
+      operations: ["query"],
+      fieldPaths: ["/repository/nameWithOwner"],
+      fieldArguments: { "/organization": { login: ["my-org"] } },
+    },
+    'graphql.fieldArguments のキー "/organization" は fieldPaths のどの末端でも途中でもありません',
+  ],
+] as const;
+
+for (const [label, graphql, message] of NON_NAME_GRAPHQL_ENTRIES) {
+  test(`validate: rejects a graphql ${label} that is not usable in match`, () => {
+    expect(() =>
+      validateConfig(
+        graphqlScope({
+          read: {
+            match: {
+              paths: ["/graphql"],
+              body: { format: "json", graphql },
+            },
+            onMatch: "allow",
+          },
+        }),
+      ),
+    ).toThrow(`ルール github.read の match.body.${message}`);
+  });
+
+  test(`validate: rejects a graphql ${label} that is not usable in BodyExpect`, () => {
+    expect(() =>
+      validateConfig(
+        graphqlScope({
+          read: {
+            match: { paths: ["/graphql"], body: { format: "json" } },
+            onMatch: "allow",
+            expect: [{ kind: "body", graphql }],
+          },
+        }),
+      ),
+    ).toThrow(`ルール github.read の expect[0] の ${message}`);
+  });
+}
+
+test("validate: rejects the retired rootFields / arguments keys", () => {
+  // 旧設定は黙って無視も自動変換もしない。未知のキーとして起動時に落とす。
+  const graphql = {
+    operations: ["query"],
+    fieldPaths: [VIEWER_PATH],
+    rootFields: ["viewer"],
+  } as unknown as {
+    operations: readonly ["query"];
+    fieldPaths: readonly string[];
+  };
+  expect(() =>
+    validateConfig(
+      graphqlScope({
+        read: {
+          match: {
+            paths: ["/graphql"],
+            body: { format: "json", graphql },
+          },
+          onMatch: "allow",
+        },
+      }),
+    ),
+  ).toThrow('match.body.graphql に未知のキー "rootFields" があります');
+});
+
+test("validate: accepts graphql names with underscores and digits", () => {
+  const graphql = {
+    operations: ["query"],
+    fieldPaths: ["/_node2/x", "/repository/nameWithOwner"],
+    fieldArguments: {
+      "/repository": { _after9: ["x"], first_2: ["10"] },
+    },
+  } as const;
+  const config = graphqlScope({
+    read: {
+      match: { paths: ["/graphql"], body: { format: "json", graphql } },
+      onMatch: "allow",
+      expect: [{ kind: "body", graphql }],
+    },
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: rejects a graphql.at that is not a JSON Pointer", () => {
+  const message = (() => {
+    try {
+      validateConfig(
+        graphqlScope({
+          read: {
+            match: {
+              paths: ["/graphql"],
+              body: {
+                format: "json",
+                graphql: {
+                  at: "query",
+                  operations: ["query"],
+                  fieldPaths: [VIEWER_PATH],
+                },
+              },
+            },
+            onMatch: "allow",
+            expect: [
+              {
+                kind: "body",
+                graphql: {
+                  at: "/bad~2",
+                  operations: ["query"],
+                  fieldPaths: [VIEWER_PATH],
+                },
+              },
+            ],
+          },
+        }),
+      );
+      return "";
+    } catch (thrown) {
+      return String(thrown);
+    }
+  })();
+  expect(message).toContain(
+    "match.body.graphql.at の query は RFC 6901 JSON Pointer として不正です",
+  );
+  expect(message).toContain(
+    "expect[0] の graphql.at の /bad~2 は RFC 6901 JSON Pointer として不正です",
+  );
+});
+
+test("validate: rejects unresolved overlapping graphql rules and shows a document", () => {
+  const rule = (at: string) => ({
+    match: {
+      methods: ["POST"],
+      paths: ["/graphql"],
+      body: {
+        format: "json" as const,
+        graphql: {
+          at,
+          operations: ["query" as const],
+          fieldPaths: [VIEWER_PATH],
+        },
+      },
+    },
+    onMatch: "allow" as const,
+  });
+  expect(() =>
+    validateConfig(graphqlScope({ query: rule("/query"), doc: rule("/doc") })),
+  ).toThrow(
+    'ボディ: {"query":"query { viewer { login } }","doc":"query { viewer { login } }"}',
+  );
+
+  const resolved = graphqlScope({
+    query: rule("/query"),
+    doc: { ...rule("/doc"), overrides: ["query"] },
+  });
+  expect(validateConfig(resolved)).toBe(resolved);
 });
 
 test("validate: rejects an inject that names no registered secret", () => {

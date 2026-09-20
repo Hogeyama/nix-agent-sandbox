@@ -14,7 +14,9 @@ import {
   targetSetsIntersect,
   targetSetsSubsume,
 } from "./relation.ts";
+import { accepts } from "./semantics.ts";
 import type { BodyMatch, Match, Target } from "./types.ts";
+import { matchIntersectionWitness } from "./witness.ts";
 
 function compile(match: Match): CompiledMatch {
   const compiled = compileMatch(match);
@@ -173,47 +175,179 @@ describe("ボディの graphql", () => {
   const gql = (graphql: NonNullable<BodyMatch["graphql"]>) =>
     body({ format: "json", graphql });
 
-  test("operations と rootFields は集合の包含で比べる", () => {
-    const narrow = gql({ operations: ["query"] });
-    const wide = gql({ operations: ["query", "mutation"] });
+  const LEAF = "/repository/issues/nodes/body";
+  const NAME = "/repository/nameWithOwner";
+
+  /**
+   * a ⊆ b と判断したなら、a の受理例は b も受理する。
+   *
+   * 受理例は a だけから作った証人 (`matchIntersectionWitness(a, a)`) を使う。
+   * 静的な包含判定が実評価より緩くなっていれば、ここで捕まる。
+   */
+  const subsumesSoundly = (
+    a: NonNullable<BodyMatch["graphql"]>,
+    b: NonNullable<BodyMatch["graphql"]>,
+  ): void => {
+    const matchA = compile({
+      paths: ["/graphql"],
+      body: { format: "json", graphql: a },
+    });
+    const matchB = compile({
+      paths: ["/graphql"],
+      body: { format: "json", graphql: b },
+    });
+    expect(bodySubsumes(matchA.body, matchB.body)).toBe(true);
+    const witness = matchIntersectionWitness(matchA, matchA);
+    expect(witness).not.toBeNull();
+    if (witness === null) return;
+    expect(accepts(matchA, witness)).toBe(true);
+    expect(accepts(matchB, witness)).toBe(true);
+  };
+
+  test("operations は集合の包含で比べる", () => {
+    const narrow = gql({ operations: ["query"], fieldPaths: [LEAF] });
+    const wide = gql({ operations: ["query", "mutation"], fieldPaths: [LEAF] });
     expect(bodySubsumes(narrow, wide)).toBe(true);
     expect(bodySubsumes(wide, narrow)).toBe(false);
     expect(
       bodiesIntersect(
-        gql({ operations: ["query"] }),
-        gql({ operations: ["mutation"] }),
+        gql({ operations: ["query"], fieldPaths: [LEAF] }),
+        gql({ operations: ["mutation"], fieldPaths: [LEAF] }),
+      ),
+    ).toBe(false);
+    subsumesSoundly(
+      { operations: ["query"], fieldPaths: [LEAF] },
+      { operations: ["query", "mutation"], fieldPaths: [LEAF] },
+    );
+  });
+
+  test("許可末端の集合が部分集合なら包含する", () => {
+    const narrow = gql({ operations: ["query"], fieldPaths: [LEAF] });
+    const wide = gql({ operations: ["query"], fieldPaths: [LEAF, NAME] });
+    expect(bodySubsumes(narrow, wide)).toBe(true);
+    expect(bodySubsumes(wide, narrow)).toBe(false);
+    subsumesSoundly(
+      { operations: ["query"], fieldPaths: [LEAF] },
+      { operations: ["query"], fieldPaths: [LEAF, NAME] },
+    );
+  });
+
+  test("許可末端の集合が素なら交差しない", () => {
+    // 有効な facts は末端の出現を必ず 1 つ持ち、その経路は両方の許可集合に
+    // 属さなければならない。
+    expect(
+      bodiesIntersect(
+        gql({ operations: ["query"], fieldPaths: [LEAF] }),
+        gql({ operations: ["query"], fieldPaths: [NAME] }),
+      ),
+    ).toBe(false);
+    // 接頭辞が共通でも末端が違えば交差しない。
+    expect(
+      bodiesIntersect(
+        gql({ operations: ["query"], fieldPaths: ["/repository/issues"] }),
+        gql({ operations: ["query"], fieldPaths: [LEAF] }),
       ),
     ).toBe(false);
   });
 
-  test("省略された rootFields は制約なしとして最も広く扱う", () => {
-    const constrained = gql({
+  test("末端が共通なら、引数が矛盾していても交差すると倒す", () => {
+    // ある経路で値集合が素でも、その経路を通らない別の共通末端で両方を満たす
+    // document を作れる。引数の矛盾だけから文書全体の非交差を推測しない。
+    const v1 = gql({
       operations: ["query"],
-      rootFields: ["organization"],
+      fieldPaths: [LEAF, NAME],
+      fieldArguments: { "/repository": { owner: ["v1"] } },
     });
-    const free = gql({ operations: ["query"] });
-    expect(bodySubsumes(constrained, free)).toBe(true);
-    expect(bodySubsumes(free, constrained)).toBe(false);
+    const v2 = gql({
+      operations: ["query"],
+      fieldPaths: [LEAF, NAME],
+      fieldArguments: { "/repository": { owner: ["v2"] } },
+    });
+    expect(bodiesIntersect(v1, v2)).toBe(true);
+    expect(bodySubsumes(v1, v2)).toBe(false);
+    expect(bodySubsumes(v2, v1)).toBe(false);
+  });
+
+  test("b の必須引数が a に無ければ包含しない", () => {
+    const free = gql({ operations: ["query"], fieldPaths: [LEAF] });
+    const owned = gql({
+      operations: ["query"],
+      fieldPaths: [LEAF],
+      fieldArguments: { "/repository": { owner: ["my-org"] } },
+    });
+    expect(bodySubsumes(owned, free)).toBe(true);
+    expect(bodySubsumes(free, owned)).toBe(false);
+    subsumesSoundly(
+      {
+        operations: ["query"],
+        fieldPaths: [LEAF],
+        fieldArguments: { "/repository": { owner: ["my-org"] } },
+      },
+      { operations: ["query"], fieldPaths: [LEAF] },
+    );
+  });
+
+  test("引数の許可値は集合の包含で比べる", () => {
+    const one = gql({
+      operations: ["query"],
+      fieldPaths: [LEAF],
+      fieldArguments: { "/repository": { owner: ["a"] } },
+    });
+    const two = gql({
+      operations: ["query"],
+      fieldPaths: [LEAF],
+      fieldArguments: { "/repository": { owner: ["a", "b"] } },
+    });
+    expect(bodySubsumes(one, two)).toBe(true);
+    expect(bodySubsumes(two, one)).toBe(false);
+    subsumesSoundly(
+      {
+        operations: ["query"],
+        fieldPaths: [LEAF],
+        fieldArguments: { "/repository": { owner: ["a"] } },
+      },
+      {
+        operations: ["query"],
+        fieldPaths: [LEAF],
+        fieldArguments: { "/repository": { owner: ["a", "b"] } },
+      },
+    );
+  });
+
+  test("同じ引数名でも経路が違えば包含を満たさない", () => {
+    // 別の場所の owner で `/repository` の必須 owner を満たさせない。
+    const onRepository = gql({
+      operations: ["query"],
+      fieldPaths: [LEAF],
+      fieldArguments: { "/repository": { owner: ["my-org"] } },
+    });
+    const onIssues = gql({
+      operations: ["query"],
+      fieldPaths: [LEAF],
+      fieldArguments: { "/repository/issues": { owner: ["my-org"] } },
+    });
+    expect(bodySubsumes(onIssues, onRepository)).toBe(false);
+    expect(bodySubsumes(onRepository, onIssues)).toBe(false);
   });
 
   test("at が異なる 2 つは交差し、どちらも包含しない", () => {
-    const a = gql({ at: "/query", operations: ["query"] });
-    const b = gql({ at: "/doc", operations: ["mutation"] });
+    const a = gql({
+      at: "/query",
+      operations: ["query"],
+      fieldPaths: [LEAF],
+    });
+    const b = gql({ at: "/doc", operations: ["mutation"], fieldPaths: [NAME] });
     expect(bodiesIntersect(a, b)).toBe(true);
     expect(bodySubsumes(a, b)).toBe(false);
     expect(bodySubsumes(b, a)).toBe(false);
   });
 
-  test("arguments は包含を狭めるが、交差は否定しない", () => {
-    const v1 = gql({ operations: ["query"], arguments: { login: ["v1"] } });
-    const v2 = gql({ operations: ["query"], arguments: { login: ["v2"] } });
-    const free = gql({ operations: ["query"] });
-    expect(bodySubsumes(v1, free)).toBe(true);
-    expect(bodySubsumes(free, v1)).toBe(false);
-    expect(bodySubsumes(v1, v2)).toBe(false);
-    // その引数を 1 つも含まない document は両方を満たすので、値集合が素でも
-    // 受理集合は交差する。
-    expect(bodiesIntersect(v1, v2)).toBe(true);
+  test("GraphQL 条件を持たない側は最も広い", () => {
+    const constrained = gql({ operations: ["query"], fieldPaths: [LEAF] });
+    const free = body({ format: "json" });
+    expect(bodySubsumes(constrained, free)).toBe(true);
+    expect(bodySubsumes(free, constrained)).toBe(false);
+    expect(bodiesIntersect(constrained, free)).toBe(true);
   });
 });
 

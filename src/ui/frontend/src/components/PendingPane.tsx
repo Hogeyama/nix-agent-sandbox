@@ -21,6 +21,8 @@ import {
   hostExecScopeLabel,
   networkApprovalEffect,
   sessionLabel,
+  violationHeadline,
+  violationPointerLine,
 } from "./pendingCardView";
 import { filterPendingForSession } from "./pendingNotificationView";
 import { PortBindingsPanel } from "./ports/PortBindingsPanel";
@@ -313,7 +315,7 @@ export function PendingPane(props: Props) {
                           <div class="card-violation">
                             <div class="card-violation-head">
                               <span class="card-violation-value">
-                                {violation.value ?? violation.kind}
+                                {violationHeadline(violation)}
                               </span>
                               <Show when={violation.count > 1}>
                                 <span class="card-violation-count">
@@ -326,10 +328,12 @@ export function PendingPane(props: Props) {
                                 </span>
                               </Show>
                             </div>
-                            <Show when={violation.pointer}>
-                              <div class="card-violation-pointer">
-                                {violation.pointer}
-                              </div>
+                            <Show when={violationPointerLine(violation)}>
+                              {(pointer) => (
+                                <div class="card-violation-pointer">
+                                  {pointer()}
+                                </div>
+                              )}
                             </Show>
                             <Show when={violation.excerpt}>
                               {(excerpt) => (

@@ -13,14 +13,23 @@
 
 import { expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import type { AuthzConfig } from "../../network/authz/config.ts";
+import {
+  GRAPHQL_TABLE_CASES,
+  GRAPHQL_TABLE_LIMITS,
+  type GraphqlTruth,
+  SPEC_GRAPHQL_CONDITION,
+} from "../../network/authz/examples_fixture.ts";
+import { buildGraphqlDocuments } from "../../network/authz/graphql.ts";
 import { normalizeBody } from "../../network/authz/relation.ts";
 import {
   decide,
   type ResolvedDocument,
   type ResolvedRule,
   resolveAuthzConfig,
+  resolvedBodyMatch,
 } from "../../network/authz/resolve.ts";
 import { evaluateBody } from "../../network/authz/semantics.ts";
 import type { JsonValue, RequestBody } from "../../network/authz/types.ts";
@@ -28,6 +37,11 @@ import type { RequestTransport } from "../../network/protocol.ts";
 
 const python3 = Bun.which("python3");
 const addonDir = path.dirname(new URL(import.meta.url).pathname);
+
+// decide_parity.py は nas_addon を import し、nas_addon は ./vendor の
+// graphql-core を必要とする。vendor/ は gitignore 済みの生成物なので、
+// `bun run vendor` 未実行の checkout では ModuleNotFoundError で落ちる。
+const vendoredDeps = existsSync(path.join(addonDir, "vendor", "graphql"));
 
 interface BodyCase {
   readonly name: string;
@@ -71,7 +85,17 @@ interface SerializedDecisionCase {
  *   確かめられない — 並べ替えを消して宣言順で歩く実装も同じ答えを返す。
  *   `order` スコープは広いルールを先に宣言し、狭いルールを後に宣言するので、
  *   2 つの順序が別々の答えを出す。
+ * - GraphQL 条件 (`graphql` スコープ)。document の解析はルールごとに、その
+ *   ルール自身の `maxNodes` / `maxDepth` で行う。予算の違う 2 本 (`read` は
+ *   `maxDepth` を、`mutations` は `maxNodes` を絞る) が同じ document を見るので、
+ *   片方の予算で解析した結果をもう片方に使い回す実装はここで割れる。
+ *   `read` と `mutations` は operations が互いに素で、特異度では決着しない。
+ *   両方が判定不能になる document では、どちらで打ち切るか (review か deny か)
+ *   が評価順を映す。
  */
+/** `mutations` の token 予算だけを越えさせるための 60 個の末端名。 */
+const MANY_FIELD_NAMES = Array.from({ length: 60 }, (_, i) => `f${i}`);
+
 const CONFIG: AuthzConfig = {
   network: {
     fallback: "review",
@@ -174,6 +198,84 @@ const CONFIG: AuthzConfig = {
             onMatch: "allow",
             onIndeterminate: "review",
             limits: { maxBodyBytes: 8 },
+          },
+        },
+      },
+      graphql: {
+        targets: ["graphql.example"],
+        fallback: "deny",
+        rules: {
+          read: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: {
+                format: "json",
+                graphql: {
+                  operations: ["query"],
+                  fieldPaths: [
+                    "/viewer/login",
+                    "/viewer/a/b/c",
+                    "/repository/id",
+                    "/repository/issues/totalCount",
+                    // `query-over-mutations-tokens` を read で真にするための
+                    // 末端。mutations の token 予算を越える document が、
+                    // read 自身の予算では読み切れることを見る。
+                    ...MANY_FIELD_NAMES.map((name) => `/viewer/${name}`),
+                  ],
+                  fieldArguments: { "/repository": { owner: ["my-org"] } },
+                },
+              },
+            },
+            onMatch: "allow",
+            onIndeterminate: "review",
+            limits: { maxDepth: 4 },
+          },
+          mutations: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: {
+                format: "json",
+                graphql: {
+                  operations: ["mutation"],
+                  fieldPaths: ["/addStar/id", "/a/b/c/d/e"],
+                },
+              },
+            },
+            onMatch: "review",
+            onIndeterminate: "deny",
+            // 普通の document (最長の GRAPHQL_READ で 31 token) は収まり、
+            // 名前を 60 個並べた document だけが越える。
+            limits: { maxNodes: 40 },
+          },
+          any: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: { format: "json" },
+            },
+            onMatch: "deny",
+          },
+        },
+      },
+      // `graphql_acceptance_test.ts` の期待表と**同じ**条件・同じ予算。
+      // 向こうは addon の中の真理値と違反を見るが、ここではホストの `decide`
+      // と addon の `_decide` が同じ document・同じ variables・同じ limits で
+      // 同じルールを選ぶことを見る。片方だけが経路を評価していれば割れる。
+      graphqlTable: {
+        targets: ["graphql-table.example"],
+        fallback: "deny",
+        rules: {
+          read: {
+            match: {
+              methods: ["POST"],
+              paths: ["/graphql"],
+              body: { format: "json", graphql: SPEC_GRAPHQL_CONDITION },
+            },
+            onMatch: "allow",
+            onIndeterminate: "review",
+            limits: { ...GRAPHQL_TABLE_LIMITS },
           },
         },
       },
@@ -374,6 +476,183 @@ const VALUE_CASES: readonly DecisionCase[] = [
   },
 ];
 
+/**
+ * `graphql` スコープに流す document。答えは次の 3 本のどれで終わるかで読む。
+ * `read` の真は allow、判定不能は打ち切りの review。`mutations` の真は
+ * review、判定不能は打ち切りの deny。どちらも偽なら `any` の deny (rule)。
+ */
+function graphqlCase(
+  name: string,
+  requestBody: unknown,
+  requestPath = "/graphql",
+): DecisionCase {
+  return {
+    name: `graphql-${name}`,
+    host: "graphql.example",
+    port: 443,
+    method: "POST",
+    path: requestPath,
+    body: body(
+      name,
+      typeof requestBody === "string"
+        ? requestBody
+        : JSON.stringify(requestBody),
+      true,
+    ),
+  };
+}
+
+const GRAPHQL_READ =
+  'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { totalCount } } }';
+
+const GRAPHQL_DEFAULT =
+  'query($o: String = "my-org") { repository(owner: $o, name: "x") { id } }';
+
+const MANY_FIELDS = MANY_FIELD_NAMES.join(" ");
+
+const GRAPHQL_CASES: readonly DecisionCase[] = [
+  graphqlCase("shorthand", { query: "{ viewer { login } }" }),
+  graphqlCase("mutation", {
+    query: 'mutation { addStar(owner: "my-org") { id } }',
+  }),
+  // root の fragment spread を展開しないと出現が 1 つも取れず、node が
+  // fieldPaths の制約をすり抜ける。
+  graphqlCase("root-fragment-spread", {
+    query: 'query { ...f } fragment f on Query { node(id: "1") { id } }',
+  }),
+  graphqlCase("root-inline-fragment", {
+    query: '{ ... on Query { node(id: "1") { id } } }',
+  }),
+  graphqlCase("variable-resolved", {
+    query: GRAPHQL_READ,
+    variables: { o: "my-org" },
+  }),
+  graphqlCase("variable-resolved-other", {
+    query: GRAPHQL_READ,
+    variables: { o: "other-org" },
+  }),
+  graphqlCase("literal-other", {
+    query: 'query { repository(owner: "other-org", name: "x") { id } }',
+  }),
+  // 名指しした引数 (owner) が解決できない。read は判定不能で打ち切る。
+  graphqlCase("named-argument-unresolved", { query: GRAPHQL_READ }),
+  graphqlCase("named-argument-non-string", {
+    query: GRAPHQL_READ,
+    variables: { o: 7 },
+  }),
+  // variables に無い変数は operation の既定値で解決する。与えた値
+  // (明示の null を含む) は既定値より優先する。
+  graphqlCase("variable-default", { query: GRAPHQL_DEFAULT }),
+  graphqlCase("variable-default-overridden", {
+    query: GRAPHQL_DEFAULT,
+    variables: { o: "other-org" },
+  }),
+  graphqlCase("variable-default-null", {
+    query: GRAPHQL_DEFAULT,
+    variables: { o: null },
+  }),
+  // variables が JSON の null なら無いのと同じく既定値で解決する。
+  // オブジェクトでない variables (JSON を詰めた文字列など) は、サーバが
+  // 読み直して使うことがあるので既定値に落とさず解決不能とする。
+  graphqlCase("variables-null", { query: GRAPHQL_DEFAULT, variables: null }),
+  graphqlCase("variables-string", {
+    query: GRAPHQL_DEFAULT,
+    variables: '{"o":"other-org"}',
+  }),
+  graphqlCase("variables-array", { query: GRAPHQL_DEFAULT, variables: [] }),
+  graphqlCase("variables-number", { query: GRAPHQL_DEFAULT, variables: 1 }),
+  graphqlCase("variables-boolean", {
+    query: GRAPHQL_DEFAULT,
+    variables: true,
+  }),
+  // 共有 fragment の引数は到達する operation ごとの既定値で評価する。
+  graphqlCase("variable-default-shared-fragment", {
+    query:
+      'query A($o: String = "my-org") { ...f } ' +
+      'query B($o: String = "other-org") { ...f } ' +
+      'fragment f on Query { repository(owner: $o, name: "x") { id } }',
+  }),
+  // 名指ししない引数 (first: 10 の Int) の解決不能は判定に関与しない。
+  graphqlCase("unnamed-argument-unresolved", {
+    query:
+      'query { repository(owner: "my-org", name: "x") { issues(first: 10) { totalCount } } }',
+  }),
+  // read の maxDepth (4) を越える。mutations は既定の深さで解析して偽。
+  graphqlCase("query-over-read-depth", {
+    query: "{ viewer { a { b { c { d } } } } }",
+  }),
+  graphqlCase("query-at-read-depth", {
+    query: "{ viewer { a { b { c } } } }",
+  }),
+  // mutations だけが真になる document を、read の深さを越えて置く。
+  // 両ルールの評価順で答えが割れる。
+  graphqlCase("mutation-over-read-depth", {
+    query: "mutation { a { b { c { d { e } } } } }",
+  }),
+  // mutations の maxNodes (40 token) を越える mutation。read は既定の予算で
+  // 解析して偽なので、判定不能は mutations 自身の予算からしか来ない。
+  graphqlCase("mutation-over-mutations-tokens", {
+    query: `mutation { ${MANY_FIELDS} }`,
+  }),
+  graphqlCase("query-over-mutations-tokens", {
+    query: `{ viewer { ${MANY_FIELDS} } }`,
+  }),
+  // `at` の対象が無いと偽 (any の deny)。文字列でなければ判定不能。
+  graphqlCase("at-missing", { variables: {} }),
+  graphqlCase("at-not-string", { query: 7 }),
+  graphqlCase("unparseable", { query: "query {" }),
+  graphqlCase("fragment-only", {
+    query: "fragment f on Query { viewer { login } }",
+  }),
+  graphqlCase("not-json", "query { viewer { login } }"),
+  // サーバは document と変数を URL からも読む。クエリ文字列があれば graphql
+  // 条件はボディを見る前に判定不能になり、read で打ち切る。ボディに document
+  // が無くても偽にはならない。`?` だけで中身が無ければ関係しない。
+  graphqlCase(
+    "query-string-document",
+    { query: "{ viewer { login } }" },
+    "/graphql?query=mutation%7BdeleteRepository%7D",
+  ),
+  graphqlCase(
+    "query-string-variables",
+    { query: GRAPHQL_DEFAULT },
+    "/graphql?variables=%7B%22o%22%3A%22other-org%22%7D",
+  ),
+  graphqlCase(
+    "query-string-nested-variables",
+    { query: GRAPHQL_DEFAULT },
+    "/graphql?variables[o]=other-org",
+  ),
+  graphqlCase(
+    "query-string-no-document",
+    { variables: {} },
+    "/graphql?query=mutation%7BdeleteRepository%7D",
+  ),
+  graphqlCase(
+    "query-string-empty",
+    { query: "{ viewer { login } }" },
+    "/graphql?",
+  ),
+];
+
+/** 期待表の document を `graphqlTable` スコープへ流す形。 */
+const GRAPHQL_TABLE_DECISION_CASES: readonly DecisionCase[] =
+  GRAPHQL_TABLE_CASES.map((case_) => ({
+    name: `table-${case_.name}`,
+    host: "graphql-table.example",
+    port: 443,
+    method: "POST",
+    path: case_.path ?? "/graphql",
+    body: body(case_.name, JSON.stringify(case_.body), true),
+  }));
+
+/** 期待表の真理値が `graphqlTable` スコープの決定として見える形。 */
+const TABLE_DECISION: Readonly<Record<GraphqlTruth, readonly string[]>> = {
+  true: ["graphqlTable.read", "allow", "rule"],
+  false: ["graphqlTable.$fallback", "deny", "scope-fallback"],
+  indeterminate: ["graphqlTable.read", "review", "indeterminate"],
+};
+
 function requestBody(
   bodyCase: BodyCase,
   maxBodyBytes = Number.POSITIVE_INFINITY,
@@ -393,14 +672,19 @@ function requestBody(
   }
 }
 
-function resolvedBodyMatch(rule: ResolvedRule) {
-  return rule.match.bodyFormat === null
-    ? undefined
-    : {
-        format: rule.match.bodyFormat,
-        equals: rule.match.equals,
-        oneOf: rule.match.oneOf,
-      };
+/**
+ * そのルールが見るボディ。バイト数の予算で組み直し、GraphQL の document は
+ * そのルール自身の `maxNodes` / `maxDepth` で解析する。addon が候補ごとに
+ * 自分の limits で評価するのと同じ位置である。
+ */
+function ruleRequestBody(bodyCase: BodyCase, rule: ResolvedRule): RequestBody {
+  const body = requestBody(bodyCase, rule.limits.maxBodyBytes);
+  const graphql = rule.match.graphql;
+  if (body.kind !== "json" || graphql === null) return body;
+  return {
+    ...body,
+    documents: buildGraphqlDocuments(body.value, [graphql.at], rule.limits),
+  };
 }
 
 function decideCase(
@@ -430,8 +714,9 @@ function decideCase(
     { method: case_.method, path: case_.path, transport, body },
     (rule) =>
       evaluateBody(
-        normalizeBody(resolvedBodyMatch(rule)),
-        requestBody(case_.body, rule.limits.maxBodyBytes),
+        normalizeBody(resolvedBodyMatch(rule.match)),
+        ruleRequestBody(case_.body, rule),
+        case_.path,
       ),
   );
   return { body, decision };
@@ -566,7 +851,7 @@ function decisionLine(
   ].join("|");
 }
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "the addon reproduces the resolver's decision on every axis of selection",
   async () => {
     const resolved = resolveAuthzConfig(CONFIG);
@@ -594,6 +879,8 @@ test.skipIf(!python3)(
       }
     }
     cases.push(...VALUE_CASES);
+    cases.push(...GRAPHQL_CASES);
+    cases.push(...GRAPHQL_TABLE_DECISION_CASES);
     cases.push(
       {
         name: "websocket-allow-scope-reaches-review-rule",
@@ -658,7 +945,7 @@ test.skipIf(!python3)(
   },
 );
 
-test.skipIf(!python3)(
+test.skipIf(!python3 || !vendoredDeps)(
   "overflowing JSON numbers have the same candidate truth on host and addon",
   async () => {
     const resolved = resolveAuthzConfig({
@@ -722,3 +1009,135 @@ test.skipIf(!python3)(
     expect(stdout.trim()).toEqual(expected);
   },
 );
+
+/**
+ * 突き合わせは TS と Python が同じように間違っても通る (例えば graphql 条件が
+ * すべて偽に倒れ、全件が `any` に落ちる)。そこで代表的な document については
+ * 仕様が決める答えをここで固定する。Python 側は上の突き合わせがこの答えに
+ * 縛る。
+ */
+test("GraphQL documents select the rule the spec says they select", () => {
+  const resolved = resolveAuthzConfig(CONFIG);
+  const document = resolved.document;
+  if (document === null) throw new Error("unresolvable fixture config");
+  const byName = new Map(GRAPHQL_CASES.map((case_) => [case_.name, case_]));
+  const decided = (name: string) => {
+    const case_ = byName.get(`graphql-${name}`);
+    if (case_ === undefined) throw new Error(`missing case ${name}`);
+    const { decision } = decideCase(document, case_);
+    return [decision.ruleId, decision.action, decision.reason];
+  };
+
+  // 条件をすべて満たす query は read が許す。省略形は query である。
+  expect(decided("shorthand")).toEqual(["graphql.read", "allow", "rule"]);
+  // 変数で渡した owner は variables を引いて解決する。
+  expect(decided("variable-resolved")).toEqual([
+    "graphql.read",
+    "allow",
+    "rule",
+  ]);
+  // variables に無い owner は operation の既定値で解決し、read が許す。
+  expect(decided("variable-default")).toEqual([
+    "graphql.read",
+    "allow",
+    "rule",
+  ]);
+  // 明示の null は既定値に落ちず解決不能で、read で打ち切る。
+  expect(decided("variable-default-null")).toEqual([
+    "graphql.read",
+    "review",
+    "indeterminate",
+  ]);
+  // variables が null なら既定値で解決し、read が許す。
+  expect(decided("variables-null")).toEqual(["graphql.read", "allow", "rule"]);
+  // オブジェクトでない variables の下では既定値に落ちず、read で打ち切る。
+  for (const shape of ["string", "array", "number", "boolean"]) {
+    expect(decided(`variables-${shape}`)).toEqual([
+      "graphql.read",
+      "review",
+      "indeterminate",
+    ]);
+  }
+  // mutation は read にとって偽で、mutations が選ぶ。
+  expect(decided("mutation")).toEqual(["graphql.mutations", "review", "rule"]);
+  // root の fragment spread は展開され、node の経路が fieldPaths に無いので偽。
+  expect(decided("root-fragment-spread")).toEqual([
+    "graphql.any",
+    "deny",
+    "rule",
+  ]);
+  // 名指しした引数が解決できなければ判定不能で、read で打ち切る。
+  expect(decided("named-argument-unresolved")).toEqual([
+    "graphql.read",
+    "review",
+    "indeterminate",
+  ]);
+  // read 自身の maxDepth を越える document は判定不能。
+  expect(decided("query-over-read-depth")).toEqual([
+    "graphql.read",
+    "review",
+    "indeterminate",
+  ]);
+  // mutations 自身の maxNodes を越える mutation は、そのルールで判定不能。
+  expect(decided("mutation-over-mutations-tokens")).toEqual([
+    "graphql.mutations",
+    "deny",
+    "indeterminate",
+  ]);
+  // 同じ長さの query は read の既定の予算で解析され、許される。
+  expect(decided("query-over-mutations-tokens")).toEqual([
+    "graphql.read",
+    "allow",
+    "rule",
+  ]);
+  // `at` の対象が無いのは偽で、判定不能ではない。
+  expect(decided("at-missing")).toEqual(["graphql.any", "deny", "rule"]);
+  // クエリ文字列があれば、ボディの document が読み取りでも、既定値で解決
+  // できても、document が無くても判定不能で、read で打ち切って人に回す。
+  // `?query=mutation...` を読み取りのボディで包んでも許可にはならない。
+  for (const name of [
+    "query-string-document",
+    "query-string-variables",
+    "query-string-nested-variables",
+    "query-string-no-document",
+  ]) {
+    expect([name, ...decided(name)]).toEqual([
+      name,
+      "graphql.read",
+      "review",
+      "indeterminate",
+    ]);
+  }
+  expect(decided("query-string-empty")).toEqual([
+    "graphql.read",
+    "allow",
+    "rule",
+  ]);
+});
+
+/**
+ * 期待表の `match` 列を、ホストの `decide` の上でも固定する。
+ *
+ * addon 側は `graphql_acceptance_test.ts` が同じ表で固定し、上の突き合わせが
+ * この 2 つを縛る。両者が同じように間違うことだけが残る危険なので、答えは
+ * 仕様の表からしか来ないようにしてある。
+ */
+test("the expectation table's match column holds on the host resolver too", () => {
+  const resolved = resolveAuthzConfig(CONFIG);
+  const document = resolved.document;
+  if (document === null) throw new Error("unresolvable fixture config");
+  const byName = new Map(
+    GRAPHQL_TABLE_DECISION_CASES.map((case_) => [case_.name, case_]),
+  );
+  for (const case_ of GRAPHQL_TABLE_CASES) {
+    const decisionCase = byName.get(`table-${case_.name}`);
+    if (decisionCase === undefined) throw new Error(`missing ${case_.name}`);
+    const { decision } = decideCase(document, decisionCase);
+    expect([
+      case_.name,
+      decision.ruleId,
+      decision.action,
+      decision.reason,
+    ]).toEqual([case_.name, ...TABLE_DECISION[case_.matchTruth]]);
+  }
+});

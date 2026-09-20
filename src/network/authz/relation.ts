@@ -30,9 +30,13 @@ import {
 export interface NormalizedGraphql {
   readonly at: string;
   readonly operations: readonly GraphqlOperation[];
-  /** null は「制約しない」。 */
-  readonly rootFields: readonly string[] | null;
-  readonly argumentValues: ReadonlyMap<string, readonly string[]>;
+  /** 取得を許す末端の経路。重複は除いてある。 */
+  readonly fieldPaths: readonly string[];
+  /** 経路 → 引数名 → 許す文字列。省略は空の Map になる。 */
+  readonly fieldArguments: ReadonlyMap<
+    string,
+    ReadonlyMap<string, readonly string[]>
+  >;
 }
 
 export interface NormalizedBody {
@@ -102,15 +106,22 @@ export function normalizeBody(body: BodyMatch | undefined): NormalizedBody {
         : {
             at: graphql.at ?? DEFAULT_GRAPHQL_AT,
             operations: unique(graphql.operations),
-            rootFields:
-              graphql.rootFields === undefined
-                ? null
-                : unique(graphql.rootFields),
-            argumentValues: new Map(
-              Object.entries(graphql.arguments ?? {}).map(([name, values]) => [
-                name,
-                unique(values),
-              ]),
+            // `fieldPaths` は必須だが、欠けた設定は検査器が拒否する前にここを
+            // 通り得る。空集合は「どの末端も許さない」であり、制約なしには
+            // 倒さない。
+            fieldPaths: unique(graphql.fieldPaths ?? []),
+            fieldArguments: new Map(
+              Object.entries(graphql.fieldArguments ?? {}).map(
+                ([path, args]) => [
+                  path,
+                  new Map(
+                    Object.entries(args).map(([name, values]) => [
+                      name,
+                      unique(values),
+                    ]),
+                  ),
+                ],
+              ),
             ),
           },
   };
@@ -325,6 +336,18 @@ function pointersSubsume(
   return true;
 }
 
+/**
+ * 交差を否定できるのは operation の集合か許可末端の集合が互いに素なときだけ。
+ *
+ * 有効な facts は必ず末端の出現を 1 つ以上持ち、その経路は両方の許可末端集合に
+ * 属さなければならないので、末端集合が素なら両方を満たす document は存在しない。
+ *
+ * 引数の矛盾だけから文書全体の非交差は推測しない。ある経路で値集合が素でも、
+ * その経路を通らない別の共通末端で両方を満たす document を作れるからである。
+ * 共通末端がすべて矛盾する引数を通る場合は交差しないが、それを示すのはこの
+ * 判定の仕事ではない。証人 (`witness.ts`) が候補の末端を順に試して作れなければ
+ * 「証人なし」として扱い、交差の否定とは取り違えない。
+ */
 function graphqlIntersects(
   a: NormalizedGraphql | null,
   b: NormalizedGraphql | null,
@@ -335,18 +358,22 @@ function graphqlIntersects(
   if (!a.operations.some((operation) => b.operations.includes(operation))) {
     return false;
   }
-  if (a.rootFields !== null && b.rootFields !== null) {
-    if (!a.rootFields.some((field) => b.rootFields?.includes(field)))
-      return false;
-  }
-  // `arguments` は交差を妨げない。「この名前の引数が現れるなら値はこの集合に
-  // 含まれる」という条件なので、その引数を 1 つも含まない document は値集合が
-  // 素な 2 つの条件を同時に満たす。値集合の非交差から document の非存在は導け
-  // ないので、保守側に倒してここでは交差を否定しない。witness.ts の証人も、
-  // 制約された引数を置かない形で構成することでこの判断と一貫している。
+  if (!a.fieldPaths.some((path) => b.fieldPaths.includes(path))) return false;
   return true;
 }
 
+/**
+ * 包含は仕様の 3 つの十分条件をすべて満たしたときだけ主張する。
+ *
+ * 1. a の許可末端集合が b の部分集合である。
+ * 2. b の必須 fieldArguments がすべて a にもあり、値集合が V_a ⊆ V_b である。
+ * 3. a の operations が b の部分集合である。
+ *
+ * 1 から a の接頭辞集合も b のそれに含まれるので、a が受理する出現はすべて b の
+ * 経路条件を通る。2 は「b が要求する引数は a も同じ経路・同じ名前で要求し、a が
+ * 通す値は b も通す」ことを言う。どれか 1 つでも示せなければ「包含しない」に
+ * 倒す。実際には出現し得ない経路を使った追加の最適化はしない。
+ */
 function graphqlSubsumes(
   a: NormalizedGraphql | null,
   b: NormalizedGraphql | null,
@@ -357,17 +384,15 @@ function graphqlSubsumes(
   if (!a.operations.every((operation) => b.operations.includes(operation))) {
     return false;
   }
-  if (b.rootFields !== null) {
-    if (a.rootFields === null) return false;
-    if (!a.rootFields.every((field) => b.rootFields?.includes(field)))
-      return false;
-  }
-  // Pointer → 値集合と同じ規則。b のすべての引数名が a にもあり、値集合が
-  // V_a ⊆ V_b であること。
-  for (const [name, valuesB] of b.argumentValues) {
-    const valuesA = a.argumentValues.get(name);
-    if (valuesA === undefined) return false;
-    if (!valuesA.every((value) => valuesB.includes(value))) return false;
+  if (!a.fieldPaths.every((path) => b.fieldPaths.includes(path))) return false;
+  for (const [path, argsB] of b.fieldArguments) {
+    const argsA = a.fieldArguments.get(path);
+    if (argsA === undefined) return false;
+    for (const [name, valuesB] of argsB) {
+      const valuesA = argsA.get(name);
+      if (valuesA === undefined) return false;
+      if (!valuesA.every((value) => valuesB.includes(value))) return false;
+    }
   }
   return true;
 }

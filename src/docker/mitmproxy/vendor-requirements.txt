@@ -1,0 +1,9 @@
+# Machine-read pin file. Two consumers parse this:
+#
+#   - `bun run vendor` (uv pip install --target src/docker/mitmproxy/vendor)
+#   - flake.nix `graphqlCorePin`, which takes the first non-comment,
+#     non-empty line and splits it on "=="
+#
+# Keep exactly one `name==version` pin per file; pip options, hashes,
+# extras, and environment markers are not supported by the flake parse.
+graphql-core==3.2.11

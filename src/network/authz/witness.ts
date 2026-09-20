@@ -15,6 +15,7 @@
  * 落とす想定で、判定そのものは変えない。
  */
 
+import { graphqlPathChain } from "./graphql_selection.ts";
 import {
   type CompiledPath,
   joinPath,
@@ -37,6 +38,8 @@ import type {
   AuthzRequest,
   BodyFormat,
   GraphqlDocument,
+  GraphqlFieldOccurrence,
+  GraphqlOperation,
   JsonScalar,
   JsonValue,
   RequestBody,
@@ -45,7 +48,6 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_METHOD = "GET";
-const DEFAULT_ROOT_FIELD = "field";
 const DEFAULT_PORT = 443;
 
 /**
@@ -274,6 +276,19 @@ function mergedGraphql(
   return documents;
 }
 
+/**
+ * 両方の経路条件を満たす document を 1 つ作る。
+ *
+ * 共通の許可末端を **a の設定順**に試し、最初に作れたものを返す。末端が決まれば
+ * 通る field の鎖も決まる (`graphqlPathChain`) ので、あとは鎖の各段に両方が
+ * 要求する引数を置けるかだけを見る。置けない段があればその末端は使えないので
+ * 次の候補へ進み、全候補が失敗したときだけ null を返す。
+ *
+ * null は「証人を作れなかった」であって「交差しない」ではない。relation.ts の
+ * `graphqlIntersects` は引数の矛盾を交差の否定に使わないので、交差すると判定
+ * された組でもここが null を返すことはある。呼び手 (validate.ts) は例を省いた
+ * エラーに落とす。
+ */
 function documentFor(
   a: NormalizedGraphql,
   b: NormalizedGraphql | null,
@@ -284,32 +299,97 @@ function documentFor(
       : a.operations.find((candidate) => b.operations.includes(candidate));
   if (operation === undefined) return null;
 
-  const rootField = pickRootField(a.rootFields, b?.rootFields ?? null);
-  if (rootField === null) return null;
+  for (const leaf of a.fieldPaths) {
+    if (b !== null && !b.fieldPaths.includes(leaf)) continue;
+    const document = documentForLeaf(a, b, operation, leaf);
+    if (document !== null) return document;
+  }
+  return null;
+}
 
-  // 引数は置かない。`arguments` は「その引数が現れるなら値はこの集合」という
-  // 条件なので、引数を持たない document は両方の制約を満たす。relation.ts が
-  // `arguments` を交差の否定に使わないのと同じ判断である。
-  const facts: GraphqlDocument = {
-    operations: [operation],
-    rootFields: [rootField],
-    argumentValues: {},
-  };
+function documentForLeaf(
+  a: NormalizedGraphql,
+  b: NormalizedGraphql | null,
+  operation: GraphqlOperation,
+  leaf: string,
+): WitnessDocument | null {
+  const chain = graphqlPathChain(leaf);
+  const fields: GraphqlFieldOccurrence[] = [];
+  for (const [index, path] of chain.entries()) {
+    const argumentValues = pickArguments(
+      a.fieldArguments.get(path),
+      b?.fieldArguments.get(path),
+    );
+    if (argumentValues === null) return null;
+    fields.push({
+      path,
+      leaf: index === chain.length - 1,
+      // `Object.fromEntries` は [[DefineOwnProperty]] を使うので、`__proto__`
+      // という引数名も普通の own property になる。
+      argumentValues: Object.fromEntries(argumentValues),
+      unresolvedArguments: [],
+    });
+  }
   return {
     at: a.at,
-    facts,
-    text: `${operation} { ${rootField} { __typename } }`,
+    facts: { operations: [operation], fields },
+    text: renderDocument(operation, chain, fields),
   };
 }
 
-function pickRootField(
-  a: readonly string[] | null,
-  b: readonly string[] | null,
-): string | null {
-  if (a === null && b === null) return DEFAULT_ROOT_FIELD;
-  if (a === null) return b?.[0] ?? null;
-  if (b === null) return a[0] ?? null;
-  return a.find((field) => b.includes(field)) ?? null;
+/**
+ * 1 つの経路に両方が要求する引数の値を選ぶ。
+ *
+ * 片方だけが要求する引数はその集合の先頭を、両方が要求する引数は許可値の積集合の
+ * 先頭を置く。積集合が空ならこの経路を通る document は作れないので null を返す。
+ */
+function pickArguments(
+  a: ReadonlyMap<string, readonly string[]> | undefined,
+  b: ReadonlyMap<string, readonly string[]> | undefined,
+): ReadonlyMap<string, string> | null {
+  const picked = new Map<string, string>();
+  for (const name of new Set([...(a?.keys() ?? []), ...(b?.keys() ?? [])])) {
+    const valuesA = a?.get(name);
+    const valuesB = b?.get(name);
+    const value =
+      valuesA === undefined
+        ? valuesB?.[0]
+        : valuesB === undefined
+          ? valuesA[0]
+          : valuesA.find((candidate) => valuesB.includes(candidate));
+    if (value === undefined) return null;
+    picked.set(name, value);
+  }
+  return picked;
+}
+
+/**
+ * facts と同じ選択・同じ引数を表す document の文字列を作る。
+ *
+ * 文字列リテラルは `JSON.stringify` で書く。GraphQL の StringValue の escape は
+ * JSON のそれと同じ綴りなので、`"` `\` 制御文字・改行を含む値もそのまま通る。
+ */
+function renderDocument(
+  operation: GraphqlOperation,
+  chain: readonly string[],
+  fields: readonly GraphqlFieldOccurrence[],
+): string {
+  let inner = "";
+  for (let index = chain.length - 1; index >= 0; index--) {
+    const path = chain[index] as string;
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    const entries = Object.entries(
+      (fields[index] as GraphqlFieldOccurrence).argumentValues,
+    );
+    const args =
+      entries.length === 0
+        ? ""
+        : `(${entries
+            .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+            .join(", ")})`;
+    inner = inner === "" ? `${name}${args}` : `${name}${args} { ${inner} }`;
+  }
+  return `${operation} { ${inner} }`;
 }
 
 /**

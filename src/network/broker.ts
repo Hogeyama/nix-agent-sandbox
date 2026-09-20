@@ -480,7 +480,7 @@ export class SessionBroker {
           )
         : Promise.resolve();
 
-    // 所見には `onViolation = "allow"` の違反も載っている。承認者はリクエスト
+    // 違反レコードには `onViolation = "allow"` の違反も載っている。承認者はリクエスト
     // 全体を見て押すので、記録に回った違反を隠す理由はない。ただし答えを要する
     // のは `review` の違反だけである。`allow` の違反まで承認の対象にすると、
     // 設定が「訊くな」と言った条件のせいで確認が出る — その値はリクエストごとに
@@ -495,7 +495,7 @@ export class SessionBroker {
       return denyDecision(message.requestId, "review-condition-mismatch");
     }
 
-    // 押せない所見が混ざっていたら、そのリクエストは承認では通せない。押した
+    // 押せない違反レコードが混ざっていたら、そのリクエストは承認では通せない。押した
     // 人が通したつもりのリクエストが通らないまま残るより、ここで断る方が
     // 正直である。走査が完了しなかった記録と、保持上限で畳まれた記録がそれで
     // あり、どちらも受理条件か値を欠いている。`allow` の条件が上限を埋めた
@@ -591,7 +591,7 @@ export class SessionBroker {
       notificationAbort,
       // ターゲットは同一性に入らないので、広さを選ぶ粒度は出さない。残る問いは
       // 「この違反を覚えるかどうか」だけである。
-      allowedScopes: ["once", "violation"],
+      allowedScopes: violationScopesFor(asked),
       identities: asked.map((finding) => violationKey(message.ruleId, finding)),
       findings: [...shown],
     };
@@ -1153,7 +1153,7 @@ export class SessionBroker {
   }
 
   /**
-   * 所見を人が読む面へ出す前に、レジストリの全ての値で伏せ直す。
+   * 違反レコードを人が読む面へ出す前に、レジストリの全ての値で伏せ直す。
    *
    * addon は既にマスクしているが、そこで使うパターンはそのルールで `mask` と
    * 宣言された秘密だけである。`ignore` や `inject` の秘密がボディに現れて違反
@@ -1176,6 +1176,10 @@ export class SessionBroker {
         finding.value === null
           ? null
           : maskText(finding.value, this.maskPatterns),
+      label:
+        finding.label === null
+          ? null
+          : maskText(finding.label, this.maskPatterns),
       excerpt:
         finding.excerpt === null
           ? null
@@ -1348,7 +1352,7 @@ export class SessionBroker {
 }
 
 /**
- * 所見を監査ログの形に落とす。
+ * 違反レコードを監査ログの形に落とす。
  *
  * 抜粋は落とす。承認 UI が違反箇所を見せるための成果物であって、ログを読む人が
  * 違反を特定するのに要るのは受理条件と Pointer と値だからである。1 件あたり
@@ -1361,6 +1365,7 @@ function toAuditViolation(finding: ViolationFinding): AuditViolation {
     kind: finding.kind,
     pointer: finding.pointer,
     value: finding.value,
+    label: finding.label,
     count: finding.count,
   };
 }
@@ -1382,6 +1387,23 @@ function approvalScopesFor(decided: AuthzDecision): readonly ApprovalScope[] {
   return scopePinsTarget(decided.scope)
     ? ["once", "rule"]
     : ["once", "host-port", "host"];
+}
+
+/**
+ * 違反の確認で選べる粒度。
+ *
+ * 答えを要する違反レコードがすべて `label` を持つ — 値がリクエストごとの UUID である —
+ * なら、`violation` は出さない。覚えた同一性に次のリクエストが一致することは
+ * ないので、その粒度は `once` と同じ働きしかせず、「この値を覚える」と読める
+ * 選択肢は押す人を欺く。通常の違反レコードが 1 件でも混ざっていれば、それは覚えられる
+ * ので出す。出さなかった粒度が送られてきたら `approve` / `deny` が断る。
+ */
+function violationScopesFor(
+  asked: readonly ViolationFinding[],
+): readonly ApprovalScope[] {
+  return asked.every((finding) => finding.label !== null)
+    ? ["once"]
+    : ["once", "violation"];
 }
 
 function scopePinsTarget(scope: ResolvedScope | null): boolean {
@@ -1420,14 +1442,14 @@ function approvalKey(
 }
 
 /**
- * その所見が人の答えを要するか。
+ * その違反レコードが人の答えを要するか。
  *
- * 所見の列には `onViolation` が `allow` の違反も混ざっている。承認 UI には
+ * 違反レコードの列には `onViolation` が `allow` の違反も混ざっている。承認 UI には
  * 全部出すが (承認者はリクエスト全体を見て押す)、答えを要するのは `review` の
- * 違反だけである。どの受理条件から出た所見かは位置で分かり、解決済み
+ * 違反だけである。どの受理条件から出た違反レコードかは位置で分かり、解決済み
  * ドキュメントはこの broker が持っているので、ここで引ける。
  *
- * 受理条件に紐づかない所見 — 走査が完了しなかった記録 — はどの条件が違反した
+ * 受理条件に紐づかない違反レコード — 走査が完了しなかった記録 — はどの条件が違反した
  * はずかを言えない。検査未完了はルールが宣言する中で最も厳しい帰結を取り、
  * それが `review` だったからここへ来ているので、答えを要する側に数える。
  * 承認には変換できないので、呼び出し側がそこで拒否する。
@@ -1466,6 +1488,40 @@ function violationNeedsApproval(
  * 無い違反を出す一方、`{"type": ""}` は値が空文字列の違反を出す。前者を承認
  * した人は後者を見ていないので、同じ鍵に落としてはならない。`JSON.stringify`
  * が `null` と `""` を書き分けるので、それを鍵の成分にする。
+ *
+ * 鍵に JSON Pointer は入らない。`UnionShape` はセレクタごとに受理条件の位置が
+ * 分かれるが、`BodyExpect` の `equals` / `oneOf` は 1 つの位置に複数の Pointer
+ * を並べる。そこで addon が値に Pointer を含める (`/owner="other"`、
+ * `/owner=(missing)`、`/owner=(not-scalar)`)。`/model` の `"other"` を承認した
+ * 人は `/owner` の `"other"` を見ていないし、`/model` が無いことを承認した人は
+ * `/owner` が無いことを見ていないからである。
+ *
+ * 1 件を承認しても他のリクエストに広げてはならない違反 (許されない GraphQL
+ * operation と取得経路、経路に紐づく引数、解析できない GraphQL document、
+ * GraphQL 条件を判定できなくする URL のクエリ文字列) には、addon が
+ * リクエストごとの UUID を値として載せる。鍵はそのリクエストにしか
+ * 一致しないので、ここで特別扱いは要らない。`operation:mutation` を固定の値に
+ * すると、1 件の mutation を承認しただけで、以後のあらゆる mutation
+ * (`deleteRepository` も) がセッションの間は確認なしに通る。「読み取り以外は
+ * 人に回す」というルールの意図が 1 回の承認で消える。
+ * `fieldPath:/user/starredRepositories/nodes/object/text` も同じで、1 件の
+ * 承認が、以後同じ経路を使うあらゆる repo・あらゆる子選択を通す。
+ *
+ * その代わり、この違反レコードについては承認だけでなく拒否も覚えられない。
+ * `deniedViolations` の鍵も、直近の拒否を覚える `negativeCache` の鍵
+ * (`violationGroupKey`、まだ答えの無い違反の鍵を束ねたもの) も UUID を含むので、
+ * 次のリクエストには二度と一致しない。そのため、
+ *
+ * - 許されない operation や取得経路、解析できない document、解決できない
+ *   経路引数、クエリ文字列を含むリクエストは、再送のたびに新しいカードと通知になる。
+ * - 答えを待つ間に同じ document が重ねて届いても 1 枚のカードに畳まれない。
+ *   束ねる鍵が UUID で分かれるので、同じリクエストに並ぶ通常の違反ごと
+ *   別のカードになる。
+ * - `violation` の粒度は、この違反レコードに限っては `once` と同じに振る舞う。同じ
+ *   カードに並ぶ通常の違反は、これまでどおり覚えられる。
+ *
+ * これは受け入れた代償である。どちらの答えを覚えても、人が見ていない別の
+ * document にその答えが及ぶ。
  */
 function violationKey(ruleId: string, finding: ViolationFinding): string {
   return `${ruleId}\u0000${finding.expect}\u0000${JSON.stringify(finding.value)}`;

@@ -10,9 +10,8 @@
  * 走査には `Object.entries` の順序を使う。ルールのキーは
  * `[a-z][a-z0-9._-]{0,63}` に従うので整数キーにはならず、挿入順が保たれる。
  *
- * `match.body` は `format` と JSON Pointer の `equals` / `oneOf` を持つ。
- * `graphql` を `match` に置けるようにするのは後の段階であり、この段階では
- * 受理条件 (`BodyExpect`) の側にだけ現れる。
+ * `match.body` と受理条件 `BodyExpect` は同じ語彙 (`equals` / `oneOf` /
+ * `graphql`) を持つ。`match.body` はそれに `format` を加える。
  */
 
 import type { BodyFormat, GraphqlMatch, JsonScalar, Result } from "./types.ts";
@@ -69,6 +68,18 @@ export const LIMIT_CEILINGS: ResolvedLimits = {
   maxNodes: 200_000,
   maxSelectorExpansions: 1_000_000,
 };
+
+/**
+ * `BodyExpect` の `equals` / `oneOf` に書ける JSON Pointer の長さ (UTF-16 の
+ * 単位、JavaScript の `length`)。
+ *
+ * 違反レコードは Pointer を切らずに値の頭に付ける (`/owner="other"`)。違反レコードは
+ * broker が長さを確かめてから受け取るので、Pointer の長さに上限が無いと、
+ * 長い Pointer の違反レコードは broker に拒まれ、そのリクエストは承認できなくなる。
+ * 値の天井 (`protocol.ts` の `MAX_FINDING_VALUE_CHARS`) はこの長さから
+ * 組み立てる。
+ */
+export const MAX_BODY_EXPECT_POINTER_CHARS = 256;
 
 export const LIMIT_KEYS = [
   "maxBodyBytes",
@@ -131,6 +142,7 @@ export interface BodyMatchConfig {
   readonly format: BodyFormat;
   readonly equals?: Readonly<Record<string, JsonScalar>>;
   readonly oneOf?: Readonly<Record<string, readonly JsonScalar[]>>;
+  readonly graphql?: GraphqlMatch;
 }
 
 export interface MatchConfig {

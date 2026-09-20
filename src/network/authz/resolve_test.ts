@@ -9,13 +9,19 @@ import {
   githubGraphqlExample,
   githubPathsExample,
 } from "./examples_fixture.ts";
+import { buildGraphqlDocuments } from "./graphql.ts";
 import {
   decide,
   type ResolvedDocument,
   resolveAuthzConfig,
   withoutInjectLiterals,
 } from "./resolve.ts";
-import type { AuthzRequest, RequestBody, TargetAddress } from "./types.ts";
+import type {
+  AuthzRequest,
+  JsonValue,
+  RequestBody,
+  TargetAddress,
+} from "./types.ts";
 
 function documentOf(config: AuthzConfig): ResolvedDocument {
   const outcome = resolveAuthzConfig(config);
@@ -657,6 +663,312 @@ describe("ボディの値条件", () => {
       "review",
       "indeterminate",
     ]);
+  });
+});
+
+describe("GraphQL 条件", () => {
+  const document = documentOf({
+    network: {
+      scopes: {
+        gh: {
+          targets: ["api.github.com"],
+          fallback: "deny",
+          rules: {
+            read: {
+              match: {
+                methods: ["POST"],
+                paths: ["/graphql"],
+                body: {
+                  format: "json",
+                  graphql: {
+                    operations: ["query", "query"],
+                    fieldPaths: [
+                      "/repository/id",
+                      "/repository/id",
+                      "/viewer/login",
+                    ],
+                    fieldArguments: {
+                      "/repository": { owner: ["my-org", "my-org"] },
+                    },
+                  },
+                },
+              },
+              onMatch: "allow",
+              onIndeterminate: "review",
+              expect: [
+                {
+                  kind: "body",
+                  graphql: {
+                    at: "/q",
+                    operations: ["query"],
+                    fieldPaths: ["/viewer/login"],
+                  },
+                },
+                { kind: "body", equals: { "/variables/o": "my-org" } },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+  const address = at("api.github.com");
+  const rule = document.scopes[0]?.rules[0];
+  const LIMITS = { maxNodes: 200_000, maxDepth: 64 };
+  const post = (value: JsonValue) =>
+    decide(
+      document,
+      address,
+      request("POST", "/graphql", {
+        kind: "json",
+        value,
+        documents: buildGraphqlDocuments(value, ["/query"], LIMITS),
+      }),
+    );
+
+  test("match の graphql を既定値と重複除去を済ませた形で載せる", () => {
+    expect(rule?.match.graphql).toEqual({
+      at: "/query",
+      operations: ["query"],
+      fieldPaths: ["/repository/id", "/viewer/login"],
+      fieldArguments: { "/repository": { owner: ["my-org"] } },
+    });
+  });
+
+  test("graphql を持たない match は null を載せる", () => {
+    const plain = documentOf(githubGraphqlExample());
+    expect(plain.scopes[0]?.rules[0]?.match.graphql).toBeNull();
+  });
+
+  // addon は受理条件をキーの過不足なく検証するので、省略した項目も置く。
+  test("BodyExpect は全項目を持つ正準形に解決する", () => {
+    expect(rule?.expect).toEqual([
+      {
+        kind: "body",
+        onViolation: "deny",
+        equals: {},
+        oneOf: {},
+        graphql: {
+          at: "/q",
+          operations: ["query"],
+          fieldPaths: ["/viewer/login"],
+          fieldArguments: {},
+        },
+      },
+      {
+        kind: "body",
+        onViolation: "deny",
+        equals: { "/variables/o": "my-org" },
+        oneOf: {},
+        graphql: null,
+      },
+    ]);
+  });
+
+  test("変数で与えた引数を variables で解決して判定する", () => {
+    const decision = post({
+      query: 'query($o: String!) { repository(owner: $o, name: "x") { id } }',
+      variables: { o: "my-org" },
+    });
+    expect([decision.ruleId, decision.action, decision.reason]).toEqual([
+      "gh.read",
+      "allow",
+      "rule",
+    ]);
+  });
+
+  test("条件を外れた document は偽として fallback へ進む", () => {
+    for (const query of [
+      "mutation { deleteRepository }",
+      '{ node(id: "x") { id } }',
+      'query { ...f } fragment f on Query { node(id: "x") { id } }',
+      '{ repository(owner: "other-org") { id } }',
+    ]) {
+      const decision = post({ query });
+      expect([query, decision.ruleId, decision.reason]).toEqual([
+        query,
+        "gh.$fallback",
+        "scope-fallback",
+      ]);
+    }
+  });
+
+  test("名指しした引数が解決できなければ判定不能で打ち切る", () => {
+    const decision = post({
+      query: "query($o: String) { repository(owner: $o) { id } }",
+      variables: { o: 7 },
+    });
+    expect([decision.ruleId, decision.action, decision.reason]).toEqual([
+      "gh.read",
+      "review",
+      "indeterminate",
+    ]);
+  });
+
+  test("解析できない document は判定不能で打ち切る", () => {
+    const decision = post({ query: "query {" });
+    expect([decision.ruleId, decision.action, decision.reason]).toEqual([
+      "gh.read",
+      "review",
+      "indeterminate",
+    ]);
+  });
+});
+
+describe("GraphQL 条件の評価順", () => {
+  const address = at("api.github.com");
+  const LIMITS = { maxNodes: 200_000, maxDepth: 64 };
+  type Rules = NonNullable<AuthzConfig["network"]["scopes"][string]["rules"]>;
+  type GraphqlCondition = NonNullable<
+    NonNullable<Rules[string]["match"]["body"]>["graphql"]
+  >;
+
+  function graphqlRule(
+    graphql: GraphqlCondition | undefined,
+    onMatch: "allow" | "review" | "deny",
+    overrides?: string[],
+  ): Rules[string] {
+    return {
+      match: {
+        methods: ["POST"],
+        paths: ["/graphql"],
+        body:
+          graphql === undefined
+            ? { format: "json" }
+            : { format: "json", graphql },
+      },
+      onMatch,
+      ...(overrides === undefined ? {} : { overrides }),
+    };
+  }
+
+  /** 宣言順どおりにルールを並べたスコープ 1 つの解決済みドキュメント。 */
+  function scopeOf(rules: Rules): ResolvedDocument {
+    return documentOf({
+      network: {
+        scopes: {
+          gh: { targets: ["api.github.com"], fallback: "deny", rules },
+        },
+      },
+    });
+  }
+
+  function post(
+    document: ResolvedDocument,
+    value: JsonValue,
+    ats: readonly string[] = ["/query"],
+  ): readonly [string, string] {
+    const decision = decide(
+      document,
+      address,
+      request("POST", "/graphql", {
+        kind: "json",
+        value,
+        documents: buildGraphqlDocuments(value, ats, LIMITS),
+      }),
+    );
+    return [decision.ruleId, decision.action];
+  }
+
+  test("graphql 条件を持つルールは、後に宣言しても format だけのルールより先に評価する", () => {
+    const document = scopeOf({
+      any: graphqlRule(undefined, "review"),
+      read: graphqlRule(
+        { operations: ["query"], fieldPaths: ["/viewer/login"] },
+        "allow",
+      ),
+    });
+    expect(post(document, { query: "{ viewer { login } }" })).toEqual([
+      "gh.read",
+      "allow",
+    ]);
+    expect(post(document, { query: "mutation { addStar { id } }" })).toEqual([
+      "gh.any",
+      "review",
+    ]);
+  });
+
+  test("狭い fieldPaths を先に評価する", () => {
+    const document = scopeOf({
+      reads: graphqlRule(
+        {
+          operations: ["query"],
+          fieldPaths: ["/viewer/login", "/repository/id"],
+        },
+        "allow",
+      ),
+      viewer: graphqlRule(
+        { operations: ["query"], fieldPaths: ["/viewer/login"] },
+        "deny",
+      ),
+    });
+    expect(post(document, { query: "{ viewer { login } }" })).toEqual([
+      "gh.viewer",
+      "deny",
+    ]);
+    expect(
+      post(document, { query: '{ repository(owner: "o", name: "n") { id } }' }),
+    ).toEqual(["gh.reads", "allow"]);
+  });
+
+  test("fieldArguments を縛るルールを、縛らないルールより先に評価する", () => {
+    const document = scopeOf({
+      "any-owner": graphqlRule(
+        { operations: ["query"], fieldPaths: ["/repository/id"] },
+        "review",
+      ),
+      mine: graphqlRule(
+        {
+          operations: ["query"],
+          fieldPaths: ["/repository/id"],
+          fieldArguments: { "/repository": { owner: ["my-org"] } },
+        },
+        "allow",
+      ),
+    });
+    const query = "query($o: String!) { repository(owner: $o) { id } }";
+    expect(post(document, { query, variables: { o: "my-org" } })).toEqual([
+      "gh.mine",
+      "allow",
+    ]);
+    expect(post(document, { query, variables: { o: "other-org" } })).toEqual([
+      "gh.any-owner",
+      "review",
+    ]);
+  });
+
+  test("at が異なる 2 条件は overrides を書いた側を先に評価する", () => {
+    const both = {
+      query: "{ viewer { login } }",
+      doc: "{ viewer { login } }",
+    };
+    const ats = ["/query", "/doc"];
+    const leaves = ["/viewer/login"];
+    const forward = scopeOf({
+      query: graphqlRule(
+        { operations: ["query"], fieldPaths: leaves },
+        "allow",
+      ),
+      doc: graphqlRule(
+        { at: "/doc", operations: ["query"], fieldPaths: leaves },
+        "deny",
+        ["query"],
+      ),
+    });
+    expect(post(forward, both, ats)).toEqual(["gh.doc", "deny"]);
+
+    const reversed = scopeOf({
+      query: graphqlRule(
+        { operations: ["query"], fieldPaths: leaves },
+        "allow",
+        ["doc"],
+      ),
+      doc: graphqlRule(
+        { at: "/doc", operations: ["query"], fieldPaths: leaves },
+        "deny",
+      ),
+    });
+    expect(post(reversed, both, ats)).toEqual(["gh.query", "allow"]);
   });
 });
 

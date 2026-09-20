@@ -221,6 +221,49 @@
           '';
         };
 
+        # vendor-requirements.txt が vendored 依存の唯一の真実の源。
+        # dev 経路は `bun run vendor` (uv pip install --target) が
+        # src/docker/mitmproxy/vendor/ を生成するが、このディレクトリは
+        # gitignore 済みで flake の src には現れない。バンドル側は同じ pin
+        # を読んで sdist を取得し、addon が sys.path に足すのと同じ
+        # layout (vendor/graphql/) を組み立てる。sdist のファイル名は
+        # 正規化済みの `graphql_core` (アンダースコア) である。
+        graphqlCorePin = let
+          # vendor-requirements.txt はヘッダコメントを持つ (ファイル先頭
+          # 参照)。最初の非コメント・非空行の先頭トークンが pin 本体で、
+          # 行内コメントや前後の空白はここで落とす。
+          pinLines = builtins.filter
+            (line: builtins.match "^[[:space:]]*[^#[:space:]].*" line != null)
+            (pkgs.lib.splitString "\n" (
+              builtins.readFile ./src/docker/mitmproxy/vendor-requirements.txt
+            ));
+          line = builtins.head (
+            builtins.filter (token: builtins.isString token && token != "") (
+              builtins.split "[[:space:]]+" (builtins.elemAt pinLines 0)
+            )
+          );
+          parts = pkgs.lib.splitString "==" line;
+          pname = builtins.elemAt parts 0;
+        in {
+          inherit pname;
+          version = builtins.elemAt parts 1;
+          # PyPI の sdist ファイル名は正規化済み (ハイフンはアンダースコア)。
+          sdistName = builtins.replaceStrings [ "-" ] [ "_" ] pname;
+        };
+        mitmproxyVendor = pkgs.stdenv.mkDerivation {
+          pname = "nas-mitmproxy-vendor";
+          version = graphqlCorePin.version;
+          src = pkgs.fetchurl {
+            url = "https://files.pythonhosted.org/packages/source/g/${graphqlCorePin.pname}/${graphqlCorePin.sdistName}-${graphqlCorePin.version}.tar.gz";
+            hash = "sha256-5+FW0QvrEnyrXIn/DacUFvxz0nxISkdX07LTVjN3SAI=";
+          };
+          installPhase = ''
+            mkdir -p $out
+            cp -r src/graphql $out/graphql
+            cp LICENSE $out/LICENSE-graphql-core
+          '';
+        };
+
         # contrib/vscode-nas-approval はホスト側 VS Code に入れる拡張。
         # vsce package はファイルを zip するだけで完結するが、npm 不在の
         # ビルドサンドボックスで依存解決を試みないよう --no-dependencies が必須。
@@ -252,6 +295,7 @@
 
           cp -r ${self}/src/docker/embed/. $out/docker/embed/
           cp ${self}/src/docker/mitmproxy/nas_addon.py $out/docker/mitmproxy/
+          cp -r ${mitmproxyVendor} $out/docker/mitmproxy/vendor
           cp ${self}/scripts/notify-send-wsl $out/scripts/
           cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
@@ -389,6 +433,9 @@
             # nas_addon.py のユニットテストがこれに依存する。宣言しておかないと
             # ホストの profile 次第でテストが黙って skip される。
             pkgs.python3
+            # `bun run vendor` が呼ぶ。src/docker/mitmproxy/vendor/ を
+            # vendor-requirements.txt から生成するのに必要。
+            pkgs.uv
             pklNative
             # 静的に検出できる規約は prompt ではなく ast-grep ルールに落とす。
             pkgs.ast-grep

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   chmod,
   copyFile,
+  cp,
   mkdir,
   mkdtemp,
   rm,
@@ -11,7 +12,15 @@ import {
 import net from "node:net";
 import path from "node:path";
 import { queryAuditLogs } from "../../audit/store.ts";
-import type { ResolvedDocument } from "../../network/authz/resolve.ts";
+import {
+  githubGraphqlExample,
+  STARRED_CROSSING_QUERY,
+  STARRED_CROSSING_REFUSED_LEAVES,
+} from "../../network/authz/examples_fixture.ts";
+import {
+  type ResolvedDocument,
+  withoutInjectLiterals,
+} from "../../network/authz/resolve.ts";
 import {
   documentWithScopes,
   resolvedDocument,
@@ -35,6 +44,12 @@ import {
 
 const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const canBindMount = SHARED_TMP !== undefined || !process.env.DOCKER_HOST;
+// nas_addon.py は ./vendor を sys.path に足して graphql を import する。
+// vendor/ は gitignore 済みの生成物なので、`bun run vendor` 未実行の
+// checkout では setupAddonFixture の cp が ENOENT で落ちる。
+const vendoredDeps = existsSync(
+  new URL("./vendor/graphql", import.meta.url).pathname,
+);
 const dockerAvailable = (() => {
   try {
     return Bun.spawnSync(["docker", "info"], {
@@ -682,6 +697,11 @@ interface AddonFixture {
 }
 
 interface AddonFixtureSetupOptions {
+  /**
+   * addon が読むファイルに書くドキュメント。省略時は broker と同じもの。
+   * 注入を持つ設定では、本番と同じく `withoutInjectLiterals` を通した形を渡す。
+   */
+  addonDocument?: ResolvedDocument;
   afterBrokerStarted?: (partial: {
     runtimeDir: string;
     broker: SessionBroker;
@@ -780,9 +800,19 @@ async function setupAddonFixture(
       new URL("./nas_addon.py", import.meta.url).pathname,
       paths.addonScriptPath,
     );
+    // The addon imports the vendored graphql-core relative to its own path;
+    // a runtime dir with nas_addon.py alone fails to load the script at all.
+    // `dereference` matters: in a git worktree `vendor/` is a symlink into the
+    // main checkout, and copying it as a symlink puts a dangling link inside
+    // the container's bind mount, where the addon dies on `import graphql`.
+    await cp(
+      new URL("./vendor", import.meta.url).pathname,
+      path.join(paths.runtimeDir, "vendor"),
+      { recursive: true, dereference: true },
+    );
     await writeFile(
       `${paths.authzDir}/${sessionId}.json`,
-      JSON.stringify(document),
+      JSON.stringify(options.addonDocument ?? document),
     );
     await writeSessionRegistry(paths, {
       version: 1,
@@ -830,59 +860,65 @@ async function teardownFixture(fixture?: AddonFixture): Promise<void> {
   await rm(fixture.auditDir, { recursive: true, force: true }).catch(() => {});
 }
 
-test("setupAddonFixture cleans partial state when setup fails after broker start", async () => {
-  const setupError = new Error("injected post-broker setup failure");
-  let partial: { runtimeDir: string; broker: SessionBroker } | undefined;
-  let thrown: unknown;
+test.skipIf(!vendoredDeps)(
+  "setupAddonFixture cleans partial state when setup fails after broker start",
+  async () => {
+    const setupError = new Error("injected post-broker setup failure");
+    let partial: { runtimeDir: string; broker: SessionBroker } | undefined;
+    let thrown: unknown;
 
-  try {
     try {
-      await setupAddonFixture(
-        "nas-addon-partial-setup-",
-        RESOLVED_DOCUMENT,
-        { workspace: ["SECRET123"] },
-        {
-          afterBrokerStarted: async (state) => {
-            partial = state;
-            throw setupError;
+      try {
+        await setupAddonFixture(
+          "nas-addon-partial-setup-",
+          RESOLVED_DOCUMENT,
+          { workspace: ["SECRET123"] },
+          {
+            afterBrokerStarted: async (state) => {
+              partial = state;
+              throw setupError;
+            },
           },
-        },
-      );
-    } catch (error) {
-      thrown = error;
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBe(setupError);
+      expect(partial).toBeDefined();
+      expect(existsSync(partial?.runtimeDir ?? "")).toBe(false);
+    } finally {
+      if (partial) {
+        await partial.broker.close().catch(() => {});
+        await rm(partial.runtimeDir, { recursive: true, force: true });
+      }
     }
+  },
+);
 
-    expect(thrown).toBe(setupError);
-    expect(partial).toBeDefined();
-    expect(existsSync(partial?.runtimeDir ?? "")).toBe(false);
-  } finally {
-    if (partial) {
-      await partial.broker.close().catch(() => {});
-      await rm(partial.runtimeDir, { recursive: true, force: true });
+test.skipIf(!vendoredDeps)(
+  "setupAddonFixture installs the shared resolved document",
+  async () => {
+    const fixture = await setupAddonFixture("nas-addon-review-rule-");
+    try {
+      const document = await Bun.file(
+        `${fixture.paths.authzDir}/${fixture.sessionId}.json`,
+      ).json();
+
+      // addon が読むファイルと broker が握るルールが同一であることが、
+      // このスイートの前提そのもの。
+      expect(document).toEqual(RESOLVED_DOCUMENT);
+      expect(document.contractVersion).toBe(1);
+    } finally {
+      await teardownFixture(fixture);
     }
-  }
-});
-
-test("setupAddonFixture installs the shared resolved document", async () => {
-  const fixture = await setupAddonFixture("nas-addon-review-rule-");
-  try {
-    const document = await Bun.file(
-      `${fixture.paths.authzDir}/${fixture.sessionId}.json`,
-    ).json();
-
-    // addon が読むファイルと broker が握るルールが同一であることが、
-    // このスイートの前提そのもの。
-    expect(document).toEqual(RESOLVED_DOCUMENT);
-    expect(document.contractVersion).toBe(1);
-  } finally {
-    await teardownFixture(fixture);
-  }
-});
+  },
+);
 
 const WEBSOCKET_TARGET_PORT = 8091;
 const WEBSOCKET_TARGET_IDLE_TIMEOUT_SECONDS = 15;
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: default-denied scope returns 403 before upstream handshake",
   async () => {
     const resources = protocolResources("nas-ws-denied");
@@ -921,7 +957,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: one handshake approval releases multiple messages without another pending item",
   async () => {
     const resources = protocolResources("nas-ws-review");
@@ -975,7 +1011,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: masks an authorized client message before upstream echo",
   async () => {
     const resources = protocolResources("nas-ws-mask");
@@ -1022,7 +1058,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "websocket: forbidden secret is never delivered and leaves the session fail-closed",
   async () => {
     const resources = protocolResources("nas-ws-forbid");
@@ -1075,7 +1111,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
 
 const ANTHROPIC_TARGET_PORT = 8090;
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic bodyless GET: masks URL and headers before forwarding",
   async () => {
     const networkName = `nas-addon-net-${crypto.randomUUID().slice(0, 8)}`;
@@ -1188,7 +1224,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic /v1/messages: masks secret in JSON body before forwarding",
   async () => {
     // `api.anthropic.com` を denied-IP 判定に引っかからない upstream に
@@ -1307,7 +1343,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic: unknown content block is held for review and denied closed",
   async () => {
     // 未知の content block type は upstream connect より前に review へ回る。
@@ -1419,7 +1455,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   60_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount)(
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic: blocked endpoint policy is enforced before upstream connect",
   async () => {
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
@@ -1580,6 +1616,379 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+const GITHUB_TARGET_PORT = 8093;
+const GITHUB_TOKEN = "ghp_integration_token";
+
+/**
+ * 仕様の受け入れ例 (`githubGraphqlExample`) をそのまま解決したもの。変えるのは
+ * ターゲットのポートだけで、fake upstream が平文 HTTP で待つポートに向ける。
+ */
+function githubGraphqlDocuments(): {
+  broker: ResolvedDocument;
+  addon: ResolvedDocument;
+} {
+  const config = githubGraphqlExample();
+  const scope = config.network?.scopes?.github;
+  if (!scope) throw new Error("githubGraphqlExample lost its github scope");
+  const broker = resolvedDocument({
+    ...config,
+    network: {
+      ...config.network,
+      scopes: {
+        github: { ...scope, targets: [`api.github.com:${GITHUB_TARGET_PORT}`] },
+      },
+    },
+  });
+  return { broker, addon: withoutInjectLiterals(broker) };
+}
+
+async function setupGithubGraphqlFixture(
+  dirPrefix: string,
+): Promise<AddonFixture> {
+  const documents = githubGraphqlDocuments();
+  return await setupAddonFixture(
+    dirPrefix,
+    documents.broker,
+    { "gh-token": [GITHUB_TOKEN] },
+    { addonDocument: documents.addon },
+  );
+}
+
+function sendGraphql(
+  fixture: AddonFixture,
+  proxyPort: number,
+  body: string,
+  query = "",
+): Promise<string> {
+  return sendProxyRequest(
+    proxyPort,
+    `http://api.github.com:${GITHUB_TARGET_PORT}/graphql${query}`,
+    `${fixture.sessionId}:${fixture.token}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    },
+  );
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: a query whose variable resolves to an allowed owner is forwarded with the injected token",
+  async () => {
+    const resources = protocolResources("nas-gql-allow");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-gql-allow-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+
+      // 引数はリテラルでなく変数で渡す。addon は variables を引いて解決した
+      // 値で fieldArguments を判定するので、これが通れば解決まで働いている。
+      // 末端は受け入れ例が許した経路 (`/repository/issues/nodes/body`) に置く。
+      const body = JSON.stringify({
+        query:
+          'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { nodes { body } } } }',
+        variables: { o: "my-org" },
+      });
+      const response = await sendGraphql(fixture, proxyPort, body);
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "POST /graphql",
+      );
+
+      expect(response).toContain("200 OK");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
+      expect(upstreamLogs).toContain(body);
+      const outcome = await expectSinglePolicyOutcome(
+        fixture.auditDir,
+        {
+          ruleId: "github.graphql",
+          requestPolicyResult: "pass",
+          reason: "recognized-json",
+        },
+        "graphql read",
+      );
+      expect(JSON.stringify(outcome)).not.toContain(GITHUB_TOKEN);
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: documents the acceptance example refuses are held for review before upstream",
+  async () => {
+    const resources = protocolResources("nas-gql-review");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-gql-review-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+
+      const cases = [
+        {
+          name: "mutation",
+          bodyMarker: "deleteRepository(",
+          body: JSON.stringify({
+            query: 'mutation { deleteRepository(owner: "my-org") { ok } }',
+          }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "schema-mismatch",
+                label: "operation:mutation",
+                excerpt: null,
+              },
+              {
+                expectKind: "body",
+                kind: "schema-mismatch",
+                label: "fieldPath:/deleteRepository/ok",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          name: "variable resolving to another owner",
+          // 許可した末端だけを読むが、入口の owner が許可集合の外にある。
+          // 引数の実値は違反レコードに載らないので、document 側の語で見る。
+          bodyMarker: "repository(owner: $o",
+          body: JSON.stringify({
+            query:
+              'query($o: String!) { repository(owner: $o, name: "x") { nameWithOwner } }',
+            variables: { o: "other-org" },
+          }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "schema-mismatch",
+                label: "fieldArgument:/repository@owner=(not-allowed)",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          // spec 冒頭の反例。許可した末端 (Issue 本文・コメント本文・README
+          // 本文) でも、そこへ至る経路が違えば自動許可にならない。3 本の禁止
+          // 末端が別々に出ることを要求する — 1 本に縮めると「メンバー経路を
+          // 丸ごと禁止したから」でも緑になる。
+          name: "the spec's counterexample",
+          // 目印は引数付きの呼び出しにする。引数は違反レコードに載らないので、
+          // 経路の field 名と違って「載っていないこと」を検査できる。
+          bodyMarker: "membersWithRole(first: 10)",
+          body: JSON.stringify({ query: STARRED_CROSSING_QUERY }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: STARRED_CROSSING_REFUSED_LEAVES.map((path) => ({
+              expectKind: "body",
+              kind: "schema-mismatch",
+              label: `fieldPath:${path}`,
+              excerpt: null,
+            })),
+          },
+        },
+        {
+          name: "unanalysable document",
+          bodyMarker: "query { repository(",
+          body: JSON.stringify({ query: "query { repository(" }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "body-unavailable",
+                label: "document:(unanalysable)",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          // サーバは URL の document も実行するので、ボディが読み取りでも
+          // 1 リクエスト限りの違反として人に回す。
+          name: "query string",
+          query: "?query=mutation%7BdeleteRepository%7D",
+          bodyMarker: "repository(owner: $o",
+          body: JSON.stringify({
+            query:
+              'query($o: String!) { repository(owner: $o, name: "x") { id } }',
+            variables: { o: "my-org" },
+          }),
+          expected: {
+            ruleId: "github.graphql",
+            violations: [
+              {
+                expectKind: "body",
+                kind: "body-unavailable",
+                label: "document:(query-string)",
+                excerpt: null,
+              },
+            ],
+          },
+        },
+        {
+          // JSON として読めないので match の body 条件が判定不能になり、
+          // 受理条件に届く前にルールの onIndeterminate が人に回す。
+          name: "broken JSON",
+          bodyMarker: "viewer { login }",
+          body: '{"query": "query { viewer { login } }"',
+          expected: {
+            ruleId: "github.graphql",
+            askReason: "indeterminate",
+            bodyDiagnostic: { code: "invalid-json" },
+          },
+        },
+      ];
+
+      for (const testCase of cases) {
+        const responsePromise = sendGraphql(
+          fixture,
+          proxyPort,
+          testCase.body,
+          "query" in testCase ? testCase.query : "",
+        );
+        const pending = await waitForPendingItem(fixture, testCase.name);
+        expect(pending, testCase.name).toMatchObject({
+          state: "pending",
+          ...testCase.expected,
+        });
+        // GraphQL の違反はどれも同一性がリクエストごとの UUID なので、承認が
+        // 別の mutation・別の経路・別の document へ広がらない。
+        for (const violation of pending.violations ?? []) {
+          expect(violation.value ?? "", testCase.name).toMatch(UUID_PATTERN);
+        }
+        // 値を覚えられる違反が 1 つも無いので、選べるのは once だけになる。
+        if ((pending.violations?.length ?? 0) > 0) {
+          expect(pending.approvalScopes, testCase.name).toEqual(["once"]);
+        }
+        // document 本文は確認にも監査にも載らない。載るのは正準形の短い値
+        // だけ。目印が送ったボディに実在することを先に確かめ、検査が空振り
+        // しないようにする。
+        expect(testCase.body, testCase.name).toContain(testCase.bodyMarker);
+        expect(JSON.stringify(pending), testCase.name).not.toContain(
+          testCase.bodyMarker,
+        );
+        await sendBrokerRequest(
+          brokerSocketPath(fixture.paths, fixture.sessionId),
+          { type: "deny", requestId: pending.requestId },
+        );
+        const response = await responsePromise;
+        expect(response, testCase.name).toContain("403");
+        expect(await fixture.broker.listPending(), testCase.name).toEqual([]);
+        const auditLogs = await queryAuditLogs(
+          { domain: "network" },
+          fixture.auditDir,
+        );
+        expect(auditLogs.length, testCase.name).toBeGreaterThan(0);
+        expect(JSON.stringify(auditLogs), testCase.name).not.toContain(
+          testCase.bodyMarker,
+        );
+      }
+
+      // どれも upstream に届いていない。fake upstream は完全なリクエストを
+      // 1 本受け取った時点でそれを印字する。
+      expect(await dockerLogs(resources.targetName)).not.toContain("POST ");
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+/**
+ * 反例が upstream へ出る回数を数える (spec A1)。
+ *
+ * fake upstream は完全なリクエストを 1 本受け取ったところで印字して終わるので、
+ * `docker logs` に現れる `POST /graphql` の数がそのまま到達数になる。数えるのは
+ * 「承認の前にリクエストが漏れないこと」だけである。この fixture は GitHub では
+ * ないので、レスポンスの GraphQL 的な意味は何も証明しない。
+ */
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: the counterexample reaches upstream only after a once approval",
+  async () => {
+    const resources = protocolResources("nas-gql-upstream");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-gql-upstream-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+      const socketPath = brokerSocketPath(fixture.paths, fixture.sessionId);
+      const body = JSON.stringify({ query: STARRED_CROSSING_QUERY });
+      const upstreamRequests = async () =>
+        (await dockerLogs(resources.targetName)).split("POST /graphql").length -
+        1;
+
+      // 1. 確認を待っているあいだ、upstream には 1 件も出ていない。
+      const denied = sendGraphql(fixture, proxyPort, body);
+      const first = await waitForPendingItem(fixture, "counterexample");
+      expect(first.violations?.map((violation) => violation.label)).toEqual(
+        STARRED_CROSSING_REFUSED_LEAVES.map((path) => `fieldPath:${path}`),
+      );
+      expect(first.approvalScopes).toEqual(["once"]);
+      expect(await upstreamRequests()).toBe(0);
+
+      // 2. deny のあとも 0 件のままである。
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId: first.requestId,
+      });
+      expect(await denied).toContain("403");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      expect(await upstreamRequests()).toBe(0);
+
+      // 3. 同じ document を送り直しても承認は使い回せず、改めて確認になる。
+      //    once で通した 1 本だけが upstream に届く。
+      const allowed = sendGraphql(fixture, proxyPort, body);
+      const second = await waitForPendingItem(fixture, "counterexample again");
+      expect(second.requestId).not.toEqual(first.requestId);
+      expect(second.approvalScopes).toEqual(["once"]);
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: second.requestId,
+        scope: "once",
+      });
+      expect(await allowed).toContain("200 OK");
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "POST /graphql",
+      );
+      expect(upstreamLogs.split("POST /graphql").length - 1).toBe(1);
+      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
+    } finally {
+      await cleanupProtocolResources(resources);
       await teardownFixture(fixture);
     }
   },

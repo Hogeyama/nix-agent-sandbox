@@ -11,7 +11,58 @@ import {
   hostExecScopeLabel,
   networkApprovalEffect,
   sessionLabel,
+  violationHeadline,
+  violationPointerLine,
 } from "./pendingCardView";
+
+describe("violationHeadline", () => {
+  test("prefers the label over a per-request identity value", () => {
+    expect(
+      violationHeadline({
+        kind: "body-unavailable",
+        value: "0b6f3c1e-2d4a-4f7b-9c8e-5a1d2e3f4a5b",
+        label: "document:(unanalysable)",
+      }),
+    ).toBe("document:(unanalysable)");
+  });
+
+  test("shows the value when there is no label", () => {
+    expect(
+      violationHeadline({
+        kind: "schema-mismatch",
+        value: "future_block",
+        label: null,
+      }),
+    ).toBe("future_block");
+  });
+
+  test("falls back to the kind when there is neither", () => {
+    expect(
+      violationHeadline({ kind: "unexpected-body", value: null, label: null }),
+    ).toBe("unexpected-body");
+  });
+});
+
+describe("violationPointerLine", () => {
+  test("omits a pointer that repeats the selector", () => {
+    expect(violationPointerLine({ at: "/query", pointer: "/query" })).toBe(
+      null,
+    );
+  });
+
+  test("keeps a pointer more specific than the selector", () => {
+    expect(
+      violationPointerLine({
+        at: "/**/content/*",
+        pointer: "/messages/3/content/0",
+      }),
+    ).toBe("/messages/3/content/0");
+  });
+
+  test("omits an empty pointer", () => {
+    expect(violationPointerLine({ at: "", pointer: "" })).toBe(null);
+  });
+});
 
 describe("formatRequestBodyAuditStatus", () => {
   test("describes disabled capture", () => {
@@ -88,6 +139,35 @@ describe("formatBodyDiagnostic", () => {
       }),
     ).toBe(
       "JSON pointer /messages/0/content resolved to an object/array, not a scalar.",
+    );
+  });
+
+  test("names only the rule's pointer for an unanalyzable GraphQL document", () => {
+    expect(
+      formatBodyDiagnostic({ code: "graphql-unparseable", pointer: "/query" }),
+    ).toBe(
+      "JSON pointer /query did not hold a GraphQL document this rule could analyze.",
+    );
+  });
+
+  test("names only the rule's pointer, not the URL, when a query string makes GraphQL undecidable", () => {
+    expect(
+      formatBodyDiagnostic({ code: "graphql-query-string", pointer: "/query" }),
+    ).toBe(
+      "The request URL had a query string, which the server may read the GraphQL document or variables from, so the GraphQL condition on /query could not be decided.",
+    );
+  });
+
+  test("names the constrained path and argument, not its value, when it does not resolve", () => {
+    expect(
+      formatBodyDiagnostic({
+        code: "graphql-unresolved-field-argument",
+        pointer: "/query",
+        fieldPath: "/repository",
+        argument: "owner",
+      }),
+    ).toBe(
+      "GraphQL argument /repository@owner (document at /query) had a value that did not resolve to a string.",
     );
   });
 });
