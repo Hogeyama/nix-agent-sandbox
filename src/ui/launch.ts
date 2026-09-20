@@ -3,7 +3,7 @@
  */
 
 import * as path from "node:path";
-import { loadConfig, resolveProfile } from "../config/load.ts";
+import { resolveProfile } from "../config/load.ts";
 import { makeSessionLaunchClient } from "../domain/launch.ts";
 import { dtachIsAvailable } from "../dtach/client.ts";
 import { readRecentDirs } from "../sessions/recent_dirs.ts";
@@ -37,7 +37,7 @@ export interface LaunchBranches {
 }
 
 export async function getLaunchInfo(
-  _ctx: UiDataContext,
+  ctx: UiDataContext,
   opts?: { cwd?: string },
 ): Promise<LaunchInfo> {
   const cwd = opts?.cwd;
@@ -46,7 +46,7 @@ export async function getLaunchInfo(
   }
   const [dtachAvailable, config, recentDirectories] = await Promise.all([
     dtachIsAvailable(),
-    loadConfig({ startDir: cwd }),
+    ctx.loadConfig({ startDir: cwd }),
     readRecentDirs(),
   ]);
 
@@ -220,7 +220,10 @@ export async function launchSession(
 ): Promise<LaunchResult> {
   req = validateLaunchRequest(req);
 
-  const config = await loadConfig({ startDir: req.cwd, nonInteractive: true });
+  const config = await ctx.loadConfig({
+    startDir: req.cwd,
+    nonInteractive: true,
+  });
   const { profile } = resolveProfile(config, req.profile);
   if (profile.mode === "acp") {
     throw new LaunchValidationError(

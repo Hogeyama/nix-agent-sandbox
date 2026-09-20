@@ -5,7 +5,6 @@ import {
   beforeEach,
   describe,
   expect,
-  mock,
   test,
 } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -44,23 +43,11 @@ afterAll(async () => {
 });
 
 // loadConfig の実体は .nas/config.pkl の pkl eval (外部プロセス + trust
-// gate) まで行くので、unit test では差し替える。ここで pin するのは
-// getLaunchInfo が opts.cwd を startDir として渡すことと、返ってきた
-// Config の profiles/default をどうマッピングするかだけ。実 pkl での
-// 解決や auto-init は src/config/load_integration_test.ts の責務。
-const realLoadModule = await import("../config/load.ts");
-const loadConfigMock = mock<(typeof realLoadModule)["loadConfig"]>(async () =>
-  fakeConfig("claude"),
-);
-mock.module("../config/load.ts", () => ({
-  ...realLoadModule,
-  loadConfig: loadConfigMock,
-}));
-
-const startDirOf = (
-  opts?: Parameters<(typeof realLoadModule)["loadConfig"]>[0],
-) => (typeof opts === "string" ? opts : opts?.startDir);
-
+// gate) まで行くので、unit test では UiDataContext 経由で差し替える
+// (mock.module はプロセス内の他テストファイルへ漏れるため使わない)。
+// ここで pin するのは getLaunchInfo が opts.cwd を startDir として渡す
+// ことと、返ってきた Config の profiles/default をどうマッピングするか
+// だけ。実 pkl での解決や auto-init は load_integration_test.ts の責務。
 // getLaunchInfo が読むのは profiles のキー・各 profile.mode・default だけ
 // なので、Profile の必須フィールドは埋めずにキャストする。
 const fakeConfig = (name: string): Config => ({
@@ -87,7 +74,9 @@ const validReq: LaunchRequest = { profile: "default" };
  * `launchSession` only reads `terminalRuntimeDir` when it proceeds past
  * validation + dtach availability; the other paths are unused here.
  */
-function createDummyCtx(): UiDataContext {
+function createDummyCtx(
+  loadConfig: UiDataContext["loadConfig"] = async () => fakeConfig("claude"),
+): UiDataContext {
   const networkPaths: NetworkRuntimePaths = {
     runtimeDir: "/tmp/nas-launch-test-unused/network",
     sessionsDir: "/tmp/nas-launch-test-unused/network/sessions",
@@ -139,6 +128,7 @@ function createDummyCtx(): UiDataContext {
         models: {},
       }),
     },
+    loadConfig,
   };
 }
 
@@ -359,8 +349,6 @@ describe("getLaunchInfo", () => {
     await mkdir(xdgDir, { recursive: true });
     originalXdg = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = xdgDir;
-    // mockImplementation はテストをまたいで残るので毎回デフォルトに戻す。
-    loadConfigMock.mockImplementation(async () => fakeConfig("claude"));
   });
 
   afterEach(async () => {
@@ -379,32 +367,35 @@ describe("getLaunchInfo", () => {
         (v) => v.profiles,
         (e: Error) => `ERR:${e.constructor.name}`,
       );
-    const a = extract(getLaunchInfo(dummyCtx));
-    const b = extract(getLaunchInfo(dummyCtx, {}));
-    const c = extract(getLaunchInfo(dummyCtx, { cwd: undefined }));
+    let lastOpts: Parameters<UiDataContext["loadConfig"]>[0];
+    const ctx = createDummyCtx(async (opts) => {
+      lastOpts = opts;
+      return fakeConfig("claude");
+    });
+    const a = extract(getLaunchInfo(ctx));
+    const b = extract(getLaunchInfo(ctx, {}));
+    const c = extract(getLaunchInfo(ctx, { cwd: undefined }));
     expect(await a).toEqual(await b);
     expect(await a).toEqual(await c);
     // cwd 未指定は startDir undefined のまま委譲する (loadConfig 側が
     // process.cwd() にフォールバックする)。
-    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: undefined });
+    expect(lastOpts!).toEqual({ startDir: undefined });
   });
 
   test("opts.cwd が指定された場合、その cwd を startDir として loadConfig に渡す", async () => {
     const dirA = path.join(testRoot, "projA");
     const dirB = path.join(testRoot, "projB");
-    loadConfigMock.mockImplementation(async (opts) =>
-      fakeConfig(startDirOf(opts) === dirA ? "a" : "b"),
+    const ctx = createDummyCtx(async (opts) =>
+      fakeConfig(opts?.startDir === dirA ? "a" : "b"),
     );
 
-    const infoA = await getLaunchInfo(dummyCtx, { cwd: dirA });
+    const infoA = await getLaunchInfo(ctx, { cwd: dirA });
     expect(infoA.profiles).toEqual(["a"]);
     expect(infoA.defaultProfile).toEqual("a");
-    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: dirA });
 
-    const infoB = await getLaunchInfo(dummyCtx, { cwd: dirB });
+    const infoB = await getLaunchInfo(ctx, { cwd: dirB });
     expect(infoB.profiles).toEqual(["b"]);
     expect(infoB.defaultProfile).toEqual("b");
-    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: dirB });
   });
 
   test("opts.cwd が相対パスの場合 LaunchValidationError を throw する", () => {
@@ -428,8 +419,13 @@ describe("getLaunchInfo", () => {
     // config の無い dir への auto-init は loadConfig 側の責務なので、
     // getLaunchInfo が存在確認でショートカットせず委譲することを pin する。
     const emptyDir = path.join(testRoot, "no-config-anywhere");
-    const info = await getLaunchInfo(dummyCtx, { cwd: emptyDir });
-    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: emptyDir });
+    let lastOpts: Parameters<UiDataContext["loadConfig"]>[0];
+    const ctx = createDummyCtx(async (opts) => {
+      lastOpts = opts;
+      return fakeConfig("claude");
+    });
+    const info = await getLaunchInfo(ctx, { cwd: emptyDir });
+    expect(lastOpts!).toEqual({ startDir: emptyDir });
     expect(info.profiles).toContain("claude");
   });
 });

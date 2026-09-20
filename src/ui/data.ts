@@ -5,7 +5,9 @@
 import { readdir } from "node:fs/promises";
 import { resolveAuditDir } from "../audit/store.ts";
 import type { AuditLogEntry, AuditLogFilter } from "../audit/types.ts";
-import type { HostExecPromptScope } from "../config/types.ts";
+import type { LoadConfigOptions } from "../config/load.ts";
+import { loadConfig } from "../config/load.ts";
+import type { Config, HostExecPromptScope } from "../config/types.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
 import { makeAuditQueryClient } from "../domain/audit.ts";
 import {
@@ -133,6 +135,12 @@ export interface UiDataContext {
   historyDbPath: string;
   history: UiHistoryReader;
   pricing: UiPricingReader;
+  /**
+   * Config loader. Injected so tests can supply a Config without evaluating
+   * a real .nas/config.pkl — that path spawns pkl behind a trust gate and
+   * auto-inits directories, none of which a unit test should touch.
+   */
+  loadConfig(opts?: LoadConfigOptions): Promise<Config>;
 }
 
 function makeHistoryReader(historyDbPath: string): UiHistoryReader {
@@ -204,6 +212,7 @@ export async function createDataContext(): Promise<UiDataContext> {
     historyDbPath,
     history: makeHistoryReader(historyDbPath),
     pricing: makePricingReader(),
+    loadConfig,
   };
 }
 

@@ -194,6 +194,10 @@ function makeCtx(reader: UiHistoryReader): UiDataContext {
         models: {},
       }),
     },
+    // history SSE のテスト対象は設定を読まないので、呼ばれたら落とす。
+    loadConfig: async () => {
+      throw new Error("unexpected loadConfig call");
+    },
   };
 }
 

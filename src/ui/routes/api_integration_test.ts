@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { appendAuditLog, storeRequestBody } from "../../audit/store.ts";
+import { loadConfig } from "../../config/load.ts";
 import { useRepoSchemaAsset } from "../../config/schema_asset_testing.ts";
 import {
   AmbiguousHostPortError,
@@ -57,6 +58,21 @@ beforeAll(async () => {
 afterAll(async () => {
   await restoreSchemaAsset?.();
 });
+
+async function pklAvailable(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["pkl", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    return (await proc.exited) === 0;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+}
+
+const hasPkl = await pklAvailable();
 
 /** テスト用のダミーコンテキストを作成 */
 function createTestContext(dir: string): UiDataContext {
@@ -111,6 +127,7 @@ function createTestContext(dir: string): UiDataContext {
         models: {},
       }),
     },
+    loadConfig,
   };
 }
 
@@ -1283,41 +1300,44 @@ test("GET /launch/info without cwd returns 200 with LaunchInfo shape", async () 
   }
 });
 
-test("GET /launch/info?cwd=/abs/path uses the cwd-local config", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
-  const xdgDir = path.join(tmpDir, "xdg");
-  await mkdir(xdgDir, { recursive: true });
-  const projectDir = path.join(tmpDir, "proj");
-  await mkdir(projectDir, { recursive: true });
-  await setupNasConfig(
-    projectDir,
-    `default = "cwdprofile"\nprofiles {\n  ["cwdprofile"] {\n    agent = "claude"\n  }\n}\n`,
-  );
-
-  const originalXdg = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = xdgDir;
-  try {
-    const ctx = createTestContext(tmpDir);
-    const api = createApiRoutes(ctx);
-    const app = new Router();
-    app.route("/api", api);
-
-    const res = await app.request(
-      `/api/launch/info?cwd=${encodeURIComponent(projectDir)}`,
+test.skipIf(!hasPkl)(
+  "GET /launch/info?cwd=/abs/path uses the cwd-local config",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+    const xdgDir = path.join(tmpDir, "xdg");
+    await mkdir(xdgDir, { recursive: true });
+    const projectDir = path.join(tmpDir, "proj");
+    await mkdir(projectDir, { recursive: true });
+    await setupNasConfig(
+      projectDir,
+      `default = "cwdprofile"\nprofiles {\n  ["cwdprofile"] {\n    agent = "claude"\n  }\n}\n`,
     );
-    expect(res.status).toEqual(200);
-    const body = await res.json();
-    expect(body.profiles).toEqual(["cwdprofile"]);
-    expect(body.defaultProfile).toEqual("cwdprofile");
-  } finally {
-    if (originalXdg === undefined) {
-      delete process.env.XDG_CONFIG_HOME;
-    } else {
-      process.env.XDG_CONFIG_HOME = originalXdg;
+
+    const originalXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdgDir;
+    try {
+      const ctx = createTestContext(tmpDir);
+      const api = createApiRoutes(ctx);
+      const app = new Router();
+      app.route("/api", api);
+
+      const res = await app.request(
+        `/api/launch/info?cwd=${encodeURIComponent(projectDir)}`,
+      );
+      expect(res.status).toEqual(200);
+      const body = await res.json();
+      expect(body.profiles).toEqual(["cwdprofile"]);
+      expect(body.defaultProfile).toEqual("cwdprofile");
+    } finally {
+      if (originalXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdg;
+      }
+      await rm(tmpDir, { recursive: true, force: true });
     }
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 test("GET /launch/info?cwd=relative returns 400 (LaunchValidationError)", async () => {
   // validateCwd() rejects synchronously before loadConfig() is called, so no
