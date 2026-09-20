@@ -459,10 +459,9 @@ export const REPO_GITHUB_OWNERS: readonly string[] = ["Hogeyama", "hogeyama"];
  * `.nas/config.pkl` の `github-api` スコープの GraphQL 条件。
  *
  * 仕様「導入範囲と旧形式の廃止」の初期許可表を、各 root の下の完全経路へ
- * 展開したものである。`repo_pkl_test.ts` が実際の `.nas/config.pkl` を pkl で
- * 評価して解決済み JSON をこの値と突き合わせるので、設定とこの定数が離れたら
- * どちらかのテストが落ちる。便宜的な末端をここに足してはならない。足すときは
- * 仕様の表も同時に直す。
+ * 展開したものである。実ファイルとの突き合わせは自動化していないので、
+ * `.nas/config.pkl` 側の条件を変えたらここも手で直すこと。便宜的な末端を
+ * ここに足してはならない。足すときは仕様の表も同時に直す。
  */
 export const REPO_GRAPHQL_CONDITION: GraphqlMatch = {
   operations: ["query"],
@@ -626,11 +625,8 @@ export const REPO_GRAPHQL_CASES: readonly GraphqlTableCase[] = [
  * いる。A19 が要求するのは「GraphQL を経路で絞っても REST の境界が動いて
  * いないこと」なので、同じドキュメントの上で両方を見る必要がある。
  *
- * `REPO_GRAPHQL_CONDITION` と同様、この REST ルールとスコープ `fallback` も
- * `repo_pkl_test.ts` が実際の `.nas/config.pkl` を pkl で評価した値と
- * 突き合わせる。ここを書き換えても実ファイルと突き合わせるテストが無ければ
- * 食い違いに気付けないので、書き換えるときは `repo_pkl_test.ts` 側も見る
- * こと。
+ * 実ファイルとの突き合わせは自動化していないので、`.nas/config.pkl` の
+ * `github-api` スコープを変えたらここも手で直すこと。
  */
 export function repoGithubApiExample(): AuthzConfig {
   return {

@@ -943,11 +943,11 @@ test.skipIf(!python3 || !vendoredDeps)(
  * A19: このリポジトリ自身の `github-api` スコープを addon に通す。
  *
  * 設定は `repoGithubApiExample()` が写した `.nas/config.pkl` の `github-api`
- * スコープで、GraphQL の条件は `REPO_GRAPHQL_CONDITION` である。実ファイルが
- * その条件に解決されることは `src/config/repo_pkl_test.ts` が pkl で評価して
- * 確かめる。claude / codex / copilot / anthropic-policy-demo の 4 プロファイルは
- * `commonNetwork` 経由でこのスコープを共有するので、条件がプロファイルごとに
- * 同じ形へ落ちることも `repo_pkl_test.ts` の側で確かめる。
+ * スコープで、GraphQL の条件は `REPO_GRAPHQL_CONDITION` である。この写しと
+ * 実ファイルの突き合わせは自動化していないので、`.nas/config.pkl` 側を
+ * 変えたら `repoGithubApiExample()` も手で直すこと。claude / codex / copilot /
+ * anthropic-policy-demo の 4 プロファイルは `commonNetwork` 経由でこのスコープを
+ * 共有する。
  *
  * REST を同じドキュメントに入れてあるのは、GraphQL の経路制限が REST の境界を
  * 動かしていないことを分けて見るためである。`/users/Hogeyama/starred` は今まで
