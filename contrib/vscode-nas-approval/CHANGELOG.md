@@ -9,10 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.2.0] - 2026-09-21
+
+### Added
+
+- Windows + WSL2 support: when `nasPath` is left as `"nas"` on Windows, the
+  extension reaches a `nas` that lives inside WSL. It takes a distro hint
+  from the Dev Container authority (best effort only — that encoding is a
+  Dev Containers implementation detail) and otherwise probes the distros
+  from `wsl.exe -l -q` for a working `nas`.
+
 ### Changed
 
+- The extension now activates outside `dev-container` remotes as well, so
+  the WSL auto-detection works wherever the UI side runs on Windows.
+- `nas-approval.nasPath` is a command line split on whitespace rather than
+  a binary path, so a bridge such as `wsl.exe -d <DISTRO> nas` can be set
+  explicitly when auto-detection fails.
 - A network violation that carries a `label` shows that label in place of its
   value. nas sets it on findings whose value is a per-request identity.
+
+### Fixed
+
+- `NAS: Refresh Approval Session` clears the cached WSL command resolution,
+  so retrying after installing `nas` into a distro re-probes instead of
+  keeping the stale failure.
 
 ## [0.1.0] - 2026-09-18
 

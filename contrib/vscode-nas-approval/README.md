@@ -27,7 +27,7 @@ code --install-extension result/nas-approval-*.vsix
 programs.vscode.extensions = [
   (pkgs.vscode-utils.buildVscodeExtension {
     pname = "nas-approval";
-    version = "0.1.0";
+    version = "0.2.0";
     src = <path to>/contrib/vscode-nas-approval;
   })
 ];
@@ -36,7 +36,7 @@ programs.vscode.extensions = [
 ## Install (manual)
 
 Copy this directory to
-`~/.vscode/extensions/nas.nas-approval-0.1.0/` and restart VS Code.
+`~/.vscode/extensions/nas.nas-approval-0.2.0/` and restart VS Code.
 
 ## Settings
 
