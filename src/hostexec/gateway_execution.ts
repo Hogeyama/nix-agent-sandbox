@@ -140,7 +140,15 @@ export class RawLineReader implements GatewayLineReader {
   };
 
   private readonly onError = (error: Error): void => {
-    this.fail(error);
+    // A socket error is the same terminal event as a clean close for this
+    // protocol: the gateway is gone before a terminal state. Whether the
+    // peer's teardown arrives as FIN ("end") or RST ("read ECONNRESET")
+    // depends on unread in-flight bytes and Bun/libc version, so normalise
+    // transport errors here — readers report "gateway disconnected" instead
+    // of leaking platform-specific errno text.
+    this.fail(
+      new Error(`gateway disconnected: ${error.message}`, { cause: error }),
+    );
   };
 
   constructor(private readonly socket: Socket) {
