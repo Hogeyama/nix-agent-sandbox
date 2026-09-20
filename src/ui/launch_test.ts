@@ -5,14 +5,20 @@ import {
   beforeEach,
   describe,
   expect,
+  mock,
   test,
 } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { useRepoSchemaAsset } from "../config/schema_asset_testing.ts";
+import {
+  type Config,
+  DEFAULT_OBSERVABILITY_CONFIG,
+  DEFAULT_UI_CONFIG,
+  type Profile,
+} from "../config/types.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
-import { resolveAsset } from "../lib/asset.ts";
 import type { PortsRuntimePaths } from "../network/port_bind_registry.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
@@ -35,6 +41,33 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await restoreSchemaAsset?.();
+});
+
+// loadConfig の実体は .nas/config.pkl の pkl eval (外部プロセス + trust
+// gate) まで行くので、unit test では差し替える。ここで pin するのは
+// getLaunchInfo が opts.cwd を startDir として渡すことと、返ってきた
+// Config の profiles/default をどうマッピングするかだけ。実 pkl での
+// 解決や auto-init は src/config/load_integration_test.ts の責務。
+const realLoadModule = await import("../config/load.ts");
+const loadConfigMock = mock<(typeof realLoadModule)["loadConfig"]>(async () =>
+  fakeConfig("claude"),
+);
+mock.module("../config/load.ts", () => ({
+  ...realLoadModule,
+  loadConfig: loadConfigMock,
+}));
+
+const startDirOf = (
+  opts?: Parameters<(typeof realLoadModule)["loadConfig"]>[0],
+) => (typeof opts === "string" ? opts : opts?.startDir);
+
+// getLaunchInfo が読むのは profiles のキー・各 profile.mode・default だけ
+// なので、Profile の必須フィールドは埋めずにキャストする。
+const fakeConfig = (name: string): Config => ({
+  ui: DEFAULT_UI_CONFIG,
+  observability: DEFAULT_OBSERVABILITY_CONFIG,
+  default: name,
+  profiles: { [name]: { agent: "claude" } as unknown as Profile },
 });
 
 /**
@@ -326,6 +359,8 @@ describe("getLaunchInfo", () => {
     await mkdir(xdgDir, { recursive: true });
     originalXdg = process.env.XDG_CONFIG_HOME;
     process.env.XDG_CONFIG_HOME = xdgDir;
+    // mockImplementation はテストをまたいで残るので毎回デフォルトに戻す。
+    loadConfigMock.mockImplementation(async () => fakeConfig("claude"));
   });
 
   afterEach(async () => {
@@ -336,32 +371,6 @@ describe("getLaunchInfo", () => {
     }
     await rm(testRoot, { recursive: true, force: true });
   });
-
-  /** Read bundled Schema.pkl text for test setup. */
-  async function readBundledSchema(): Promise<string> {
-    const schemaSrc = resolveAsset(
-      "config/Schema.pkl",
-      import.meta.url,
-      "../config/Schema.pkl",
-    );
-    return readFile(schemaSrc, "utf8");
-  }
-
-  /** Set up a .nas/ directory with config.pkl, Schema.pkl, and PklProject. */
-  async function writeLocalNasConfig(dir: string, pkl: string): Promise<void> {
-    const nasDir = path.join(dir, ".nas");
-    await mkdir(nasDir, { recursive: true });
-    const schemaText = await readBundledSchema();
-    await writeFile(path.join(nasDir, "Schema.pkl"), schemaText);
-    await writeFile(
-      path.join(nasDir, "PklProject"),
-      `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
-    );
-    await writeFile(
-      path.join(nasDir, "config.pkl"),
-      `amends "Schema.pkl"\n${pkl}`,
-    );
-  }
 
   test("引数なし呼び出しは process.cwd() 起点で loadConfig() を呼ぶ", async () => {
     // 引数なし / 空 opts / cwd undefined はすべて同一の profiles を返すことを pin する。
@@ -375,29 +384,27 @@ describe("getLaunchInfo", () => {
     const c = extract(getLaunchInfo(dummyCtx, { cwd: undefined }));
     expect(await a).toEqual(await b);
     expect(await a).toEqual(await c);
+    // cwd 未指定は startDir undefined のまま委譲する (loadConfig 側が
+    // process.cwd() にフォールバックする)。
+    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: undefined });
   });
 
-  test("opts.cwd が指定された場合、その cwd 配下の local config を読む", async () => {
+  test("opts.cwd が指定された場合、その cwd を startDir として loadConfig に渡す", async () => {
     const dirA = path.join(testRoot, "projA");
     const dirB = path.join(testRoot, "projB");
-    await mkdir(dirA, { recursive: true });
-    await mkdir(dirB, { recursive: true });
-    await writeLocalNasConfig(
-      dirA,
-      `default = "a"\nprofiles {\n  ["a"] {\n    agent = "claude"\n  }\n}\n`,
-    );
-    await writeLocalNasConfig(
-      dirB,
-      `default = "b"\nprofiles {\n  ["b"] {\n    agent = "claude"\n  }\n}\n`,
+    loadConfigMock.mockImplementation(async (opts) =>
+      fakeConfig(startDirOf(opts) === dirA ? "a" : "b"),
     );
 
     const infoA = await getLaunchInfo(dummyCtx, { cwd: dirA });
     expect(infoA.profiles).toEqual(["a"]);
     expect(infoA.defaultProfile).toEqual("a");
+    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: dirA });
 
     const infoB = await getLaunchInfo(dummyCtx, { cwd: dirB });
     expect(infoB.profiles).toEqual(["b"]);
     expect(infoB.defaultProfile).toEqual("b");
+    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: dirB });
   });
 
   test("opts.cwd が相対パスの場合 LaunchValidationError を throw する", () => {
@@ -417,10 +424,12 @@ describe("getLaunchInfo", () => {
     expect(await infoEmpty).toEqual(await infoUndef);
   });
 
-  test("opts.cwd 配下に .nas/config.pkl 無しの場合は auto-init でデフォルト設定を返す", async () => {
+  test("opts.cwd 配下に config が無くても loadConfig に委譲する", async () => {
+    // config の無い dir への auto-init は loadConfig 側の責務なので、
+    // getLaunchInfo が存在確認でショートカットせず委譲することを pin する。
     const emptyDir = path.join(testRoot, "no-config-anywhere");
-    await mkdir(emptyDir, { recursive: true });
     const info = await getLaunchInfo(dummyCtx, { cwd: emptyDir });
+    expect(loadConfigMock).toHaveBeenLastCalledWith({ startDir: emptyDir });
     expect(info.profiles).toContain("claude");
   });
 });
