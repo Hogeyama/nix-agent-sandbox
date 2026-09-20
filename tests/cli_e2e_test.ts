@@ -105,6 +105,23 @@ async function isDockerAvailable(): Promise<boolean> {
 
 const dockerAvailable = await isDockerAvailable();
 
+async function pklAvailable(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["pkl", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    return (await proc.exited) === 0;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+}
+
+// .nas/config.pkl の eval は外部プロセスの pkl に依存する。config を実際に
+// 評価させるテストは pkl 不在環境では「pkl が無い」で落ちるだけなので skip する。
+const hasPkl = await pklAvailable();
+
 /** nas CLI をサブプロセスとして実行するヘルパー */
 async function runNas(
   args: string[],
@@ -315,43 +332,49 @@ test("CLI: exits with error when no config file found", async () => {
   }
 });
 
-test("CLI: auto-initializes config when stdio is piped", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-autoinit-"));
-  try {
-    // runNas pipes stdout/stderr. A missing profile stops before Docker.
-    const result = await runNas(["nonexistent"], {
-      cwd: tmpDir,
-      env: {
-        HOME: tmpDir,
-        XDG_CONFIG_HOME: path.join(tmpDir, ".config"),
-        NAS_NO_AUTO_INIT: "",
-      },
-    });
-    expect(result.stderr).toContain("Auto-initializing .nas/");
-    expect(result.stderr).toContain('Profile "nonexistent" not found');
-    expect(result.code).toEqual(1);
-    await stat(path.join(tmpDir, ".nas", "config.pkl"));
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
+test.skipIf(!hasPkl)(
+  "CLI: auto-initializes config when stdio is piped",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-autoinit-"));
+    try {
+      // runNas pipes stdout/stderr. A missing profile stops before Docker.
+      const result = await runNas(["nonexistent"], {
+        cwd: tmpDir,
+        env: {
+          HOME: tmpDir,
+          XDG_CONFIG_HOME: path.join(tmpDir, ".config"),
+          NAS_NO_AUTO_INIT: "",
+        },
+      });
+      expect(result.stderr).toContain("Auto-initializing .nas/");
+      expect(result.stderr).toContain('Profile "nonexistent" not found');
+      expect(result.code).toEqual(1);
+      await stat(path.join(tmpDir, ".nas", "config.pkl"));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
 
-test("CLI: exits with error for nonexistent profile", async () => {
-  const pkl = `
+test.skipIf(!hasPkl)(
+  "CLI: exits with error for nonexistent profile",
+  async () => {
+    const pkl = `
 profiles {
   ["dev"] {
     agent = "claude"
   }
 }
 `;
-  await withTempConfig(pkl, async (dir) => {
-    const result = await runNas(["nonexistent"], { cwd: dir });
-    expect(result.code).toEqual(1);
-    expect(result.stderr.includes("not found")).toEqual(true);
-  });
-});
+    await withTempConfig(pkl, async (dir) => {
+      const result = await runNas(["nonexistent"], { cwd: dir });
+      expect(result.code).toEqual(1);
+      expect(result.stderr.includes("not found")).toEqual(true);
+    });
+  },
+);
 
-test("CLI: exits with error for invalid config", async () => {
+test.skipIf(!hasPkl)("CLI: exits with error for invalid config", async () => {
   const pkl = `
 profiles {
   ["test"] {
@@ -367,7 +390,7 @@ profiles {
   });
 });
 
-test("CLI: exits with error for empty profiles", async () => {
+test.skipIf(!hasPkl)("CLI: exits with error for empty profiles", async () => {
   const pkl = `
 profiles {}
 `;
@@ -381,8 +404,10 @@ profiles {}
   });
 });
 
-test("CLI: multiple profiles without default exits with error", async () => {
-  const pkl = `
+test.skipIf(!hasPkl)(
+  "CLI: multiple profiles without default exits with error",
+  async () => {
+    const pkl = `
 profiles {
   ["a"] {
     agent = "claude"
@@ -392,15 +417,16 @@ profiles {
   }
 }
 `;
-  await withTempConfig(pkl, async (dir) => {
-    const result = await runNas([], {
-      cwd: dir,
-      env: { HOME: dir, XDG_CONFIG_HOME: path.join(dir, ".config") },
+    await withTempConfig(pkl, async (dir) => {
+      const result = await runNas([], {
+        cwd: dir,
+        env: { HOME: dir, XDG_CONFIG_HOME: path.join(dir, ".config") },
+      });
+      expect(result.code).toEqual(1);
+      expect(result.stderr.includes("No profile specified")).toEqual(true);
     });
-    expect(result.code).toEqual(1);
-    expect(result.stderr.includes("No profile specified")).toEqual(true);
-  });
-});
+  },
+);
 
 // ============================================================
 // CLI: worktree subcommand
@@ -657,8 +683,10 @@ test("CLI: hostexec pending lists queued approvals", async () => {
   }
 });
 
-test("CLI: hostexec test forwards command args after --", async () => {
-  const pkl = `
+test.skipIf(!hasPkl)(
+  "CLI: hostexec test forwards command args after --",
+  async () => {
+    const pkl = `
 profiles {
   ["claude"] {
     agent = "claude"
@@ -680,21 +708,24 @@ profiles {
   }
 }
 `;
-  await withTempConfig(pkl, async (dir) => {
-    const result = await runNas(
-      ["hostexec", "test", "--profile", "claude", "--", "gpg", "hoge"],
-      { cwd: dir },
-    );
-    expect(result.code).toEqual(0);
-    expect(result.stdout.includes('args string: "hoge"')).toEqual(true);
-    expect(
-      result.stdout.includes("Matched rule: gpg-sign (approval: allow)"),
-    ).toEqual(true);
-  });
-});
+    await withTempConfig(pkl, async (dir) => {
+      const result = await runNas(
+        ["hostexec", "test", "--profile", "claude", "--", "gpg", "hoge"],
+        { cwd: dir },
+      );
+      expect(result.code).toEqual(0);
+      expect(result.stdout.includes('args string: "hoge"')).toEqual(true);
+      expect(
+        result.stdout.includes("Matched rule: gpg-sign (approval: allow)"),
+      ).toEqual(true);
+    });
+  },
+);
 
-test("CLI: hostexec test preserves positional args named like subcommand", async () => {
-  const pkl = `
+test.skipIf(!hasPkl)(
+  "CLI: hostexec test preserves positional args named like subcommand",
+  async () => {
+    const pkl = `
 profiles {
   ["claude"] {
     agent = "claude"
@@ -716,18 +747,19 @@ profiles {
   }
 }
 `;
-  await withTempConfig(pkl, async (dir) => {
-    const result = await runNas(
-      ["hostexec", "test", "--profile", "claude", "--", "deno", "-A", "test"],
-      { cwd: dir },
-    );
-    expect(result.code).toEqual(0);
-    expect(result.stdout.includes('args string: "-A test"')).toEqual(true);
-    expect(
-      result.stdout.includes("Matched rule: deno-test (approval: allow)"),
-    ).toEqual(true);
-  });
-});
+    await withTempConfig(pkl, async (dir) => {
+      const result = await runNas(
+        ["hostexec", "test", "--profile", "claude", "--", "deno", "-A", "test"],
+        { cwd: dir },
+      );
+      expect(result.code).toEqual(0);
+      expect(result.stdout.includes('args string: "-A test"')).toEqual(true);
+      expect(
+        result.stdout.includes("Matched rule: deno-test (approval: allow)"),
+      ).toEqual(true);
+    });
+  },
+);
 
 // ============================================================
 // CLI: audit subcommand
@@ -979,7 +1011,7 @@ async function withFakeCodexProject(
   }
 }
 
-test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
+test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable || !hasPkl)(
   "CLI E2E: launches agent through nas pipeline",
   async () => {
     await withFakeCodexProject(async (projectDir, env) => {
@@ -997,7 +1029,7 @@ test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
   30_000,
 );
 
-test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
+test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable || !hasPkl)(
   "CLI E2E: agent writes into mounted workspace",
   async () => {
     await withFakeCodexProject(async (projectDir, env) => {
