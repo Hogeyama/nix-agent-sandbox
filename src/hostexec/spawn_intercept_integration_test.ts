@@ -10,6 +10,10 @@ const artifacts = await resolveGatewayTestArtifacts();
 const python = Bun.which("python3");
 const echo = Bun.which("echo");
 const cat = Bun.which("cat");
+// The child script echoes the spawned envp verbatim, so its interpreter must
+// not rewrite PATH. NixOS wraps /bin/sh to splice the system profile dirs
+// into PATH; a resolved bash preserves the caller's environment exactly.
+const bash = Bun.which("bash");
 const available = Boolean(
   python &&
     artifacts.clientPath &&
@@ -85,7 +89,7 @@ finally:
 
 for (const mode of ["chdir", "fchdir"]) {
   for (const interceptedLocation of ["parent", "child"]) {
-    test.skipIf(!available || !chdirActionsAvailable || !echo)(
+    test.skipIf(!available || !chdirActionsAvailable || !echo || !bash)(
       `posix_spawnp: ${mode} selects the child cwd executable (${interceptedLocation} intercepted)`,
       async () => {
         const harness = await startGatewayTestHarness({
@@ -110,7 +114,7 @@ for (const mode of ["chdir", "fchdir"]) {
           );
           await writeFile(
             path.join(child, "hostexec"),
-            '#!/bin/sh\nprintf "child %s\\n" "$PATH"\n',
+            `#!${bash}\nprintf "child %s\\n" "$PATH"\n`,
             { mode: 0o755 },
           );
           const result = await harness.runShell(
