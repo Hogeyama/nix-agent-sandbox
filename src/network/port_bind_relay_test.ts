@@ -651,6 +651,10 @@ test("a client line for a forwarded port is piped to the host port", async () =>
   await withSocketPath(async (socketPath) => {
     const echo = createServer({ allowHalfOpen: true }, (socket: Socket) => {
       socket.on("data", (chunk: Buffer) => socket.write(chunk));
+      // allowHalfOpen keeps the writable side open past the peer's FIN, so
+      // the client's teardown would otherwise leave this open forever and
+      // make this test's echo.close() hang.
+      socket.on("end", () => socket.destroy());
     });
     await new Promise<void>((resolve) =>
       echo.listen(0, "127.0.0.1", () => resolve()),

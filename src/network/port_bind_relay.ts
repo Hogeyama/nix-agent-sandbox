@@ -568,10 +568,19 @@ export async function startRelayGateway(opts: {
       }
       try {
         active.write(`${kind} ${id} ${argument}\n`, (error) => {
-          if (error) settle(id, (entry) => entry.reject(error));
+          // A write failure here means the same thing as the control
+          // socket's own "close": the relay is gone. Surface the raw OS
+          // errno (EPIPE/ECONNRESET) only loses that connection to callers
+          // racing the disconnect via `drop()`'s message instead.
+          if (error)
+            settle(id, (entry) =>
+              entry.reject(new RelayTransportError("relay disconnected")),
+            );
         });
-      } catch (error) {
-        settle(id, (entry) => entry.reject(asError(error)));
+      } catch {
+        settle(id, (entry) =>
+          entry.reject(new RelayTransportError("relay disconnected")),
+        );
       }
     });
   };

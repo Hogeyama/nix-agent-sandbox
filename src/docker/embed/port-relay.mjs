@@ -152,6 +152,9 @@ function forward(id, token, port) {
       stream.write(`client ${token}\n`);
       for (const chunk of held) stream.write(chunk);
       pipePair(stream, client);
+      // Removing the last "data" listener above left `client` paused; a
+      // pipe()'d socket does not resume flowing on its own under Bun.
+      client.resume();
     });
   });
   const entry = {

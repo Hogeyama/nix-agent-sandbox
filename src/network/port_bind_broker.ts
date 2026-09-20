@@ -432,6 +432,12 @@ export async function startPortBindBroker(opts: {
         connections.add(browser);
         browser.on("close", () => connections.delete(browser));
         browser.on("error", () => browser.destroy());
+        // allowHalfOpen keeps the writable side open past the browser's own
+        // FIN. Before openStream() resolves nothing else reads from or
+        // writes to this socket, so without this, a browser that disconnects
+        // while waiting never reaches "close" and the request below never
+        // aborts.
+        browser.once("end", () => browser.destroy());
         const abort = new AbortController();
         browser.once("close", () => abort.abort());
         opts.gateway
@@ -443,6 +449,10 @@ export async function startPortBindBroker(opts: {
               pipeSockets(browser, stream);
               if (pendingChunk) stream.write(pendingChunk);
               browser.resume();
+              // `stream` came from the relay's readFirstLine handshake, which
+              // paused it; a pipe()'d socket does not resume flowing on its
+              // own under Bun.
+              stream.resume();
             }
           })
           .catch((error) => {

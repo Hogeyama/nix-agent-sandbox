@@ -91,7 +91,10 @@ export async function safeRemove(
   options?: { recursive?: boolean },
 ): Promise<void> {
   try {
-    await rm(targetPath, { force: true, recursive: options?.recursive });
+    await rm(targetPath, {
+      force: true,
+      recursive: options?.recursive ?? false,
+    });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

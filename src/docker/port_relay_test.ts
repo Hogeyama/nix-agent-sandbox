@@ -33,6 +33,10 @@ async function withRelay<T>(
   const echo = createServer({ allowHalfOpen: true }, (socket: Socket) => {
     socket.write("HELLO\n");
     socket.on("data", (chunk: Buffer) => socket.write(chunk));
+    // allowHalfOpen keeps the writable side open past the peer's FIN, so a
+    // probe's dial-then-destroy would otherwise leave this connection open
+    // forever and make the fixture's server.close() in `withRelay` hang.
+    socket.on("end", () => socket.destroy());
   });
   const tokens: string[] = [];
   const proxySockets = new Set<Socket>();
