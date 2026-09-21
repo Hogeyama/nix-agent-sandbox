@@ -30,5 +30,17 @@ jobs:
       - name: Lint
         run: nix develop -c bun run lint
 
+      # docker:dind-rootless needs unprivileged user namespaces; Ubuntu 24.04
+      # runners restrict them via AppArmor (rootlesskit dies with
+      # "fork/exec /proc/self/exe: operation not permitted"). Drop the
+      # restriction on this throwaway VM so the DinD integration tests can
+      # run; environments without the sysctl keep working because the tests
+      # probe for the capability and skip.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Tests
         run: nix develop -c bun run test
