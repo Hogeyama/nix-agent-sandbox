@@ -36,24 +36,32 @@ bun run check
 
 `check` currently includes the lint aggregate as well as TypeScript checks.
 
-4. Run the test lane for the current environment.
+4. Run the test lane required by the change's scope.
 
 Use the repository's Nix development environment (or equivalent installed
 build tools). `test:unit` now includes Zig suites as well as Bun suites;
 addon Python wrappers also require Python and the generated vendor dependencies.
 Inspect [package.json](../../package.json) for the current aggregate membership.
 
-Inside NAS, use the unit aggregate as the standard test lane:
+After a substantial change, run the complete aggregate even when working
+inside NAS:
+
+```bash
+bun run test
+```
+
+A change is substantial when it crosses multiple components or changes
+pipeline behavior, Docker or process lifecycle, security or resource
+isolation, test aggregation, CI, release behavior, integration tests, or E2E
+behavior. Also use the complete aggregate when the user requests thorough or
+final verification. When uncertain whether the affected surface is narrow,
+prefer the complete aggregate.
+
+For a narrow ordinary change inside NAS, use the unit aggregate:
 
 ```bash
 bun run test:unit
 ```
-
-Do not run `bun test`, `bun run test`, or `bun test src/` as the standard NAS
-verification path. `bun test` is not routed through hostexec, and integration
-test modules can execute `docker info` probes while being imported, causing the
-run to hang instead of reaching an approval flow. This constraint applies even
-when interactive hostexec approval is available.
 
 Outside NAS, when Docker and the other integration dependencies are directly
 available, run the full suite:
@@ -67,10 +75,15 @@ black-box suites. `test`, `test:unit`, and `test:integration` explicitly
 aggregate component suites without overlapping them. They finish the other
 selected suites after a failure and then return a nonzero status.
 
-If integration or e2e verification is required while working inside NAS,
-report that it was not run and must be executed in an environment where those
-dependencies are directly available. Do not bypass the boundary with an
-absolute host path, a permissive rule, or an already-allowed parent process.
+Use the aggregate scripts rather than plain `bun test` or `bun test src/`.
+Plain discovery does not include every native or black-box suite and may import
+Docker probes outside the intended lanes.
+
+Inside NAS, the complete aggregate may skip tests whose capabilities are not
+available. Report those skips as unverified, not passed. If skipped coverage is
+material to the change, it still needs a run in an environment where the
+dependency is directly available. Do not switch to host execution merely to
+fill skips unless the user asks for or authorizes that environment change.
 
 ## Reading aggregate output
 
@@ -98,8 +111,10 @@ Report these items in the final response:
 - Whether `fmt`, `lint`, `check`, and the selected test lane passed or failed
 - Test summary counts by suite/runtime when available; distinguish skips and
   cached Zig successes from tests actually rerun
-- Whether integration/e2e tests were not run because verification occurred
-  inside NAS
+- Which integration/e2e tests were skipped or not run and why; do not infer
+  coverage merely from running inside NAS
+- If the complete aggregate was not run, why the change qualified for the
+  narrower lane
 - Notable failures or errors if the output highlights them
 
 ## Failure Handling
