@@ -15,6 +15,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const supervise = @import("supervise");
+const mask_stream = @import("masking").stream;
 const secrets = @import("secrets.zig");
 const shell = @import("shell.zig");
 const claude_post = @import("claude/hook_post.zig");
@@ -67,7 +68,7 @@ fn runFilter(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     };
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
-    supervise.mask_stream.streamMask(stdin.deprecatedReader(), stdout.deprecatedWriter(), list) catch |err| {
+    mask_stream.streamMask(stdin.deprecatedReader(), stdout.deprecatedWriter(), list) catch |err| {
         std.debug.print("sumi: stream error: {}\n", .{err});
         return 1;
     };

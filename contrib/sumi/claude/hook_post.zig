@@ -4,7 +4,7 @@ const std = @import("std");
 const jsonio = @import("../jsonio.zig");
 const secrets = @import("../secrets.zig");
 const cli = @import("../main.zig");
-const mask = @import("mask");
+const mask = @import("masking").mask;
 
 pub const SecretsResult = union(enum) { ok: []const []const u8, err: secrets.LoadError };
 pub const Decision = union(enum) {

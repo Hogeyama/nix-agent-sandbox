@@ -3,7 +3,7 @@ const std = @import("std");
 const jsonio = @import("../jsonio.zig");
 const secret_file = @import("../secrets.zig");
 const cli = @import("../main.zig");
-const mask = @import("mask");
+const mask = @import("masking").mask;
 
 pub const SCAN_LIMIT: usize = 32 * 1024 * 1024;
 pub const DIR_FILE_LIMIT: usize = 100;

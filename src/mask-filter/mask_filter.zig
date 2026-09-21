@@ -30,9 +30,9 @@
 //!            マスク経路が壊れたときだけ返る (fail-closed)。
 
 const std = @import("std");
-const mask_stream = @import("mask_stream.zig");
+const mask_stream = @import("masking").stream;
 const serve = @import("serve.zig");
-const supervise = @import("supervise.zig");
+const supervise = @import("supervise");
 
 const allocator = std.heap.page_allocator;
 
@@ -231,10 +231,7 @@ pub fn main() !u8 {
 const testing = std.testing;
 
 test {
-    _ = @import("mask_stream.zig");
-    _ = @import("relay.zig");
     _ = @import("serve.zig");
-    _ = @import("supervise.zig");
 }
 
 // ---------------------------------------------------------------------------

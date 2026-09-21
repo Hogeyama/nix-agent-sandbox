@@ -5,7 +5,7 @@
 //! ケースの両方から使えるよう、状態を `MaskStream` に切り出してある。
 
 const std = @import("std");
-const mask = @import("mask");
+const mask = @import("mask.zig");
 
 pub const BUF_SIZE: usize = 64 * 1024;
 

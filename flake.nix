@@ -128,7 +128,7 @@
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
               ./contrib/maskfs
-              ./src/zig
+              ./lib/masking
             ];
           };
           sourceRoot = "source/contrib/maskfs";
@@ -157,13 +157,14 @@
           pname = "nas-mask-filter";
           version = "0.1.0";
           src = pkgs.lib.fileset.toSource {
-            root = ./src;
+            root = ./.;
             fileset = pkgs.lib.fileset.unions [
               ./src/mask-filter
-              ./src/zig
+              ./lib/process-supervisor
+              ./lib/masking
             ];
           };
-          sourceRoot = "source/mask-filter";
+          sourceRoot = "source/src/mask-filter";
           nativeBuildInputs = [ zig pkgs.removeReferencesTo ];
           dontConfigure = true;
           dontFixup = true;
@@ -177,6 +178,8 @@
           checkPhase = ''
             export HOME=$TMPDIR
             zig build test --global-cache-dir "$TMPDIR/zig-cache"
+            (cd ../../lib/masking && zig build test --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/zig-cache")
+            (cd ../../lib/process-supervisor && zig build test --cache-dir "$TMPDIR/process-supervisor-cache" --global-cache-dir "$TMPDIR/zig-cache")
           '';
           installPhase = ''
             mkdir -p $out/bin
@@ -200,8 +203,8 @@
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
               ./contrib/sumi
-              ./src/mask-filter
-              ./src/zig
+              ./lib/process-supervisor
+              ./lib/masking
             ];
           };
           sourceRoot = "source/contrib/sumi";
@@ -220,6 +223,8 @@
           checkPhase = ''
             zig build test \
               --global-cache-dir "$TMPDIR/sumi-zig-cache"
+            (cd ../../lib/masking && zig build test --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
+            (cd ../../lib/process-supervisor && zig build test --cache-dir "$TMPDIR/process-supervisor-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
           '';
           installPhase = ''
             mkdir -p $out/bin

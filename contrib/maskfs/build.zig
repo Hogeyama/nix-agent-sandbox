@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Create shared mask module (for both maskfs and mask-filter to use) ──
     const mask_mod = b.createModule(.{
-        .root_source_file = b.path("../../src/zig/mask.zig"),
+        .root_source_file = b.path("../../lib/masking/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    exe_mod.addImport("mask", mask_mod);
+    exe_mod.addImport("masking", mask_mod);
     exe_mod.addOptions("build_options", build_options);
     const exe = b.addExecutable(.{
         .name = "nas-maskfs",
@@ -32,9 +32,10 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("fuse3");
     b.installArtifact(exe);
 
-    // ── unit tests (mask.zig は FUSE 非依存) ──
+    // Compatibility test entry point: the shared masking suite, without FUSE.
+    // maskfs itself is covered by tests/maskfs_e2e_test.ts.
     const mask_test_mod = b.createModule(.{
-        .root_source_file = b.path("../../src/zig/mask.zig"),
+        .root_source_file = b.path("../../lib/masking/root.zig"),
         .target = host_target,
         .optimize = optimize,
     });

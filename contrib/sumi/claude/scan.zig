@@ -4,7 +4,7 @@ const jsonio = @import("../jsonio.zig");
 const secrets = @import("../secrets.zig");
 const init = @import("init.zig");
 const cli = @import("../main.zig");
-const mask = @import("mask");
+const mask = @import("masking").mask;
 const extract = @import("extract.zig");
 const MAX_EXTRACT = 8 * 1024 * 1024;
 

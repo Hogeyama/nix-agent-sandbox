@@ -13,8 +13,16 @@ bun run vendor             # Populate src/docker/mitmproxy/vendor/ (gitignored;
 
 # Development and testing
 bun run test:unit          # Unit only, no Docker — use this while iterating
-bun run test               # Full suite (src/ + tests/) — run ONCE as the final check
-bun run test:integration   # Integration + e2e only
+bun run test               # All component suites — run ONCE as the final check
+bun run test:integration   # All component integration + nas e2e tests
+bun run test:nas-unit      # nas TS + hostexec + mask-filter unit tests
+bun run test:nas-integration # nas integration + tests/ e2e tests
+bun run test:vscode-approval # VS Code approval extension tests
+bun run test:mitmproxy-addon-unit # Addon unit tests (including Python wrappers)
+bun run test:mitmproxy-addon-integration # Addon integration tests
+bun run test:masking-unit  # Shared masking and stream unit tests
+bun run test:process-supervisor-unit # Shared supervisor and relay unit tests
+bun run test:sumi          # sumi unit + black-box tests
 bun test path/to/file_test.ts         # Single file
 bun test --test-name-pattern 'config' # Run specific test pattern
 bun run check              # Type check (uses strict mode)

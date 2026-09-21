@@ -5,7 +5,7 @@
 //! foreground (-f) / single-thread (-s) で fuse_main を実行する。
 
 const std = @import("std");
-const mask = @import("mask");
+const mask = @import("masking").mask;
 const build_options = @import("build_options");
 
 const c = @cImport({
@@ -491,7 +491,7 @@ pub fn main() !u8 {
 
     const rc = c.fuse_main_fn(
         @intCast(fuse_args.items.len),
-        @constCast(@ptrCast(fuse_args.items.ptr)),
+        @ptrCast(@constCast(fuse_args.items.ptr)),
         &ops,
         null,
     );

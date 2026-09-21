@@ -29,7 +29,7 @@ Claude Code の設定では防げません。
 
 **2. `sumi scan` が遅い**
 
-展開した全パターンを、パターンごとに `std.mem.indexOf` で探し直している（[mask.zig](/home/hogeyama/repo/nix-agent-sandbox/src/zig/mask.zig) の `containsAny`）。計算量は「パターン数 × 読むバイト数」になる。
+展開した全パターンを、パターンごとに `std.mem.indexOf` で探し直している（[mask.zig](/home/hogeyama/repo/nix-agent-sandbox/lib/masking/mask.zig) の `containsAny`）。計算量は「パターン数 × 読むバイト数」になる。
 
 実測（64 MiB のランダムなファイル、sumi 0.1.0）:
 

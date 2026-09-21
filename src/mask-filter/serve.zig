@@ -52,7 +52,7 @@
 
 const std = @import("std");
 const posix = std.posix;
-const mask_stream = @import("mask_stream.zig");
+const mask_stream = @import("masking").stream;
 
 const BUF_SIZE = mask_stream.BUF_SIZE;
 

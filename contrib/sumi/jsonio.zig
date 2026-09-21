@@ -6,7 +6,7 @@
 //! 対象にしない。
 
 const std = @import("std");
-const mask = @import("mask");
+const mask = @import("masking").mask;
 
 pub const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 /// Input is kept well below std.json.Stringify's fixed 256-container stack so

@@ -7,10 +7,18 @@ pub fn build(b: *std.Build) void {
 
     // ── shared mask module (maskfs と共用) ──
     const mask_mod = b.createModule(.{
-        .root_source_file = b.path("../zig/mask.zig"),
+        .root_source_file = b.path("../../lib/masking/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    const supervise_mod = b.createModule(.{
+        .root_source_file = b.path("../../lib/process-supervisor/supervise.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    supervise_mod.addImport("masking", mask_mod);
 
     // ── nas-mask-filter executable ──
     const exe_mod = b.createModule(.{
@@ -19,7 +27,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    exe_mod.addImport("mask", mask_mod);
+    exe_mod.addImport("masking", mask_mod);
+    exe_mod.addImport("supervise", supervise_mod);
     const exe = b.addExecutable(.{
         .name = "nas-mask-filter",
         .root_module = exe_mod,
@@ -28,17 +37,25 @@ pub fn build(b: *std.Build) void {
 
     // ── unit tests ──
     const mask_test_mod = b.createModule(.{
-        .root_source_file = b.path("../zig/mask.zig"),
+        .root_source_file = b.path("../../lib/masking/root.zig"),
         .target = host_target,
         .optimize = optimize,
     });
+    const supervise_test_mod = b.createModule(.{
+        .root_source_file = b.path("../../lib/process-supervisor/supervise.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    supervise_test_mod.addImport("masking", mask_test_mod);
     const test_mod = b.createModule(.{
         .root_source_file = b.path("mask_filter.zig"),
         .target = host_target,
         .optimize = optimize,
         .link_libc = true,
     });
-    test_mod.addImport("mask", mask_test_mod);
+    test_mod.addImport("masking", mask_test_mod);
+    test_mod.addImport("supervise", supervise_test_mod);
     const unit_tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");

@@ -143,7 +143,7 @@ pub fn free(a: std.mem.Allocator, values: []const []const u8) void {
 }
 
 const testing = std.testing;
-const mask = @import("mask");
+const mask = @import("masking").mask;
 
 test "URL encoding preserves literal case and covers UTF-8, slash and spaces" {
     const values = try expand(testing.allocator, &.{"Ab/é +?"});

@@ -60,7 +60,7 @@
 
 const std = @import("std");
 const posix = std.posix;
-pub const mask_stream = @import("mask_stream.zig");
+const mask_stream = @import("masking").stream;
 const relay_mod = @import("relay.zig");
 
 const MaskStream = mask_stream.MaskStream;
@@ -823,4 +823,9 @@ test "exitCodeFromStatus: killed by signal maps to 128+signo" {
     try testing.expectEqual(@as(u8, 128 + 2), exitCodeFromStatus(2)); // SIGINT
     try testing.expectEqual(@as(u8, 128 + 15), exitCodeFromStatus(15)); // SIGTERM
     try testing.expectEqual(@as(u8, 128 + 9), exitCodeFromStatus(9)); // SIGKILL
+}
+
+// Keep relay tests in the shared supervisor suite.
+test {
+    _ = relay_mod;
 }

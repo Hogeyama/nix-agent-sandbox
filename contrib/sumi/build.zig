@@ -10,20 +10,19 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
 
-    // sumi 実行ファイル。supervise.zig は mask_stream.zig と relay.zig を相対 import
-    // しているので、1 つのモジュールとして取り込む (ファイルは 1 モジュールにしか属せない)。
+    // Shared libraries are independent of the nas executable sources.
     const mask_mod = b.createModule(.{
-        .root_source_file = b.path("../../src/zig/mask.zig"),
+        .root_source_file = b.path("../../lib/masking/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     const supervise_mod = b.createModule(.{
-        .root_source_file = b.path("../../src/mask-filter/supervise.zig"),
+        .root_source_file = b.path("../../lib/process-supervisor/supervise.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    supervise_mod.addImport("mask", mask_mod);
+    supervise_mod.addImport("masking", mask_mod);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("main.zig"),
@@ -32,7 +31,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .strip = strip,
     });
-    exe_mod.addImport("mask", mask_mod);
+    exe_mod.addImport("masking", mask_mod);
     exe_mod.addImport("supervise", supervise_mod);
     exe_mod.addOptions("build_options", build_options);
 
@@ -41,24 +40,24 @@ pub fn build(b: *std.Build) void {
 
     // unit test はクロスターゲットでは走らせられないので、常にホスト向けにビルドする。
     const test_mask_mod = b.createModule(.{
-        .root_source_file = b.path("../../src/zig/mask.zig"),
+        .root_source_file = b.path("../../lib/masking/root.zig"),
         .target = host_target,
         .optimize = optimize,
     });
     const test_supervise_mod = b.createModule(.{
-        .root_source_file = b.path("../../src/mask-filter/supervise.zig"),
+        .root_source_file = b.path("../../lib/process-supervisor/supervise.zig"),
         .target = host_target,
         .optimize = optimize,
         .link_libc = true,
     });
-    test_supervise_mod.addImport("mask", test_mask_mod);
+    test_supervise_mod.addImport("masking", test_mask_mod);
     const test_mod = b.createModule(.{
         .root_source_file = b.path("main.zig"),
         .target = host_target,
         .optimize = optimize,
         .link_libc = true,
     });
-    test_mod.addImport("mask", test_mask_mod);
+    test_mod.addImport("masking", test_mask_mod);
     test_mod.addImport("supervise", test_supervise_mod);
     test_mod.addOptions("build_options", build_options);
     const unit_tests = b.addTest(.{ .root_module = test_mod });
