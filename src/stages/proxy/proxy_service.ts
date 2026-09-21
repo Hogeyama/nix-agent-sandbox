@@ -37,6 +37,23 @@ export interface SessionNetworkPlan {
   readonly proxyAlias: string;
 }
 
+/**
+ * The stock mitmproxy entrypoint rewrites the `mitmproxy` account to the
+ * uid/gid that owns the mounted cert store (`usermod -u <uid> -g <gid>`).
+ * `usermod -g` requires the gid to resolve to a group in /etc/group, so a
+ * host whose primary gid is absent from the image (e.g. a CI runner user
+ * with gid 1001) kills the container with `usermod: group '<gid>' does not
+ * exist` before mitmdump starts. Create the group up front, then defer to
+ * the stock entrypoint for the usermod + gosu drop.
+ */
+const PROXY_ENTRYPOINT_WRAPPER = [
+  "f=/home/mitmproxy/.mitmproxy/mitmproxy-ca.pem",
+  '[ -f "$f" ] || f=/home/mitmproxy/.mitmproxy',
+  'g=$(stat -c %g "$f")',
+  'getent group "$g" >/dev/null 2>&1 || groupadd -o -g "$g" nas-host-group',
+  'exec docker-entrypoint.sh "$@"',
+].join("; ");
+
 // ---------------------------------------------------------------------------
 // ProxyService tag
 // ---------------------------------------------------------------------------
@@ -145,7 +162,11 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
                   [NAS_KIND_LABEL]: NAS_KIND_PROXY,
                   [NAS_ADDON_HASH_LABEL]: plan.addonHash,
                 },
+                entrypoint: "bash",
                 command: [
+                  "-c",
+                  PROXY_ENTRYPOINT_WRAPPER,
+                  "nas-proxy-entrypoint",
                   "mitmdump",
                   "--mode",
                   "regular@8080",

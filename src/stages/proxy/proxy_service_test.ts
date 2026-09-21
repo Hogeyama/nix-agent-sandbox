@@ -390,7 +390,15 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
     [NAS_KIND_LABEL]: NAS_KIND_PROXY,
     [NAS_ADDON_HASH_LABEL]: "abc123",
   });
-  expect(run.command).toEqual([
+  // The wrapper creates the cert store's gid in /etc/group before deferring to
+  // the stock entrypoint, whose `usermod -g` fails when the host gid is absent
+  // from the image.
+  expect(run.entrypoint).toEqual("bash");
+  expect(run.command?.[0]).toEqual("-c");
+  expect(run.command?.[1]).toContain("groupadd");
+  expect(run.command?.[1]).toContain("docker-entrypoint.sh");
+  expect(run.command?.[2]).toEqual("nas-proxy-entrypoint");
+  expect(run.command?.slice(3)).toEqual([
     "mitmdump",
     "--mode",
     "regular@8080",
