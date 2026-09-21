@@ -25,17 +25,17 @@ Usage:
   nas devcontainer up|status|down [--workspace DIR] [--json]
 
 Subcommands:
-  rebuild   Docker イメージを削除して再ビルドする
-  worktree  git worktree の管理
-  container sidecar container の管理
-  session   dtach セッションの管理
-  network   network 承認キューと runtime の管理
-  hostexec  hostexec 承認キューの管理
-  ui        Web ダッシュボードを起動する
-  audit     監査ログを表示する
-  config    設定ファイルの管理 (init: 初期設定ファイルを生成, migrate yml2pkl: YAML→Pkl変換, migrate nix2pkl: Nix→Pkl変換)
+  rebuild   Remove the Docker image and rebuild it
+  worktree  Manage git worktrees
+  container Manage sidecar containers
+  session   Manage dtach sessions
+  network   Manage the network approval queue and runtime state
+  hostexec  Manage the hostexec approval queue
+  ui        Start the web dashboard
+  audit     Show audit logs
+  config    Manage config files (init: generate the initial config, migrate yml2pkl: YAML→Pkl, migrate nix2pkl: Nix→Pkl)
   hook      Report a session event from an agent hook (internal use)
-  devcontainer  VS Code Dev Container の初期化・起動・状態確認・終了
+  devcontainer  Initialize, start, inspect, and stop a VS Code Dev Container
 
 Options:
   (main command only — must appear before [profile-name])
@@ -63,64 +63,64 @@ Rebuild options:
 
 Worktree subcommand options:
   ('nas worktree' manages worktrees created by past sessions, distinct from the -b/--worktree run option)
-  list            nas が作成した worktree を一覧表示（デフォルト）
-  clean           nas が作成した worktree をすべて削除
-  -f, --force     確認なしで削除
-  -B, --delete-branch  worktree 削除時にブランチも削除
+  list            List worktrees created by nas (default)
+  clean           Remove all worktrees created by nas
+  -f, --force     Remove without confirmation
+  -B, --delete-branch  Also delete the branch when removing a worktree
 
 Container options:
-  list            nas 管理コンテナを一覧表示
-  clean           未使用の nas sidecar container/network/volume を削除
+  list            List nas-managed containers
+  clean           Remove unused nas sidecar containers/networks/volumes
 
 Session options:
-  list            アクティブな dtach セッション一覧（デフォルト）
-  attach <id>     セッションに再接続
+  list            List active dtach sessions (default)
+  attach <id>     Reattach to a session
 
 Network options:
-  pending         保留中の network 承認要求を表示
-  approve         承認する
-  deny            拒否する
-  review          fzf で対話的に承認/拒否する
-  watch           承認要求の発生と消滅を JSON Lines で流し続ける
-  gc              stale runtime state を掃除する
+  pending         Show pending network approval requests
+  approve         Approve a request
+  deny            Deny a request
+  review          Interactively approve/deny with fzf
+  watch           Stream approval request arrivals/removals as JSON Lines
+  gc              Clean up stale runtime state
   bind <session-id> -L <host-port>:<container-port>
-                  ホストで待ち受け、コンテナへ転送する
+                  Listen on the host and forward to the container
   bind <session-id> -R <container-port>:<host-port>
-                  コンテナで待ち受け、ホストへ転送する
-                  L/R は左が待受ポート、右が転送先ポート（引数なしで両方向を一覧表示）
+                  Listen in the container and forward to the host
+                  For -L/-R, the left port listens and the right port is the target (no args lists both directions)
   unbind <session-id> -L <host-port>
   unbind <session-id> -R <container-port>
-                  指定方向の待受ポートを削除する（引数なしで両方向から fzf 選択）
+                  Remove the listener for the given direction (no args: pick from both directions with fzf)
   bind <session-id>:<container-port> [<host-port>]
   unbind [<session-id>:<container-port> | <host-port>]
-                  Local 転送の互換構文
+                  Compatibility syntax for Local forwards
   forward <session-id>:<container-port> [<host-port>]
-                  Remote 転送の互換構文（引数なしで Remote のみ一覧表示）
+                  Compatibility syntax for Remote forwards (no args lists Remote only)
   unforward [<session-id>:<container-port>]
-                  Remote 転送を削除する互換構文（引数なしで fzf 選択）
-  --local-forward  -L の長い形式
-  --remote-forward -R の長い形式
+                  Compatibility syntax to remove a Remote forward (no args: pick with fzf)
+  --local-forward  Long form of -L
+  --remote-forward Long form of -R
   --runtime-dir DIR
-                  bind/unbind/forward/unforward では ports runtime root、それ以外では network runtime root
-  --format json   pending および bind/forward の一覧を JSON 形式で表示
-  --session ID    pending/review/watch の対象セッションを 1 つに限定する
+                  Ports runtime root for bind/unbind/forward/unforward; network runtime root otherwise
+  --format json   Print pending and bind/forward listings as JSON
+  --session ID    Limit pending/review/watch to one session
 
 HostExec options:
-  pending         保留中の hostexec 承認要求を表示
-  approve         承認する
-  deny            拒否する
-  review          fzf で対話的に承認/拒否する
-  watch           承認要求の発生と消滅を JSON Lines で流し続ける
-  test            ルールマッチングをテストする
-  --format json   pending の一覧を JSON 形式で表示
-  --session ID    pending/review/watch の対象セッションを 1 つに限定する
+  pending         Show pending hostexec approval requests
+  approve         Approve a request
+  deny            Deny a request
+  review          Interactively approve/deny with fzf
+  watch           Stream approval request arrivals/removals as JSON Lines
+  test            Test rule matching
+  --format json   Print the pending list as JSON
+  --session ID    Limit pending/review/watch to one session
 
 Audit options:
-  --since YYYY-MM-DD    指定日以降のログを表示（デフォルト: 今日）
-  --session ID          セッション ID でフィルタ
-  --domain DOMAIN       ドメインでフィルタ（network|hostexec）
-  --json                JSON 形式で出力
-  --audit-dir DIR       監査ログディレクトリを指定
+  --since YYYY-MM-DD    Show logs since the given date (default: today)
+  --session ID          Filter by session ID
+  --domain DOMAIN       Filter by domain (network|hostexec)
+  --json                Output as JSON
+  --audit-dir DIR       Use DIR as the audit log directory
 
 Dev Container options:
   init [--profile PROFILE]  Generate the managed configuration (default: claude)

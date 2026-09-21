@@ -1,0 +1,61 @@
+id: no-japanese-messages-ts
+snapshots:
+  console.log("開始しました");:
+    labels:
+    - source: 開始しました
+      style: primary
+      start: 13
+      end: 31
+  'const config = { note: "クリックしてください" };':
+    labels:
+    - source: クリックしてください
+      style: primary
+      start: 24
+      end: 54
+  const label = "承認";:
+    labels:
+    - source: 承認
+      style: primary
+      start: 15
+      end: 21
+  const label = "ｾｯｼｮﾝ";:
+    labels:
+    - source: ｾｯｼｮﾝ
+      style: primary
+      start: 15
+      end: 30
+  const message = "Session " + id + " が見つかりません";:
+    labels:
+    - source: ' が見つかりません'
+      style: primary
+      start: 35
+      end: 60
+  'const message = `${ready ? "準備完了" : "Ready"}`;':
+    labels:
+    - source: 準備完了
+      style: primary
+      start: 28
+      end: 40
+  const message = `Session ${id} を開始しました`;:
+    labels:
+    - source: ' を開始しました'
+      style: primary
+      start: 30
+      end: 52
+  ? |
+    const usage = `Usage:
+      list  セッション一覧
+    `;
+  : labels:
+    - source: |
+        Usage:
+          list  セッション一覧
+      style: primary
+      start: 15
+      end: 52
+  throw new Error('接続できません');:
+    labels:
+    - source: 接続できません
+      style: primary
+      start: 17
+      end: 38

@@ -130,7 +130,7 @@ describe("validateConfig: mask", () => {
       }),
     );
     expect(() => validateConfig(config)).toThrow(
-      /mask\.proxy = false を選べません/,
+      /mask\.proxy = false is not allowed/,
     );
   });
 

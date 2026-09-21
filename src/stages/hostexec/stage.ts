@@ -373,9 +373,9 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   if (symlinks.length > 0) {
     if (!clientBinPath) {
       throw new Error(
-        "[nas] hostexec: コマンド名 argv0 のルールには hostexec クライアント " +
-          "(nas-hostexec-client) が必要ですが、見つかりませんでした。" +
-          "nix ビルド（または `cd src/hostexec/intercept && zig build`）で生成するか、nas を再インストールしてください。",
+        "[nas] hostexec: rules matching a bare command name as argv0 need the " +
+          "hostexec client (nas-hostexec-client), but it was not found. " +
+          "Build it with the nix build (or `cd src/hostexec/intercept && zig build`), or reinstall nas.",
       );
     }
     dockerArgs.push(
@@ -387,9 +387,9 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   if (interceptPaths.length > 0) {
     if (!interceptLibPath) {
       throw new Error(
-        "[nas] hostexec: 相対・絶対パス argv0 のルールには intercept ライブラリ " +
-          "(hostexec_intercept.so) が必要ですが、見つかりませんでした。" +
-          "nix ビルド（または `cd src/hostexec/intercept && zig build`）で生成するか、nas を再インストールしてください。",
+        "[nas] hostexec: rules matching a relative or absolute path as argv0 need " +
+          "the intercept library (hostexec_intercept.so), but it was not found. " +
+          "Build it with the nix build (or `cd src/hostexec/intercept && zig build`), or reinstall nas.",
       );
     }
     const existingLdPreload = envVars.LD_PRELOAD;

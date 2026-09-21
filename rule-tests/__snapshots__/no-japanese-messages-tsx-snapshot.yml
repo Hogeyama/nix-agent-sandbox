@@ -1,0 +1,55 @@
+id: no-japanese-messages-tsx
+snapshots:
+  const label = "設定";:
+    labels:
+    - source: 設定
+      style: primary
+      start: 15
+      end: 21
+  const view = <button aria-label="拒否">Deny</button>;:
+    labels:
+    - source: 拒否
+      style: primary
+      start: 33
+      end: 39
+  const view = <button>承認</button>;:
+    labels:
+    - source: 承認
+      style: primary
+      start: 21
+      end: 27
+  const view = <input placeholder="検索" />;:
+    labels:
+    - source: 検索
+      style: primary
+      start: 33
+      end: 39
+  ? |
+    const view = <p>
+      実行対象ファイルが変化しています
+    </p>;
+  : labels:
+    - source: |2
+
+          実行対象ファイルが変化しています
+      style: primary
+      start: 16
+      end: 68
+  const view = <p>{"起動していません"}</p>;:
+    labels:
+    - source: 起動していません
+      style: primary
+      start: 18
+      end: 42
+  const view = <p>{`セッション ${id}`}</p>;:
+    labels:
+    - source: 'セッション '
+      style: primary
+      start: 18
+      end: 34
+  'const view = <p>{ready ? "準備完了" : "Ready"}</p>;':
+    labels:
+    - source: 準備完了
+      style: primary
+      start: 26
+      end: 38

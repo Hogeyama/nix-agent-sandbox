@@ -125,7 +125,7 @@ export function planProxy(
   if (resolved.document === null) {
     throw new Error(
       [
-        "[nas] ネットワーク認可の設定を解決できません:",
+        "[nas] could not resolve the network authorization config:",
         ...resolved.diagnostics
           .filter((diagnostic) => diagnostic.severity === "error")
           .map((diagnostic) => diagnostic.message),

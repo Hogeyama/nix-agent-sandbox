@@ -146,11 +146,11 @@ function printForwardResult(result: {
   hostProbe: "ok" | "no-answer";
 }): void {
   console.log(
-    `コンテナ内の localhost:${result.containerPort} からホストの 127.0.0.1:${result.hostPort} へ転送します`,
+    `Forwarding localhost:${result.containerPort} in the container to 127.0.0.1:${result.hostPort} on the host`,
   );
   if (result.hostProbe === "no-answer") {
     console.log(
-      `[nas] ホストの 127.0.0.1:${result.hostPort} はまだ応答していません。`,
+      `[nas] 127.0.0.1:${result.hostPort} on the host is not responding yet.`,
     );
   }
 }
@@ -165,20 +165,20 @@ function printAddForwardResult(result: AddForwardResult): void {
     return;
   }
 
-  console.log(`http://localhost:${result.entry.hostPort} で開きました`);
+  console.log(`Listening at http://localhost:${result.entry.hostPort}`);
   if (result.probe === "no-answer") {
-    console.log("[nas] コンテナのポートは応答しませんでした。");
+    console.log("[nas] The container port did not respond.");
   } else if (result.probe === "container-not-running") {
-    console.log("[nas] コンテナは起動していません。");
+    console.log("[nas] The container is not running.");
   } else if (result.probe === "relay-unreachable") {
-    console.log("[nas] リレーを起動できませんでした。");
+    console.log("[nas] The port relay could not be started.");
   }
 }
 
 function printRemoveForwardResult(result: RemoveForwardResult): void {
   const outcome = result.removed
-    ? "ポート転送のユーザー設定を削除しました。"
-    : "削除できるポート転送のユーザー設定はありませんでした。";
+    ? "Removed the user-configured port forward."
+    : "No user-configured port forward to remove.";
   console.log(
     `[nas] ${outcome} retainedInternal=${result.retainedInternal} listenerClosed=${result.listenerClosed}`,
   );
@@ -207,7 +207,7 @@ function candidateLine(candidate: PortBindCandidate): string {
   // work; an ordinary server is just its port.
   return candidate.reachable
     ? `${candidate.containerPort}`
-    : `${candidate.containerPort} (${candidate.scope} — 127.0.0.1 からは届きません)`;
+    : `${candidate.containerPort} (${candidate.scope} — not reachable from 127.0.0.1)`;
 }
 
 interface NetworkCommandDependencies {
@@ -290,11 +290,11 @@ export async function runNetworkCommand(
         }
         if (found.candidates.length === 0) {
           if (found.watch === "container-not-running") {
-            console.log("[nas] コンテナは起動していません。");
+            console.log("[nas] The container is not running.");
           } else if (found.watch === "relay-unreachable") {
-            console.log("[nas] リレーを起動できませんでした。");
+            console.log("[nas] The port relay could not be started.");
           } else {
-            console.log("[nas] 未転送の待ち受けポートは見つかりませんでした。");
+            console.log("[nas] No unforwarded listening ports were found.");
           }
           return;
         }
@@ -312,7 +312,7 @@ export async function runNetworkCommand(
           chosen.containerPort,
           null,
         );
-        console.log(`http://localhost:${suggested.hostPort} で開きました`);
+        console.log(`Listening at http://localhost:${suggested.hostPort}`);
         return;
       }
 
@@ -324,13 +324,13 @@ export async function runNetworkCommand(
         request.containerPort,
         request.hostPort,
       );
-      console.log(`http://localhost:${result.hostPort} で開きました`);
+      console.log(`Listening at http://localhost:${result.hostPort}`);
       if (result.probe === "no-answer") {
-        console.log("[nas] コンテナのポートは応答しませんでした。");
+        console.log("[nas] The container port did not respond.");
       } else if (result.probe === "container-not-running") {
-        console.log("[nas] コンテナは起動していません。");
+        console.log("[nas] The container is not running.");
       } else if (result.probe === "relay-unreachable") {
-        console.log("[nas] リレーを起動できませんでした。");
+        console.log("[nas] The port relay could not be started.");
       }
       return;
     }
@@ -374,7 +374,7 @@ export async function runNetworkCommand(
       }
       if ("sessionId" in key) unreachableSessionId = key.sessionId;
       await portBindClient.unbindByKey(paths, key);
-      console.log("[nas] ポート転送の削除を処理しました。");
+      console.log("[nas] Removed the port forward.");
       return;
     }
 
@@ -429,14 +429,15 @@ export async function runNetworkCommand(
         }
         if (listeners.length === 0) {
           console.log(
-            "[nas] ホストの 127.0.0.1 で待ち受けている未転送のポートは見つかりませんでした。",
+            "[nas] No unforwarded ports listening on 127.0.0.1 on the host were found.",
           );
           return;
         }
         const lines = listeners.map((listener) => `${listener.containerPort}`);
         const selected = await select(lines, {
           prompt: "forward> ",
-          header: "ホストの待ち受けポート（同じ番号でコンテナ内に転送）",
+          header:
+            "Host listening ports (forwarded to the same port in the container)",
           missingMessage:
             "[nas] fzf is not installed. Pass <session-id>:<port> to 'nas network forward'.",
         });
@@ -482,7 +483,7 @@ export async function runNetworkCommand(
       }
       unreachableSessionId = key.sessionId;
       await portBindClient.unforward(paths, key);
-      console.log("[nas] ホストへの転送の削除を処理しました。");
+      console.log("[nas] Removed the forward to the host.");
       return;
     }
 
@@ -570,11 +571,11 @@ export async function runNetworkCommand(
   } catch (err) {
     if (err instanceof SessionUnreachableError) {
       const subject = unreachableSessionId
-        ? `セッション ${unreachableSessionId}`
-        : "ポート転送先のセッション";
+        ? `session ${unreachableSessionId}`
+        : "the session the forward targets";
       exitOnCliError(
         new Error(
-          `${subject} に接続できません。この機能の追加前に開始された可能性があります。セッションを再起動するか nas network gc を実行してください。`,
+          `Could not connect to ${subject}. The session may have been started before this feature was added. Restart the session or run nas network gc.`,
         ),
       );
     }

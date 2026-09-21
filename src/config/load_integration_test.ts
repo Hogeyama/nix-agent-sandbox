@@ -720,7 +720,7 @@ profiles {
 `;
     await withNasConfig(configPkl, async (dir) => {
       await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-        /profile "dev": ルール github\.graphql の expect\[0\] の graphql\.operations が空の Listing です/,
+        /profile "dev": rule github\.graphql expect\[0\] graphql\.operations is an empty Listing/,
       );
     });
   },
@@ -802,7 +802,7 @@ profiles {
 `;
     await withNasConfig(configPkl, async (dir) => {
       await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-        /profile "dev": ルール api\.matched.*RFC 6901 JSON Pointer/,
+        /profile "dev": rule api\.matched.*RFC 6901 JSON Pointer/,
       );
     });
   },

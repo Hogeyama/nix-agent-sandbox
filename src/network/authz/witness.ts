@@ -95,13 +95,13 @@ export function describeTargetAddress(address: TargetAddress): string {
 function describeBody(body: RequestBody): string {
   switch (body.kind) {
     case "absent":
-      return "ボディ条件なし";
+      return "no body condition";
     case "empty":
-      return "ボディ: 長さ 0";
+      return "body: length 0";
     case "binary":
-      return "ボディ: JSON として解析できない任意のバイト列";
+      return "body: arbitrary bytes that do not parse as JSON";
     case "json":
-      return `ボディ: ${JSON.stringify(body.value)}`;
+      return `body: ${JSON.stringify(body.value)}`;
   }
 }
 

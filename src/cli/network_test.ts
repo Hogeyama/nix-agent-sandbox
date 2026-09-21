@@ -244,7 +244,7 @@ test("unbind picker removes each direction by its listen port", async () => {
     expect(localLogs.join("\n")).toContain("listenerClosed=false");
     expect(remoteLogs.join("\n")).toContain("listenerClosed=false");
     expect([...localLogs, ...remoteLogs].join("\n")).not.toContain(
-      "閉じました",
+      "listenerClosed=true",
     );
   });
 });

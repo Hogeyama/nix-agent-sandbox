@@ -1,0 +1,19 @@
+id: no-japanese-messages-tsx
+valid:
+  - 'const view = <button title="Approve request">Approve</button>;'
+  - 'const view = <p>⚠ Request → approval …</p>;'
+  - 'const view = <p>{/* 日本語のコメント */}Ready</p>;'
+  - 'const view = <p>{message}</p>;'
+  - 'const label = `Ready ${/* 日本語のコメント */ id}`;'
+invalid:
+  - 'const view = <button>承認</button>;'
+  - 'const view = <input placeholder="検索" />;'
+  - 'const view = <button aria-label="拒否">Deny</button>;'
+  - 'const view = <p>{"起動していません"}</p>;'
+  - 'const view = <p>{`セッション ${id}`}</p>;'
+  - 'const label = "設定";'
+  - 'const view = <p>{ready ? "準備完了" : "Ready"}</p>;'
+  - |
+    const view = <p>
+      実行対象ファイルが変化しています
+    </p>;

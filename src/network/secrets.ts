@@ -55,7 +55,7 @@ export async function resolveSecretRegistry(
       } catch (error) {
         // 取得元の綴りは設定に書いてあるので出してよい。値は出さない。
         throw new Error(
-          `[nas] secrets["${name}"] (${config.from}) を解決できませんでした: ${
+          `[nas] could not resolve secrets["${name}"] (${config.from}): ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -66,7 +66,7 @@ export async function resolveSecretRegistry(
       if (values.length === 0) {
         if (required) {
           throw new Error(
-            `[nas] secrets["${name}"] (${config.from}) が空です。required = false でなければセッションを開始できません。`,
+            `[nas] secrets["${name}"] (${config.from}) is empty. The session cannot start unless required = false.`,
           );
         }
         return null;
@@ -85,7 +85,7 @@ function assertMinSecretBytes(value: string, name: string): void {
   const bytes = new TextEncoder().encode(value).byteLength;
   if (bytes < MIN_SECRET_BYTES) {
     throw new Error(
-      `[nas] secrets["${name}"] の値が ${bytes} バイトしかありません。${MIN_SECRET_BYTES} バイト未満の値は無関係な内容まで巻き込んでマスクします。`,
+      `[nas] secrets["${name}"] is only ${bytes} bytes. Values under ${MIN_SECRET_BYTES} bytes mask unrelated content.`,
     );
   }
 }

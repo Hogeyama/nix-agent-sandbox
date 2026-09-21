@@ -433,11 +433,11 @@ export function parseTarget(source: string): Result<Target> {
   let port: number | null = null;
   if (portPart !== null) {
     if (!PORT.test(portPart)) {
-      return { ok: false, error: `ポートが不正である: ${source}` };
+      return { ok: false, error: `invalid port: ${source}` };
     }
     port = Number.parseInt(portPart, 10);
     if (port < 1 || port > 65535) {
-      return { ok: false, error: `ポートが範囲外である: ${source}` };
+      return { ok: false, error: `port out of range: ${source}` };
     }
   }
 
@@ -460,11 +460,11 @@ export function normalizeHost(host: string): string {
 }
 
 function parseHostPattern(host: string): Result<HostPattern> {
-  if (host === "") return { ok: false, error: "ホストが空である" };
+  if (host === "") return { ok: false, error: "host is empty" };
   if (host.startsWith("*.")) {
     const suffix = host.slice(2);
     if (suffix === "" || suffix.includes("*")) {
-      return { ok: false, error: `ホストパターンが不正である: ${host}` };
+      return { ok: false, error: `invalid host pattern: ${host}` };
     }
     return {
       ok: true,
@@ -474,7 +474,7 @@ function parseHostPattern(host: string): Result<HostPattern> {
   if (host.includes("*")) {
     return {
       ok: false,
-      error: `ワイルドカードは先頭の "*." だけに置ける: ${host}`,
+      error: `a wildcard may only appear as a leading "*." in ${host}`,
     };
   }
   return { ok: true, value: { kind: "exact", host: normalizeHost(host) } };

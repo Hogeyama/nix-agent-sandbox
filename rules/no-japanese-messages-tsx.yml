@@ -1,0 +1,26 @@
+# Check literals, including messages stored in variables before they are displayed.
+# This is a syntax-level guard, not data-flow analysis or language detection:
+# Japanese literal data also needs an explicit, reasoned ast-grep-ignore.
+# Match fragments so Japanese comments inside template substitutions stay valid.
+id: no-japanese-messages-tsx
+language: Tsx
+severity: error
+files:
+  - src/**/*.tsx
+ignores:
+  - '**/*_test.ts'
+  - '**/*_test.tsx'
+  - '**/fixtures/**'
+  - '**/*_fixture.ts'
+rule:
+  all:
+    - any:
+        - kind: string_fragment
+        - kind: jsx_text
+    - regex: '[\p{Hiragana}\p{Katakana}\p{Han}]'
+message: Write user-facing messages in English.
+note: >-
+  Japanese comments and test fixtures are allowed. This rule checks production
+  string/template fragments and JSX text, including labels and diagnostic messages.
+  For intentional Japanese data that is not a message, use a narrowly scoped
+  ast-grep-ignore with a comment explaining why.

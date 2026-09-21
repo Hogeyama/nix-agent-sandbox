@@ -59,7 +59,7 @@ describe("スコープのターゲット", () => {
         },
       },
     });
-    expect(message).toContain("スコープ a と b のターゲット集合が交差します");
+    expect(message).toContain("target sets of scopes a and b intersect");
     // 証人がないと書き手はどこが重なったのか分からない。
     expect(message).toContain("a.example.com:8443");
   });
@@ -79,14 +79,14 @@ describe("スコープのターゲット", () => {
 
   test("targets が空のスコープはエラーになる", () => {
     expect(joined({ network: { scopes: { a: { targets: [] } } } })).toContain(
-      "targets が空",
+      "has no targets",
     );
   });
 
   test("ターゲットの書き方が不正ならエラーになる", () => {
     expect(
       joined({ network: { scopes: { a: { targets: ["a.*.com"] } } } }),
-    ).toContain("ワイルドカード");
+    ).toContain("wildcard");
   });
 });
 
@@ -109,13 +109,13 @@ describe("ルールの重なり", () => {
   test("交差してどちらも包含しない 2 つのルールはエラーになる", () => {
     const message = joined(ambiguous);
     expect(message).toContain(
-      "ルール api.repos.read と api.repos.pulls の受理集合が交差します",
+      "accepted sets of rules api.repos.read and api.repos.pulls intersect",
     );
   });
 
   test("エラーには両方に一致する具体的なリクエストが載る", () => {
     const message = joined(ambiguous);
-    expect(message).toContain("両方に一致するリクエストの例");
+    expect(message).toContain("A request matching both:");
     expect(message).toContain("GET /repos/my-org/x/pulls");
   });
 
@@ -141,9 +141,9 @@ describe("ルールの重なり", () => {
       }),
     );
 
-    expect(message).toContain("ルール api.exact-path と api.exact-method");
-    expect(message).toContain("両方に一致するリクエストの例");
-    expect(message).toContain('ボディ: "root-value"');
+    expect(message).toContain("rules api.exact-path and api.exact-method");
+    expect(message).toContain("A request matching both:");
+    expect(message).toContain('body: "root-value"');
     // root を指す Pointer は空文字なので、表では (root) と書かないと値だけが浮く。
     expect(message).toContain(
       [
@@ -160,7 +160,7 @@ describe("ルールの重なり", () => {
         "  api.repos.read   GET|HEAD  /repos/{org}/{repo}/**",
         "  api.repos.pulls  GET       /repos/*/*/pulls",
         "",
-        "  解決方法:",
+        "  How to fix:",
       ].join("\n"),
     );
   });
@@ -189,7 +189,7 @@ describe("ルールの重なり", () => {
     expect(message).toContain(
       [
         '  api.mode  GET|POST  /run  body json /mode="fast"|"safe" /kind=1',
-        "  api.any   POST      /**   ボディ条件なし",
+        "  api.any   POST      /**   no body condition",
       ].join("\n"),
     );
   });
@@ -200,8 +200,8 @@ describe("ルールの重なり", () => {
     expect(message).toContain("/repos/{org}/{repo}/**");
     expect(message).toContain("/repos/*/*/pulls");
     expect(message).toContain('overrides { "repos.read" }');
-    expect(message).toContain("どちらかの match を狭める");
-    expect(message).toContain("交差部分を担当する第 3 のルールを足す");
+    expect(message).toContain("Narrow one side's match");
+    expect(message).toContain("Add a third rule covering the intersection");
   });
 
   test("overrides を書けば重なりは解決される", () => {
@@ -254,7 +254,7 @@ describe("ルールの重なり", () => {
           },
         }),
       ),
-    ).toContain("存在しないルール");
+    ).toContain("does not exist");
   });
 
   test("互いに overrides を書いた 2 つのルールはエラーになる", () => {
@@ -285,13 +285,13 @@ describe("ルールの重なり", () => {
         },
       },
     });
-    expect(message).toContain("優先関係が循環しています");
+    expect(message).toContain("precedence in scope github is cyclic");
     expect(message).toContain("c → b → c");
     expect(message).toContain(
-      'github.b は overrides { "c" } で github.c より先',
+      'github.b precedes github.c via overrides { "c" }',
     );
     expect(message).toContain(
-      'github.c は overrides { "b" } で github.b より先',
+      'github.c precedes github.b via overrides { "b" }',
     );
   });
 
@@ -313,8 +313,8 @@ describe("ルールの重なり", () => {
         },
       }),
     );
-    expect(message).toContain("優先関係が循環しています");
-    expect(message).toContain("api.y は api.z より特異なので先");
+    expect(message).toContain("precedence in scope api is cyclic");
+    expect(message).toContain("api.y precedes api.z by specificity");
   });
 
   test("自分自身を overrides するルールはエラーになる", () => {
@@ -324,7 +324,7 @@ describe("ルールの重なり", () => {
           a: { match: { paths: ["/a"] }, onMatch: "allow", overrides: ["a"] },
         }),
       ),
-    ).toContain("自分自身");
+    ).toContain("pointing at itself");
   });
 
   test("overrides が交差しない相手を指すとエラーになる", () => {
@@ -342,7 +342,7 @@ describe("ルールの重なり", () => {
           },
         }),
       ),
-    ).toContain("交差しない");
+    ).toContain("does not intersect");
   });
 
   test("別の Pointer を縛る値条件の重なりは比較不能としてエラーになる", () => {
@@ -365,7 +365,7 @@ describe("ルールの重なり", () => {
           },
         }),
       ),
-    ).toContain("受理集合が交差します");
+    ).toContain("accepted sets");
   });
 
   test("__proto__ Pointer は交差診断の JSON データとして提示する", () => {
@@ -397,7 +397,7 @@ describe("ルールの重なり", () => {
 
       expect(Object.hasOwn(Object.prototype, pollutionKey)).toBe(false);
       expect(message).toContain(
-        `ボディ: {"__proto__":{"${pollutionKey}":"blocked"},"tier":"pro"}`,
+        `body: {"__proto__":{"${pollutionKey}":"blocked"},"tier":"pro"}`,
       );
     } finally {
       delete (Object.prototype as Record<string, unknown>)[pollutionKey];
@@ -432,8 +432,8 @@ describe("ルールの重なり", () => {
       );
 
       expect(Object.hasOwn(Object.prototype, pollutionKey)).toBe(false);
-      expect(message).toContain("受理集合が交差します");
-      expect(message).not.toContain("両方に一致するリクエストの例");
+      expect(message).toContain("accepted sets");
+      expect(message).not.toContain("A request matching both:");
     } finally {
       delete (Object.prototype as Record<string, unknown>)[pollutionKey];
     }
@@ -460,7 +460,7 @@ describe("ルールの重なり", () => {
           },
         }),
       ),
-    ).toContain("交差しない相手");
+    ).toContain("does not intersect");
   });
 
   test("値条件の包含と overrides が作る優先関係の閉路はエラーになる", () => {
@@ -497,8 +497,8 @@ describe("ルールの重なり", () => {
         },
       }),
     );
-    expect(message).toContain("優先関係が循環しています");
-    expect(message).toContain("y は api.z より特異なので先");
+    expect(message).toContain("precedence in scope api is cyclic");
+    expect(message).toContain("api.y precedes api.z by specificity");
   });
 });
 
@@ -544,10 +544,10 @@ describe("GraphQL 条件の重なり", () => {
       ),
     );
     expect(message).toContain(
-      "ルール api.read と api.other の受理集合が交差します",
+      "accepted sets of rules api.read and api.other intersect",
     );
     // 共通の末端へ至る鎖を持つ document が、at の位置に置かれて現れる。
-    expect(message).toContain('ボディ: {"query":"query { viewer { login } }"}');
+    expect(message).toContain('body: {"query":"query { viewer { login } }"}');
     expect(message).toContain('overrides { "read" }');
   });
 
@@ -584,11 +584,11 @@ describe("GraphQL 条件の重なり", () => {
 
     const message = joined(twoGraphqlRules(read, other));
     expect(message).toContain(
-      "ルール api.read と api.other の受理集合が交差します",
+      "accepted sets of rules api.read and api.other intersect",
     );
     // それぞれの位置に別の document を置いた 1 つのボディが両方を満たす。
     expect(message).toContain(
-      'ボディ: {"query":"query { viewer { login } }","doc":"query { organization { login } }"}',
+      'body: {"query":"query { viewer { login } }","doc":"query { organization { login } }"}',
     );
 
     expect(errorsOf(twoGraphqlRules(read, other, { other: ["read"] }))).toEqual(
@@ -604,7 +604,7 @@ describe("GraphQL 条件の重なり", () => {
       ),
     );
     expect(message).toContain(
-      'ボディ: {"query":"query { viewer { login } }","doc":"mutation { organization { login } }"}',
+      'body: {"query":"query { viewer { login } }","doc":"mutation { organization { login } }"}',
     );
   });
 
@@ -625,8 +625,8 @@ describe("GraphQL 条件の重なり", () => {
         },
       ),
     );
-    expect(message).toContain("受理集合が交差します");
-    expect(message).toContain('ボディ: {"query":"query { viewer { login } }"}');
+    expect(message).toContain("accepted sets");
+    expect(message).toContain('body: {"query":"query { viewer { login } }"}');
   });
 
   test("証人を作れない交差では、例を省いたエラーになる", () => {
@@ -646,8 +646,8 @@ describe("GraphQL 条件の重なり", () => {
         },
       ),
     );
-    expect(message).toContain("受理集合が交差します");
-    expect(message).not.toContain("両方に一致するリクエストの例");
+    expect(message).toContain("accepted sets");
+    expect(message).not.toContain("A request matching both:");
   });
 
   test("包含関係にある graphql 条件は overrides なしで共存できる", () => {
@@ -721,7 +721,7 @@ describe("GraphQL 条件の重なり", () => {
     const write = { operations: ["mutation" as const], fieldPaths: [VIEWER] };
     expect(errorsOf(twoGraphqlRules(read, write))).toEqual([]);
     expect(joined(twoGraphqlRules(read, write, { read: ["other"] }))).toContain(
-      "交差しない相手",
+      "does not intersect",
     );
   });
 
@@ -778,15 +778,15 @@ describe("実 ID の一意性", () => {
   };
 
   test("2 つの宣言が同じ実 ID を作る設定はエラーになる", () => {
-    expect(joined(colliding)).toContain("実 ID github.api.read");
+    expect(joined(colliding)).toContain("effective id github.api.read");
   });
 
   test("エラーは衝突した両方の宣言を名指しする", () => {
     const message = joined(colliding);
-    expect(message).toContain("スコープ github ");
-    expect(message).toContain('ルール "api.read"');
-    expect(message).toContain("スコープ github.api ");
-    expect(message).toContain('ルール "read"');
+    expect(message).toContain("scope github ");
+    expect(message).toContain('rule "api.read"');
+    expect(message).toContain("scope github.api ");
+    expect(message).toContain('rule "read"');
   });
 
   test("実 ID が重ならなければキーに `.` があっても共存できる", () => {
@@ -825,7 +825,7 @@ describe("match の構文", () => {
       joined(
         oneRule({ Bad_Key: { match: { paths: ["/a"] }, onMatch: "allow" } }),
       ),
-    ).toContain("ルールのキー");
+    ).toContain("rule key");
   });
 
   test("** が末尾以外に現れるとエラーになる", () => {
@@ -833,7 +833,7 @@ describe("match の構文", () => {
       joined(
         oneRule({ a: { match: { paths: ["/a/**/b"] }, onMatch: "allow" } }),
       ),
-    ).toContain("末尾");
+    ).toContain("last segment");
   });
 
   test("capture 名が同一パターン内で重複するとエラーになる", () => {
@@ -843,7 +843,7 @@ describe("match の構文", () => {
           a: { match: { paths: ["/{n}/{n}"] }, onMatch: "allow" },
         }),
       ),
-    ).toContain("重複");
+    ).toContain("duplicate");
   });
 
   test("どのパスパターンにも現れない capture を制約するとエラーになる", () => {
@@ -869,7 +869,7 @@ describe("match の構文", () => {
           },
         }),
       ).replaceAll("\n", " "),
-    ).toMatch(/空.*受理集合/s);
+    ).toMatch(/empty Listing.*accepted set/s);
   });
 
   for (const format of ["opaque", "none"] as const) {
@@ -886,7 +886,7 @@ describe("match の構文", () => {
             },
           }),
         ),
-      ).toContain(`format = "${format}" に equals`);
+      ).toContain(`format = "${format}" with equals`);
     });
 
     test(`${format} に oneOf を併記するとエラーになる`, () => {
@@ -902,7 +902,7 @@ describe("match の構文", () => {
             },
           }),
         ),
-      ).toContain(`format = "${format}" に oneOf`);
+      ).toContain(`format = "${format}" with oneOf`);
     });
 
     test(`${format} に graphql を併記するとエラーになる`, () => {
@@ -924,7 +924,7 @@ describe("match の構文", () => {
             },
           }),
         ),
-      ).toContain(`format = "${format}" に graphql`);
+      ).toContain(`format = "${format}" with graphql`);
     });
   }
 
@@ -947,12 +947,16 @@ describe("match の構文", () => {
         },
       }),
     );
-    expect(message).toContain("match.body.graphql.operations が空の Listing");
-    expect(message).toContain("match.body.graphql.fieldPaths が空の Listing");
     expect(message).toContain(
-      "match.body.graphql.fieldArguments の /repository の owner が空の Listing",
+      "match.body.graphql.operations is an empty Listing",
     );
-    expect(message).toContain("決して発火しません");
+    expect(message).toContain(
+      "match.body.graphql.fieldPaths is an empty Listing",
+    );
+    expect(message).toContain(
+      "match.body.graphql.fieldArguments /repository owner is an empty Listing",
+    );
+    expect(message).toContain("this rule never fires");
   });
 
   test("graphql の fieldPaths は必須である", () => {
@@ -976,7 +980,7 @@ describe("match の構文", () => {
           },
         }),
       );
-      expect(message).toContain("match.body.graphql.fieldPaths がありません");
+      expect(message).toContain("match.body.graphql.fieldPaths is missing");
     }
   });
 
@@ -1003,13 +1007,13 @@ describe("match の構文", () => {
       }),
     );
     expect(message).toContain(
-      'match.body.graphql に未知のキー "rootFields" があります',
+      'match.body.graphql has an unknown key "rootFields"',
     );
     expect(message).toContain(
-      'match.body.graphql に未知のキー "arguments" があります',
+      'match.body.graphql has an unknown key "arguments"',
     );
     expect(message).toContain(
-      "指定できるのは at, operations, fieldPaths, fieldArguments です",
+      "Allowed keys: at, operations, fieldPaths, fieldArguments",
     );
   });
 
@@ -1042,7 +1046,7 @@ describe("match の構文", () => {
       expect([
         path,
         message.includes(
-          `match.body.graphql.fieldPaths の ${JSON.stringify(path)} は GraphQL の選択経路ではありません`,
+          `match.body.graphql.fieldPaths entry ${JSON.stringify(path)} is not a GraphQL selection path`,
         ),
       ]).toEqual([path, true]);
     }
@@ -1079,11 +1083,11 @@ describe("match の構文", () => {
       }),
     );
     for (const key of [
-      '"/repository/issues/nodes/body/text" は fieldPaths のどの末端でも途中でもありません',
-      '"/organization" は fieldPaths のどの末端でも途中でもありません',
-      '"/repository/**" は GraphQL の選択経路ではありません',
-      "/repository/issues が空の Mapping です",
-      '"owner " は GraphQL の名前ではありません',
+      '"/repository/issues/nodes/body/text" is neither a leaf nor a prefix of any fieldPaths entry',
+      '"/organization" is neither a leaf nor a prefix of any fieldPaths entry',
+      'key "/repository/**" is not a GraphQL selection path',
+      "/repository/issues is an empty Mapping",
+      'key "owner " is not a GraphQL name',
     ]) {
       expect(message).toContain(key);
     }
@@ -1145,8 +1149,8 @@ describe("match の構文", () => {
         },
       }),
     );
-    expect(message).toContain("match.body.graphql.at の query");
-    expect(message).toContain("expect[0] の graphql.at の /bad~2");
+    expect(message).toContain("match.body.graphql.at query");
+    expect(message).toContain("expect[0] graphql.at /bad~2");
   });
 
   const invalidBodyValues: readonly (readonly [string, unknown])[] = [
@@ -1172,8 +1176,8 @@ describe("match の構文", () => {
           },
         }),
       );
-      expect(message).toContain("equals の /value");
-      expect(message).toContain("文字列・有限な数値・真偽値");
+      expect(message).toContain("equals /value");
+      expect(message).toContain("a string, a finite number, or a boolean");
     });
 
     test(`oneOf の ${label} を拒否する`, () => {
@@ -1192,8 +1196,8 @@ describe("match の構文", () => {
           },
         }),
       );
-      expect(message).toContain("oneOf の /value");
-      expect(message).toContain("文字列・有限な数値・真偽値");
+      expect(message).toContain("oneOf /value");
+      expect(message).toContain("strings, finite numbers, or booleans");
     });
   }
 
@@ -1217,7 +1221,7 @@ describe("match の構文", () => {
           },
         }),
       );
-      expect(message).toContain(`equals の ${pointer}`);
+      expect(message).toContain(`equals ${pointer}`);
       expect(message).toContain("RFC 6901 JSON Pointer");
     });
 
@@ -1236,7 +1240,7 @@ describe("match の構文", () => {
           },
         }),
       );
-      expect(message).toContain(`oneOf の ${pointer}`);
+      expect(message).toContain(`oneOf ${pointer}`);
       expect(message).toContain("RFC 6901 JSON Pointer");
     });
   }
@@ -1273,8 +1277,8 @@ describe("match の構文", () => {
         },
       }),
     );
-    expect(message).toContain("oneOf の /mode が空の Listing");
-    expect(message).toContain("決して発火しません");
+    expect(message).toContain("oneOf /mode is an empty Listing");
+    expect(message).toContain("this rule never fires");
   });
 });
 
@@ -1403,9 +1407,10 @@ describe("受理条件", () => {
         },
       }),
     );
-    expect(message).toContain("expect[0] の equals の mode は RFC 6901");
+    expect(message).toContain("expect[0] equals mode");
+    expect(message).toContain("RFC 6901");
     expect(message).toContain(
-      "expect[0] の oneOf の /tier は文字列・有限な数値・真偽値",
+      "expect[0] oneOf /tier may only contain strings, finite numbers, or booleans",
     );
   });
 
@@ -1427,7 +1432,7 @@ describe("受理条件", () => {
 
     test(`BodyExpect の ${field} の Pointer は 257 文字だとエラーになる`, () => {
       expect(joined(bodyExpect(`/${"p".repeat(256)}`))).toContain(
-        `ルール api.a の expect[0] の ${field} の Pointer /${"p".repeat(31)}… は 257 文字で、上限の 256 文字を超えています。`,
+        `rule api.a expect[0] ${field} Pointer /${"p".repeat(31)}… is 257 characters, over the 256-character limit.`,
       );
     });
 
@@ -1494,9 +1499,7 @@ describe("受理条件", () => {
           },
         }),
       ),
-    ).toContain(
-      "expect[0] の graphql.fieldArguments の /organization の login",
-    );
+    ).toContain("expect[0] graphql.fieldArguments /organization login");
   });
 
   test("UnionShape の allowed が空だとエラーになる", () => {
@@ -1632,7 +1635,7 @@ describe("秘密と注入", () => {
           },
         },
       }),
-    ).toContain("複数の値");
+    ).toContain("multiple values");
   });
 
   test("template が存在しない名前を指すとエラーになる", () => {
@@ -1747,7 +1750,7 @@ describe("予算", () => {
           },
         },
       }),
-    ).toContain("継承した天井 1000");
+    ).toContain("the inherited ceiling of 1000");
   });
 
   test("defaults が狭めた予算を、スコープが広げ返すことはできない", () => {
@@ -1761,7 +1764,7 @@ describe("予算", () => {
           },
         },
       }),
-    ).toContain("継承した天井 8");
+    ).toContain("the inherited ceiling of 8");
   });
 
   test("スコープが狭めた範囲の内側なら、ルールはさらに狭められる", () => {
@@ -1834,9 +1837,9 @@ describe("設定の警告", () => {
       }),
     ).join("\n");
     expect(warnings).toContain(
-      "ルール api.gql.read のボディ条件は、同一スコープのより広い無条件 allow ルール api.api.all に覆われています",
+      "the body condition of rule api.gql.read is covered by the broader unconditional allow rule api.api.all",
     );
-    expect(warnings).toContain("条件を match ではなく expect に置いてください");
+    expect(warnings).toContain("put the condition on expect, not match");
   });
 
   test("overrides の総数がルール数を超えると警告する", () => {
@@ -2046,7 +2049,7 @@ describe("同一ホストの分割", () => {
           },
         },
       }),
-    ).toContain("スコープ read と write のターゲット集合が一致します");
+    ).toContain("scopes read and write have identical target sets");
   });
 });
 

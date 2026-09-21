@@ -276,18 +276,18 @@ test("validate: rejects two scopes that claim the same host", () => {
         second: { targets: ["api.example.com"], fallback: "deny" },
       }),
     ),
-  ).toThrow(/ターゲット集合が一致します/);
+  ).toThrow(/have identical target sets/);
 });
 
 test("validate: rejects a wildcard in the middle of a target", () => {
   expect(() =>
     validateConfig(withScopes({ bad: { targets: ["git*hub.com"] } })),
-  ).toThrow(/targets が不正です/);
+  ).toThrow(/has invalid targets/);
 });
 
 test("validate: rejects a scope with no targets", () => {
   expect(() => validateConfig(withScopes({ bad: { targets: [] } }))).toThrow(
-    /targets が空です/,
+    /has no targets/,
   );
 });
 
@@ -310,7 +310,7 @@ test("validate: rejects two rules whose accepted requests overlap unresolved", (
         },
       }),
     ),
-  ).toThrow(/受理集合が交差します/);
+  ).toThrow(/accepted sets.*intersect/);
 });
 
 test("validate: accepts an overlap that overrides resolves", () => {
@@ -345,7 +345,7 @@ test("validate: rejects a rule key outside the allowed syntax", () => {
         },
       }),
     ),
-  ).toThrow(/ルールのキー/);
+  ).toThrow(/rule key/);
 });
 
 test("validate: rejects a body-shaped expect on a rule that never parses JSON", () => {
@@ -371,7 +371,7 @@ test("validate: rejects a body-shaped expect on a rule that never parses JSON", 
         },
       }),
     ),
-  ).toThrow(/format = "json" を要します/);
+  ).toThrow(/requires match\.body\.format = "json"/);
 });
 
 // GraphQL 条件の誤りは、addon が解決済みドキュメントを拒否する最初のリクエストの
@@ -413,7 +413,7 @@ for (const format of ["opaque", "none"] as const) {
           },
         }),
       ),
-    ).toThrow(`format = "${format}" に graphql を併記できません`);
+    ).toThrow(`format = "${format}" with graphql`);
   });
 }
 
@@ -433,14 +433,14 @@ test("validate: rejects a BodyExpect with graphql on a rule that never parses JS
         },
       }),
     ),
-  ).toThrow(/expect\[0\] \(body\) は match\.body\.format = "json" を要します/);
+  ).toThrow(/expect\[0\] \(body\) requires match\.body\.format = "json"/);
 });
 
 const EMPTY_GRAPHQL_LISTINGS = [
   ["operations", { operations: [], fieldPaths: [VIEWER_PATH] }],
   ["fieldPaths", { operations: ["query"], fieldPaths: [] }],
   [
-    "fieldArguments の /organization の login",
+    "fieldArguments /organization login",
     {
       operations: ["query"],
       fieldPaths: ["/organization/login"],
@@ -463,7 +463,7 @@ for (const [label, graphql] of EMPTY_GRAPHQL_LISTINGS) {
           },
         }),
       ),
-    ).toThrow(`match.body.graphql.${label} が空の Listing です`);
+    ).toThrow(`match.body.graphql.${label} is an empty Listing`);
   });
 
   test(`validate: rejects an empty graphql.${label} listing in BodyExpect`, () => {
@@ -477,7 +477,7 @@ for (const [label, graphql] of EMPTY_GRAPHQL_LISTINGS) {
           },
         }),
       ),
-    ).toThrow(`expect[0] の graphql.${label} が空の Listing です`);
+    ).toThrow(`expect[0] graphql.${label} is an empty Listing`);
   });
 }
 
@@ -485,7 +485,7 @@ const NON_NAME_GRAPHQL_ENTRIES = [
   [
     "fieldPaths entry",
     { operations: ["query"], fieldPaths: [VIEWER_PATH, "/repository/**"] },
-    'graphql.fieldPaths の "/repository/**" は GraphQL の選択経路ではありません',
+    'graphql.fieldPaths entry "/repository/**" is not a GraphQL selection path',
   ],
   [
     "fieldArguments argument key",
@@ -494,7 +494,7 @@ const NON_NAME_GRAPHQL_ENTRIES = [
       fieldPaths: ["/repository/nameWithOwner"],
       fieldArguments: { "/repository": { "owner ": ["my-org"] } },
     },
-    'graphql.fieldArguments の /repository のキー "owner " は GraphQL の名前ではありません',
+    'graphql.fieldArguments /repository key "owner " is not a GraphQL name',
   ],
   [
     "fieldArguments path key",
@@ -503,7 +503,7 @@ const NON_NAME_GRAPHQL_ENTRIES = [
       fieldPaths: ["/repository/nameWithOwner"],
       fieldArguments: { "/organization": { login: ["my-org"] } },
     },
-    'graphql.fieldArguments のキー "/organization" は fieldPaths のどの末端でも途中でもありません',
+    'graphql.fieldArguments key "/organization" is neither a leaf nor a prefix of any fieldPaths entry',
   ],
 ] as const;
 
@@ -521,7 +521,7 @@ for (const [label, graphql, message] of NON_NAME_GRAPHQL_ENTRIES) {
           },
         }),
       ),
-    ).toThrow(`ルール github.read の match.body.${message}`);
+    ).toThrow(`rule github.read match.body.${message}`);
   });
 
   test(`validate: rejects a graphql ${label} that is not usable in BodyExpect`, () => {
@@ -535,7 +535,7 @@ for (const [label, graphql, message] of NON_NAME_GRAPHQL_ENTRIES) {
           },
         }),
       ),
-    ).toThrow(`ルール github.read の expect[0] の ${message}`);
+    ).toThrow(`rule github.read expect[0] ${message}`);
   });
 }
 
@@ -561,7 +561,7 @@ test("validate: rejects the retired rootFields / arguments keys", () => {
         },
       }),
     ),
-  ).toThrow('match.body.graphql に未知のキー "rootFields" があります');
+  ).toThrow('match.body.graphql has an unknown key "rootFields"');
 });
 
 test("validate: accepts graphql names with underscores and digits", () => {
@@ -619,10 +619,10 @@ test("validate: rejects a graphql.at that is not a JSON Pointer", () => {
     }
   })();
   expect(message).toContain(
-    "match.body.graphql.at の query は RFC 6901 JSON Pointer として不正です",
+    "match.body.graphql.at query is not a valid RFC 6901 JSON Pointer",
   );
   expect(message).toContain(
-    "expect[0] の graphql.at の /bad~2 は RFC 6901 JSON Pointer として不正です",
+    "expect[0] graphql.at /bad~2 is not a valid RFC 6901 JSON Pointer",
   );
 });
 
@@ -645,7 +645,7 @@ test("validate: rejects unresolved overlapping graphql rules and shows a documen
   expect(() =>
     validateConfig(graphqlScope({ query: rule("/query"), doc: rule("/doc") })),
   ).toThrow(
-    'ボディ: {"query":"query { viewer { login } }","doc":"query { viewer { login } }"}',
+    'body: {"query":"query { viewer { login } }","doc":"query { viewer { login } }"}',
   );
 
   const resolved = graphqlScope({
@@ -667,7 +667,7 @@ test("validate: rejects an inject that names no registered secret", () => {
         },
       }),
     ),
-  ).toThrow(/secrets レジストリに存在しない名前/);
+  ).toThrow(/does not exist in the secrets registry/);
 });
 
 test("validate: rejects an inject whose secret is not dispositioned for injection", () => {
@@ -684,7 +684,7 @@ test("validate: rejects an inject whose secret is not dispositioned for injectio
         { secrets: { token: { from: "env:TOKEN" } } },
       ),
     ),
-  ).toThrow(/"mask" です/);
+  ).toThrow(/effective disposition is "mask"/);
 });
 
 test("validate: accepts an inject the scope dispositions for injection", () => {
@@ -714,7 +714,7 @@ test("validate: rejects injecting a header that frames the connection", () => {
         },
       }),
     ),
-  ).toThrow(/注入を禁じられたヘッダー/);
+  ).toThrow(/cannot be injected/);
 });
 
 test("validate: rejects mask.proxy = false while a scope still masks", () => {
@@ -732,7 +732,7 @@ test("validate: rejects mask.proxy = false while a scope still masks", () => {
         },
       ),
     ),
-  ).toThrow(/mask\.proxy = false を選べません/);
+  ).toThrow(/mask\.proxy = false is not allowed/);
 });
 
 test("validate: accepts mask.proxy = false once every secret is ignored", () => {
@@ -783,7 +783,7 @@ test("validate: rejects a limit above its ceiling", () => {
         api: { targets: ["api.example.com"], limits: { maxNodes: 200_001 } },
       }),
     ),
-  ).toThrow(/天井/);
+  ).toThrow(/inherited ceiling/);
 });
 
 test("validate: rejects a secret source with no recognised prefix", () => {
@@ -1734,7 +1734,7 @@ test("validateConfig: every connection-framing header is refused for injection",
           },
         }),
       ),
-    ).toThrow(/注入を禁じられたヘッダー/);
+    ).toThrow(/cannot be injected/);
   }
 });
 

@@ -1,0 +1,22 @@
+id: no-japanese-messages-ts
+valid:
+  - 'console.log("Session started");'
+  - 'const message = `Session ${id} started`;'
+  - 'const hint = "⚠ Request → approval …";'
+  - '// 日本語のコメントは許可する'
+  - '/* 日本語の説明 */ const label = "Approve";'
+  - 'const message = `Ready ${/* 日本語のコメント */ id}`;'
+  - 'const pattern = /日本語/;'
+invalid:
+  - 'console.log("開始しました");'
+  - "throw new Error('接続できません');"
+  - 'const message = `Session ${id} を開始しました`;'
+  - 'const label = "承認";'
+  - 'const config = { note: "クリックしてください" };'
+  - 'const message = "Session " + id + " が見つかりません";'
+  - 'const message = `${ready ? "準備完了" : "Ready"}`;'
+  - 'const label = "ｾｯｼｮﾝ";'
+  - |
+    const usage = `Usage:
+      list  セッション一覧
+    `;

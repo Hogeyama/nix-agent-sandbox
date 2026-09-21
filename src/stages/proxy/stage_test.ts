@@ -273,7 +273,7 @@ test("ProxyStage: refuses to plan a config the resolver rejects", () => {
   });
   const { shared, container, observability } = makeInput(profile);
   expect(() => planProxy({ ...shared, container, observability })).toThrow(
-    /ターゲット集合が一致します/,
+    /have identical target sets/,
   );
 });
 test("ProxyStage: resolves scopes in target-specificity order", () => {

@@ -38,7 +38,7 @@ describe("matchIntersectionWitness", () => {
     if (witness === null) return;
     expect(describeRequest(witness)).toEqual([
       "GET /repos/my-org/x/pulls",
-      "ボディ条件なし",
+      "no body condition",
     ]);
     expect(accepts(read, witness)).toBe(true);
     expect(accepts(pulls, witness)).toBe(true);
@@ -105,7 +105,7 @@ describe("matchIntersectionWitness", () => {
     const none = compile({ paths: ["/x"], body: { format: "none" } });
     const witness = matchIntersectionWitness(opaque, none);
     expect(witness?.body).toEqual({ kind: "empty" });
-    expect(describeRequest(witness as never)[1]).toBe("ボディ: 長さ 0");
+    expect(describeRequest(witness as never)[1]).toBe("body: length 0");
   });
 
   test("graphql の証人は共通末端の鎖と両方の必須引数を置く", () => {

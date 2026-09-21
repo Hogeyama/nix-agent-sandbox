@@ -136,6 +136,9 @@ function spansHasEventsJsonColumn(db: Database): boolean {
 // v3 schema delta: log_records table plus three indexes.
 // ON DELETE clauses are omitted (implicit RESTRICT), matching the policy on
 // invocations / conversations: no delete paths exist yet, so RESTRICT is fine.
+// invocation 単位でログをまとめて取得するためのインデックス（例: invocation 削除時の cascade 対象確認、invocation 単位のレコード数集計）
+// prompt_id でフィルタする将来の turn 単位クエリ（WHERE conversation_id = ? AND prompt_id = ?）のためのインデックス。
+// 現時点では queryLogRecordsByConversation が conversation 全件取得するのみ。
 const V3_LOG_RECORDS_SQL = `
 CREATE TABLE IF NOT EXISTS log_records (
   invocation_id    TEXT NOT NULL REFERENCES invocations(id),
@@ -148,10 +151,7 @@ CREATE TABLE IF NOT EXISTS log_records (
   attrs_json       TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (conversation_id, sequence)
 );
--- invocation 単位でログをまとめて取得するためのインデックス（例: invocation 削除時の cascade 対象確認、invocation 単位のレコード数集計）
 CREATE INDEX IF NOT EXISTS idx_log_records_invocation ON log_records(invocation_id);
--- prompt_id でフィルタする将来の turn 単位クエリ（WHERE conversation_id = ? AND prompt_id = ?）のためのインデックス。
--- 現時点では queryLogRecordsByConversation が conversation 全件取得するのみ。
 CREATE INDEX IF NOT EXISTS idx_log_records_conv_prompt ON log_records(conversation_id, prompt_id);
 -- This index exists for the reader-side JS in-memory join (matching
 -- api_request event request_id against span trace_id). Currently only

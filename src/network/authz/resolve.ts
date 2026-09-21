@@ -427,7 +427,7 @@ function precedenceCycle(
   const outcome = precedenceOrder(rules, precedes);
   if (outcome.ok) return null;
   return cycleMessage(
-    `スコープ ${scopeName} のルール`,
+    `rules in scope ${scopeName}`,
     outcome.cycle.map((rule) => rule.id),
   );
 }
@@ -450,7 +450,7 @@ function orderScopes(
   return {
     ok: false,
     error: cycleMessage(
-      "スコープ",
+      "scopes",
       outcome.cycle.map((scope) => scope.name),
     ),
   };
@@ -458,9 +458,9 @@ function orderScopes(
 
 function cycleMessage(what: string, ring: readonly string[]): string {
   return [
-    `設定エラー: ${what}の優先関係に閉路があり、評価順を決められません。`,
+    `config error: precedence among ${what} is cyclic, so no evaluation order can be determined.`,
     `            ${[...ring, ...ring.slice(0, 1)].join(" → ")}`,
-    "            順序を決められない設定でセッションを始めることはできません。",
+    "            A session cannot start with a config whose ordering is undecidable.",
   ].join("\n");
 }
 
@@ -735,7 +735,7 @@ function orderedCandidates(
   // 閉路のあるスコープからはドキュメントを作らないので、部分集合にも閉路はない。
   // それでも詰まったならドキュメントが壊れている。適当な順序で通すより止める。
   throw new Error(
-    `スコープ ${scope.name} の候補を並べられませんでした: ${outcome.cycle
+    `could not order candidates in scope ${scope.name}: ${outcome.cycle
       .map((rule) => rule.id)
       .join(" → ")}`,
   );

@@ -69,16 +69,16 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     id: "session.switch",
     display: "Ctrl+1..9",
     spec: null,
-    label: "セッション切替（左 pane の順）",
+    label: "Switch Session (left pane order)",
     group: "session",
   },
   {
     id: "pane.toggleCollapse",
     display: "Ctrl+Shift+[ / ]",
     spec: null,
-    label: "左 / 右 pane 折りたたみ",
+    label: "Collapse Left / Right Pane",
     group: "pane",
-    note: "左 pane は折りたたみ非対応のため Ctrl+Shift+] のみ反応する",
+    note: "The left pane cannot be collapsed, so only Ctrl+Shift+] takes effect",
   },
   {
     id: "settings.open",
@@ -91,7 +91,7 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     id: "settings.shortcuts",
     display: "Ctrl+?",
     spec: { ctrl: true, key: "?", allowInTextField: true },
-    label: "ショートカット一覧",
+    label: "Keyboard Shortcuts",
     group: "settings",
   },
 ] as const;

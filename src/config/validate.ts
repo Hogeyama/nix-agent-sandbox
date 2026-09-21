@@ -243,11 +243,11 @@ function validateAuthz(profileName: string, profile: Profile): string[] {
       const header = entry.name.trim();
       if (header === "") {
         errors.push(
-          `${prefix}スコープ ${scopeName} の inject にヘッダー名がありません。`,
+          `${prefix}inject in scope ${scopeName} has no header name.`,
         );
       } else if (FORBIDDEN_INJECT_HEADERS.has(header.toLowerCase())) {
         errors.push(
-          `${prefix}スコープ ${scopeName} の inject が注入を禁じられたヘッダー ${header} を指しています。`,
+          `${prefix}inject in scope ${scopeName} targets the header ${header}, which cannot be injected.`,
         );
       }
     }

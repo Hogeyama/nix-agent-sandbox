@@ -242,7 +242,7 @@ export function parseInjectValue(value: string): Result<InjectValue> {
   }
   if (value.startsWith("secret:")) {
     const name = value.slice(7);
-    if (name === "") return { ok: false, error: "secret: の名前が空である" };
+    if (name === "") return { ok: false, error: "secret: name is empty" };
     return { ok: true, value: { kind: "secret", name } };
   }
   if (value.startsWith("template:")) {
@@ -258,8 +258,8 @@ export function parseInjectValue(value: string): Result<InjectValue> {
   return {
     ok: false,
     error:
-      "注入する値は literal: / secret: / template: のいずれかで始まる必要がある" +
-      " (値は秘密を含みうるので表示しない。素の値を書いていたなら literal: を前置する)",
+      "an inject value must start with literal: / secret: / template:" +
+      " (the value itself is not shown because it may contain a secret; prefix with literal: if you meant a raw value)",
   };
 }
 

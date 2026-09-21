@@ -1037,7 +1037,7 @@ describe("綴りの揺れ", () => {
         .filter((diagnostic) => diagnostic.severity === "error")
         .map((diagnostic) => diagnostic.message)
         .join("\n"),
-    ).toContain("ターゲット集合が一致します");
+    ).toContain("have identical target sets");
   });
 });
 

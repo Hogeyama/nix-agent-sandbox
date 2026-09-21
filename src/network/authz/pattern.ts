@@ -46,29 +46,29 @@ export function parsePathPattern(source: string): Result<PathPattern> {
   for (const [index, token] of tokens.entries()) {
     if (token === "**") {
       if (index !== tokens.length - 1) {
-        return err(`"**" は末尾のセグメントにのみ置ける: ${source}`);
+        return err(`"**" may only appear as the last segment: ${source}`);
       }
       trailingDoubleStar = true;
       continue;
     }
     if (token.includes("**")) {
-      return err(`セグメントの一部に "**" を書けない: ${source}`);
+      return err(`"**" cannot be part of a segment: ${source}`);
     }
     if (token === "*") {
       segments.push({ kind: "wildcard" });
       continue;
     }
     if (token.includes("*")) {
-      return err(`セグメントの一部に "*" を書けない: ${source}`);
+      return err(`"*" cannot be part of a segment: ${source}`);
     }
     if (token.startsWith("{") && token.endsWith("}") && token.length >= 2) {
       const name = token.slice(1, -1);
       if (!CAPTURE_NAME.test(name)) {
-        return err(`capture 名が不正である: ${token} (${source})`);
+        return err(`invalid capture name: ${token} (${source})`);
       }
       if (names.has(name)) {
         return err(
-          `capture 名が同一パターン内で重複している: ${name} (${source})`,
+          `duplicate capture name within one pattern: ${name} (${source})`,
         );
       }
       names.add(name);
@@ -76,9 +76,7 @@ export function parsePathPattern(source: string): Result<PathPattern> {
       continue;
     }
     if (token.includes("{") || token.includes("}")) {
-      return err(
-        `capture は 1 セグメント全体でなければならない: ${token} (${source})`,
-      );
+      return err(`a capture must span the whole segment: ${token} (${source})`);
     }
     segments.push({ kind: "literal", value: token });
   }

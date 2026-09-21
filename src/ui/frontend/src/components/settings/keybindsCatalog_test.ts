@@ -48,13 +48,13 @@ describe("SHORTCUTS", () => {
       {
         id: "session.switch",
         display: "Ctrl+1..9",
-        label: "セッション切替（左 pane の順）",
+        label: "Switch Session (left pane order)",
         group: "session",
       },
       {
         id: "pane.toggleCollapse",
         display: "Ctrl+Shift+[ / ]",
-        label: "左 / 右 pane 折りたたみ",
+        label: "Collapse Left / Right Pane",
         group: "pane",
       },
       {
@@ -66,7 +66,7 @@ describe("SHORTCUTS", () => {
       {
         id: "settings.shortcuts",
         display: "Ctrl+?",
-        label: "ショートカット一覧",
+        label: "Keyboard Shortcuts",
         group: "settings",
       },
     ]);

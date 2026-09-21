@@ -87,6 +87,6 @@ function formatMessage(
     body:
       notification.uiEnabled === false
         ? target
-        : [target, "クリックでUIを開く"].join("\n"),
+        : [target, "Click to open the UI"].join("\n"),
   };
 }

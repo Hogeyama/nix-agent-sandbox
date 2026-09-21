@@ -446,7 +446,7 @@ export function PendingPane(props: Props) {
                   </p>
                   <Show when={row.integrityChanged}>
                     <p class="card-warning">
-                      ⚠ 実行対象ファイルがセッション開始時から変化しています
+                      ⚠ The target file has changed since the session started
                     </p>
                   </Show>
                   <dl class="hostexec-match">

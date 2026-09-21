@@ -163,14 +163,14 @@ function compileScope(
   context: ScopeContext,
 ): CompiledScope {
   if (config.targets.length === 0) {
-    diagnostics.push(error(`スコープ ${name} の targets が空です。`));
+    diagnostics.push(error(`scope ${name} has no targets.`));
   }
   const targets: Target[] = [];
   for (const source of config.targets) {
     const parsed = parseTarget(source);
     if (!parsed.ok) {
       diagnostics.push(
-        error(`スコープ ${name} の targets が不正です: ${parsed.error}`),
+        error(`scope ${name} has invalid targets: ${parsed.error}`),
       );
       continue;
     }
@@ -180,7 +180,7 @@ function compileScope(
   const scopeLimits = checkLimits(
     diagnostics,
     config.limits,
-    `スコープ ${name}`,
+    `scope ${name}`,
     context.limits,
   );
 
@@ -191,7 +191,7 @@ function compileScope(
   checkInjects(
     diagnostics,
     seenInjectFaults,
-    `スコープ ${name}`,
+    `scope ${name}`,
     config.inject ?? [],
     dispositions,
     context.secrets,
@@ -202,12 +202,12 @@ function compileScope(
     if (!RULE_KEY_PATTERN.test(key)) {
       diagnostics.push(
         error(
-          `スコープ ${name} のルールのキー ${JSON.stringify(key)} が [a-z][a-z0-9._-]{0,63} に反します。`,
+          `rule key ${JSON.stringify(key)} in scope ${name} does not match [a-z][a-z0-9._-]{0,63}.`,
         ),
       );
       continue;
     }
-    checkLimits(diagnostics, ruleConfig.limits, `ルール ${id}`, scopeLimits);
+    checkLimits(diagnostics, ruleConfig.limits, `rule ${id}`, scopeLimits);
     const ruleDispositions = mergeDispositions(
       dispositions,
       ruleConfig.secrets,
@@ -215,7 +215,7 @@ function compileScope(
     checkInjects(
       diagnostics,
       seenInjectFaults,
-      `ルール ${id}`,
+      `rule ${id}`,
       effectiveInject(config.inject, ruleConfig.inject),
       ruleDispositions,
       context.secrets,
@@ -251,7 +251,7 @@ function compileRuleMatch(
   for (const source of rule.match.paths) {
     const parsed = parsePathPattern(source);
     if (!parsed.ok) {
-      diagnostics.push(error(`ルール ${id} のパスパターン: ${parsed.error}`));
+      diagnostics.push(error(`rule ${id} path pattern: ${parsed.error}`));
       broken = true;
       continue;
     }
@@ -262,7 +262,7 @@ function compileRuleMatch(
   if (rule.match.paths.length === 0) {
     diagnostics.push(
       error(
-        `ルール ${id} の paths が空です。受理集合が空になり、このルールは決して発火しません。`,
+        `rule ${id} has no paths. Its accepted set is empty, so this rule never fires.`,
       ),
     );
     broken = true;
@@ -272,7 +272,7 @@ function compileRuleMatch(
     if (!captureNames.has(name)) {
       diagnostics.push(
         error(
-          `ルール ${id} の captures が、どのパスパターンにも現れない名前 ${name} を制約しています。`,
+          `rule ${id} constrains the capture ${name}, which appears in no path pattern.`,
         ),
       );
       continue;
@@ -280,7 +280,7 @@ function compileRuleMatch(
     if (values.length === 0) {
       diagnostics.push(
         error(
-          `ルール ${id} の captures の ${name} が空の Listing です。受理集合が空になり、このルールは決して発火しません。`,
+          `rule ${id} has an empty Listing at captures.${name}. Its accepted set is empty, so this rule never fires.`,
         ),
       );
     }
@@ -292,7 +292,7 @@ function compileRuleMatch(
   if (broken) return null;
   const compiled = compileMatch(rule.match);
   if (!compiled.ok) {
-    diagnostics.push(error(`ルール ${id} の match: ${compiled.error}`));
+    diagnostics.push(error(`rule ${id} match: ${compiled.error}`));
     return null;
   }
   return compiled.value;
@@ -315,7 +315,7 @@ function checkBodyMatch(
     if (body.format === "json" || !present) continue;
     diagnostics.push(
       error(
-        `ルール ${id} の match.body.format = "${body.format}" に ${name} を併記できません。ボディの条件は format = "json" を要します。`,
+        `rule ${id} cannot combine match.body.format = "${body.format}" with ${name}. Body conditions require format = "json".`,
       ),
     );
     broken = true;
@@ -324,9 +324,9 @@ function checkBodyMatch(
   return (
     checkBodyConditions(
       diagnostics,
-      `ルール ${id} の match.body.`,
+      `rule ${id} match.body.`,
       body,
-      "このルールは決して発火しません",
+      "this rule never fires",
     ) || broken
   );
 }
@@ -355,26 +355,26 @@ function checkBodyConditions(
 
   for (const [pointer, value] of Object.entries(body.equals ?? {})) {
     if (!isValidJsonPointer(pointer)) {
-      fail(`equals の ${pointer} は RFC 6901 JSON Pointer として不正です。`);
+      fail(`equals ${pointer} is not a valid RFC 6901 JSON Pointer.`);
     }
     if (!isFiniteJsonScalar(value)) {
       fail(
-        `equals の ${pointer} は文字列・有限な数値・真偽値のいずれかである必要があります。`,
+        `equals ${pointer} must be a string, a finite number, or a boolean.`,
       );
     }
   }
   for (const [pointer, values] of Object.entries(body.oneOf ?? {})) {
     if (!isValidJsonPointer(pointer)) {
-      fail(`oneOf の ${pointer} は RFC 6901 JSON Pointer として不正です。`);
+      fail(`oneOf ${pointer} is not a valid RFC 6901 JSON Pointer.`);
     }
     if (values.length === 0) {
       fail(
-        `oneOf の ${pointer} が空の Listing です。受理集合が空になり、${never}。`,
+        `oneOf ${pointer} is an empty Listing. The accepted set is empty, so ${never}.`,
       );
     }
     if (!(values as readonly unknown[]).every(isFiniteJsonScalar)) {
       fail(
-        `oneOf の ${pointer} は文字列・有限な数値・真偽値のみを持つ必要があります。`,
+        `oneOf ${pointer} may only contain strings, finite numbers, or booleans.`,
       );
     }
   }
@@ -410,17 +410,15 @@ function checkGraphqlCondition(
   for (const key of Object.keys(graphql)) {
     if (GRAPHQL_KEYS.has(key)) continue;
     fail(
-      `graphql に未知のキー ${JSON.stringify(key)} があります。指定できるのは ${[...GRAPHQL_KEYS].join(", ")} です。`,
+      `graphql has an unknown key ${JSON.stringify(key)}. Allowed keys: ${[...GRAPHQL_KEYS].join(", ")}.`,
     );
   }
   if (graphql.at !== undefined && !isValidJsonPointer(graphql.at)) {
-    fail(
-      `graphql.at の ${graphql.at} は RFC 6901 JSON Pointer として不正です。`,
-    );
+    fail(`graphql.at ${graphql.at} is not a valid RFC 6901 JSON Pointer.`);
   }
   if (graphql.operations.length === 0) {
     fail(
-      `graphql.operations が空の Listing です。受理集合が空になり、${never}。`,
+      `graphql.operations is an empty Listing. The accepted set is empty, so ${never}.`,
     );
   }
 
@@ -429,18 +427,18 @@ function checkGraphqlCondition(
   const fieldPaths = graphql.fieldPaths as readonly string[] | null | undefined;
   if (fieldPaths === undefined || fieldPaths === null) {
     fail(
-      "graphql.fieldPaths がありません。取得を許す末端の経路は必須です。経路を制約しない GraphQL 条件は書けません。",
+      "graphql.fieldPaths is missing. Paths to the leaves you allow are required; a GraphQL condition cannot leave paths unconstrained.",
     );
   } else if (fieldPaths.length === 0) {
     fail(
-      `graphql.fieldPaths が空の Listing です。受理集合が空になり、${never}。`,
+      `graphql.fieldPaths is an empty Listing. The accepted set is empty, so ${never}.`,
     );
   }
   for (const path of fieldPaths ?? []) {
     if (isGraphqlFieldPath(path)) continue;
     fail(
-      `graphql.fieldPaths の ${JSON.stringify(path)} は GraphQL の選択経路ではありません。` +
-        ` "/" 始まりで、各要素が GraphQL の名前である必要があります。ワイルドカード、空の要素、末尾の "/"、JSON Pointer の escape は書けません。`,
+      `graphql.fieldPaths entry ${JSON.stringify(path)} is not a GraphQL selection path.` +
+        ` It must start with "/" and every element must be a GraphQL name; wildcards, empty elements, a trailing "/", and JSON Pointer escapes are not allowed.`,
     );
   }
 
@@ -452,28 +450,28 @@ function checkGraphqlCondition(
   for (const [path, args] of Object.entries(graphql.fieldArguments ?? {})) {
     if (!isGraphqlFieldPath(path)) {
       fail(
-        `graphql.fieldArguments のキー ${JSON.stringify(path)} は GraphQL の選択経路ではありません。document に現れ得ないので、このキーの制約は何も制約しません。`,
+        `graphql.fieldArguments key ${JSON.stringify(path)} is not a GraphQL selection path. It cannot appear in a document, so its constraints constrain nothing.`,
       );
     } else if (!leaves.has(path) && !prefixes.has(path)) {
       fail(
-        `graphql.fieldArguments のキー ${JSON.stringify(path)} は fieldPaths のどの末端でも途中でもありません。この経路の field は許されないので、このキーの制約は何も制約しません。`,
+        `graphql.fieldArguments key ${JSON.stringify(path)} is neither a leaf nor a prefix of any fieldPaths entry. Fields on this path are not allowed, so its constraints constrain nothing.`,
       );
     }
     const names = Object.entries(args ?? {});
     if (names.length === 0) {
       fail(
-        `graphql.fieldArguments の ${path} が空の Mapping です。引数を 1 つも要求しないので、書いた意図が失われます。`,
+        `graphql.fieldArguments ${path} is an empty Mapping. It requires no argument, so the intent of writing it is lost.`,
       );
     }
     for (const [name, values] of names) {
       if (!isGraphqlName(name)) {
         fail(
-          `graphql.fieldArguments の ${path} のキー ${JSON.stringify(name)} は GraphQL の名前ではありません。document に現れ得ないので、この引数は決して満たせません。`,
+          `graphql.fieldArguments ${path} key ${JSON.stringify(name)} is not a GraphQL name. It cannot appear in a document, so this argument can never be satisfied.`,
         );
       }
       if (values.length === 0) {
         fail(
-          `graphql.fieldArguments の ${path} の ${name} が空の Listing です。受理集合が空になり、${never}。`,
+          `graphql.fieldArguments ${path} ${name} is an empty Listing. The accepted set is empty, so ${never}.`,
         );
       }
     }
@@ -518,8 +516,8 @@ function checkMethods(
     if (KNOWN_HTTP_METHODS.has(normalizeMethod(method))) continue;
     diagnostics.push(
       warning(
-        `ルール ${id} の match.methods にある ${JSON.stringify(method)} は既知の HTTP メソッドではありません。` +
-          ` 綴りが違えばこのルールは決して発火しません。`,
+        `rule ${id} match.methods contains ${JSON.stringify(method)}, which is not a known HTTP method.` +
+          ` If the spelling is wrong, this rule never fires.`,
       ),
     );
   }
@@ -540,7 +538,7 @@ function checkExpects(
     if (requiresJsonBody(expect) && format !== "json") {
       diagnostics.push(
         error(
-          `ルール ${id} の expect[${index}] (${expect.kind}) は match.body.format = "json" を要します。`,
+          `rule ${id} expect[${index}] (${expect.kind}) requires match.body.format = "json".`,
         ),
       );
     }
@@ -551,8 +549,8 @@ function checkExpects(
   if (audit !== "always") {
     diagnostics.push(
       error(
-        `ルール ${id} は onViolation = "allow" を持つので audit = "always" が要ります。` +
-          ` 記録なしで違反を通過させる設定は禁じられています。`,
+        `rule ${id} has onViolation = "allow", which requires audit = "always".` +
+          ` Letting violations through without a record is not allowed.`,
       ),
     );
   }
@@ -564,11 +562,11 @@ function checkExpectConditions(
   index: number,
   expect: Expect,
 ): void {
-  const where = `ルール ${id} の expect[${index}]`;
+  const where = `rule ${id} expect[${index}]`;
   if (expect.kind === "unionShape") {
     if (expect.allowed.length === 0) {
       diagnostics.push(
-        error(`${where} の allowed が空の Listing です。常に違反になります。`),
+        error(`${where} allowed is an empty Listing. It is always violated.`),
       );
     }
     return;
@@ -576,9 +574,9 @@ function checkExpectConditions(
   if (expect.kind !== "body") return;
   checkBodyConditions(
     diagnostics,
-    `${where} の `,
+    `${where} `,
     expect,
-    "この条件は決して満たされません",
+    "this condition is never satisfied",
   );
   // 違反レコードは Pointer を値に含めて broker へ送る。長さの上限を超えた
   // Pointer の違反レコードは broker に拒まれ、そのリクエストは承認できない。
@@ -590,7 +588,7 @@ function checkExpectConditions(
       if (pointer.length <= MAX_BODY_EXPECT_POINTER_CHARS) continue;
       diagnostics.push(
         error(
-          `${where} の ${field} の Pointer ${pointer.slice(0, 32)}… は ${pointer.length} 文字で、上限の ${MAX_BODY_EXPECT_POINTER_CHARS} 文字を超えています。違反レコードはこの Pointer を値に含めるので、超えると承認できない違反レコードになります。`,
+          `${where} ${field} Pointer ${pointer.slice(0, 32)}… is ${pointer.length} characters, over the ${MAX_BODY_EXPECT_POINTER_CHARS}-character limit. Violation records carry this Pointer as a value, so a longer Pointer produces violation records that cannot be approved.`,
         ),
       );
     }
@@ -622,7 +620,7 @@ function checkLimits(
     if (value > inherited[key]) {
       diagnostics.push(
         error(
-          `${where} の limits.${key} = ${value} が継承した天井 ${inherited[key]} を上回っています。予算は下げる方向にしか変えられません。`,
+          `${where} limits.${key} = ${value} exceeds the inherited ceiling of ${inherited[key]}. Budgets can only be lowered.`,
         ),
       );
       continue;
@@ -688,7 +686,7 @@ function checkInjects(
       // メッセージにも記録にも出ない。
       if (once(seen, `value:${entry.value}`)) {
         diagnostics.push(
-          error(`${where} の inject のヘッダー ${entry.name}: ${parsed.error}`),
+          error(`${where} inject header ${entry.name}: ${parsed.error}`),
         );
       }
       continue;
@@ -699,7 +697,7 @@ function checkInjects(
         if (once(seen, `unknown:${name}`)) {
           diagnostics.push(
             error(
-              `${where} の inject が secrets レジストリに存在しない名前 ${name} を参照しています。`,
+              `${where} inject references ${name}, which does not exist in the secrets registry.`,
             ),
           );
         }
@@ -709,7 +707,7 @@ function checkInjects(
         if (once(seen, `multi:${name}`)) {
           diagnostics.push(
             error(
-              `${where} の inject が複数の値に展開される秘密 ${name} (${secret.from}) を参照しています。注入は単一の値を要します。`,
+              `${where} inject references the secret ${name} (${secret.from}), which expands to multiple values. Injection requires a single value.`,
             ),
           );
         }
@@ -721,7 +719,7 @@ function checkInjects(
       ) {
         diagnostics.push(
           error(
-            `${where} の inject が参照する秘密 ${name} の扱いが実効値で "${disposition}" です。inject から参照するには "inject" である必要があります。`,
+            `${where} inject references the secret ${name}, whose effective disposition is "${disposition}". Secrets referenced from inject must be "inject".`,
           ),
         );
       }
@@ -753,8 +751,8 @@ function checkMaskProxy(
         if (disposition !== "mask" && disposition !== "forbid") continue;
         diagnostics.push(
           error(
-            `スコープ ${scope.name} が秘密の扱いに "${disposition}" を持つので mask.proxy = false を選べません。` +
-              ` プロキシでのマスクを行わないなら network.defaults.secrets { ["*"] = "ignore" } を明示してください。`,
+            `scope ${scope.name} uses "${disposition}" as a secret disposition, so mask.proxy = false is not allowed.` +
+              ` If you do not want masking at the proxy, set network.defaults.secrets { ["*"] = "ignore" } explicitly.`,
           ),
         );
         return;
@@ -793,19 +791,19 @@ function describeScopeConflict(
   const witness = targetIntersectionWitness(a.targets, b.targets);
   const lines = equivalent
     ? [
-        `設定エラー: スコープ ${a.name} と ${b.name} のターゲット集合が一致します。`,
-        "            同一ホストを 2 つのスコープに分割することはできません。",
-        "            ホストの中の書き分けは 1 つのスコープ内のルールで表現してください。",
+        `config error: scopes ${a.name} and ${b.name} have identical target sets.`,
+        "            The same host cannot be split across two scopes.",
+        "            Use rules within a single scope to distinguish requests to the same host.",
         "",
       ]
     : [
-        `設定エラー: スコープ ${a.name} と ${b.name} のターゲット集合が交差します。`,
-        "            どちらも他方を包含しないため、どちらを適用するか決まりません。",
+        `config error: the target sets of scopes ${a.name} and ${b.name} intersect.`,
+        "            Neither contains the other, so which scope applies is undecidable.",
         "",
       ];
   if (witness !== null) {
     lines.push(
-      "  両方に属するターゲットの例:",
+      "  A target belonging to both:",
       `    ${describeTargetAddress(witness)}`,
       "",
     );
@@ -816,12 +814,12 @@ function describeScopeConflict(
       [b.name, b.config.targets.join(" ")],
     ]),
     "",
-    "  解決方法:",
+    "  How to fix:",
     ...(equivalent
-      ? ["    - 2 つのスコープを 1 つにまとめ、書き分けをルールで表現する"]
+      ? ["    - Merge the two scopes into one and distinguish cases with rules"]
       : [
-          "    - どちらかの targets をポートまで揃える",
-          "    - 一方の targets を他方に包含される形に狭める",
+          "    - Make one side's targets match down to the port",
+          "    - Narrow one side's targets so the other contains them",
         ]),
   );
   return lines.join("\n");
@@ -882,7 +880,7 @@ function idDeclarations(
       declarations.push({
         id: rule.id,
         scopeName: scope.name,
-        detail: `ルール ${JSON.stringify(rule.key)}`,
+        detail: `rule ${JSON.stringify(rule.key)}`,
       });
     }
   }
@@ -891,19 +889,19 @@ function idDeclarations(
 
 function describeIdCollision(a: IdDeclaration, b: IdDeclaration): string {
   return [
-    `設定エラー: 2 つの宣言が同じ実 ID ${a.id} を作ります。`,
-    "            承認も監査もルールを実 ID で指すので、どちらの宣言に対する",
-    "            答えなのかが決まりません。一方に向けて押された承認が、",
-    "            もう一方のリクエストまで通してしまいます。",
+    `config error: two declarations produce the same effective id ${a.id}.`,
+    "            Approvals and audit records both refer to rules by effective",
+    "            id, so it is undecidable which declaration an answer belongs to.",
+    "            An approval given for one could let the other's requests through.",
     "",
     ...alignedRows([
-      [`スコープ ${a.scopeName}`, a.detail],
-      [`スコープ ${b.scopeName}`, b.detail],
+      [`scope ${a.scopeName}`, a.detail],
+      [`scope ${b.scopeName}`, b.detail],
     ]),
     "",
-    "  解決方法:",
-    "    - どちらかのルールのキーを変える",
-    "    - どちらかのスコープ名を変える",
+    "  How to fix:",
+    "    - Change one rule's key",
+    "    - Change one scope's name",
   ].join("\n");
 }
 
@@ -977,38 +975,38 @@ function describePrecedenceCycle(
     describePrecedenceEdge(rule, next(index)),
   );
   return [
-    `設定エラー: スコープ ${scope.name} のルールの優先関係が循環しています。`,
+    `config error: rule precedence in scope ${scope.name} is cyclic.`,
     `            ${ring}`,
-    "            どのルールを先に評価するか決まりません。特異度による選択が",
-    "            スコープ全体で成り立たなくなります。",
+    "            Which rule to evaluate first is undecidable, so",
+    "            specificity-based selection breaks down across the scope.",
     "",
-    "  循環を作っている優先:",
+    "  Precedence edges forming the cycle:",
     ...edges.map((line) => `    ${line}`),
     "",
-    "  解決方法:",
-    "    - 優先の向きが 1 つに決まるよう、片側の overrides を消す",
-    "    - どちらかの match を狭めて overrides を不要にする",
-    "    - 交差部分を担当する第 3 のルールを足す",
+    "  How to fix:",
+    "    - Remove one side's overrides so precedence points a single way",
+    "    - Narrow one side's match so overrides are not needed",
+    "    - Add a third rule covering the intersection",
   ].join("\n");
 }
 
 function describePrecedenceEdge(a: CompiledRule, b: CompiledRule): string {
   if ((a.config.overrides ?? []).includes(b.key)) {
-    return `${a.id} は overrides { ${JSON.stringify(b.key)} } で ${b.id} より先`;
+    return `${a.id} precedes ${b.id} via overrides { ${JSON.stringify(b.key)} }`;
   }
-  return `${a.id} は ${b.id} より特異なので先`;
+  return `${a.id} precedes ${b.id} by specificity`;
 }
 
 function describeRuleConflict(a: CompiledRule, b: CompiledRule): string {
   const witness = matchIntersectionWitness(a.match, b.match);
   const lines = [
-    `設定エラー: ルール ${a.id} と ${b.id} の受理集合が交差します。`,
-    "            どちらも他方を包含しないため、どちらを適用するか決まりません。",
+    `config error: the accepted sets of rules ${a.id} and ${b.id} intersect.`,
+    "            Neither contains the other, so which rule applies is undecidable.",
     "",
   ];
   if (witness !== null) {
     lines.push(
-      "  両方に一致するリクエストの例:",
+      "  A request matching both:",
       ...describeRequest(witness).map((line) => `    ${line}`),
       "",
     );
@@ -1025,10 +1023,10 @@ function describeRuleConflict(a: CompiledRule, b: CompiledRule): string {
       ]),
     ),
     "",
-    "  解決方法:",
-    `    - ${b.id} に overrides { ${JSON.stringify(a.key)} } を書く`,
-    "    - どちらかの match を狭める",
-    "    - 交差部分を担当する第 3 のルールを足す",
+    "  How to fix:",
+    `    - Add overrides { ${JSON.stringify(a.key)} } to ${b.id}`,
+    "    - Narrow one side's match",
+    "    - Add a third rule covering the intersection",
   );
   return lines.join("\n");
 }
@@ -1036,7 +1034,7 @@ function describeRuleConflict(a: CompiledRule, b: CompiledRule): string {
 function describeMethods(rule: CompiledRule): string {
   const methods = rule.config.match.methods;
   return methods === undefined || methods.length === 0
-    ? "(全メソッド)"
+    ? "(all methods)"
     : methods.join("|");
 }
 
@@ -1052,7 +1050,7 @@ function hasBodyCondition(rule: CompiledRule): boolean {
  * どちらを狭めればよいか分からない。値は設定から来た文字列なので、そのまま載せる。
  */
 function describeBodyCondition(body: NormalizedBody): string {
-  if (body.format === null) return "ボディ条件なし";
+  if (body.format === null) return "no body condition";
   const parts = [`body ${body.format}`];
   for (const [pointer, values] of body.pointers) {
     parts.push(
@@ -1101,7 +1099,7 @@ function checkOverrides(diagnostics: Diagnostic[], scope: CompiledScope): void {
     for (const key of overrides) {
       if (key === rule.key) {
         diagnostics.push(
-          error(`ルール ${rule.id} の overrides が自分自身を指しています。`),
+          error(`rule ${rule.id} has overrides pointing at itself.`),
         );
         continue;
       }
@@ -1109,7 +1107,7 @@ function checkOverrides(diagnostics: Diagnostic[], scope: CompiledScope): void {
       if (other === undefined) {
         diagnostics.push(
           error(
-            `ルール ${rule.id} の overrides が存在しないルール ${scope.name}.${key} を指しています。`,
+            `rule ${rule.id} has overrides pointing at ${scope.name}.${key}, which does not exist.`,
           ),
         );
         continue;
@@ -1117,7 +1115,7 @@ function checkOverrides(diagnostics: Diagnostic[], scope: CompiledScope): void {
       if (!matchesIntersect(rule.match, other.match)) {
         diagnostics.push(
           error(
-            `ルール ${rule.id} の overrides が受理集合の交差しない相手 ${other.id} を指しています。優先を述べる意味がありません。`,
+            `rule ${rule.id} has overrides pointing at ${other.id}, whose accepted set does not intersect. Stating precedence is meaningless.`,
           ),
         );
       }
@@ -1126,8 +1124,8 @@ function checkOverrides(diagnostics: Diagnostic[], scope: CompiledScope): void {
   if (total > scope.rules.length && scope.rules.length > 0) {
     diagnostics.push(
       warning(
-        `スコープ ${scope.name} の overrides の総数 (${total}) がルール数 (${scope.rules.length}) を超えています。` +
-          ` 特異度による選択が手書きの優先順位に退化しかけています。`,
+        `scope ${scope.name} has ${total} overrides for ${scope.rules.length} rules.` +
+          ` Specificity-based selection is degenerating into a hand-written ordering.`,
       ),
     );
   }
@@ -1151,8 +1149,8 @@ function checkCoveringAllow(
       if (!matchSubsumes(narrow.match, wide.match)) continue;
       diagnostics.push(
         warning(
-          `ルール ${narrow.id} のボディ条件は、同一スコープのより広い無条件 allow ルール ${wide.id} に覆われています。` +
-            ` 条件を外れたリクエストは ${wide.id} が拾って通すので、意図が制限であれば条件を match ではなく expect に置いてください。`,
+          `the body condition of rule ${narrow.id} is covered by the broader unconditional allow rule ${wide.id} in the same scope.` +
+            ` Requests outside the condition are caught and let through by ${wide.id}, so if the intent is restriction, put the condition on expect, not match.`,
         ),
       );
     }
@@ -1169,38 +1167,35 @@ function checkCoveringAllow(
  * 動かない。
  */
 const LEGACY_IDENTIFIERS: readonly (readonly [string, string])[] = [
-  ["reviewRules", "network.scopes に移行してください。"],
-  ["ReviewRule", "Scope と Rule に移行してください。"],
-  ["credentials", "secrets レジストリとスコープの inject に移行してください。"],
+  ["reviewRules", "Migrate to network.scopes."],
+  ["ReviewRule", "Migrate to Scope and Rule."],
+  ["credentials", "Migrate to the secrets registry and scope inject."],
   [
     "CredentialRule",
-    "スコープまたはルールの inject に移行してください。マッチャは match が持ちます。",
+    "Migrate to scope or rule inject. The matcher lives in match.",
   ],
-  [
-    "CredentialValSpec",
-    'secrets { [name] { from = "cmd:..." } } に移行してください。',
-  ],
+  ["CredentialValSpec", 'Migrate to secrets { [name] { from = "cmd:..." } }.'],
   [
     "BodylessRequestPolicy",
-    'match.body { format = "none" } または expect の EmptyBody に移行してください。',
+    'Migrate to match.body { format = "none" } or EmptyBody in expect.',
   ],
   [
     "JsonRequestPolicy",
-    'match.body { format = "json" } と expect に移行してください。',
+    'Migrate to match.body { format = "json" } and expect.',
   ],
-  ["TaggedUnionGuard", "expect の UnionShape に移行してください。"],
+  ["TaggedUnionGuard", "Migrate to UnionShape in expect."],
   [
     "anthropicV1",
-    'scopes { ["anthropic"] = presets.anthropic.v1 } に移行してください。',
+    'Migrate to scopes { ["anthropic"] = presets.anthropic.v1 }.',
   ],
   [
     "anthropicJsonPolicy",
-    "preset は関数ではなく名前付きのスコープ宣言になりました。presets.anthropic.v1 を使ってください。",
+    "presets are now named scope declarations, not functions. Use presets.anthropic.v1.",
   ],
-  ["MaskValueConfig", "secrets レジストリに移行してください。"],
+  ["MaskValueConfig", "Migrate to the secrets registry."],
   [
     "pendingDefaultScope",
-    "廃止されました。承認スコープはマッチしたルールの具体性から導出されます。",
+    "Removed. The approval scope is derived from the specificity of the matched rule.",
   ],
 ];
 
@@ -1228,9 +1223,9 @@ export function detectLegacyIdentifiers(
       diagnostics.push(
         error(
           [
-            `設定エラー: ${fileName}:${index + 1} で廃止された \`${identifier}\` を参照しています。`,
+            `config error: ${fileName}:${index + 1} references the removed \`${identifier}\`.`,
             `            ${migration}`,
-            `            対応表: ${MIGRATION_GUIDE_URL}`,
+            `            Mapping table: ${MIGRATION_GUIDE_URL}`,
           ].join("\n"),
         ),
       );
