@@ -163,7 +163,9 @@ function makeStageState(
 
 /**
  * DinD rootless が動作可能か事前チェック。
- * コンテナを起動して数秒待ち、まだ running なら OK。
+ * コンテナが一瞬 running になっても rootlesskit が user namespace を
+ * 作れない環境（Ubuntu 24.04 系の AppArmor userns 制限など）では直後に
+ * 落ちるため、running の確認だけではなく dockerd の readiness まで見る。
  */
 async function canRunDindRootless(): Promise<boolean> {
   const name = `nas-test-dind-probe-${crypto.randomUUID()}`;
@@ -185,11 +187,17 @@ async function canRunDindRootless(): Promise<boolean> {
     ).exited;
     if (exitCode !== 0) return false;
 
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
-      const running = await dockerIsRunning(name);
-      if (running) return true;
-      await new Promise((r) => setTimeout(r, 100));
+      if (!(await dockerIsRunning(name))) return false;
+      const result = await dockerExec(name, [
+        "docker",
+        "-H",
+        "tcp://127.0.0.1:2375",
+        "info",
+      ]);
+      if (result.code === 0) return true;
+      await new Promise((r) => setTimeout(r, 250));
     }
     return false;
   } catch {
