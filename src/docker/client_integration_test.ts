@@ -39,7 +39,7 @@ import {
 } from "./client.ts";
 
 const TEST_IMAGE = "alpine:latest";
-const PREFIX = `nas-test-${Date.now()}`;
+const PREFIX = `nas-test-${crypto.randomUUID()}`;
 const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const DOCKER_HOST = process.env.DOCKER_HOST;
 const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
@@ -496,17 +496,21 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
   "dockerVolumeRemove: removes a volume",
   async () => {
     const volumeName = `${PREFIX}-vol`;
-    await Bun.spawn(["docker", "volume", "create", volumeName], {
-      stdout: "ignore",
-      stderr: "ignore",
-    }).exited;
+    try {
+      await Bun.spawn(["docker", "volume", "create", volumeName], {
+        stdout: "ignore",
+        stderr: "ignore",
+      }).exited;
 
-    await dockerVolumeRemove(volumeName);
-    const exitCode = await Bun.spawn(
-      ["docker", "volume", "inspect", volumeName],
-      { stdout: "ignore", stderr: "ignore" },
-    ).exited;
-    expect(exitCode).not.toEqual(0);
+      await dockerVolumeRemove(volumeName);
+      const exitCode = await Bun.spawn(
+        ["docker", "volume", "inspect", volumeName],
+        { stdout: "ignore", stderr: "ignore" },
+      ).exited;
+      expect(exitCode).not.toEqual(0);
+    } finally {
+      await dockerVolumeRemove(volumeName).catch(() => {});
+    }
   },
 );
 

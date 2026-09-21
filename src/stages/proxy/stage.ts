@@ -1,3 +1,4 @@
+import { sharedDockerResources } from "../../docker/shared_resources.ts";
 /**
  * ProxyStage (EffectStage)
  *
@@ -15,10 +16,7 @@ import type {
   RequestBodyAuditConfig,
   SecretConfig,
 } from "../../config/types.ts";
-import {
-  NAS_SHARED_PROXY_CONTAINER,
-  sessionDockerResources,
-} from "../../docker/nas_resources.ts";
+import { sessionDockerResources } from "../../docker/nas_resources.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { formatElapsed, logDebug } from "../../log.ts";
 import {
@@ -55,7 +53,7 @@ import {
 } from "./session_broker_service.ts";
 
 const PROXY_IMAGE = "mitmproxy/mitmproxy:11";
-const PROXY_CONTAINER_NAME = NAS_SHARED_PROXY_CONTAINER;
+
 const PROXY_ALIAS = "nas-proxy";
 const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
@@ -133,7 +131,9 @@ export function planProxy(
     );
   }
   const document = resolved.document;
-  const proxyContainerName = options.proxyContainerName ?? PROXY_CONTAINER_NAME;
+  const proxyContainerName =
+    options.proxyContainerName ??
+    sharedDockerResources(Object.fromEntries(input.host.env)).proxyContainer;
   const generateSessionToken =
     options.generateSessionToken ?? defaultGenerateToken;
 

@@ -1,3 +1,4 @@
+import { sharedDockerResources } from "../docker/shared_resources.ts";
 /**
  * nas rebuild サブコマンド
  */
@@ -38,7 +39,7 @@ export function createRebuildPipelineBuilder({
 export async function runRebuild(nasArgs: string[]): Promise<void> {
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");
   try {
-    const imageName = "nas-sandbox";
+    const imageName = sharedDockerResources(process.env).sandboxImage;
 
     if (await dockerImageExists(imageName)) {
       logInfo(`[nas] Removing Docker image "${imageName}"...`);

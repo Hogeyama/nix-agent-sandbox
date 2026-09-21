@@ -64,3 +64,21 @@ test("reapSessionDockerResources: a missing resource does not stop later removal
   ]);
   expect(steps.filter((step) => step.error).length).toBe(7);
 });
+
+test("reaper disconnects only the proxy belonging to its namespace", async () => {
+  const disconnected: string[] = [];
+  await reapSessionDockerResources(
+    sessionDockerResources("test-session"),
+    {
+      stop: async () => {},
+      rm: async () => {},
+      networkDisconnect: async (_network, name) => {
+        disconnected.push(name);
+      },
+      networkRemove: async () => {},
+      volumeRemove: async () => {},
+    },
+    { NAS_RESOURCE_NAMESPACE: "test-isolated" },
+  );
+  expect(disconnected).toEqual(["nas-proxy-test-isolated"]);
+});

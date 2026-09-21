@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { isolatedNasResources } from "./docker_resources_fixture.ts";
 
 const FIXTURE_IMAGE =
   process.env.NAS_DEVCONTAINER_CONTRACT_IMAGE ??
@@ -20,13 +21,15 @@ interface CommandResult {
   readonly stderr: string;
 }
 
+const nasResourceEnv = isolatedNasResources();
+
 async function run(
   command: string[],
   options: { cwd?: string } = {},
 ): Promise<CommandResult> {
   const subprocess = Bun.spawn(command, {
     cwd: options.cwd,
-    env: { ...process.env },
+    env: { ...process.env, ...nasResourceEnv() },
     stdout: "pipe",
     stderr: "pipe",
   });

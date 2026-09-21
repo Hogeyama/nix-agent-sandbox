@@ -2,6 +2,7 @@ import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { createCliInitialState } from "../cli/pipeline_state.ts";
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { Config, Profile } from "../config/types.ts";
+import { sharedDockerResources } from "../docker/shared_resources.ts";
 import type { DevcontainerRegistration } from "../domain/devcontainer.ts";
 import {
   resolveDevcontainerPaths,
@@ -104,7 +105,7 @@ export async function runDevcontainerRuntime(
         ensureDevcontainerAgentState(options.profile.agent, host.home),
       );
       const buildProbes = await guard.wait(
-        resolveBuildProbes("nas-sandbox", {
+        resolveBuildProbes(sharedDockerResources(process.env).sandboxImage, {
           timeoutMs: Math.max(1, deadlineAt - Date.now()),
           signal: guard.signal,
         }),
@@ -177,9 +178,13 @@ export async function runDevcontainerRuntime(
     );
     const prepared = yield* preparationBuilder
       .run(
-        createCliInitialState(workspace, "nas-sandbox", {
-          NAS_SESSION_ID: options.sessionId,
-        }),
+        createCliInitialState(
+          workspace,
+          sharedDockerResources(process.env).sandboxImage,
+          {
+            NAS_SESSION_ID: options.sessionId,
+          },
+        ),
       )
       .pipe(
         Effect.timeoutFail({

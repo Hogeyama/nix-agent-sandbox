@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 
 /**
  * Container integration tests: Docker イメージと entrypoint の実起動
@@ -52,7 +52,7 @@ import {
   CONTAINER_RELAY_SOCKET,
 } from "../port_bind/stage.ts";
 
-const IMAGE_NAME = "nas-sandbox";
+const IMAGE_NAME = `nas-test-launch-${crypto.randomUUID()}`;
 
 // DinD 共有 tmp が利用可能なら bind mount テストで使う。
 // なければホスト Docker 前提で /tmp を使う。
@@ -479,6 +479,7 @@ const canRunImage = dockerAvailable && imageBuildable;
 let imageBuilt = false;
 async function ensureImage(): Promise<void> {
   if (imageBuilt) return;
+  imageBuildAttempted = true;
   const imageName = IMAGE_NAME;
   const buildProbes = await resolveBuildProbes(imageName);
   const stage = createDockerBuildStage(buildProbes);
@@ -1621,3 +1622,13 @@ test.skipIf(!canRunImage || !canBindMount)(
   },
   120_000,
 );
+
+let imageBuildAttempted = false;
+afterAll(async () => {
+  if (!imageBuildAttempted) return;
+  await Bun.spawn(["docker", "image", "rm", IMAGE_NAME], {
+    stdout: "ignore",
+    stderr: "ignore",
+    timeout: 10_000,
+  }).exited;
+});

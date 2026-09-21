@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { isolatedNasResources } from "./docker_resources_fixture.ts";
 
 /**
  * CLI E2E tests
@@ -68,6 +69,8 @@ afterAll(async () => {
 // ============================================================
 // Shared helpers
 // ============================================================
+
+const nasResourceEnv = isolatedNasResources();
 
 const MAIN_TS = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -143,7 +146,7 @@ async function runNas(
     stdout: "pipe",
     stderr: "pipe",
     cwd: options.cwd,
-    env: options.env ? { ...cleanedParent, ...options.env } : cleanedParent,
+    env: { ...cleanedParent, ...options.env, ...nasResourceEnv() },
   });
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,

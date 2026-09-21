@@ -14,10 +14,20 @@
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 
+import { isolateDockerConfig } from "../src/lib/test_docker_config_fixture.ts";
+
 const root = mkdtempSync(path.join(tmpdir(), "nas-test-xdg-"));
+
+const dockerConfig = path.join(root, "docker");
+isolateDockerConfig(
+  process.env.DOCKER_CONFIG || path.join(homedir(), ".docker"),
+  dockerConfig,
+);
+process.env.DOCKER_CONFIG = dockerConfig;
+delete process.env.DOCKER_AUTH_CONFIG;
 
 process.env.XDG_RUNTIME_DIR = path.join(root, "runtime");
 process.env.XDG_STATE_HOME = path.join(root, "state");

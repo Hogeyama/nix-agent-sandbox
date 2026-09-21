@@ -1,3 +1,4 @@
+import { sharedDockerResources } from "./shared_resources.ts";
 /**
  * Removal of one session's Docker resources after its nas process is gone.
  *
@@ -12,10 +13,7 @@ import {
   dockerStop,
   dockerVolumeRemove,
 } from "./client.ts";
-import {
-  NAS_SHARED_PROXY_CONTAINER,
-  type SessionDockerResources,
-} from "./nas_resources.ts";
+import type { SessionDockerResources } from "./nas_resources.ts";
 
 export interface SessionReapDeps {
   readonly stop: (containerName: string) => Promise<void>;
@@ -46,7 +44,9 @@ function liveSessionReapDeps(): SessionReapDeps {
 export async function reapSessionDockerResources(
   resources: SessionDockerResources,
   deps: SessionReapDeps = liveSessionReapDeps(),
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<SessionReapStep[]> {
+  const proxyContainer = sharedDockerResources(env).proxyContainer;
   const container = (name: string): Array<[string, () => Promise<void>]> => [
     [`stop ${name}`, () => deps.stop(name)],
     [`remove ${name}`, () => deps.rm(name)],
@@ -58,12 +58,8 @@ export async function reapSessionDockerResources(
     ...container(resources.registryMirrorContainer),
     // The shared proxy outlives sessions; only detach it from this network.
     [
-      `disconnect ${NAS_SHARED_PROXY_CONTAINER} from ${resources.sessionNetwork}`,
-      () =>
-        deps.networkDisconnect(
-          resources.sessionNetwork,
-          NAS_SHARED_PROXY_CONTAINER,
-        ),
+      `disconnect ${proxyContainer} from ${resources.sessionNetwork}`,
+      () => deps.networkDisconnect(resources.sessionNetwork, proxyContainer),
     ],
     [
       `remove network ${resources.sessionNetwork}`,

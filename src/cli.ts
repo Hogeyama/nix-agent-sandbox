@@ -1,3 +1,4 @@
+import { sharedDockerResources } from "./docker/shared_resources.ts";
 /**
  * CLI エントリポイント
  */
@@ -317,7 +318,7 @@ async function runMain(
           await prepare(() => addRecentDir(process.cwd()));
         } catch {}
 
-        const imageName = "nas-sandbox";
+        const imageName = sharedDockerResources(process.env).sandboxImage;
 
         // HostEnv 構築と probe 解決
         // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will

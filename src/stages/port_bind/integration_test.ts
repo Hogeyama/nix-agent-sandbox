@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -38,6 +38,8 @@ import {
 } from "../docker_build.ts";
 import { CONTAINER_RELAY_SCRIPT, CONTAINER_RELAY_SOCKET } from "./stage.ts";
 
+const IMAGE_NAME = `nas-test-port-bind-${crypto.randomUUID()}`;
+
 const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const canBindMount = SHARED_TMP !== undefined || !process.env.DOCKER_HOST;
 /**
@@ -69,7 +71,8 @@ async function makeDockerBindableTempDir(): Promise<string> {
 }
 
 async function ensureImage(): Promise<void> {
-  const imageName = "nas-sandbox";
+  imageBuildAttempted = true;
+  const imageName = IMAGE_NAME;
   const stage = createDockerBuildStage(await resolveBuildProbes(imageName));
   await Effect.runPromise(
     Effect.scoped(
@@ -258,7 +261,7 @@ test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
 
       await dockerRunDetached({
         name: containerName,
-        image: "nas-sandbox:latest",
+        image: IMAGE_NAME,
         args: [],
         envVars: {},
         mounts: [
@@ -505,3 +508,13 @@ test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable)(
   },
   120_000,
 );
+
+let imageBuildAttempted = false;
+afterAll(async () => {
+  if (!imageBuildAttempted) return;
+  await Bun.spawn(["docker", "image", "rm", IMAGE_NAME], {
+    stdout: "ignore",
+    stderr: "ignore",
+    timeout: 10_000,
+  }).exited;
+});

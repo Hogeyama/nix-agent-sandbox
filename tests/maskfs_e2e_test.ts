@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 import { initConfig } from "../src/config/init.ts";
 import { resolveMaskFsBinPath } from "../src/stages/maskfs/maskfs_path.ts";
 import { isUserAllowOtherEnabled } from "../src/stages/maskfs/maskfs_service.ts";
+import { isolatedNasResources } from "./docker_resources_fixture.ts";
+
+const nasResourceEnv = isolatedNasResources();
 
 const MAIN_TS = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -63,7 +66,7 @@ async function runNas(
     stdout: "pipe",
     stderr: "pipe",
     cwd: options.cwd,
-    env: options.env ? { ...cleanedParent, ...options.env } : cleanedParent,
+    env: { ...cleanedParent, ...options.env, ...nasResourceEnv() },
   });
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,

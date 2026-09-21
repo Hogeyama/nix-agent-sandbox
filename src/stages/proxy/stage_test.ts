@@ -1027,3 +1027,17 @@ test("ProxyStage owns only the HTTP proxy even with configured remote forwarding
   ).toBe(true);
   expect(result.envVars.HTTP_PROXY).toBe("http://127.0.0.1:18080");
 });
+
+test("ProxyStage: child environment isolates the shared proxy", () => {
+  const { shared, container, observability } = makeInput(makeProfile());
+  const plan = planProxy({
+    ...shared,
+    host: {
+      ...shared.host,
+      env: new Map([["NAS_RESOURCE_NAMESPACE", "test-isolated"]]),
+    },
+    container,
+    observability,
+  });
+  expect(plan.proxyContainerName).toBe("nas-proxy-test-isolated");
+});
