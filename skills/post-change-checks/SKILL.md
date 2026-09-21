@@ -1,6 +1,6 @@
 ---
 name: post-change-checks
-description: Run the standard post-change verification flow for this Bun project. Use when code, tests, or configuration changed and you should finish by running formatting, linting, type checking, and tests, then report pass/fail status to the user.
+description: Run the standard post-change verification flow for this Bun and Zig project. Use when code, tests, or configuration changed and you should finish by running formatting, linting, type checking, and tests, then report pass/fail status to the user.
 ---
 
 # Post Change Checks
@@ -15,11 +15,18 @@ Run the repository's standard verification sequence after making changes. Prefer
 bun run fmt
 ```
 
+`fmt` covers the Biome-managed files. When Zig files changed, also run
+`zig fmt` on those files and verify them with `zig fmt --check`.
+
 2. Run lint next.
 
 ```bash
 bun run lint
 ```
+
+This is the aggregate for every `lint:*` script, including Biome,
+ast-grep rule tests and scanning, and composed-effects checks. Do not
+substitute `lint:biome` or run each child again separately.
 
 3. Run type check.
 
@@ -27,9 +34,16 @@ bun run lint
 bun run check
 ```
 
+`check` currently includes the lint aggregate as well as TypeScript checks.
+
 4. Run the test lane for the current environment.
 
-Inside NAS, run unit tests only:
+Use the repository's Nix development environment (or equivalent installed
+build tools). `test:unit` now includes Zig suites as well as Bun suites;
+addon Python wrappers also require Python and the generated vendor dependencies.
+Inspect [package.json](../../package.json) for the current aggregate membership.
+
+Inside NAS, use the unit aggregate as the standard test lane:
 
 ```bash
 bun run test:unit
@@ -45,8 +59,13 @@ Outside NAS, when Docker and the other integration dependencies are directly
 available, run the full suite:
 
 ```bash
-bun test
+bun run test
 ```
+
+Plain `bun test` only discovers Bun tests; it does not run the Zig or sumi
+black-box suites. `test`, `test:unit`, and `test:integration` explicitly
+aggregate component suites without overlapping them. They finish the other
+selected suites after a failure and then return a nonzero status.
 
 If integration or e2e verification is required while working inside NAS,
 report that it was not run and must be executed in an environment where those
@@ -77,7 +96,8 @@ to recover output. Direct component commands, such as
 Report these items in the final response:
 
 - Whether `fmt`, `lint`, `check`, and the selected test lane passed or failed
-- Test summary counts when available
+- Test summary counts by suite/runtime when available; distinguish skips and
+  cached Zig successes from tests actually rerun
 - Whether integration/e2e tests were not run because verification occurred
   inside NAS
 - Notable failures or errors if the output highlights them
@@ -85,6 +105,8 @@ Report these items in the final response:
 ## Failure Handling
 
 If one step fails, stop the sequence there and report the failure clearly.
+Let a running test aggregate finish its selected suites before reporting its
+result; its continue-on-error behavior does not turn failures into success.
 
 If dependencies must be downloaded or sandbox/network approval is needed, request it and then continue the workflow.
 

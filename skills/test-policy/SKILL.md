@@ -1,50 +1,90 @@
 ---
 name: test-policy
-description: テストの書き方ルール。テストを新規作成・修正するとき、また既存テストの分類・スキップ条件・cleanup を変更するときに参照する。ランタイムは Bun (bun:test)。Unit/integration/e2e の分類基準、ファイル名規約、skipIf ガード、モック方針を扱う。
+description: テストの書き方ルール。テストを新規作成・修正するとき、また既存テストの分類・スキップ条件・cleanup を変更するときに参照する。Bun・Zig・Python ラッパーのテスト配置、コンポーネント別コマンド、unit/integration/e2e の分類、skip 条件、cleanup、モック方針を扱う。
 ---
 
 # Test Policy
 
-ランタイムは **Bun** (`bun:test`)。Deno ではない。`Deno.test` / `Deno.makeTempDir` /
-`sanitizeOps` / `sanitizeResources` はこのリポジトリには存在しない。
+TypeScript / JavaScript のテストは **Bun** (`bun:test`) で実行する。
+ネイティブコードは Zig の `test` ブロック、mitmproxy addon の Python テストは
+Bun ラッパー経由で実行する。sumi の black-box テストには専用のシェルスクリプトがある。
 
-## カテゴリと命名規約
+実行コマンドと集約対象の正本は [package.json](../../package.json)。
+全体の検証手順は [post-change-checks](../post-change-checks/SKILL.md) に従う。
+
+## Bun テストのカテゴリと命名規約
 
 | カテゴリ | ファイル名 | 配置 | 外部依存 | 速度 |
 |---|---|---|---|---|
-| Unit | `*_test.ts` | `src/` (ソース隣接) | 不要 | 高速 |
+| Unit | `*_test.ts` | `src/` (ソース隣接) | Docker 不要 | 高速 |
 | Integration | `*integration_test.ts` | `src/` (ソース隣接) | Docker 等 | 遅い |
 | E2E | `*_e2e_test.ts` | `tests/` (トップレベル) | Docker 等 | 遅い |
 
-**ファイル名がそのまま実行レーンを決める。** `test:unit` は
-`find src -name "*_test.ts" ! -name "*integration_test.ts"` で集めるので、
+**`src/` の TypeScript テストは、配置とファイル名で実行レーンを決める。**
+`test:nas-ts-unit` と `test:mitmproxy-addon-unit` は、それぞれの対象範囲から
+`*_test.ts` を集め、`*integration_test.ts` を除外する。
+nas 側は `src/docker/mitmproxy/` を除外し、addon 側だけで実行するため重複しない。
+
 末尾を `integration_test.ts` にし忘れた Docker 依存テストは unit レーンに紛れ込み、
 Docker が無い環境の高速テストを壊す。逆に付けると unit レーンから消える。
 分類を変えたいときに書き換えるのはファイル名であって、テストの中身ではない。
 
 除外グロブに先頭のアンダースコアが無いので、実在する形は2つある:
 
-- `<module>_integration_test.ts` — ソースファイルに隣接させる場合（27ファイル）
+- `<module>_integration_test.ts` — ソースファイルに隣接させる場合
 - `integration_test.ts` — `src/stages/<name>/` のようにディレクトリ全体が
-  一つの関心事に対応する場合（6ファイル）
+  一つの関心事に対応する場合
 
 どちらでもよいが、末尾が `integration_test.ts` で終わることだけは必須。
 
 ## 配置ルール
 
 - Unit / Integration はテスト対象のソースと同じディレクトリに置く（co-location）
-- E2E は複数モジュールをまたぐのでリポジトリルートの `tests/` に置く
+- E2E は複数モジュールをまたぐのでリポジトリルートの `tests/` に置き、`test:nas-integration` に含める
+- VS Code approval の JavaScript テストは `contrib/vscode-nas-approval/` のソース隣接に `*_test.js` として置く
+- addon の Python テストを追加するときは、対応する Bun ラッパーから実行されることも確認する
 
 ## コマンド
 
 ```bash
-bun test                       # 全テスト
-bun test src/                  # src 配下（unit + integration）
-bun test path/to/file_test.ts  # 単一ファイル
-bun test --test-name-pattern 'config'   # 名前で絞る
-bun run test:unit              # unit のみ（Docker 不要、高速、安全）
-bun run test:integration       # integration + tests/ 配下すべて
+bun run test                  # 全コンポーネントの unit + integration + e2e
+bun run test:unit             # Bun と Zig の unit を集約（Docker 不要）
+bun run test:integration      # nas/addon integration、nas e2e、sumi black-box
+bun run test:nas-unit         # nas TS + hostexec + mask-filter
+bun run test:vscode-approval
+bun run test:mitmproxy-addon-unit
+bun run test:mitmproxy-addon-integration
+bun run test:masking-unit
+bun run test:process-supervisor-unit
+bun run test:sumi             # sumi unit + black-box
+bun test path/to/file_test.ts # Bun の単一ファイル
 ```
+
+`bun test` は Bun テストの直接実行であり、全コンポーネントの集約ではない。
+`bun test src/` は import 時に Docker を呼ぶ integration も含むため、unit の代用にしない。
+
+新しいスイートは `test:<component>-unit` / `test:<component>-integration` を基本とし、
+対応する集約に明示的に追加する。`test:*` を無差別に実行すると集約と子スイートが
+重複する。失敗しても残りのスイートを実行し、集約の終了コードは非ゼロにする。
+実行には Zig などのビルドツールが必要なので、Nix 開発環境か同等の環境を使う。
+
+## Zig の共有ライブラリとテスト
+
+- `lib/masking/` はマスク本体とストリーム処理、`lib/process-supervisor/` は
+  プロセス監督とリレーを所有する。製品固有のテストは製品側に置く。
+- 各ライブラリの `build.zig` が独立したテストルートを持つ。
+  **製品からモジュールを import しても、そのライブラリのテストは実行されない。**
+  ファイルを共有ライブラリへ移したら、移したテストがそのルートから到達でき、
+  `test:unit` と必要な Nix の `checkPhase` で実行されることを確認する。
+- コンパイルキャッシュの成功とテスト実行を区別し、`--summary all` の結果を確認する。
+- `std.testing.tmpDir` の一時ファイルは `defer tmp.cleanup()` で削除する。
+  Nix の `sourceRoot` 外は読み取り専用になるため、共有テストは書き込み可能な
+  キャッシュ領域を作業ディレクトリにする。`--cache-dir` の指定だけでは
+  `tmpDir` の作業ディレクトリは変わらない。
+- maskfs の `zig build test` は互換入口として共有 masking のテストを実行する。
+  FUSE 本体の検証ではない。FUSE の E2E は `tests/maskfs_e2e_test.ts` が担当する。
+
+配置と製品からの依存関係は [lib/README.md](../../lib/README.md) を参照する。
 
 ## 集約ランナーとそのテスト
 
@@ -78,11 +118,10 @@ fake command runner を使う。
 
 ## Integration / E2E のルール
 
-### skipIf ガード必須
+### Bun の integration / E2E は skipIf ガード必須
 
 能力の判定はモジュールトップレベルで一度だけ行い、`test.skipIf` に渡す。
-判定用のプローブは共有ヘルパではなく各テストファイルにローカルに置く
-（`isDockerAvailable` は現状 4ファイルにそれぞれ定義されている）。
+判定用のプローブは共有ヘルパではなく各テストファイルにローカルに置く。
 
 ```typescript
 async function isDockerAvailable(): Promise<boolean> { ... }
@@ -99,10 +138,10 @@ test.skipIf(!dockerAvailable)("...", async () => { ... });
 
 ### テストの実行環境
 
-このプロジェクトの開発自体もnasサンドボックスで行われるため、
-テストはコンテナ内で走る。そのため、いくつかのテストケースはスキップされてしまう。
-そのようなケースを実行するためには `hostexec bun ...` を使うとよい。
-これはユーザーの手動承認を必要とするため、利用は最小限に絞ること。
+NAS 内での標準検証は `bun run test:unit`。必要な依存や権限がないために
+スキップされたテストは、実行済みとして報告しない。integration / E2E が必要なら、
+必要な依存を直接利用できる環境で実行する。スキップを埋めるために自動で
+ホスト実行へ切り替えず、環境の選択は post-change-checks の手順に合わせる。
 
 ### cleanup を必ず書く
 
@@ -127,6 +166,18 @@ try {
 ```typescript
 const containerName = `nas-hostexec-gateway-${crypto.randomUUID()}`;
 ```
+
+Docker CLI の認証設定は `scripts/test_preload.ts` で隔離する。
+実ユーザーの `auths` / `credsStore` / `credHelpers` を引き継がず、
+接続先の context と TLS 設定だけを維持する。テストからログインや
+credential helper の解除を要求してはならない。
+
+CLI / Dev Containers の E2E は `tests/docker_resources_fixture.ts` を使い、
+子プロセスに実行ごとの `NAS_RESOURCE_NAMESPACE` を渡す。
+共有 proxy と sandbox image はこの名前空間で分離し、fixture の cleanup で削除する。
+直接 image を build する integration も UUID 付きの専用タグと cleanup を持つ。
+ベースイメージや事前に用意した fixture image の参照は共有してよいが、
+テストで本番のタグを上書き・削除しない。
 
 ## モック優先順
 
