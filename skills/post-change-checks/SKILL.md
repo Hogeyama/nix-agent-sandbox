@@ -53,6 +53,25 @@ report that it was not run and must be executed in an environment where those
 dependencies are directly available. Do not bypass the boundary with an
 absolute host path, a permissive rule, or an already-allowed parent process.
 
+## Reading aggregate output
+
+Test aggregates use [scripts/run_tests.ts](../../scripts/run_tests.ts).
+They print each suite's start and result, then a final `Test results` table.
+`PASS` means the suite command exited successfully; the `Suites:` totals
+count suite commands, not individual tests. Use the per-suite summaries
+for test counts and skips. A Zig `(cached)` summary includes cached test
+steps; do not count those as freshly run. Consult its full log to distinguish
+cached and executed steps.
+
+Successful suites keep their detailed output in logs. `Logs:` and
+`Full logs:` show the temporary directory; each suite has a file named
+with colons replaced by hyphens, such as `test-nas-ts-unit.log`.
+Read that file for skip names, warnings, or details absent from the summary.
+Failing suites also print their full log to the terminal. Preserve needed
+logs before temporary-directory cleanup; rerunning is not necessary just
+to recover output. Direct component commands, such as
+`bun run test:nas-ts-unit`, still print their normal detailed output.
+
 ## Reporting
 
 Report these items in the final response:

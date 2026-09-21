@@ -46,6 +46,25 @@ bun run test:unit              # unit のみ（Docker 不要、高速、安全�
 bun run test:integration       # integration + tests/ 配下すべて
 ```
 
+## 集約ランナーとそのテスト
+
+集約コマンドは [package.json](../../package.json) に
+`bun run scripts/run_tests.ts <子スクリプト名>...` の形で定義する。
+[scripts/run_tests.ts](../../scripts/run_tests.ts) は入れ子の集約を実行前に展開し、
+同じスイートを重複実行せず、指定順に逐次実行する。
+子スクリプトを追加するときもこの形を維持する。別の集約方式を混ぜると
+展開対象にならず、入れ子の実行やログ表示が再発する。
+
+ランナーの unit テストはソース隣接の `scripts/run_tests_test.ts` に置き、
+`bun run test:runner-unit` で実行する。このスイートは `test:unit` に含まれる。
+`src/` 外のテストは `test:nas-ts-unit` には自動で含まれないため、
+ファイルを追加しただけで集約から実行されると考えず、対応するスクリプトを確認する。
+
+ランナーを変更するときは、失敗後も残りを実行して全体が非ゼロ終了すること、
+成功・失敗の両方で詳細ログが保存されることを保つ。
+集計の読み方と保存ログの確認方法は
+[post-change-checks](../post-change-checks/SKILL.md#reading-aggregate-output) を参照する。
+
 ## Unit テストで許可される依存
 
 - temp dir: `mkdtemp(path.join(tmpdir(), "nas-<area>-"))`（`node:fs/promises` + `node:os`）
