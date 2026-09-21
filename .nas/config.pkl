@@ -102,7 +102,12 @@ local commonNetwork: NetworkConfig = new {
         ["owned.rest-read"] {
           match {
             methods { "GET"; "HEAD" }
-            paths { "/repos/{owner}/**"; "/users/{owner}/**"; "/orgs/{owner}/**" }
+            paths {
+              "/repos/{owner}/**"
+              "/users/{owner}/**"
+              "/orgs/{owner}/**"
+              "/user"
+            }
             captures { ["owner"] = githubOwners }
           }
           onMatch = "allow"
@@ -154,7 +159,7 @@ local commonNetwork: NetworkConfig = new {
                   "/user/login"
                   "/repositoryOwner/login"
                 }
-                // 各 root の出現ごとに、所有者を名指す引数が存在し githubOwners に
+                // 各 root の出現ごとに、所有者を名指す引数が存在すれば githubOwners に
                 // 含まれることを要求する。別の field に書いた owner では満たせない。
                 fieldArguments {
                   ["/repository"] { ["owner"] = githubOwners }
@@ -166,6 +171,16 @@ local commonNetwork: NetworkConfig = new {
               onViolation = "review"
             }
           }
+        }
+        ["copilot"] {
+          match {
+            methods { "GET"; "HEAD" }
+            paths {
+              "/copilot_internal/user"
+              "/copilot_internal/v2/token"
+            }
+          }
+          onMatch = "allow"
         }
       }
     }
@@ -217,18 +232,6 @@ local commonNetwork: NetworkConfig = new {
       }
     }
 
-    // ダウンロード先の URL が ID / hash のみなら所有者を判定できない。
-    ["github-assets"] {
-      targets {
-        "release-assets.githubusercontent.com"
-        "objects.githubusercontent.com"
-        "github-releases.githubusercontent.com"
-        "camo.githubusercontent.com"
-        "avatars.githubusercontent.com"
-      }
-      fallback = "review"
-    }
-
     ["github-packages"] {
       targets { "ghcr.io" }
       fallback = "review"
@@ -244,23 +247,12 @@ local commonNetwork: NetworkConfig = new {
       }
     }
 
-    ["httpbin"] {
-      targets { "httpbin.org" }
-      fallback = "allow"
-      rules {
-        ["post"] {
-          match { methods { "POST" }; paths { "/**" } }
-          onMatch = "review"
-        }
-      }
-    }
-
     ["openai"] {
       targets {
         "api.openai.com:443"
         "chatgpt.com:443"
       }
-      webSocket = "allow" // "allow" | "deny" (規定deny) (reviewはない)
+      webSocket = "allow"
       fallback = "review"
       rules {
         ["streaming"] {
@@ -275,8 +267,20 @@ local commonNetwork: NetworkConfig = new {
         ["non-streaming"] {
           match {
             methods { "POST" }
-            paths { "/v1/responses" }
+            paths {
+              "/v1/responses"
+              "/backend-api/plugins/export/curated"
+            }
             body { format = "json"; equals { ["/stream"] = false } }
+          }
+          onMatch = "allow"
+          onIndeterminate = "deny"
+        }
+        ["bootstrap"] {
+          match {
+            methods { "GET" }
+            paths { "/backend-api/plugins/featured" }
+            body { format = "json" }
           }
           onMatch = "allow"
           onIndeterminate = "deny"
@@ -295,6 +299,18 @@ local commonNetwork: NetworkConfig = new {
         "edgedl.me.gvt1.com"
         "mtalk.google.com"
         "www.google.com"
+      }
+      fallback = "deny"
+    }
+
+    // chromium 開くと勝手にアクセスするやつ
+    ["vscode"] {
+      targets {
+        "mobile.events.data.microsoft.com"
+        "default.exp-tas.com"
+        "westus-0.in.applicationinsights.azure.com"
+        "o33249.ingest.us.sentry.io"
+        "embeddings.vscode-cdn.net" // これは許可してもいい気がする
       }
       fallback = "deny"
     }
