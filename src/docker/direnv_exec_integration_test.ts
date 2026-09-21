@@ -53,6 +53,9 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>) {
       XDG_CACHE_HOME: cache,
       NAS_DIRENV_ENABLED: "true",
       NAS_REAL_BASH: "/bin/bash",
+      // Exercise the ordinary CLI entrypoint even when this suite itself runs
+      // inside a reusable Dev Container.
+      NAS_DEVCONTAINER: undefined,
       // ランチャーはこの値で分岐し、acp なら fd 8/9 を差し替える。ここを
       // 固定しないと、開発者のセッションが acp で立ち上がっていたときだけ
       // 全ケースが "Bad file descriptor" で落ちる。テストが見たいのは
