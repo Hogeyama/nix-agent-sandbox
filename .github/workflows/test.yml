@@ -30,15 +30,5 @@ jobs:
       - name: Lint
         run: nix develop -c bun run lint
 
-      - name: Unit tests
-        run: nix develop -c bun run test:unit
-
-      - name: sumi integration tests
-        run: nix develop -c bun run test:sumi-integration
-
-      - name: Hostexec native integration
-        run: >-
-          nix develop -c bun test
-          src/hostexec/fd_gateway_integration_test.ts
-          src/hostexec/client_integration_test.ts
-          src/hostexec/intercept_integration_test.ts
+      - name: Tests
+        run: nix develop -c bun run test
