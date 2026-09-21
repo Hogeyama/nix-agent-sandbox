@@ -50,15 +50,17 @@ aarch64-linux は動作未確認です。
 ```sh
 # x86_64-linux
 gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C ~/.local/bin
-nas
+  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C /tmp
+/tmp/nas --extract ~/.local/share/nas-bin
+ln -s ~/.local/share/nas-bin/bin/nas ~/.local/bin/nas
 ```
 
 ```sh
 # aarch64-linux
 gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C ~/.local/bin
-nas
+  --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C /tmp
+/tmp/nas --extract ~/.local/share/nas-bin
+ln -s ~/.local/share/nas-bin/bin/nas ~/.local/bin/nas
 ```
 
 ### Nix
