@@ -21,7 +21,11 @@ pub fn executable(comptime name: []const u8) []const u8 {
 }
 
 pub fn addToolPath(env: *std.process.EnvMap) !void {
-    try env.put("PATH", if (options.bin_dir.len == 0) "/bin:/usr/bin" else options.bin_dir);
+    const path = if (options.bin_dir.len == 0)
+        std.posix.getenv("PATH") orelse "/bin:/usr/bin"
+    else
+        options.bin_dir;
+    try env.put("PATH", path);
 }
 
 /// Creates a private directory for a test's unix sockets and returns its path.

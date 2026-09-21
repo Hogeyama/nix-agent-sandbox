@@ -1,8 +1,8 @@
 const std = @import("std");
 
-fn testToolPath(b: *std.Build, bin_dir: []const u8, comptime name: []const u8, comptime host_path: []const u8) []const u8 {
-    if (bin_dir.len == 0) return host_path;
-    return b.fmt("{s}/{s}", .{ bin_dir, name });
+fn testToolPath(b: *std.Build, bin_dir: []const u8, comptime name: []const u8) []const u8 {
+    if (bin_dir.len != 0) return b.fmt("{s}/{s}", .{ bin_dir, name });
+    return name;
 }
 
 pub fn build(b: *std.Build) void {
@@ -11,12 +11,12 @@ pub fn build(b: *std.Build) void {
     const test_bin_dir = b.option([]const u8, "test-bin-dir", "Directory containing hostexec test executables") orelse "";
     const test_options = b.addOptions();
     test_options.addOption([]const u8, "bin_dir", test_bin_dir);
-    test_options.addOption([]const u8, "true_path", testToolPath(b, test_bin_dir, "true", "/bin/true"));
-    test_options.addOption([]const u8, "sh_path", testToolPath(b, test_bin_dir, "sh", "/bin/sh"));
-    test_options.addOption([]const u8, "cat_path", testToolPath(b, test_bin_dir, "cat", "/bin/cat"));
-    test_options.addOption([]const u8, "ls_path", testToolPath(b, test_bin_dir, "ls", "/bin/ls"));
-    test_options.addOption([]const u8, "sleep_path", testToolPath(b, test_bin_dir, "sleep", "/bin/sleep"));
-    test_options.addOption([]const u8, "env_path", testToolPath(b, test_bin_dir, "env", "/usr/bin/env"));
+    test_options.addOption([]const u8, "true_path", testToolPath(b, test_bin_dir, "true"));
+    test_options.addOption([]const u8, "sh_path", testToolPath(b, test_bin_dir, "sh"));
+    test_options.addOption([]const u8, "cat_path", testToolPath(b, test_bin_dir, "cat"));
+    test_options.addOption([]const u8, "ls_path", testToolPath(b, test_bin_dir, "ls"));
+    test_options.addOption([]const u8, "sleep_path", testToolPath(b, test_bin_dir, "sleep"));
+    test_options.addOption([]const u8, "env_path", testToolPath(b, test_bin_dir, "env"));
     const test_options_module = test_options.createModule();
 
     const host_target = b.resolveTargetQuery(.{});
