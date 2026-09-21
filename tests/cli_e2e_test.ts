@@ -1029,7 +1029,9 @@ test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable || !hasPkl)(
       expect(result.stdout.includes("MY_VAR=from-config")).toEqual(true);
     });
   },
-  30_000,
+  // The sandbox image build dominates the first run; a cold buildkit cache
+  // can take minutes, matching the 120s used by other image-building tests.
+  120_000,
 );
 
 test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable || !hasPkl)(
@@ -1047,7 +1049,7 @@ test.skipIf(!dockerAvailable || !canBindMount || !imageBuildable || !hasPkl)(
       expect(content.trim()).toEqual("written-by-fake-codex");
     });
   },
-  30_000,
+  120_000,
 );
 
 // ============================================================
