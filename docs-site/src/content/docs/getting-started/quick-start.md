@@ -62,7 +62,7 @@ Claude Code の画面で「このプロジェクトの構成を説明して」�
 
 ## Codex での最初の作業
 
-Claude Code の導入や、上の Claude 用の設定は不要です。ホストで作業するプロジェクトへ移動し、`nas config init` を実行します。生成された `.nas/config.pkl` の codex プロファイルを使います。
+Claude Code の導入や、上の Claude 用の設定は不要です。ホストで作業するプロジェクトへ移動し、`nas config init` を実行します。共通設定 (`global.pkl`) に生成された codex プロファイルをそのまま使うため、`.nas/config.pkl` の編集は不要です。
 
 ホストの Codex で認証を済ませておきます。認証情報を OS のキーリングに保存している場合は、起動前に [Codex のキーリング](/nix-agent-sandbox/configuration/authentication/#codex-のキーリング)の共有設定を codex プロファイルへ追加します。
 

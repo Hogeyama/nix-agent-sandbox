@@ -4,52 +4,52 @@ amends "modulepath:/global.pkl"
 // replace the line above with:
 //   amends "Schema.pkl"
 
-/// Project-local settings layered onto a profile inherited from global.pkl.
-///
-/// Listings (env, extraMounts, hostexec.rules, network.proxy.forwardPorts) are
-/// appended to; Mappings (network.scopes, secrets) are merged by key.
-local function extendProfile(p: Profile): Profile = (p) {
-  // Approved .envrc files load by default. To skip loading them:
-  // direnv { enable = false }
-
-  // Provide `hostexec <command>` on PATH, with approval and the host environment.
-  // No rules are required. Preserve inherited hostexec settings when enabling it.
-  // hostexec {
-  //   installScript = true
-  // }
-
-  // Give a secret a name, then say where it may be hidden or sent:
-  //
-  // secrets {
-  //   ["api-password"] { from = "dotenv:.env#API_PASSWORD" }
-  // }
-  //
-  // // Hide it from the agent: file reads show same-length "*".
-  // mask = new MaskConfig {
-  //   proxy = true;
-  // }
-  //
-  // // Reach one host, and send the secret only there.
-  // network {
-  //   scopes {
-  //     ["api"] {
-  //       targets { "api.example.com:443" }
-  //       fallback = "allow"
-  //       secrets { ["api-password"] = "inject" }
-  //       inject {
-  //         new Inject {
-  //           name = "Authorization"
-  //           value = #"template:Bearer ${api-password}"#
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
-}
-
-profiles {
-  // `super[...]` is the profile as global.pkl left it. Reading `profiles[...]`
-  // here instead is a self-reference and overflows the stack.
-  ["claude"] = extendProfile(super["claude"])
-  ["codex"] = extendProfile(super["codex"])
-}
+// Project-local settings can be layered onto a profile inherited from
+// global.pkl. Uncomment below and adjust the profile names to match your
+// global.pkl.
+//
+// local function extendProfile(p: Profile): Profile = (p) {
+//   // Approved .envrc files load by default. To skip loading them:
+//   // direnv { enable = false }
+//
+//   // Provide `hostexec <command>` on PATH, with approval and the host environment.
+//   // No rules are required. Preserve inherited hostexec settings when enabling it.
+//   // hostexec {
+//   //   installScript = true
+//   // }
+//
+//   // Give a secret a name, then say where it may be hidden or sent:
+//   //
+//   // secrets {
+//   //   ["api-password"] { from = "dotenv:.env#API_PASSWORD" }
+//   // }
+//   //
+//   // // Hide it from the agent: file reads show same-length "*".
+//   // mask = new MaskConfig {
+//   //   proxy = true;
+//   // }
+//   //
+//   // // Reach one host, and send the secret only there.
+//   // network {
+//   //   scopes {
+//   //     ["api"] {
+//   //       targets { "api.example.com:443" }
+//   //       fallback = "allow"
+//   //       secrets { ["api-password"] = "inject" }
+//   //       inject {
+//   //         new Inject {
+//   //           name = "Authorization"
+//   //           value = #"template:Bearer ${api-password}"#
+//   //         }
+//   //       }
+//   //     }
+//   //   }
+//   // }
+// }
+//
+// profiles {
+//   // `super[...]` is the profile as global.pkl left it. Reading `profiles[...]`
+//   // here instead is a self-reference and overflows the stack.
+//   ["claude"] = extendProfile(super["claude"])
+//   ["codex"] = extendProfile(super["codex"])
+// }

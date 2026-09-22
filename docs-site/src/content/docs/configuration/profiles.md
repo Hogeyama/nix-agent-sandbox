@@ -28,18 +28,18 @@ Pending に届いた要求は、[UI の承認](/nix-agent-sandbox/work/approvals
 
 ### 初期生成したファイル
 
-`nas config init` が生成したファイルの末尾には、次の `profiles` があります。
+`nas config init` が生成したファイルでは、変更例として `extendProfile` 関数と末尾の `profiles` がコメントアウトされています。
 
 ```pkl
-profiles {
-  ["claude"] = extendProfile(super["claude"])
-  ["codex"] = extendProfile(super["codex"])
-}
+// profiles {
+//   ["claude"] = extendProfile(super["claude"])
+//   ["codex"] = extendProfile(super["codex"])
+// }
 ```
 
-`super["codex"]` は共通設定の codex です。`extendProfile` は同じファイルの上部に定義された関数で、その中に追加した設定は関数を使う claude と codex の両方に適用されます。
+この形でプロファイルを変更する場合は、上部の `extendProfile` の定義と末尾の `profiles` のコメントを外します。`super["codex"]` は共通設定の codex です。`extendProfile` の中に追加した設定は、関数を使う claude と codex の両方に適用されます。
 
-Codex にだけ共有を追加する場合は、末尾を次の形に変更します。上部の `amends` と `extendProfile` の定義は残します。
+Codex にだけ共有を追加する場合は、コメントを外した末尾を次の形に変更します。
 
 ```pkl
 profiles {

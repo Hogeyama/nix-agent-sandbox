@@ -114,7 +114,7 @@ profiles {
 }
 ```
 
-`mode = "acp"` が、Claude の起動方法をターミナルから ACP に切り替える指定です。`agent = "claude"`、認証と履歴のマウント、通信の設定は継承元の `claude` から引き継ぎます。`super["claude"]` は共通設定の claude を指すので、同じファイルの `["claude"]` に書いた通信許可は引き継がれません。そのため `network` を繰り返しています。`nas config init` が生成した `extendProfile` を残しているファイルでは、継承元を `(extendProfile(super["claude"]))` にすると、関数の中に書いた設定も引き継げます。
+`mode = "acp"` が、Claude の起動方法をターミナルから ACP に切り替える指定です。`agent = "claude"`、認証と履歴のマウント、通信の設定は継承元の `claude` から引き継ぎます。`super["claude"]` は共通設定の claude を指すので、同じファイルの `["claude"]` に書いた通信許可は引き継がれません。そのため `network` を繰り返しています。生成ファイルのコメントアウトを外して `extendProfile` を使っている場合は、継承元を `(extendProfile(super["claude"]))` にすると、関数の中に書いた設定も引き継げます。
 
 Nix を使わずに持ち込む場合は、前の節の `extraMounts` と `env` を同じ位置に置きます。direnv は既定で有効なので、devShell の読み込みに設定の追加は要りません。
 
