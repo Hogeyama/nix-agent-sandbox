@@ -13,7 +13,7 @@ function detail(profile: Profile, topic: string): string {
 }
 
 test("direnv is disclosed either way, because reading .envrc is not expected of a Dev Container", () => {
-  const off = devcontainerProfile();
+  const off = { ...devcontainerProfile(), direnv: { enable: false } };
   expect(detail(off, "direnv")).toContain("does not evaluate");
   const on = { ...off, direnv: { enable: true } };
   expect(detail(on, "direnv")).toContain("evaluates the workspace .envrc");

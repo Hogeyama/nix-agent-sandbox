@@ -152,7 +152,8 @@ class NixConfig {
 
 class DirenvConfig {
   /// 起動時に許可済みの .envrc をコンテナ内で読み込む。
-  enable: Boolean = false
+  /// 既定は true。許可されていない .envrc が見つかると起動を拒否する。
+  enable: Boolean = true
 }
 
 class DockerConfig {

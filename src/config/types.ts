@@ -285,7 +285,7 @@ export const DEFAULT_OBSERVABILITY_CONFIG: ObservabilityConfig = {
   retention: 31 * 24 * 60 * 60,
 };
 
-export const DEFAULT_DIRENV_CONFIG: DirenvConfig = { enable: false };
+export const DEFAULT_DIRENV_CONFIG: DirenvConfig = { enable: true };
 
 export const DEFAULT_NIX_CONFIG: NixConfig = {
   enable: "auto",

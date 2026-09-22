@@ -1418,7 +1418,7 @@ for (const { name, reference, referenced } of [
               );
             else
               expect((await loadConfig(dir)).profiles.dev.direnv.enable).toBe(
-                false,
+                true,
               );
           },
         );

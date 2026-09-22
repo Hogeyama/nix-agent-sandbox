@@ -18,17 +18,19 @@ use flake
 
 必要なコマンドはプロジェクトの devShell に追加します。Nix を使わないプロジェクトでは、`.envrc` で PATH や環境変数を設定できます。
 
-### direnv の有効化
+### direnv の設定
 
-[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に次の設定を追加します。`direnv.enable` の既定は false なので、プロファイルごとに有効にします。
+direnv は既定で有効です。ワークスペースに `.envrc` があれば、ホストで承認済みのものをセッションの起動時にコンテナ内で読み込みます。プロファイルへの設定の追加は不要です。
+
+読み込みを止めたいプロファイルでは、[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に次の設定を追加します。
 
 ```pkl
 direnv = new DirenvConfig {
-  enable = true
+  enable = false
 }
 ```
 
-設定の差分を確認し、[変更の反映と確認](/nix-agent-sandbox/configuration/profiles/#変更の反映と確認)の手順で `nas config trust` を実行します。これは nas の設定に対する信頼であり、次の `.envrc` の承認とは別です。
+設定を変更した場合は、差分を確認し、[変更の反映と確認](/nix-agent-sandbox/configuration/profiles/#変更の反映と確認)の手順で `nas config trust` を実行します。これは nas の設定に対する信頼であり、次の `.envrc` の承認とは別です。
 
 ### ホストでの承認
 
@@ -59,7 +61,7 @@ nas が新しい worktree を作る場合、その worktree にある `.envrc` �
 
 `nix.enable` だけでは、flake の devShell を自動で読み込まなくなりました。以前 `nix.extraPackages` に指定していたツールを削除して、プロジェクトの devShell または `.envrc` に定義します。
 
-nas を更新した後、プロジェクトのルートで `nas config init` を実行して Schema.pkl を再生成します。対象プロファイルに `direnv.enable = true` を追加し、編集した設定を `nas config trust` で信頼し直してから、実際の `.envrc` をホストの `direnv allow` で承認します。
+nas を更新した後、プロジェクトのルートで `nas config init` を実行して Schema.pkl を再生成します。編集した設定を `nas config trust` で信頼し直してから、実際の `.envrc` をホストの `direnv allow` で承認します。direnv は既定で有効なので、プロファイルへの追加は不要です。
 
 ## テスト用 Docker
 

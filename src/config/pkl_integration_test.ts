@@ -563,7 +563,7 @@ profiles {
 
 for (const enabled of [false, true]) {
   test.skipIf(!hasPkl)(
-    `pkl: direnv defaults off and can enable without Nix (${enabled})`,
+    `pkl: direnv defaults on and can be disabled without Nix (${enabled})`,
     async () => {
       const root = await mkdtemp(path.join(tmpdir(), "nas-pkl-direnv-"));
       try {
@@ -574,7 +574,7 @@ profiles {
   ["dev"] {
     agent = "claude"
     nix { enable = false }
-    ${enabled ? "direnv { enable = true }" : ""}
+    ${enabled ? "" : "direnv { enable = false }"}
   }
 }`,
         );

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- **direnv**: `direnv.enable` now defaults to `true`. A workspace `.envrc` that is allowed on the host is loaded on session start without any profile setting; one that is not allowed still refuses to launch. Set `direnv { enable = false }` on a profile to skip project environments.
+
 ## [0.19.0] - 2026-09-20
 
 ### Added

@@ -55,7 +55,7 @@ devShells.default = pkgs.mkShell {
 };
 ```
 
-devShell をコンテナ内で読み込むには、プロジェクトの `.envrc` に `use flake` を置き、ACP 用プロファイルで direnv を有効にし、ホストで `direnv allow` を実行します。手順は[開発ツールと Docker](/nix-agent-sandbox/configuration/development/#direnv-の有効化)にあります。次の節のプロファイル例には direnv を有効にする行を含めています。
+devShell をコンテナ内で読み込むには、プロジェクトの `.envrc` に `use flake` を置き、ホストで `direnv allow` を実行します。direnv は既定で有効なので、プロファイルへの追加は不要です。手順は[開発ツールと Docker](/nix-agent-sandbox/configuration/development/#direnv-の設定)にあります。
 
 ### Nix を使わずに持ち込む
 
@@ -81,7 +81,7 @@ env {
 }
 ```
 
-この方法では direnv は不要なので、次の節の `direnv { enable = true }` の行は外して構いません。
+この方法では `.envrc` は不要です。direnv は既定で有効ですが、`.envrc` が見つからなければ環境を読み込まずに起動します。
 
 ## ACP 用プロファイル
 
@@ -103,7 +103,6 @@ profiles {
   ["codex"] = super["codex"]
   ["claude-acp"] = (super["claude"]) {
     mode = "acp"
-    direnv { enable = true }
     network {
       scopes {
         ["anthropic"] = (module.presets.anthropic.v1) {
@@ -117,7 +116,7 @@ profiles {
 
 `mode = "acp"` が、Claude の起動方法をターミナルから ACP に切り替える指定です。`agent = "claude"`、認証と履歴のマウント、通信の設定は継承元の `claude` から引き継ぎます。`super["claude"]` は共通設定の claude を指すので、同じファイルの `["claude"]` に書いた通信許可は引き継がれません。そのため `network` を繰り返しています。`nas config init` が生成した `extendProfile` を残しているファイルでは、継承元を `(extendProfile(super["claude"]))` にすると、関数の中に書いた設定も引き継げます。
 
-`direnv { enable = true }` は Nix の devShell から adapter を読み込む行です。Nix を使わずに持ち込む場合は、この行の代わりに前の節の `extraMounts` と `env` を同じ位置に置きます。
+Nix を使わずに持ち込む場合は、前の節の `extraMounts` と `env` を同じ位置に置きます。direnv は既定で有効なので、devShell の読み込みに設定の追加は要りません。
 
 編集したら差分を確認し、`nas config trust` を実行します。
 

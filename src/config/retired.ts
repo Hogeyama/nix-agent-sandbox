@@ -2,7 +2,7 @@ import { containsIdentifier, maskNonCode } from "../lib/pkl_source.ts";
 
 export const NIX_EXTRA_PACKAGES_MIGRATION =
   "nix.extraPackages is no longer supported. Define packages in .envrc or " +
-  "a devShell, set direnv.enable = true, and run direnv allow on the host.";
+  "a devShell, and run direnv allow on the host.";
 
 export const CLOUD_CONFIG_MOUNT_MIGRATION =
   "gcloud.mountConfig and aws.mountConfig are no longer supported. They bound " +
