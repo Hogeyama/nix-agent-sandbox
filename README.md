@@ -46,20 +46,25 @@ GitHub Releases の導入例には GitHub CLI (`gh`) と、`PATH` に含まれ�
 
 ビルド済みバイナリは x86_64-linux と aarch64-linux 向けに公開しています。
 aarch64-linux は動作未確認です。
+archive には `nas` のほか、同梱するソフトウェアのライセンス表示
+（`licenses/`）が入っています。同じ表示は展開先の
+`share/nas/assets/licenses/` にも残ります。
 
 ```sh
 # x86_64-linux
+tmp=$(mktemp -d)
 gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C /tmp
-/tmp/nas --extract ~/.local/share/nas-bin
+  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C "$tmp"
+"$tmp/nas" --extract ~/.local/share/nas-bin
 ln -s ~/.local/share/nas-bin/bin/nas ~/.local/bin/nas
 ```
 
 ```sh
 # aarch64-linux
+tmp=$(mktemp -d)
 gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C /tmp
-/tmp/nas --extract ~/.local/share/nas-bin
+  --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C "$tmp"
+"$tmp/nas" --extract ~/.local/share/nas-bin
 ln -s ~/.local/share/nas-bin/bin/nas ~/.local/bin/nas
 ```
 

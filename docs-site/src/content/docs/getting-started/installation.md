@@ -19,15 +19,21 @@ description: 対応環境、前提ツール、GitHub Releases と Nix からの�
 
 ```sh
 # x86_64-linux
+tmp=$(mktemp -d)
 gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C ~/.local/bin
+  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C "$tmp"
+install -m 755 "$tmp/nas" ~/.local/bin/nas
 ```
 
 ```sh
 # aarch64-linux
+tmp=$(mktemp -d)
 gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C ~/.local/bin
+  --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C "$tmp"
+install -m 755 "$tmp/nas" ~/.local/bin/nas
 ```
+
+archive には `nas` のほか、同梱するソフトウェアのライセンス表示（`licenses/`）が入っています。同じ表示は `nas` 自身にも埋め込まれており、`--extract` で展開すると `share/nas/assets/licenses/` に出てきます。
 
 ## Nix
 
@@ -46,10 +52,8 @@ nix profile install github:Hogeyama/nix-agent-sandbox
 配布バイナリは `nix-bundle-elf` により実行時に自己展開するため、最初の起動には少し時間がかかります。頻繁に起動する環境では、`--extract` で一度展開できます。
 
 ```sh
-gh release download --repo Hogeyama/nix-agent-sandbox \
-  --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C /tmp/
-mkdir -p ~/.local/lib ~/.local/bin
-/tmp/nas --extract ~/.local/lib/nas
+mkdir -p ~/.local/lib
+~/.local/bin/nas --extract ~/.local/lib/nas
 ```
 
 以後は `~/.local/lib/nas/bin/nas` で起動できます。通常の `nas` コマンドとして使う場合は、既存の `~/.local/bin/nas` を確認してから、この実行ファイルへのシンボリックリンクに置き換えてください。
