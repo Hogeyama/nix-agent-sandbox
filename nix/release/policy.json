@@ -1,0 +1,231 @@
+{
+  "components": {
+    "bun": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-1"
+      ],
+      "noticeFiles": [
+        "packages/bun-usockets/LICENSE",
+        "packages/bun-uws/LICENSE",
+        "src/clap/LICENSE",
+        "src/node-fallbacks/vendor/ieee754.js",
+        "src/node-fallbacks/vendor/base64-js.js",
+        "src/node-fallbacks/net.js",
+        "src/node-fallbacks/path.js",
+        "src/node-fallbacks/url.js",
+        "src/node-fallbacks/util.js"
+      ]
+    },
+    "tinycc": {
+      "license": "LGPL-2.1-or-later",
+      "requirements": [
+        "TCC-1",
+        "TCC-2"
+      ],
+      "noticeFiles": []
+    },
+    "lolhtml": {
+      "license": "BSD-3-Clause",
+      "requirements": [
+        "BUN-3"
+      ],
+      "noticeFiles": []
+    },
+    "boringssl": {
+      "license": "Apache-2.0",
+      "requirements": [
+        "BUN-4"
+      ],
+      "noticeFiles": []
+    },
+    "brotli": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "cares": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "hdrhistogram": {
+      "license": "BSD-2-Clause",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "highway": {
+      "license": "BSD-3-Clause AND CC0-1.0",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": [
+        "hwy/contrib/random/random-inl.h"
+      ]
+    },
+    "libarchive": {
+      "license": "BSD-2-Clause AND other notices",
+      "requirements": [
+        "BUN-6"
+      ],
+      "noticeFiles": []
+    },
+    "libdeflate": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "libjpeg-turbo": {
+      "license": "BSD-3-Clause AND IJG AND Zlib",
+      "requirements": [
+        "BUN-6"
+      ],
+      "noticeFiles": [
+        "LICENSE.md",
+        "README.ijg"
+      ]
+    },
+    "libspng": {
+      "license": "BSD-2-Clause",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "libuv": {
+      "license": "MIT AND other notices",
+      "requirements": [
+        "BUN-8"
+      ],
+      "noticeFiles": []
+    },
+    "libwebp": {
+      "license": "BSD-3-Clause",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "lshpack": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "lsqpack": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "lsquic": {
+      "license": "MIT AND BSD-3-Clause",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "mimalloc": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "picohttpparser": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": [
+        "picohttpparser.h",
+        "picohttpparser.c"
+      ]
+    },
+    "rust-argon2": {
+      "license": "MIT",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "zlib": {
+      "license": "Zlib AND other notices",
+      "requirements": [
+        "BUN-6"
+      ],
+      "noticeFiles": []
+    },
+    "zstd": {
+      "license": "BSD-3-Clause",
+      "requirements": [
+        "BUN-5"
+      ],
+      "noticeFiles": []
+    },
+    "webkit": {
+      "license": "LGPL-2.0-only AND file-specific notices",
+      "requirements": [
+        "JSC-1",
+        "JSC-2",
+        "JSC-3",
+        "JSC-4"
+      ],
+      "noticeFiles": [
+        "Source/JavaScriptCore/COPYING.LIB"
+      ]
+    },
+    "pkl": {
+      "license": "Apache-2.0 AND bundled third-party terms",
+      "requirements": [
+        "PKL-1",
+        "PKL-2",
+        "PKL-3"
+      ],
+      "noticeFiles": [
+        "LICENSE.txt",
+        "NOTICE.txt",
+        "THIRD-PARTY-NOTICES.txt"
+      ]
+    },
+    "pkl-graalvm-runtime": {
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0 AND file-specific terms",
+      "requirements": [
+        "PKL-3",
+        "PKL-4"
+      ],
+      "noticeFiles": [
+        "LICENSE",
+        "THIRD_PARTY_LICENSE.txt",
+        "vm/LICENSE_GRAALVM_CE",
+        "vm/THIRD_PARTY_LICENSE_CE.txt",
+        "substratevm/LICENSE",
+        "compiler/LICENSE.md",
+        "sdk/LICENSE.md",
+        "truffle/LICENSE.md"
+      ]
+    },
+    "pkl-openjdk-runtime": {
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0 AND file-specific terms",
+      "requirements": [
+        "PKL-3",
+        "PKL-4"
+      ],
+      "noticeFiles": [
+        "LICENSE",
+        "ADDITIONAL_LICENSE_INFO",
+        "ASSEMBLY_EXCEPTION"
+      ]
+    }
+  }
+}

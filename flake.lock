@@ -89,11 +89,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1779984316,
-        "narHash": "sha256-MTzfL7X0i9GWQbWK/ODyTJWIj+qSvbixXcY/CqYvbiY=",
+        "lastModified": 1790177000,
+        "narHash": "sha256-K1sUCy0etklxvZj1+6ZYlg3eJMOKucSlOuSNhKa9AiE=",
         "owner": "Hogeyama",
         "repo": "nix-bundle-elf",
-        "rev": "137948029ea69db6f6a99f6fac7758bd0ecee7f8",
+        "rev": "c75837de26d6d99522f48ab19e13bc4b963d5f7f",
         "type": "github"
       },
       "original": {

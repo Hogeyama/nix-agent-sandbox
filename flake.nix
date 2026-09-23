@@ -33,7 +33,10 @@
       let
         pkgs = nixpkgs.legacyPackages.${system}.extend overlays.diffity;
         b2n = bun2nix.packages.${system}.default;
+        bunDeps = b2n.fetchBunDeps { bunNix = ./bun.nix; };
         bundle-script = nix-bundle-elf.lib.${system}.bundle-script;
+        modifiedDate = let d = self.lastModifiedDate or "20260923000000"; in
+          "${builtins.substring 0 4 d}-${builtins.substring 4 2 d}-${builtins.substring 6 2 d}";
 
         # src/hostexec/intercept, contrib/maskfs, src/mask-filter は Zig 0.15 の
         # API を前提に書かれている。pkgs.zig は nixpkgs 側の alias で、追従する
@@ -60,22 +63,45 @@
           version = pklVersion;
           src = pklSrc;
           dontUnpack = true;
-          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+          nativeBuildInputs = [ pkgs.autoPatchelfHook pkgs.binutils ];
           buildInputs = [ pkgs.zlib pkgs.stdenv.cc.cc.lib ];
-          installPhase = "install -Dm755 $src $out/bin/pkl";
+          installPhase = ''
+            mkdir -p $out/bin
+            bash ${./scripts/release/mark_elf.sh} pkl "$src" "$out/bin/pkl" ${modifiedDate}
+          '';
         };
+        dtachMarked = pkgs.dtach.overrideAttrs (old: {
+          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.binutils ];
+          postInstall = (old.postInstall or "") + ''
+            bash ${./scripts/release/mark_elf.sh} dtach "$out/bin/dtach" "$out/bin/dtach.nas-marked" ${modifiedDate}
+            mv "$out/bin/dtach.nas-marked" "$out/bin/dtach"
+          '';
+        });
         nasUnwrapped = b2n.mkDerivation {
           pname = "nas";
           version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
           src = self;
-          module = "main.ts";
-          bunDeps = b2n.fetchBunDeps { bunNix = ./bun.nix; };
-          preBuild = ''
+          inherit bunDeps;
+          # Bun's standalone executable keeps its embedded entrypoint in an
+          # appended payload. strip removes that payload and leaves bare Bun.
+          dontStrip = true;
+          buildPhase = ''
+            runHook preBuild
             bun run build-ui
+            bun scripts/compile.ts --outfile nas --materials-dir release-js
+            runHook postBuild
           '';
           postInstall = ''
             mkdir -p $out/share/nas
             cp -r src/ui/dist $out/share/nas/dist
+            cp -r release-js $out/share/nas/cli-compliance
+          '';
+          postFixup = ''
+            version_output="$($out/bin/nas --version)"
+            case "$version_output" in
+              "nas "*) ;;
+              *) echo "standalone nas entrypoint lost during fixup: $version_output" >&2; exit 1 ;;
+            esac
           '';
         };
 
@@ -173,6 +199,7 @@
             export HOME=$TMPDIR
             zig build \
               --global-cache-dir "$TMPDIR/zig-cache" \
+              -Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
               -Doptimize=ReleaseSafe
           '';
           checkPhase = ''
@@ -301,14 +328,16 @@
 
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
-        nasAssets = pkgs.runCommand "nas-assets" { } ''
+        nasAssetsBase = pkgs.runCommand "nas-assets-base" { } ''
           mkdir -p $out/docker/embed $out/docker/mitmproxy $out/scripts $out/ui $out/hostexec $out/maskfs $out/mask-filter $out/config/templates
 
           cp -r ${self}/src/docker/embed/. $out/docker/embed/
           cp ${self}/src/docker/mitmproxy/nas_addon.py $out/docker/mitmproxy/
           cp -r ${mitmproxyVendor} $out/docker/mitmproxy/vendor
           cp ${self}/scripts/notify-send-wsl $out/scripts/
-          cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
+          mkdir -p $out/ui/dist
+          cp ${nasUnwrapped}/share/nas/dist/index.html $out/ui/dist/
+          cp -r ${nasUnwrapped}/share/nas/dist/assets $out/ui/dist/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
           cp ${hostexecIntercept}/bin/nas-hostexec-client $out/hostexec/
           cp ${hostexecIntercept}/bin/nas-hostexec-gateway $out/hostexec/
@@ -319,6 +348,34 @@
           cp ${self}/src/config/templates/eval.pkl $out/config/templates/
           cp ${self}/src/config/templates/global.pkl $out/config/templates/
           cp ${self}/src/config/templates/PklProject $out/config/templates/
+        '';
+        nasAssetsBundleBase = pkgs.runCommand "nas-assets-bundle-base" { } ''
+          mkdir -p $out
+          cp -r ${nasAssetsBase}/. $out/
+          chmod u+w $out/maskfs
+          rm $out/maskfs/nas-maskfs
+          cat > $out/maskfs/nas-maskfs <<'EOF'
+          #!/bin/sh
+          root="$(cd "$(dirname "$0")/../../../.." && pwd)"
+          exec "$root/libexec/nas-maskfs" "$@"
+          EOF
+          chmod +x $out/maskfs/nas-maskfs
+        '';
+        releaseInputs = import ./nix/release {
+          inherit pkgs system self nixpkgs bun2nix nix-bundle-elf nasUnwrapped rawPayload pklVersion
+            pklNative dtachMarked hostexecIntercept maskfs maskFilter mitmproxyVendor;
+          pklBinaryPin = pklSourceBySystem.${system};
+          nasAssetsBase = nasAssetsBundleBase;
+        };
+        nasAssets = pkgs.runCommand "nas-assets" { } ''
+          mkdir -p $out
+          cp -r ${nasAssetsBase}/. $out/
+          cp -r ${releaseInputs}/licenses $out/licenses
+        '';
+        nasAssetsBundle = pkgs.runCommand "nas-assets-bundle" { } ''
+          mkdir -p $out
+          cp -r ${nasAssetsBundleBase}/. $out/
+          cp -r ${releaseInputs}/licenses $out/licenses
         '';
 
         nas = pkgs.runCommand "nas" { } ''
@@ -341,8 +398,8 @@
           # inherit them.
           export NAS_BIN_PATH="''${NAS_BIN_PATH:-$dir/bin/nas}"
           export NAS_GIT_REVISION="${self.shortRev or self.dirtyShortRev or "unknown"}"
-          # ネイティブ pkl を先頭に置く (loadPklConfig が PATH 経由で呼ぶ)
-          export PATH="${pklNative}/bin:''${PATH}"
+          # Nix package も bundle と同じ dtach/Pkl を使う。
+          export PATH="${dtachMarked}/bin:${pklNative}/bin:''${PATH}"
           exec "$dir/share/nas/nas" "$@"
           EOF
           chmod +x $out/bin/nas
@@ -375,16 +432,18 @@
           #!/bin/sh
           exec nas "$@"
         '';
-        nasBundled = bundle-script {
+        mkNasBundle = assets: runtime: bundle-script {
           name = "nas";
           script = nasBundledEntry;
           type = "preload";
           binaries = [
-            { name = "nas"; target = "${nasUnwrapped}/bin/nas"; }
+            { name = "nas"; target = runtime; }
             { name = "pkl"; target = "${pklNative}/bin/pkl"; }
+            { name = "dtach"; target = "${dtachMarked}/bin/dtach"; }
+            { name = "nas-maskfs"; target = "${maskfs}/bin/nas-maskfs"; }
           ];
           extraFiles = {
-            "share/nas/assets" = nasAssets;
+            "share/nas/assets" = assets;
           };
           resolveWith = [
             "${pkgs.glibc}/lib/libpthread.so.0"
@@ -393,6 +452,7 @@
             "${pkgs.glibc}/lib/libm.so.6"
             "${pkgs.glibc}/lib/libc.so.6"
             "${pkgs.gcc.cc.lib}/lib/libgcc_s.so.1"
+            "${pkgs.fuse3.out}/lib/libfuse3.so.4"
           ];
           env = [
             { key = "NAS_ASSET_DIR"; action = "replace"; value = "%ROOT/share/nas/assets"; }
@@ -401,16 +461,32 @@
             { key = "NAS_BIN_PATH"; action = "replace"; value = "%ORIG"; }
           ];
         };
+        nasBundledRaw = mkNasBundle nasAssetsBundleBase "${nasUnwrapped}/bin/nas";
+        rawPayload = pkgs.runCommand "nas-raw-payload-${system}" { } ''
+          ${nasBundledRaw} --extract "$out"
+        '';
+        nasBundled = mkNasBundle nasAssetsBundle "${nasUnwrapped}/bin/nas";
+        nasBundledWithRuntime =
+          let
+            runtime = builtins.getEnv "NAS_REBUILT_BINARY";
+          in
+          if runtime == "" || builtins.substring 0 1 runtime != "/" then
+            throw "set NAS_REBUILT_BINARY to an absolute executable path and build with --impure"
+          else
+            mkNasBundle nasAssetsBundle (builtins.path { path = runtime; name = "nas-rebuilt-runtime"; });
       in
       {
         packages = {
           default = nas;
           bundled = nasBundled;
+          release-inputs = releaseInputs;
           maskfs = maskfsPackage;
           maskfs-bundled = maskfsBundled;
           mask-filter = maskFilter;
           sumi = sumi;
           vscode-nas-approval = vscodeNasApproval;
+        } // pkgs.lib.optionalAttrs (builtins.getEnv "NAS_REBUILT_BINARY" != "") {
+          bundled-with-runtime = nasBundledWithRuntime;
         };
 
         devShells.default = pkgs.mkShell {
