@@ -54,6 +54,13 @@ async function copyTree(from: string, to: string) {
   }
 }
 
+// Archive the top-level entries rather than `.`: a `./` member makes tar
+// reset the target directory's mode and mtime on extraction, which fails in
+// a shared directory such as /tmp.
+async function rootEntries(dir: string): Promise<string[]> {
+  return (await readdir(dir)).sort();
+}
+
 async function removeScratch(dir: string) {
   const root = await lstat(dir);
   if (!root.isDirectory()) {
@@ -202,7 +209,7 @@ export async function prepareRelease(options: {
         path.join(scratch, inventory.binaryArchive),
         "-C",
         binaryDir,
-        ".",
+        ...(await rootEntries(binaryDir)),
       ],
       "binary archive",
     );
@@ -213,7 +220,7 @@ export async function prepareRelease(options: {
         path.join(scratch, inventory.materialsArchive),
         "-C",
         materialsDir,
-        ".",
+        ...(await rootEntries(materialsDir)),
       ],
       "materials archive",
     );

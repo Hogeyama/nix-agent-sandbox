@@ -116,6 +116,28 @@ test("stages exact material bytes and verifies both archives", async () => {
   await verifyRelease({ stage: f.out });
 });
 
+test("archives name their members without a root entry", async () => {
+  // A `./` member makes tar reset the target directory's mode and mtime,
+  // which fails when extracting into a shared directory such as /tmp.
+  const f = await fixture();
+  const inventory = await prepareRelease({
+    inputs: f.inputs,
+    binary: f.binary,
+    out: f.out,
+    tag: "v1.2.3",
+  });
+  for (const archive of [inventory.binaryArchive, inventory.materialsArchive]) {
+    const list = Bun.spawnSync(["tar", "-tzf", path.join(f.out, archive)]);
+    const members = list.stdout.toString().trim().split("\n");
+    expect(members.filter((m) => m === "./" || m.startsWith("./"))).toEqual([]);
+  }
+  expect(
+    Bun.spawnSync(["tar", "-tzf", path.join(f.out, inventory.binaryArchive)])
+      .stdout.toString()
+      .split("\n"),
+  ).toContain("nas");
+});
+
 test("missing source and changed embedded notice block staging", async () => {
   const f = await fixture();
   await rm(path.join(f.inputs, "sources/code.tar.gz"));
