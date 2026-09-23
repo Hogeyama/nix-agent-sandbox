@@ -253,39 +253,7 @@ local commonNetwork: NetworkConfig = new {
         "chatgpt.com:443"
       }
       webSocket = "allow"
-      fallback = "review"
-      rules {
-        ["streaming"] {
-          match {
-            methods { "POST" }
-            paths { "/v1/responses" }
-            body { format = "json"; equals { ["/stream"] = true } }
-          }
-          onMatch = "review"
-          onIndeterminate = "deny"
-        }
-        ["non-streaming"] {
-          match {
-            methods { "POST" }
-            paths {
-              "/v1/responses"
-              "/backend-api/plugins/export/curated"
-            }
-            body { format = "json"; equals { ["/stream"] = false } }
-          }
-          onMatch = "allow"
-          onIndeterminate = "deny"
-        }
-        ["bootstrap"] {
-          match {
-            methods { "GET" }
-            paths { "/backend-api/plugins/featured" }
-            body { format = "json" }
-          }
-          onMatch = "allow"
-          onIndeterminate = "deny"
-        }
-      }
+      fallback = "allow"
     }
 
     // chromium 開くと勝手にアクセスするやつ
