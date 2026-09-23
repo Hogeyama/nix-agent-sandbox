@@ -88,13 +88,19 @@ nas の `bun build --compile` 成果物には Bun runtime が入る。[Bun の�
 
 この配布方式では、nas 自身の再生成に必要な source・データ・scripts を受領者に提供することを受け入れる。
 
-この選択で渡すのは上流の手順へのリンクだけではない。配布した runtime に対応する WebKit fork の source、Bun の source と変更、再ビルドに必要な入力、nas の source と build/lock 情報を揃える。手順は「変更した JavaScriptCore → Bun の再ビルド → その runtime を選んだ nas の再生成 → assets / native helper を含む bundle の作成」までを扱う。
+この選択で示すのは上流の手順へのリンクだけではない。配布した runtime に対応する WebKit fork と Bun の固定 revision、再ビルドに必要な入力の pin、nas の source と build/lock 情報を揃える。手順は「変更した JavaScriptCore → Bun の再ビルド → その runtime を選んだ nas の再生成 → assets / native helper を含む bundle の作成」までを扱う。
 
 ##### 材料の提供方法の候補
 
 Library GPL v2 §6 では、材料を伴わせる方法、written offer、同じ配布場所から材料を取得可能にする方法などがある。
 
-**§6(c) の同じ配布場所からの取得を選び、材料を binary と同じ GitHub Release の追加 asset にする。** 利用者が必要時に直接取得でき、請求受付・後日提供の運用が不要になる。必要な材料の範囲は §6(a) に対応させる。
+**Bun 自身と同じ方法を選ぶ。notice は nas とともに配り、Bun・WebKit fork・Bun の依存の source は、固定した公開 upstream revision を `recipes/upstream-sources.json` に記録して案内する。** 材料の範囲は §6(a) に対応させる。
+
+候補には、材料を binary と同じ GitHub Release の追加 asset として複製する方法もある。試算では、この部分だけで asset が数百 MB になった。build に使わない部分を除けば縮められるが、除外対象の一覧は依存を更新するたびに見直しと再検証が必要になる。複製しても、実際に取得されることはほとんどない。
+
+Bun は、JavaScriptCore を静的にリンクした自身の binary を、source を複製せずに配布している。source は、Bun の作者が管理する oven-sh/bun と oven-sh/WebKit の公開 repository にある。nas はこの runtime を変更せずに再配布するので、同じ取得経路を案内する。
+
+この選択では、上流が repository を削除した場合や、固定 commit が参照できなくなった場合に、材料を取得できなくなるリスクを受け入れる。そうなった場合は、nas 側で fork・tag を作って提供先を切り替えるか、複製の方法に戻る。
 
 ##### この選択を成立させる確認
 
@@ -108,12 +114,9 @@ nas が指定した別の Bun runtime から再生成できることを確認す
 
 ##### 材料の収録範囲
 
-固定した pin に対応する archive を、原則としてそのまま収録する。build に使わない部分を細かく除く方法は採らない。除外対象の一覧は依存を更新するたびに見直しと再検証が必要になり、その保守の負担に対して、減るのはほとんど取得されない source asset の容量だけだからである。source asset は GitHub Release の 1 ファイルの上限（2 GiB）に収まる範囲で受け入れる。上限に近づいた場合は、asset の分割を検討する。
+Release に複製するのは、Bun の runtime のうち小さく条件の厳しい TinyCC fork・`libtcc1.c`・MPL の crate だけとする。Bun・WebKit fork・その他の依存・Node headers・Rust 標準 library の source は、`recipes/upstream-sources.json` の revision・hash で案内する。
 
-例外は、見直しを必要としない次の規則だけとする。
-
-- **WebKit fork:** test data と website の tree（`LayoutTests`・`JSTests`・`PerformanceTests`・`Websites`）を除く。これらが改名・新設された場合は、そのまま収録されて容量が増えるだけで、build 材料の欠落にはならない。
-- **Bun の npm 依存:** 各 architecture の Release に、その CPU で `bun install` が取得する archive だけを収録する。
+build は notice を得るために、これらの source を固定 hash で取得し、Bun の lockfile と照合する。WebKit fork は、Bun が compile する `Source/JavaScriptCore`・`Source/WTF`・`Source/bmalloc` だけを sparse checkout で取得する（fork 全体 6.5 GB に対して約 113 MB）。notice はこの範囲から読む。
 
 A の経路に不足する非公開・取得不能の材料などが判明した場合は、B/C を含めて選び直す。その場合は不足した材料と、選択を変更した理由をここに記録する。
 
@@ -149,7 +152,7 @@ Bun 1.4.2 の [TinyCC build 定義](https://github.com/oven-sh/bun/blob/bun-v1.4
 
 **候補:** source から再生成する方法、対応する object を渡す方法、§6(c) の written offer がある。§6(b) の shared library 機構は、Bun に組み込む TinyCC の提供方法には選べない。
 
-**選択と理由（POLICY）:** source の経路を選び、§6(d) と §4 の同じ場所からの取得を使う。TinyCC fork、patch と build 定義、Bun / nas を再生成する材料を同じ Release に置く。JSC-2 と Bun の再ビルド材料を共有でき、中間 object の保管や offer の請求対応を増やさずに済む。条文番号は JavaScriptCore の Library GPL v2 §6(c) と区別する。TinyCC の変更に必要な source・patch・build 定義を固定版と照合する。再生成には Bun upstream の build scripts を用い、別の再構築ツールは維持しない。
+**選択と理由（POLICY）:** source の経路を選び、§6(d) と §4 の同じ場所からの取得を使う。TinyCC fork を同じ Release に置き、patch・build 定義・Bun / nas を再生成するその他の材料は JSC-2 と同じく固定した上流 revision で案内する。JSC-2 と Bun の再ビルド材料を共有でき、中間 object の保管や offer の請求対応を増やさずに済む。条文番号は JavaScriptCore の Library GPL v2 §6(c) と区別する。TinyCC の変更に必要な source・patch・build 定義を固定版と照合する。再生成には Bun upstream の build scripts を用い、別の再構築ツールは維持しない。
 
 #### TCC-3: `libtcc1.c` の source とリンク例外
 
@@ -272,7 +275,7 @@ Bun 1.4.2 の Cargo.lock にある registry package 181 件の archive を check
 
 **候補:** binary と一緒に source を渡す方法と、§4 が認める同じ配布場所からの equivalent access がある。
 
-**選択と理由（POLICY）:** 同じ Release の追加 source asset を選ぶ。dtach や Bun と取得先を揃え、通常の binary download を小さくできるためである。使用した source、patch、適用順序、build 定義を収録し、変更表示・許諾も保持する。Nixpkgs の revision は provenance として記録するが、材料の実物の代わりにはしない。
+**選択と理由（POLICY）:** 同じ Release の追加 source asset を選ぶ。dtach と取得先を揃え、通常の binary download を小さくできるためである。使用した source、patch、適用順序、build 定義を収録し、変更表示・許諾も保持する。Nixpkgs の revision は provenance として記録するが、材料の実物の代わりにはしない。
 
 ### GLIBC-2: 変更した library を利用できるリンク方法を用意する
 
@@ -356,7 +359,7 @@ Pkl 0.31.1 の build 定義は GraalVM Community JDK 25.0.0 を使う。配布�
 
 **要求（LICENSE）:** [GraalVM 25.0.0 の SubstrateVM 本文](https://github.com/oracle/graal/blob/graal-25.0.0/substratevm/LICENSE)の GPLv2 と Classpath Exception を保持する。GPL 対象の runtime code の本文・表示・対応 source を渡す。Classpath Exception を、その runtime 自体の source 提供を省略する根拠にはしない。内蔵する OpenJDK code と追加の第三者表示も、対応版の原文に結び付ける。
 
-**候補・選択と理由（POLICY）:** DT-2 と同じ GPLv2 §3(a) の直接提供を選び、固定版の GraalVM / OpenJDK source と変更・build 情報を同じ source asset に収録する。written offer の維持を増やさず、他の GPL component と取得経路を揃えられるためである。runtime の収録範囲と版を binary / build 定義で確認し、原文の LICENSE・例外・該当第三者表示を notice tree に加える。コンパイルに使った JDK 全体を binary に内蔵したと推定する方法は採らない。両 architecture の対応が確認できるまで PKL-3 の公開チェックを通さない。
+**候補・選択と理由（POLICY）:** Pkl 自身の配布と同じ方法を選ぶ。原文の本文・例外・表示は notice tree に収録し、固定版の GraalVM / LabsJDK の source は、公開 upstream revision と archive hash を `recipes/upstream-sources.json` に記録して案内する。Pkl は、この runtime を内蔵した native executable を source の複製なしに配布している。nas はそれを変更せずに再配布するので、同じ取得経路を案内する。上流が参照できなくなるリスクの扱いは JSC-2 と同じとする。runtime の収録範囲と版を binary / build 定義で確認し、原文の LICENSE・例外・該当第三者表示を notice tree に加える。コンパイルに使った JDK 全体を binary に内蔵したと推定する方法は採らない。両 architecture の対応が確認できるまで PKL-3 の公開チェックを通さない。
 
 ## JavaScript パッケージと vendored Python
 
@@ -370,7 +373,7 @@ nas の executable、frontend assets、同梱 Python tree に実際に入る pac
 
 **選択と理由（POLICY）:** 配布版の package から本文・表示を取得し、package ごとのファイルとして notice tree に入れる。著作権者の情報を保持しやすく、更新時に対応版も追いやすいためである。source 内にだけ表示がある場合は、その表示も保存する。BSD の対象では、配布文書等が無断の推奨・宣伝になっていないことも確認する。
 
-MIT/BSD だからという理由だけで source asset への収録を一律に要求しない。ただし JSC-2 の再生成に必要な package は、その材料として収録する。追加の許諾・例外を持つ package は、同じ節に要求・候補・選択を追加する。
+MIT/BSD だからという理由だけで source asset への収録を一律に要求しない。JSC-2 の再生成に必要な package は、JSC-2 の方法で固定した upstream revision を案内する。追加の許諾・例外を持つ package は、同じ節に要求・候補・選択を追加する。
 
 ## Geist 等のフォント — OFL の条件を維持する
 
@@ -418,7 +421,7 @@ nas の helper に含まれる runtime code、コピーされる native library�
 ### 利用者に渡すもの
 
 - `nas-<tag>_<system>.tar.gz`: executable と、component ごとの notice tree を含む binary archive。
-- source/materials archive: dtach、Bun / JavaScriptCore、glibc などについて選んだ方法に必要な source・変更・build 定義・再生成手順。
+- source/materials archive: dtach・glibc・libfuse・TinyCC・nas などの source・変更・build 定義と、Bun・Pkl の source を示す固定 upstream revision。
 - component 一覧: 配布した版・由来・適用条文、その要求への対応、材料の配置を記録する。
 
 同じ notice tree を自己展開後の `share/nas/assets/licenses` にも置く。配布 component の一覧と、収集した source archive に含まれるだけの component は区別する。source archive 内の第三者表示も保持する。
@@ -453,7 +456,7 @@ Bun の依存 revision・Cargo checksum・npm integrity と、Pkl の内蔵 runt
 
 1. 実際の配布対象すべてに、適用条件と、要求・候補・選択理由の記録がある。
 2. 両 architecture の archive 内と展開後で、各 component に必要な本文・表示が読める。
-3. source/materials が配布 binary の入力に対応し、必要な patch と build 定義を含み、同じ Release から取得できる。
+3. source/materials が配布 binary の入力に対応し、必要な patch と build 定義を含む。Release に複製する source は同じ Release から、Bun・Pkl の source は記録した固定 upstream revision から取得できる。
 4. JavaScriptCore は JSC-1〜JSC-4、TinyCC は TCC-1〜TCC-3 の告知・材料・利用条件・変更表示を確認済みであり、MPL-1 の対象 source と取得案内も揃っている。再生成方法を既存の build 手順から辿れる。
 5. glibc 等は、library 自体の source 提供と、linked work の交換・再リンク方法の両方を確認済みである。
 6. 未登録 component、必要ファイルの欠落、固定した入力との不一致、材料生成の失敗が、公開を止めることを確認する。

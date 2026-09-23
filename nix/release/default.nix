@@ -18,12 +18,14 @@
 }:
 
 let
+  nodeHeadersUrl = "https://nodejs.org/dist/v26.3.0/node-v26.3.0-headers.tar.gz";
   nodeHeaders = pkgs.fetchurl {
-    url = "https://nodejs.org/dist/v26.3.0/node-v26.3.0-headers.tar.gz";
+    url = nodeHeadersUrl;
     hash = "sha256-/KETxdWt2L+xqjESmiSsuNSappqzwiosxWmuyIlgUm0=";
   };
+  rustSourceUrl = "https://static.rust-lang.org/dist/2026-07-20/rust-src-nightly.tar.xz";
   rustSource = pkgs.fetchurl {
-    url = "https://static.rust-lang.org/dist/2026-07-20/rust-src-nightly.tar.xz";
+    url = rustSourceUrl;
     hash = "sha256-1P/lfMmdiEZ2G9vvxjG/2PBvwAHXIIV2iH44HFcJNBo=";
   };
   policy = builtins.fromJSON (builtins.readFile ./policy.json);
@@ -52,15 +54,15 @@ let
     bun fetch_sources.ts "$PWD/bun" "$PWD/pkl" "$out"
   '';
 
-  # GitHub's generated archive endpoint rejects this large fork at the pinned
-  # commit. Fetch the exact Git object tree instead of substituting WebKit
-  # upstream or a moving branch. The hash is filled from that tree, not the
-  # prebuilt WebKit archive used by the official Bun release.
+  # Only the notices of the JSC runtime Bun links are read from WebKit; its
+  # source is referenced upstream. A sparse, blob-filtered fetch of the three
+  # compiled trees avoids downloading the 6.5 GB fork.
   webkitRevision = "2e2aa2290fac856d6f451ceacb58f7f5b44dd057";
   webkitSource = pkgs.fetchgit {
     url = "https://github.com/oven-sh/WebKit.git";
     rev = webkitRevision;
-    hash = "sha256-EJsxFF2NIROfGkvlXTKRR+MSO1fFwquZaqD9G4gvzuU=";
+    sparseCheckout = [ "Source/JavaScriptCore" "Source/WTF" "Source/bmalloc" ];
+    hash = "sha256-MkyE4dJ/Wyjxvzi2ZXWkbHpSxMJa2YH4NCgUx7vANPc=";
     fetchSubmodules = false;
   };
   pklSource = pkgs.fetchurl {
@@ -111,6 +113,7 @@ let
       license = "Apache-2.0 AND bundled third-party terms";
       requirements = [ "PKL-1" "PKL-2" "PKL-3" ];
       notices = [ "LICENSE.txt" "NOTICE.txt" "THIRD-PARTY-NOTICES.txt" ];
+      source = false;
     }
     {
       id = "zlib";
@@ -172,6 +175,14 @@ let
     npmVerifier = toString ../../scripts/release/bun_npm.ts;
     nodeHeaders = toString nodeHeaders;
     rustSource = toString rustSource;
+    # Bun and Pkl sources are not copied; the materials record where the
+    # pinned upstream bytes live.
+    upstream = {
+      nodeHeaders = { url = nodeHeadersUrl; inherit (nodeHeaders) outputHash; };
+      rustSource = { url = rustSourceUrl; inherit (rustSource) outputHash; };
+      webkit = { repo = "https://github.com/oven-sh/WebKit"; commit = webkitRevision; };
+      pkl = { repo = "https://github.com/apple/pkl"; tag = pklVersion; };
+    };
     pklBinaryPin = pklBinaryPin;
     webkitSource = toString webkitSource;
     webkitRevision = webkitRevision;

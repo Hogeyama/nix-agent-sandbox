@@ -10,28 +10,29 @@ and material paths. The reasons for those choices are in the
 
 ## Find the corresponding sources
 
-| Material | Location in the source archive |
+| Material | Location |
 | --- | --- |
 | nas source, build scripts, and lockfiles | `sources/nas-source.tar.gz` |
-| Bun source and its native dependency sources | `sources/bun/` |
-| Bun's WebKit fork, including JavaScriptCore | `sources/bun/webkit.tar.xz` |
+| dtach, glibc, and libfuse sources | `sources/native/` |
 | Bun's TinyCC fork and embedded libtcc1 source | `sources/bun/tinycc.tar.gz`, `sources/bun/libtcc1.c` |
-| Cargo and npm dependency archives | `sources/cargo/`, `sources/bun/npm/` |
+| MPL-2.0 crates compiled into Bun | `sources/cargo/` |
 | Sources of packages included in the nas CLI and UI | `sources/javascript/` |
-| dtach, glibc, Pkl, and other native sources | `sources/native/` |
+| Bun, its WebKit fork (JavaScriptCore), and its other dependencies | pinned upstream revisions in `recipes/upstream-sources.json` |
+| Pkl and its GraalVM/OpenJDK runtime | pinned upstream revisions in `recipes/upstream-sources.json` |
 | Nix build recipes and source pins | `recipes/` |
 | Original license and copyright notices | `licenses/` |
 
-The Bun archive includes its `patches/`, `scripts/`, `Cargo.lock`, npm
-lockfiles, and `rust-toolchain.toml`. Node headers and Rust sources selected
-by that Bun version are also under `sources/bun/`. `sources/bun/npm/` holds
-the archives `bun install` fetches on this architecture. Source URLs and
-lockfiles record provenance; the archives provide the corresponding bytes.
+Bun and Pkl are distributed the way their authors distribute them: this
+Release carries their license and copyright notices, and their corresponding
+sources are the public upstream revisions it names. `recipes/upstream-sources.json`
+records Bun's repository, tag, and commit; the WebKit fork's commit; each
+native dependency's repository, revision, and archive hash; the Node headers
+and Rust sources Bun selects; and the Pkl, GraalVM, and LabsJDK revisions.
+Bun's `Cargo.lock` and `bun.lock` files pin its crates and npm packages by
+checksum and integrity.
 
-The WebKit archive omits only the fork's test data and website trees
-(`LayoutTests`, `JSTests`, `PerformanceTests`, `Websites`). As Bun's build
-definition states, the Linux build uses the system ICU (for example
-`libicu-dev`); ICU's license notices are in `licenses/`.
+As Bun's build definition states, its Linux build uses the
+system ICU (for example `libicu-dev`); ICU's notices are in `licenses/`.
 
 The JavaScript sources contain the packages selected by the CLI/UI build's
 emitted inputs, including their original source files and package metadata.
@@ -40,19 +41,26 @@ through the supplied lockfile using the ordinary commands below.
 
 ## Use a modified JavaScriptCore or TinyCC
 
-Use the supplied Bun source's `CONTRIBUTING.md` for toolchain prerequisites
-and upstream build commands. Its “Building WebKit locally” section and
+Check out Bun and its WebKit fork at the revisions in
+`recipes/upstream-sources.json`:
+
+```sh
+git clone https://github.com/oven-sh/bun && git -C bun checkout <bun commit>
+git clone https://github.com/oven-sh/WebKit bun/vendor/WebKit
+git -C bun/vendor/WebKit checkout <webkit commit>
+```
+
+Use Bun's `CONTRIBUTING.md` for toolchain prerequisites and upstream build
+commands. Its “Building WebKit locally” section and
 `scripts/build/deps/webkit.ts` describe building Bun with an editable WebKit
-source tree in `vendor/WebKit` (or `BUN_WEBKIT_PATH`). Unpack the supplied
-`webkit.tar.xz` there to start from the version used by this release, then
-make your changes. TinyCC's source and patch application are defined in
-`scripts/build/deps/tinycc.ts` and `patches/tinycc/` in that same Bun archive.
+source tree in `vendor/WebKit` (or `BUN_WEBKIT_PATH`); make your changes there.
+TinyCC's source and patch application are defined in
+`scripts/build/deps/tinycc.ts` and `patches/tinycc/`; the TinyCC fork is also
+in `sources/bun/tinycc.tar.gz`.
 
 The upstream scripts build the runtime. The materials do not supply a
 separate offline build system or promise a bit-for-bit identical executable.
-Use the compiler and other external tools specified by upstream. If building
-from the Bun archive without Git metadata, its original commit is recorded
-in the archive's PAX `comment`; upstream accepts it through `GIT_SHA`.
+Use the compiler and other external tools specified by upstream.
 
 After building the modified Bun, unpack the nas source and use its normal
 build commands from the nas source directory:
@@ -102,6 +110,10 @@ from its upstream definitions and lockfiles. Pkl's Gradle catalog selects
 GraalVM, whose `common.json` selects LabsJDK. Nix fetches that source set
 and creates its manifests in the store; no generated `*sources.json` is
 checked into this repository and no separate regeneration command is needed.
+The build reads notices from those sources and checks them against Bun's
+lockfiles, but copies into the Release only the sources listed in the table
+above. WebKit is fetched as a sparse checkout of `Source/JavaScriptCore`,
+`Source/WTF`, and `Source/bmalloc`, the trees Bun compiles.
 
 When updating Bun or Pkl, update the ordinary source pins and the aggregate
 `runtimeSources.outputHash` in `nix/release/default.nix`. Set that hash to

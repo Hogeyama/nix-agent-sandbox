@@ -137,6 +137,14 @@ def archive_tree(root: Path, relative: str, source: Path, *, exclude: tuple[str,
     return relative
 
 
+# Bun and Pkl are distributed the way their authors distribute them: the
+# notices ship with nas, and the corresponding source is the pinned upstream
+# revision recorded here rather than a copy in the Release.
+UPSTREAM = "recipes/upstream-sources.json"
+# Small copyleft inputs of the Bun runtime are still copied.
+SELF_HOSTED_BUN_SOURCES = {"tinycc"}
+
+
 def component(id_: str, version: str, license_: str, origin: str, requirements: list[str],
               notices: list[str], sources: list[str]) -> dict:
     return {
@@ -145,7 +153,9 @@ def component(id_: str, version: str, license_: str, origin: str, requirements: 
         "license": license_,
         "origin": origin,
         "requirements": requirements,
-        "decision": ("Provide original notices and corresponding source under the same Release; see "
+        "decision": ("Provide original notices; corresponding source is the pinned upstream "
+                     "revision in " + UPSTREAM + "; see " if sources == [UPSTREAM]
+                     else "Provide original notices and corresponding source under the same Release; see "
                      if sources else "Provide original notices; no source obligation; see ")
                     + (", ".join(requirements) or "the component license"),
         "notices": notices,
@@ -158,8 +168,10 @@ def collect_archive(root: Path, entry: dict, policy: dict, prefix: str = "bun") 
     archive = Path(entry["path"])
     if not archive.is_file():
         raise ValueError(f"missing pinned archive: {archive}")
-    source_name = f"sources/{prefix}/{id_}{archive_suffix(archive)}"
-    source_path = add_file(root, source_name, archive)
+    if id_ in SELF_HOSTED_BUN_SOURCES:
+        source_path = add_file(root, f"sources/{prefix}/{id_}{archive_suffix(archive)}", archive)
+    else:
+        source_path = UPSTREAM
     notice_files = sorted(set(top_level_notices(archive) + policy.get("noticeFiles", [])))
     notices = [
         add_file(root, f"licenses/{prefix}/{id_}/{name}", extract_notice(archive, name))
@@ -289,6 +301,7 @@ def main() -> None:
 
     for entry in config["bunSources"]:
         components.append(collect_archive(root, entry, policy[entry["id"]]))
+    bun_archive = Path(next(item["path"] for item in config["bunSources"] if item["id"] == "bun"))
 
     for entry in config["native"]:
         id_ = entry["id"]
@@ -316,7 +329,7 @@ def main() -> None:
 
     for entry in config["pklSources"]:
         archive = Path(entry["path"])
-        source_rel = add_file(root, f"sources/native/{entry['id']}.tar.gz", archive)
+        source_rel = UPSTREAM
         terms = policy[entry["id"]]
         notice_files = list(terms["noticeFiles"])
         if entry["id"] == "pkl-openjdk-runtime":
@@ -349,7 +362,6 @@ def main() -> None:
     add_file(root, "recipes/pkl-upstream-sha256.txt",
                               f"{pkl_hex}  {pkl_pin['url']}\n".encode())
 
-    bun_archive = Path(next(item["path"] for item in config["bunSources"] if item["id"] == "bun"))
     libtcc_path = "src/runtime/ffi/libtcc1.c"
     libtcc_source = add_file(root, "sources/bun/libtcc1.c", extract_notice(bun_archive, libtcc_path))
     dtach_source = Path(next(item["path"] for item in config["native"] if item["id"] == "dtach"))
@@ -363,17 +375,13 @@ def main() -> None:
     mpl_text = extract_notice(Path(next(item["path"] for item in config["cargo"] if item["name"] == "cssparser")), "LICENSE")
     for name, version in (("cssparser", "0.36.0"), ("selectors", "0.33.0"), ("dtoa-short", "0.3.5")):
         crate = next(item for item in config["cargo"] if item["name"] == name and item["version"] == version)
-        crate_path = f"sources/cargo/{name}-{version}.crate"
+        crate_path = add_file(root, f"sources/cargo/{name}-{version}.crate", Path(crate["path"]))
         notice = add_file(root, f"licenses/bun/mpl/{name}/MPL-2.0.txt", mpl_text)
         components.append(component(f"bun-{name}", version, "MPL-2.0",
                                     f"https://crates.io/crates/{name}/{version}", ["MPL-1"],
                                     [notice], [crate_path]))
 
     webkit = Path(config["webkitSource"])
-    # Test data and website trees are not build inputs. The list only drops
-    # bulk; a renamed or new tree is archived rather than failing the build.
-    webkit_source = archive_tree(root, "sources/bun/webkit.tar.xz", webkit,
-                                 exclude=("./LayoutTests", "./JSTests", "./PerformanceTests", "./Websites"))
     webkit_notice_files = [
         "Source/JavaScriptCore/COPYING.LIB",
         "Source/JavaScriptCore/disassembler/ARM64/LICENSE-binja.txt",
@@ -396,60 +404,41 @@ def main() -> None:
                       for name in webkit_notice_files]
     components.append(component("bun-webkit", config["webkitRevision"], policy["webkit"]["license"],
                                 config["webkitOrigin"], policy["webkit"]["requirements"],
-                                webkit_notices, [webkit_source]))
+                                webkit_notices, [UPSTREAM]))
 
     for crate in config["cargo"]:
         archive = Path(crate["path"])
         slug = f"{crate['name']}-{crate['version']}"
-        add_file(root, f"sources/cargo/{slug}.crate", archive)
         for name in top_level_notices(archive):
             add_file(root, f"licenses/bun/cargo-inputs/{slug}/{name}",
                      extract_notice(archive, name))
-    # The fetched set covers both release architectures; each release keeps
-    # only the archives `bun install` needs on its own CPU.
+    # Notices come from the archives `bun install` fetches on this CPU.
     npm_cpu = {"x86_64-linux": "x64", "aarch64-linux": "arm64"}[config["system"]]
-    npm_index_path = "sources/bun/npm/packages.json"
+    fetched_npm = fetched_root / "npm"
     with tempfile.TemporaryDirectory(prefix="bun-npm-verify-") as temporary:
-        subprocess.run(["tar", "-xf", str(bun_archive), "--strip-components=1", "-C", temporary],
+        source_dir = Path(temporary) / "bun"
+        source_dir.mkdir()
+        subprocess.run(["tar", "-xf", str(bun_archive), "--strip-components=1", "-C", str(source_dir)],
                        check=True)
-        (root / npm_index_path).parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["bun", config["npmVerifier"], "pins", temporary,
-                        str(root / npm_index_path), npm_cpu], check=True)
-        wanted = {pin["archive"] for pin in json.loads((root / npm_index_path).read_text())["packages"]}
-        npm_seen = {}
-        for package in config["npm"]:
-            if package["archive"] not in wanted:
-                continue
-            archive = f"sources/bun/npm/{package['archive']}"
-            if archive in npm_seen:
-                if npm_seen[archive] != package["integrity"]:
-                    raise ValueError(f"conflicting npm archive pins: {archive}")
-                continue
-            npm_seen[archive] = package["integrity"]
-            add_file(root, archive, Path(package["path"]))
-            actual = "sha512-" + base64.b64encode(hashlib.sha512((root / archive).read_bytes()).digest()).decode()
-            if actual != package["integrity"]:
-                raise ValueError(f"npm integrity mismatch: {package['name']}@{package['version']}")
-            for name in top_level_notices(root / archive):
-                add_file(root, f"licenses/bun/npm-inputs/{package['archive']}/{name}",
-                         extract_notice(root / archive, name))
-        if set(npm_seen) != {f"sources/bun/npm/{name}" for name in wanted}:
-            raise ValueError("fetched npm archives do not cover the release architecture")
-        subprocess.run(["bun", config["npmVerifier"], "verify", temporary,
-                        str(root / npm_index_path), str(root / "sources/bun/npm"), npm_cpu],
+        pins_file = Path(temporary) / "pins.json"
+        subprocess.run(["bun", config["npmVerifier"], "pins", str(source_dir), str(pins_file), npm_cpu],
                        check=True)
+        subprocess.run(["bun", config["npmVerifier"], "verify", str(source_dir), str(pins_file),
+                        str(fetched_npm), npm_cpu], check=True)
+        for archive in sorted({pin["archive"] for pin in json.loads(pins_file.read_text())["packages"]}):
+            for name in top_level_notices(fetched_npm / archive):
+                add_file(root, f"licenses/bun/npm-inputs/{archive}/{name}",
+                         extract_notice(fetched_npm / archive, name))
     recipe_paths = copy_recipes(root, config)
     components.extend(collect_javascript(root, config))
 
     own_notice = add_file(root, "licenses/nas/LICENSE", Path(config["nasSource"]) / "LICENSE")
     own_source = archive_tree(root, "sources/nas-source.tar.gz", Path(config["nasSource"]),
                               exclude=(".superpowers",))
-    add_file(root, "sources/bun/nodejs-headers.tar.gz", Path(config["nodeHeaders"]))
     rust_toolchain = tomllib.loads(extract_notice(bun_archive, "rust-toolchain.toml").decode())
     if rust_toolchain["toolchain"]["channel"] != "nightly-2026-07-20":
         raise ValueError("Rust source pin differs from Bun's required toolchain")
     rust_archive = Path(config["rustSource"])
-    rust_source = add_file(root, "sources/bun/rust-src-nightly-2026-07-20.tar.xz", rust_archive)
     with tarfile.open(rust_archive, "r:*") as archive:
         rust_notice_paths = sorted({
             "/".join(Path(member.name).parts[1:]) for member in archive
@@ -461,7 +450,7 @@ def main() -> None:
     rust_notices = [add_file(root, f"licenses/bun/rust-stdlib/{name}", body)
                     for name, body in extract_notices(rust_archive, rust_notice_paths).items()]
     rust_component = component("bun-rust-stdlib", "nightly-2026-07-20", "MIT AND file-specific terms",
-                               "Bun pinned Rust nightly toolchain", ["BUN-7"], rust_notices, [rust_source])
+                               "Bun pinned Rust nightly toolchain", ["BUN-7"], rust_notices, [UPSTREAM])
     rust_component["decision"] = "Choose MIT for Rust's dual-licensed code and retain original third-party notices and LLVM exceptions; see BUN-7."
     components.append(rust_component)
     add_file(root, "licenses/README.txt", (
@@ -471,9 +460,10 @@ def main() -> None:
         "(native/glibc/COPYING.LIB and native/glibc/LICENSES), and libfuse under LGPL 2.1 "
         "(native/fuse3/LGPL2.txt). No nas distribution term restricts modification or "
         "reverse engineering of these libraries for debugging such modifications.\n"
-        "Source materials for bundled nas, Bun/JavaScriptCore, TinyCC, glibc, libfuse, "
-        "dtach, Pkl, and the pinned Rust standard library are under sources/. "
-        "Bun's pinned Node headers are in sources/bun/nodejs-headers.tar.gz. "
+        "Source materials for bundled nas, TinyCC, glibc, libfuse, and dtach are under "
+        "sources/. The corresponding sources of Bun (including JavaScriptCore and its "
+        "other dependencies) and Pkl (including its GraalVM runtime) are the pinned "
+        "upstream revisions listed in recipes/upstream-sources.json. "
         "This directory contains original license and copyright notices. See "
         "docs/release-materials.md in sources/nas-source.tar.gz for the rebuild route and "
         "the component inventory for each license decision and material path.\n"
@@ -503,6 +493,29 @@ def main() -> None:
     components.append(component("nix-bundle-elf-runtime", config["bundlerRevision"], "MIT",
                                 "pinned nix-bundle-elf", ["BUNDLE-1"],
                                 [bundler_notice], [bundler_recipe]))
+    with tarfile.open(bun_archive) as bun_tar:
+        bun_commit = bun_tar.pax_headers.get("comment", "")
+    if len(bun_commit) != 40 or any(c not in "0123456789abcdef" for c in bun_commit):
+        raise ValueError(f"Bun source archive lacks its commit: {bun_commit!r}")
+    upstream = config["upstream"]
+    add_file(root, UPSTREAM, (json.dumps({
+        "bun": {"repo": "https://github.com/oven-sh/bun", "tag": f"bun-v{config['bunVersion']}",
+                "commit": bun_commit},
+        "webkit": upstream["webkit"],
+        "bunDependencies": [
+            {key: item[key] for key in ("id", "repo", "revision", "origin", "hash") if key in item}
+            for item in fetched["bunSources"] if item["id"] != "bun"
+        ],
+        "cargo": "Cargo.lock in the Bun source; every crate is fetched from crates.io by checksum",
+        "npm": "bun.lock files in the Bun source; every package is fetched from registry.npmjs.org by integrity",
+        "nodeHeaders": upstream["nodeHeaders"],
+        "rustSource": upstream["rustSource"],
+        "pkl": upstream["pkl"],
+        "pklRuntime": [
+            {key: item[key] for key in ("id", "version", "url", "origin", "hash")}
+            for item in fetched["pklSources"]
+        ],
+    }, indent=2) + "\n").encode())
     manifest = {"schemaVersion": 1, "system": config["system"],
                 "components": components, "payloadOrigins": origins}
     (root / "components.json").write_text(json.dumps(manifest, indent=2) + "\n")
