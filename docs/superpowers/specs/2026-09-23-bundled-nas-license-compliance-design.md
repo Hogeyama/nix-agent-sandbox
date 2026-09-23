@@ -1,6 +1,6 @@
 # bundled nas の第三者ライセンス対応と dtach 同梱
 
-Status: Proposed
+Status: Accepted; release verification pending
 
 Date: 2026-09-23
 
@@ -46,7 +46,9 @@ source asset には使用した source、Nixpkgs などによる patch、適用�
 
 **選択と理由（POLICY）:** dtach の source と変更版を GPL のまま提供し、変更ファイルの表示・日付を保持または補完する。表示を省略する案や、nas の許諾で dtach の許諾を置き換える案は採らない。別途作る変更一覧は追跡用であり、ファイルへの表示の代用にはしない。
 
-Nixpkgs の patch と配布時の ELF 加工も確認対象にする。ELF 加工に対する変更表示の具体的な方法は、変更内容と条文の適用を確認して確定する。dtach との連携方法を変える場合は、別 executable としての配布という前提も見直す。
+Nixpkgs の patch と配布時の ELF 加工も確認対象にする。dtach の ELF には、`scripts/release/mark_elf.sh` で `.nas.changes` section を追加する。変更した旨、日付、interpreter / library search path の加工、source と表示の取得先をファイル自身に保持する。`readelf -p .nas.changes` で読める、実行時にはロードしない section を選ぶ。別ファイルの provenance 一覧だけに頼らず、executable 単体にも変更表示を残すためである。bundle の展開後に表示の保持と起動を確認する。
+
+これは通常の ELF executable である dtach / Pkl のための方法であり、末尾に payload を付ける Bun executable に `objcopy` を適用する方法には一般化しない。dtach との連携方法を変える場合は、別 executable としての配布という前提も見直す。
 
 ## Bun と JavaScriptCore — MIT の表示に加えて再リンクに対応する
 
@@ -100,9 +102,9 @@ source からの経路に必要な材料が揃うことを確認する。Bun に
 
 nas が指定した別の Bun runtime から再生成できることを確認する。ただし、runtime 選択だけの試験を JavaScriptCore の再ビルドや材料一式の充足の証拠にはしない。
 
-初回は、配布する source/materials archive と明示した外部依存だけを新規の VM または container に渡し、変更した JavaScriptCore から Bun、nas、bundle まで再生成する。build 元の Nix store や作業ディレクトリにだけ存在する入力への依存を検出し、材料と手順が揃うことを確認するためである。使用した外部依存と検証結果を記録する。
+[Library GPL v2 §0・§6](https://www.gnu.org/licenses/old-licenses/lgpl-2.0.html) に基づき、実際に使用するコンパイル・インストール用 scripts と、再生成に必要なデータ・utility programs を材料に含める。これを、新しい専用の再構築ツールを開発する義務とは解釈しない。Bun upstream の build scripts と nas の通常の build 定義を利用し、それらの接続方法と外部 toolchain の前提を案内する。
 
-改変 JSC の全ビルドを毎 Release の定型試験にはせず、以後は再生成経路や必要材料に影響する変更に応じて追加検証を行う。必要材料を確認できない箇所は、配布前に調査・検証して解消する。
+材料は固定版の build 定義・lockfile と照合する。全依存をオフラインで再構築する専用環境や、初回の隔離環境での全ビルドを公開の一律条件にはしない。材料の不足や再リンクを妨げる具体的な問題が見つかった場合は、その問題に絞って調査・検証し、公開前に解消する。ファイルの存在確認だけで再リンク可能性を証明したとは扱わない。
 
 A の経路に不足する非公開・取得不能の材料などが判明した場合は、B/C を含めて選び直す。その場合は不足した材料と、選択を変更した理由をここに記録する。
 
@@ -138,7 +140,7 @@ Bun 1.4.2 の [TinyCC build 定義](https://github.com/oven-sh/bun/blob/bun-v1.4
 
 **候補:** source から再生成する方法、対応する object を渡す方法、§6(c) の written offer がある。§6(b) の shared library 機構は、Bun に組み込む TinyCC の提供方法には選べない。
 
-**選択と理由（POLICY）:** source の経路を選び、§6(d) と §4 の同じ場所からの取得を使う。TinyCC fork、patch と build 定義、Bun / nas を再生成する材料を同じ Release に置く。JSC-2 と Bun の再ビルド材料を共有でき、中間 object の保管や offer の請求対応を増やさずに済む。条文番号は JavaScriptCore の Library GPL v2 §6(c) と区別する。検証では変更 TinyCC から runtime を作れることも対象にする。
+**選択と理由（POLICY）:** source の経路を選び、§6(d) と §4 の同じ場所からの取得を使う。TinyCC fork、patch と build 定義、Bun / nas を再生成する材料を同じ Release に置く。JSC-2 と Bun の再ビルド材料を共有でき、中間 object の保管や offer の請求対応を増やさずに済む。条文番号は JavaScriptCore の Library GPL v2 §6(c) と区別する。TinyCC の変更に必要な source・patch・build 定義を固定版と照合する。再生成には Bun upstream の build scripts を用い、別の再構築ツールは維持しない。
 
 #### TCC-3: `libtcc1.c` の source とリンク例外
 
@@ -273,7 +275,7 @@ Bun 1.4.2 の Cargo.lock にある registry package 181 件の archive を check
 
 #### `--extract` で展開した library を交換する
 
-交換経路には `nix-bundle-elf` の `--extract` を使う。[展開処理と wrapper の生成](https://github.com/Hogeyama/nix-bundle-elf/blob/137948029ea69db6f6a99f6fac7758bd0ecee7f8/src/lib/shell-template.ts)は、指定したディレクトリに payload を残し、各 ELF の interpreter をその展開先に向け、`bin/nas` と executable ごとの `libexec/` wrapper を作る。[script bundle の生成](https://github.com/Hogeyama/nix-bundle-elf/blob/137948029ea69db6f6a99f6fac7758bd0ecee7f8/src/commands/bundle-script.ts)では executable ごとに `lib-nas`、`lib-pkl`、`lib-dtach` を用意する。
+交換経路には `nix-bundle-elf` の `--extract` を使う。[展開処理と wrapper の生成](https://github.com/Hogeyama/nix-bundle-elf/blob/c75837de26d6d99522f48ab19e13bc4b963d5f7f/src/lib/shell-template.ts)は、指定したディレクトリに payload を残し、各 ELF の interpreter をその展開先に向け、`bin/nas` と executable ごとの `libexec/` wrapper を作る。[script bundle の生成](https://github.com/Hogeyama/nix-bundle-elf/blob/c75837de26d6d99522f48ab19e13bc4b963d5f7f/src/commands/bundle-script.ts)では executable ごとに `lib-nas`、`lib-pkl`、`lib-dtach` を用意する。
 
 利用者に提供する手順は次のとおり。
 
@@ -295,6 +297,24 @@ glibc には LGPL 以外の個別許諾もある。[上流の `LICENSES`](https:
 
 payload に入った dynamic loader、`libc.so`、`libm` 等の各ファイルを、使用した glibc の source・patch と収録する表示に紐付ける。該当 source の個別条件も確認し、追加の表示が必要なら収録する。glibc という component 名だけから、すべてのファイルの条件を LGPL と判定しない。
 
+## libfuse と musl — 同梱 helper の依存
+
+nas-maskfs はホストで動くため、Nix store の loader や library に依存したまま assets にコピーしても standalone 配布にならない。nas-maskfs を bundle の executable として処理し、libfuse の shared library も同梱する。
+
+### FUSE-1: 本文・表示・対応 source を渡す
+
+**要求（LICENSE）:** [libfuse 3.18.2 の LICENSE](https://github.com/libfuse/libfuse/blob/fuse-3.18.2/LICENSE) は library と headers を LGPL 2.1 の対象にしている。[同梱本文](https://github.com/libfuse/libfuse/blob/fuse-3.18.2/LGPL2.txt) §1・§2・§4 に従い、表示・本文、適用した変更と build scripts を含む対応 source を提供する。
+
+**候補・選択と理由（POLICY）:** source を binary archive に入れる方法と、同じ配布場所から取得させる方法のうち、§4 の同じ場所からの提供を選ぶ。glibc と同じ source asset に、使用した libfuse source、Nixpkgs の patch と recipe を収録できるためである。notice tree に原文の本文・著作権表示・利用告知を置く。source archive に含む GPL 対象の build 用ファイルも、上流の許諾・表示を保持する。
+
+### FUSE-2: 変更した library を読み込めるようにする
+
+**要求・候補・選択と理由:** LGPL 2.1 §6 の再リンク材料提供と shared library 交換の候補から、GLIBC-2 と同じ展開後の交換を選ぶ。`lib-nas-maskfs/` の libfuse を交換し、展開後の assets 側 launcher から起動する。maskfs の再コンパイルを必要とせず、同じ交換手順を使えるためである。§6 の使用告知と、利用者自身の改変・デバッグを許す条件も維持する。
+
+### MUSL-1: 静的 helper に入る musl の表示を保持する
+
+mask-filter はホストとコンテナで同じ executable を使うため、周囲の bundle directory に依存する wrapper に置き換えず、Zig の musl target で単一の static executable にする。使用した Zig source に含まれる musl の `COPYRIGHT` を notice tree に収録し、MIT 本文だけでなく同文書の個別表示も保持する。再生成には同じ Zig の入力を使う。この方法はコンテナへ library directory 一式を追加で渡す変更を不要にする。
+
 ## Pkl — Apache-2.0 と内蔵する第三者コード
 
 Pkl の native executable を配る。Pkl 自体には [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) が適用され、内蔵コードの情報は [upstream の THIRD-PARTY-NOTICES](https://raw.githubusercontent.com/apple/pkl/0.31.1/THIRD-PARTY-NOTICES.txt) も起点に確認する。
@@ -311,13 +331,23 @@ Pkl の native executable を配る。Pkl 自体には [Apache-2.0](https://www.
 
 **要求（LICENSE）:** Apache-2.0 §4(b) に従い、変更したファイルに変更した旨を明示する。
 
-**選択と理由（POLICY）:** source の変更はファイル内の表示を保持・補完する。ELF の interpreter / RPATH 等を変更する場合も、その変更に対する表示方法を確定する。ファイルへの表示が要求されるため、別の provenance 一覧を置くだけで満たしたとは扱わない。ELF についての具体的な方法は未確定であり、配布前に解決する。
+**選択と理由（POLICY）:** source の変更はファイル内の表示を保持・補完する。ELF の interpreter / RPATH の変更は、DT-3 と同じ `.nas.changes` section に明示する。ファイルへの表示が要求されるため、別の provenance 一覧だけで代替しない。
+
+Pkl は上流 ELF に section を追加してから `autoPatchelf` を適用する。この順序を選ぶのは、`patchelf` 後の Pkl に `objcopy` を適用する試験では dynamic section が壊れて起動できず、逆の順序では起動と表示の保持を確認できたためである。両 architecture の配布 binary でも、展開後の起動と表示の保持を検査する。
 
 ### PKL-3: native executable 内の第三者コードを確認する
 
 Pkl 本体の Apache-2.0 を、内蔵コード全体の許諾とは扱わない。native executable に含まれる component と notices の対応を確認し、各 component の要求・候補・選択と理由を記録する。
 
 upstream が提供する情報を使う方法を選び、不足する本文・表示・source 等を補う。上流の収集物を利用すると追従しやすいが、それだけで内蔵コードのすべての要求に対応済みとは判断しない。
+
+### PKL-4: 内蔵 GraalVM runtime の本文・例外・対応 source を渡す
+
+Pkl 0.31.1 の build 定義は GraalVM Community JDK 25.0.0 を使う。配布する x86_64 native executable にも `GraalVM CE 25+37.1` の SubstrateVM runtime 情報が入っている。Pkl の `THIRD-PARTY-NOTICES.txt` にある Graal SDK / Truffle API の UPL 表示だけでは、この runtime の表示を代替できない。
+
+**要求（LICENSE）:** [GraalVM 25.0.0 の SubstrateVM 本文](https://github.com/oracle/graal/blob/graal-25.0.0/substratevm/LICENSE)の GPLv2 と Classpath Exception を保持する。GPL 対象の runtime code の本文・表示・対応 source を渡す。Classpath Exception を、その runtime 自体の source 提供を省略する根拠にはしない。内蔵する OpenJDK code と追加の第三者表示も、対応版の原文に結び付ける。
+
+**候補・選択と理由（POLICY）:** DT-2 と同じ GPLv2 §3(a) の直接提供を選び、固定版の GraalVM / OpenJDK source と変更・build 情報を同じ source asset に収録する。written offer の維持を増やさず、他の GPL component と取得経路を揃えられるためである。runtime の収録範囲と版を binary / build 定義で確認し、原文の LICENSE・例外・該当第三者表示を notice tree に加える。コンパイルに使った JDK 全体を binary に内蔵したと推定する方法は採らない。両 architecture の対応が確認できるまで PKL-3 の公開チェックを通さない。
 
 ## JavaScript パッケージと vendored Python
 
@@ -353,6 +383,16 @@ MIT/BSD だからという理由だけで source asset への収録を一律に�
 
 **選択と理由（POLICY）:** 取得した font ファイルを変更せずに同梱する。nas の用途のために改変や許可取得を必要としないためである。取得元が既に変更版を配っている場合は、その表示・名前の条件を満たすことも確認する。subsetting、format 変換、名前変更を導入するときは選び直す。作者等の名前を無断の推奨・宣伝には使わない。
 
+## nix-bundle-elf の自己展開コード: MIT
+
+自己展開 shell と `cleanup_env.c` 由来の共有 library は nas の配布物に入るため、build tool 本体とは別に再配布対象として扱う。nix-bundle-elf の MIT 許諾はこれらの生成コードも対象にする。
+
+### BUNDLE-1: 著作権表示と許諾本文を渡す
+
+**要求（LICENSE）:** MIT の著作権表示と許諾本文を、コピーまたは実質的な部分に添付する。
+
+**候補と選択（POLICY）:** 生成コードごとに本文を埋め込む方法と、同梱 notice にまとめる方法がある。他 component と同じ配布手順で保持できるよう、`licenses/native/nix-bundle-elf-runtime/LICENSE` に原文を置き、外側の archive と自己展開 payload の両方に収録する。固定 revision に適用する source patch にも LICENSE を含め、許諾と配布コードの対応を辿れるようにする。
+
 ## その他の native code・同梱 helper・自己展開部分
 
 nas の helper に含まれる runtime code、コピーされる native library、自己展開のためのコードも再配布対象にする。glibc 以外を一括して「native library」とだけ記録して終えない。
@@ -367,7 +407,7 @@ nas の helper に含まれる runtime code、コピーされる native library�
 
 - `nas-<tag>_<system>.tar.gz`: executable と、component ごとの notice tree を含む binary archive。
 - source/materials archive: dtach、Bun / JavaScriptCore、glibc などについて選んだ方法に必要な source・変更・build 定義・再生成手順。
-- component 一覧: 配布した版・由来・適用条文、その要求への対応、材料の配置、確認結果を記録する。
+- component 一覧: 配布した版・由来・適用条文、その要求への対応、材料の配置を記録する。
 
 同じ notice tree を自己展開後の `share/nas/assets/licenses` にも置く。配布 component の一覧と、収集した source archive に含まれるだけの component は区別する。source archive 内の第三者表示も保持する。
 
@@ -383,28 +423,28 @@ nas の helper に含まれる runtime code、コピーされる native library�
 
 ### 対応を機械可読で記録する
 
-component ごとに、固定した原文・条項から、要求、候補、選択と理由、成果物内の配置または利用条件、確認結果まで辿れるようにする。本 spec の判断を使う場合は `JSC-2` などの節を参照し、理由を二重管理しない。版・revision・hash のうち build 入力から取得できるものを手で二重入力しない。
+component ごとに、固定した原文・条項から、要求、候補、選択と理由、成果物内の配置または利用条件まで辿れるようにする。本 spec の判断を使う場合は `JSC-2` などの節を参照し、理由を二重管理しない。版・revision・hash のうち build 入力から取得できるものを手で二重入力しない。
 
 この記録は必要材料を生成・照合するために持つ。汎用のライセンス推定基盤や、すべての build 環境を保存する仕組みは作らない。新しい条件が見つかった場合は、該当 component の要求と判断を追加する。
 
 ## 依存更新と検証
 
-### 更新で確認が古くなったことを検出する
+### build 入力と収集物を照合する
 
-native は bundle が実際にコピーする対象と出自を照合する。`extraFiles` に入る helper と自己展開部分も確認する。Bun の内蔵コード、npm、フォントのように動的依存の走査では見えない対象は、upstream と build/lock 情報に基づく確認を、対象入力の hash に結び付ける。
+native は bundle が実際にコピーする対象と出自を照合する。`extraFiles` に入る helper と自己展開部分も確認する。JavaScript と font は実際の build 入力とコピー対象から収集する。ELF の走査だけでは静的に含まれるコードを拾えないため、Bun の固定版の build 定義・lockfile も使う。
 
-手書き一覧だけでは新しい library を見落とし、ELF の走査だけでは静的に含まれるコードを拾えないため、この二つを併用する。新しい component の未登録、必要材料の欠落、確認済みの入力と build 入力の不一致は、公開前の検査を失敗させる。
+Bun の依存 revision・Cargo checksum・npm integrity と、Pkl の内蔵 runtime の対応版は、材料を作る Nix build 内で upstream から導出する。生成した JSON は Nix store 内の中間成果物とし、repository には置かない。取得物と生成一覧の集合を一つの fixed-output hash で固定する。WebKit など取得方法が異なる少数の入力と、適用条項・許諾の選択は明示的に管理する。新しい component の未登録、必要材料の欠落、固定した入力と build 入力の不一致は、公開前の検査を失敗させる。
 
-入力が変わったときは該当 component の条件と選択を見直す。hash の書き換えだけでは確認済みにしない。一方、成果物に関係しない開発依存の変更まで無条件に再調査させない。
+入力更新時は、差分に含まれる component のライセンスと採用方法をレビューする。評価の理由は本 spec に残し、「検証済み」の hash や承認 JSON を別途手で管理しない。生成された checksum は材料の同一性を確認するためのものであり、ライセンス評価を代替しない。成果物に関係しない開発依存の変更まで無条件に再調査させない。
 
 ### 完成時に確認すること
 
 1. 実際の配布対象すべてに、適用条件と、要求・候補・選択理由の記録がある。
 2. 両 architecture の archive 内と展開後で、各 component に必要な本文・表示が読める。
 3. source/materials が配布 binary の入力に対応し、必要な patch と build 定義を含み、同じ Release から取得できる。
-4. JavaScriptCore は JSC-1〜JSC-4、TinyCC は TCC-1〜TCC-3 の告知・材料・利用条件・変更表示を確認済みであり、MPL-1 の対象 source と取得案内も揃っている。再生成経路の検証範囲と結果も記録されている。
+4. JavaScriptCore は JSC-1〜JSC-4、TinyCC は TCC-1〜TCC-3 の告知・材料・利用条件・変更表示を確認済みであり、MPL-1 の対象 source と取得案内も揃っている。再生成方法を既存の build 手順から辿れる。
 5. glibc 等は、library 自体の source 提供と、linked work の交換・再リンク方法の両方を確認済みである。
-6. 未登録 component、必要ファイルの欠落、確認対象の入力変更、材料生成の失敗が、公開を止めることを確認する。
+6. 未登録 component、必要ファイルの欠落、固定した入力との不一致、材料生成の失敗が、公開を止めることを確認する。
 7. ELF の変更表示、内蔵 component の個別条件、再生成に必要な材料などの未確定事項を解消している。
 
 ## なぜこのアプローチを選んだか
@@ -415,7 +455,7 @@ source を直接提供する方法は、必要時に利用者が取得でき、�
 
 ## 他のアプローチを採らない理由
 
-notice の収集だけでは、dtach の source 提供や JavaScriptCore の再リンク材料を満たせない。一方、すべての build 依存を保存し、すべてを毎回再ビルドする方法は、各 component の条件から必要性を説明できない作業まで増やす。必要な材料と検証は、選んだ提供・再生成方法から決める。
+notice の収集だけでは、dtach の source 提供や JavaScriptCore の再リンク材料を満たせない。一方、すべての build 依存を保存し、すべてを毎回再ビルドする方法は、各 component の条件から必要性を説明できない作業まで増やす。必要な材料と検証は、選んだ提供・再生成方法から決める。専用の offline installer や Bun 全体の再構築ツールを持つと、upstream の build system と重複する保守が発生するため採らない。
 
 Nix 経由のインストールだけにすれば配布形態は変わるが、Nix のない環境へ自己展開 executable を届ける目的を満たさない。dtach をホスト依存にする方法も、利用者のセットアップを増やし、Bun や glibc の対応を解消しないため採らない。
 
