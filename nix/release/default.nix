@@ -173,6 +173,7 @@ let
     inherit pklVersion;
     runtimeSources = toString runtimeSources;
     npmVerifier = toString ../../scripts/release/bun_npm.ts;
+    sourceNoticeCollector = toString ../../scripts/release/source_notices.ts;
     nodeHeaders = toString nodeHeaders;
     rustSource = toString rustSource;
     # Bun and Pkl sources are not copied; the materials record where the

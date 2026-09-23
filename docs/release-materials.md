@@ -31,7 +31,9 @@ and Rust sources Bun selects; and the Pkl, GraalVM, and LabsJDK revisions.
 Bun's `Cargo.lock` and `bun.lock` files pin its crates and npm packages by
 checksum and integrity.
 
-As Bun's build definition states, its Linux build uses the
+`licenses/bun/webkit/SOURCE-HEADERS.txt` and `licenses/bun/bun/SOURCE-HEADERS.txt`
+reproduce the BSD and MIT notices that WebKit and Bun keep in individual source
+file headers. As Bun's build definition states, its Linux build uses the
 system ICU (for example `libicu-dev`); ICU's notices are in `licenses/`.
 
 The JavaScript sources contain the packages selected by the CLI/UI build's
@@ -113,7 +115,8 @@ checked into this repository and no separate regeneration command is needed.
 The build reads notices from those sources and checks them against Bun's
 lockfiles, but copies into the Release only the sources listed in the table
 above. WebKit is fetched as a sparse checkout of `Source/JavaScriptCore`,
-`Source/WTF`, and `Source/bmalloc`, the trees Bun compiles.
+`Source/WTF`, and `Source/bmalloc`, the trees Bun compiles and whose headers
+provide `SOURCE-HEADERS.txt`.
 
 When updating Bun or Pkl, update the ordinary source pins and the aggregate
 `runtimeSources.outputHash` in `nix/release/default.nix`. Set that hash to

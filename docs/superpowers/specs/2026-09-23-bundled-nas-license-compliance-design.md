@@ -116,7 +116,7 @@ nas が指定した別の Bun runtime から再生成できることを確認す
 
 Release に複製するのは、Bun の runtime のうち小さく条件の厳しい TinyCC fork・`libtcc1.c`・MPL の crate だけとする。Bun・WebKit fork・その他の依存・Node headers・Rust 標準 library の source は、`recipes/upstream-sources.json` の revision・hash で案内する。
 
-build は notice を得るために、これらの source を固定 hash で取得し、Bun の lockfile と照合する。WebKit fork は、Bun が compile する `Source/JavaScriptCore`・`Source/WTF`・`Source/bmalloc` だけを sparse checkout で取得する（fork 全体 6.5 GB に対して約 113 MB）。notice はこの範囲から読む。
+build は notice を得るために、これらの source を固定 hash で取得し、Bun の lockfile と照合する。WebKit fork は、Bun が compile する `Source/JavaScriptCore`・`Source/WTF`・`Source/bmalloc` だけを sparse checkout で取得する（fork 全体 6.5 GB に対して約 113 MB）。
 
 A の経路に不足する非公開・取得不能の材料などが判明した場合は、B/C を含めて選び直す。その場合は不足した材料と、選択を変更した理由をここに記録する。
 
@@ -194,7 +194,7 @@ BoringSSL fork `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` の [LICENSE](https://
 - **Highway:** [固定版の LICENSE](https://github.com/google/highway/blob/2607d3b5b0113992fe84d3848859eae13b3b52c1/LICENSE)の Apache-2.0 / BSD-3-Clause から BSD を選び、本文・著作権・免責と非推奨条件に対応する。通常の表示収集と揃うためである。別条件の `random-inl.h` は CC0 のまま記録する。
 - **HdrHistogram_c:** [CC0 と BSD-2-Clause の許諾](https://github.com/HdrHistogram/HdrHistogram_c/blob/be60a9987ee48d0abf0d7b6a175bad8d6c1585d1/LICENSE.txt)から BSD を選び、著作権・条件・免責を保持する。他の BSD component と同じ明示的な許諾・表示の方法を使えるためである。Bun に組み込む計測コードであり、用途が test/benchmark というだけでは配布対象から外さない。
 
-**表示方法の候補と選択（POLICY）:** 一つの集約文書を独自に再構成する方法より、固定した各 source の本文・表示を component ごとの notice として保持する方法を選ぶ。個々の著作権者や複数許諾の片方を落としにくいためである。全文が source header にしかない場合も収録する。
+**表示方法の候補と選択（POLICY）:** 一つの集約文書を独自に再構成する方法より、固定した各 source の本文・表示を component ごとの notice として保持する方法を選ぶ。個々の著作権者や複数許諾の片方を落としにくいためである。全文が source header にしかない場合も収録する。WebKit fork（JavaScriptCore・WTF・bmalloc）と Bun の `src/` では、BSD・MIT の表示が個別ファイルの header にしかない。これらは `scripts/release/source_notices.ts` で header から機械的に抽出し、条文ごとに著作権表示を重複なくまとめて `SOURCE-HEADERS.txt` に収録する。2026-09-24 の固定版では、該当するソースファイルのうち、既に個別に収録している LICENSE ファイルと compile されない文書を除く全件から抽出できた。
 
 ### BUN-6: libarchive・libjpeg-turbo・zlib-ng — 個別の追加条件
 

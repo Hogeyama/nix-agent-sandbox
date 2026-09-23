@@ -185,6 +185,16 @@ def collect_archive(root: Path, entry: dict, policy: dict, prefix: str = "bun") 
     )
 
 
+def collect_header_notices(root: Path, cfg: dict, relative: str, sources: list[Path]) -> str:
+    """Reproduce BSD/MIT notices that WebKit and Bun keep only in file headers."""
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["bun", cfg["sourceNoticeCollector"], str(target), *map(str, sources)], check=True)
+    if target.stat().st_size == 0:
+        raise ValueError(f"empty source header notices: {relative}")
+    return relative
+
+
 def copy_recipes(root: Path, cfg: dict) -> list[str]:
     paths = []
     for recipe in cfg["recipes"]:
@@ -302,6 +312,12 @@ def main() -> None:
     for entry in config["bunSources"]:
         components.append(collect_archive(root, entry, policy[entry["id"]]))
     bun_archive = Path(next(item["path"] for item in config["bunSources"] if item["id"] == "bun"))
+    with tempfile.TemporaryDirectory(prefix="bun-source-") as temporary:
+        subprocess.run(["tar", "-xf", str(bun_archive), "--strip-components=1", "-C", temporary,
+                        "--wildcards", "*/src/*"], check=True)
+        bun_component = next(item for item in components if item["id"] == "bun-bun")
+        bun_component["notices"].append(collect_header_notices(
+            root, config, "licenses/bun/bun/SOURCE-HEADERS.txt", [Path(temporary) / "src"]))
 
     for entry in config["native"]:
         id_ = entry["id"]
@@ -402,6 +418,9 @@ def main() -> None:
     ]
     webkit_notices = [add_file(root, f"licenses/bun/webkit/{name}", (webkit / name).read_bytes())
                       for name in webkit_notice_files]
+    webkit_notices.append(collect_header_notices(
+        root, config, "licenses/bun/webkit/SOURCE-HEADERS.txt",
+        [webkit / "Source" / name for name in ("JavaScriptCore", "WTF", "bmalloc")]))
     components.append(component("bun-webkit", config["webkitRevision"], policy["webkit"]["license"],
                                 config["webkitOrigin"], policy["webkit"]["requirements"],
                                 webkit_notices, [UPSTREAM]))
