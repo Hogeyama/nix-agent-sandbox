@@ -24,42 +24,73 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710
-
       - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
 
-      - name: Build bundled binary
-        run: nix build .#bundled --out-link result-nas --print-build-logs
-
-      - name: Prepare artifacts
+      - name: Build binary and corresponding materials
         run: |
-          cp -L result-nas nas
-          chmod 755 nas
-          tar czf nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz nas
+          nix build .#bundled --out-link result-nas --print-build-logs
+          nix build .#release-inputs --out-link result-release-inputs --print-build-logs
+
+      - name: Stage artifacts and inspect the extracted payload
+        env:
+          TAG: ${{ github.ref_name }}
+          SYSTEM: ${{ matrix.system }}
+        run: |
+          nix develop -c bun scripts/release.ts prepare \
+            --inputs result-release-inputs --binary "$(realpath result-nas)" \
+            --out ".release/$SYSTEM" --tag "$TAG"
+
+      - name: Exercise library replacement on the binary being released
+        env:
+          SYSTEM: ${{ matrix.system }}
+        run: |
+          nix develop -c bash scripts/release/check_bundle.sh \
+            ".release/$SYSTEM/binary/nas" ".release/$SYSTEM/bundle-check.txt"
+
+      - name: Check staged materials and archives
+        env:
+          SYSTEM: ${{ matrix.system }}
+        run: |
+          nix develop -c bun scripts/release.ts verify --stage ".release/$SYSTEM"
+
+      - name: Hash the verified publication set
+        env:
+          TAG: ${{ github.ref_name }}
+          SYSTEM: ${{ matrix.system }}
+        run: |
+          cd ".release/$SYSTEM"
+          sha256sum "nas-${TAG}_${SYSTEM}.tar.gz" \
+            "nas-${TAG}_${SYSTEM}-sources.tar.gz" \
+            "nas-${TAG}_${SYSTEM}-components.json" > "nas-${TAG}_${SYSTEM}-sha256.txt"
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ github.ref_name }}_${{ matrix.system }}
+          if-no-files-found: error
+          compression-level: 0
           path: |
-            nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
+            .release/${{ matrix.system }}/nas-*.tar.gz
+            .release/${{ matrix.system }}/nas-*-components.json
+            .release/${{ matrix.system }}/nas-*-sha256.txt
 
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710
+      - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
       - uses: actions/download-artifact@v4
         with:
+          pattern: release-${{ github.ref_name }}_*
           merge-multiple: true
+          path: .release/publish
 
-      - name: Create release
+      - name: Upload the complete set to a draft, then publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" \
-            --generate-notes \
-            "nas-${TAG}_x86_64-linux.tar.gz" \
-            "nas-${TAG}_aarch64-linux.tar.gz"
+          nix develop -c bun scripts/release/publish.ts \
+            --directory .release/publish --tag "$TAG" --repo "$GITHUB_REPOSITORY"
