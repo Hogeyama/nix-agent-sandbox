@@ -17,6 +17,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
+import { collectJavaScriptMaterials } from "./release/javascript.ts";
 import { solidPlugin } from "./solid_plugin.ts";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -42,6 +43,7 @@ async function buildOnce(): Promise<void> {
     format: "esm",
     minify: true,
     splitting: false,
+    metafile: true,
     plugins: [solidPlugin],
     loader: { ".woff2": "file" },
   });
@@ -122,6 +124,7 @@ async function buildOnce(): Promise<void> {
   // referencing /assets/fonts/<name>.
   await mkdir(FONT_OUT_DIR, { recursive: true });
   let fontCount = 0;
+  const copiedInputs = [xtermCssPath];
   for (const fontSrc of FONT_SRC_DIRS) {
     let entries: string[];
     try {
@@ -136,6 +139,7 @@ async function buildOnce(): Promise<void> {
     for (const name of entries) {
       if (!name.endsWith(".woff2")) continue;
       await cp(path.join(fontSrc, name), path.join(FONT_OUT_DIR, name));
+      copiedInputs.push(path.join(fontSrc, name));
       perPkgCount++;
       fontCount++;
     }
@@ -146,52 +150,19 @@ async function buildOnce(): Promise<void> {
     }
   }
 
-  // Bundle third-party license texts so distributions (including the
-  // bun-compile + nix-bundle-elf binary) carry the notices required by
-  // OFL (Geist Mono) and MIT (xterm.js). Without these the woff2 files
-  // and inlined xterm.css would ship without their license terms.
-  const licenseDir = path.join(ASSETS_DIR, "licenses");
-  await mkdir(licenseDir, { recursive: true });
-  const licenseSources: Array<{ src: string; dst: string; label: string }> = [
-    {
-      src: path.join(
-        ROOT,
-        "node_modules/@fontsource-variable/geist-mono/LICENSE",
-      ),
-      dst: path.join(licenseDir, "Geist-Mono-OFL.txt"),
-      label: "geist-mono",
-    },
-    {
-      src: path.join(ROOT, "node_modules/@fontsource-variable/geist/LICENSE"),
-      dst: path.join(licenseDir, "Geist-Sans-OFL.txt"),
-      label: "geist-sans",
-    },
-    {
-      src: path.join(ROOT, "node_modules/@xterm/xterm/LICENSE"),
-      dst: path.join(licenseDir, "xterm-MIT.txt"),
-      label: "xterm",
-    },
-    {
-      src: path.join(ROOT, "node_modules/marked/LICENSE"),
-      dst: path.join(licenseDir, "marked-MIT.md"),
-      label: "marked",
-    },
-  ];
-  for (const { src, dst, label } of licenseSources) {
-    try {
-      await cp(src, dst);
-    } catch (e) {
-      throw new Error(
-        `${label} LICENSE not found at ${src}: ${(e as Error).message}`,
-      );
-    }
-  }
+  if (!result.metafile) throw new Error("frontend build: missing input graph");
+  const materials = await collectJavaScriptMaterials({
+    root: ROOT,
+    destination: path.join(DIST_DIR, "compliance"),
+    metafile: result.metafile,
+    extraInputs: copiedInputs,
+  });
 
   const jsSize = (await stat(path.join(ASSETS_DIR, jsBasename))).size;
   console.log(`dist/index.html`);
   console.log(`dist/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`);
   console.log(`dist/assets/fonts/  ${fontCount} woff2 file(s)`);
-  console.log(`dist/assets/licenses/  ${licenseSources.length} file(s)`);
+  console.log(`dist/compliance/  ${materials.components.length} components`);
 }
 
 await buildOnce();

@@ -19,3 +19,7 @@ __pycache__/
 # src/docker/mitmproxy/vendor-requirements.txt); the nix build fetches the
 # same sdist instead.
 src/docker/mitmproxy/vendor/
+
+# Local standalone build and its retained dependency materials.
+/nas
+/.release/
