@@ -7,9 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.19.1] - 2026-09-24
+
+### Added
+
+- **Distribution**: the bundled binary now includes `dtach`, so it no longer has to be installed on the host. The Nix package uses the same `dtach`.
+- **Distribution**: releases carry the license and copyright notices of every bundled component, in `licenses/` next to `nas` and under `share/nas/assets/licenses` after extraction. Each release adds a `-sources.tar.gz` asset with the sources nas provides directly (nas, dtach, glibc, libfuse, TinyCC, and others) and the pinned upstream revisions for Bun and Pkl, a `-components.json` inventory, and a `-sha256.txt` checksum list. [docs/release-materials.md](docs/release-materials.md) explains how to find a component's source, rebuild with a modified JavaScriptCore, and replace an extracted shared library.
+
 ### Changed
 
 - **direnv**: `direnv.enable` now defaults to `true`. A workspace `.envrc` that is allowed on the host is loaded on session start without any profile setting; one that is not allowed still refuses to launch. Set `direnv { enable = false }` on a profile to skip project environments.
+
+### Fixed
+
+- **Bundled binary**: the maskfs helper now runs on hosts without Nix. It previously depended on the Nix store's loader and libfuse; it now uses the libraries in the bundle.
+- **Config**: the generated `.nas/config.pkl` no longer fails to load when the user's `global.pkl` lacks a `claude` or `codex` profile. The generated file keeps only the `amends` line active and leaves the profile block as a commented example.
+- **Network**: the approval proxy starts on hosts whose primary group is absent from the mitmproxy image (for example gid 1001), instead of exiting with `usermod: group '<gid>' does not exist`.
 
 ## [0.19.0] - 2026-09-20
 
