@@ -82,6 +82,8 @@ let
       license = "Unicode-3.0 AND bundled third-party terms";
       requirements = [ "BUN-7" ];
       notices = [ "LICENSE" ];
+      # Bun's Linux relink route uses the system ICU (libicu-dev); see BUN-7.
+      source = false;
     }
     {
       id = "dtach";
@@ -118,6 +120,8 @@ let
       license = "Zlib";
       requirements = [ ];
       notices = [ "README" ];
+      source = false;
+      payloadOnly = true;
     }
     {
       id = "openssl";
@@ -127,6 +131,8 @@ let
       license = "Apache-2.0";
       requirements = [ ];
       notices = [ "LICENSE.txt" ];
+      source = false;
+      payloadOnly = true;
     }
     {
       id = "zig-runtime";
@@ -136,6 +142,7 @@ let
       license = "MIT AND bundled musl terms";
       requirements = [ "MUSL-1" ];
       notices = [ "LICENSE" "lib/libc/musl/COPYRIGHT" ];
+      source = false;
     }
     {
       id = "fuse3";
@@ -154,6 +161,7 @@ let
       license = "MIT";
       requirements = [ "PKG-1" ];
       notices = [ "LICENSE" ];
+      source = false;
     }
   ];
   config = pkgs.writeText "nas-release-source-config.json" (builtins.toJSON {

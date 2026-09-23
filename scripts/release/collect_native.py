@@ -145,8 +145,9 @@ def component(id_: str, version: str, license_: str, origin: str, requirements: 
         "license": license_,
         "origin": origin,
         "requirements": requirements,
-        "decision": "Provide original notices and corresponding source under the same Release; see "
-                    + ", ".join(requirements),
+        "decision": ("Provide original notices and corresponding source under the same Release; see "
+                     if sources else "Provide original notices; no source obligation; see ")
+                    + (", ".join(requirements) or "the component license"),
         "notices": notices,
         "sources": sources,
     }
@@ -281,25 +282,37 @@ def main() -> None:
     ))
     if runtime_versions != {"icu": "78.3", "unicode": "17.0"}:
         raise ValueError(f"Bun runtime ICU/Unicode versions differ from source pin: {runtime_versions}")
+    origins, unknown = elf_origins(Path(config["rawPayload"]), config)
+    if unknown:
+        raise ValueError("Unregistered ELF paths: " + ", ".join(unknown))
+    shipped = set(origins.values())
 
     for entry in config["bunSources"]:
         components.append(collect_archive(root, entry, policy[entry["id"]]))
 
     for entry in config["native"]:
         id_ = entry["id"]
+        # A shared library the bundler may resolve is distributed only when
+        # the payload actually contains it.
+        if entry.get("payloadOnly") and id_ not in shipped:
+            continue
         source = Path(entry["path"])
+        with_source = entry.get("source", True)
+        sources = []
         if source.is_dir():
-            archive_rel = archive_tree(root, f"sources/native/{id_}.tar.gz", source)
+            if with_source:
+                sources.append(archive_tree(root, f"sources/native/{id_}.tar.gz", source))
             notice_data = {name: (source / name).read_bytes() for name in entry["notices"]}
         else:
-            archive_rel = add_file(root, f"sources/native/{id_}{archive_suffix(source)}", source)
+            if with_source:
+                sources.append(add_file(root, f"sources/native/{id_}{archive_suffix(source)}", source))
             notice_data = {name: extract_notice(source, name) for name in entry["notices"]}
         notices = [
             add_file(root, f"licenses/native/{id_}/{Path(name).name}", data)
             for name, data in notice_data.items()
         ]
         components.append(component(id_, entry["version"], entry["license"], entry["origin"],
-                                    entry["requirements"], notices, [archive_rel]))
+                                    entry["requirements"], notices, sources))
 
     for entry in config["pklSources"]:
         archive = Path(entry["path"])
@@ -357,10 +370,10 @@ def main() -> None:
                                     [notice], [crate_path]))
 
     webkit = Path(config["webkitSource"])
-    # The JSC runtime build uses Source/ and Tools/; these upstream test data
-    # and website trees are unrelated to compiling a modified JSC/Bun runtime.
+    # Test data and website trees are not build inputs. The list only drops
+    # bulk; a renamed or new tree is archived rather than failing the build.
     webkit_source = archive_tree(root, "sources/bun/webkit.tar.xz", webkit,
-                                 exclude=("LayoutTests", "JSTests", "PerformanceTests", "Websites"))
+                                 exclude=("./LayoutTests", "./JSTests", "./PerformanceTests", "./Websites"))
     webkit_notice_files = [
         "Source/JavaScriptCore/COPYING.LIB",
         "Source/JavaScriptCore/disassembler/ARM64/LICENSE-binja.txt",
@@ -392,27 +405,39 @@ def main() -> None:
         for name in top_level_notices(archive):
             add_file(root, f"licenses/bun/cargo-inputs/{slug}/{name}",
                      extract_notice(archive, name))
-    npm_seen = {}
-    for package in config["npm"]:
-        archive = f"sources/bun/npm/{package['archive']}"
-        if archive in npm_seen:
-            if npm_seen[archive] != package["integrity"]:
-                raise ValueError(f"conflicting npm archive pins: {archive}")
-            continue
-        npm_seen[archive] = package["integrity"]
-        add_file(root, archive, Path(package["path"]))
-        actual = "sha512-" + base64.b64encode(hashlib.sha512((root / archive).read_bytes()).digest()).decode()
-        if actual != package["integrity"]:
-            raise ValueError(f"npm integrity mismatch: {package['name']}@{package['version']}")
-        for name in top_level_notices(root / archive):
-            add_file(root, f"licenses/bun/npm-inputs/{package['archive']}/{name}",
-                     extract_notice(root / archive, name))
-    npm_index_path = add_file(root, "sources/bun/npm/packages.json", Path(config["npmPins"]))
+    # The fetched set covers both release architectures; each release keeps
+    # only the archives `bun install` needs on its own CPU.
+    npm_cpu = {"x86_64-linux": "x64", "aarch64-linux": "arm64"}[config["system"]]
+    npm_index_path = "sources/bun/npm/packages.json"
     with tempfile.TemporaryDirectory(prefix="bun-npm-verify-") as temporary:
         subprocess.run(["tar", "-xf", str(bun_archive), "--strip-components=1", "-C", temporary],
                        check=True)
+        (root / npm_index_path).parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["bun", config["npmVerifier"], "pins", temporary,
+                        str(root / npm_index_path), npm_cpu], check=True)
+        wanted = {pin["archive"] for pin in json.loads((root / npm_index_path).read_text())["packages"]}
+        npm_seen = {}
+        for package in config["npm"]:
+            if package["archive"] not in wanted:
+                continue
+            archive = f"sources/bun/npm/{package['archive']}"
+            if archive in npm_seen:
+                if npm_seen[archive] != package["integrity"]:
+                    raise ValueError(f"conflicting npm archive pins: {archive}")
+                continue
+            npm_seen[archive] = package["integrity"]
+            add_file(root, archive, Path(package["path"]))
+            actual = "sha512-" + base64.b64encode(hashlib.sha512((root / archive).read_bytes()).digest()).decode()
+            if actual != package["integrity"]:
+                raise ValueError(f"npm integrity mismatch: {package['name']}@{package['version']}")
+            for name in top_level_notices(root / archive):
+                add_file(root, f"licenses/bun/npm-inputs/{package['archive']}/{name}",
+                         extract_notice(root / archive, name))
+        if set(npm_seen) != {f"sources/bun/npm/{name}" for name in wanted}:
+            raise ValueError("fetched npm archives do not cover the release architecture")
         subprocess.run(["bun", config["npmVerifier"], "verify", temporary,
-                        str(root / npm_index_path), str(root / "sources/bun/npm")], check=True)
+                        str(root / npm_index_path), str(root / "sources/bun/npm"), npm_cpu],
+                       check=True)
     recipe_paths = copy_recipes(root, config)
     components.extend(collect_javascript(root, config))
 
@@ -453,18 +478,24 @@ def main() -> None:
         "docs/release-materials.md in sources/nas-source.tar.gz for the rebuild route and "
         "the component inventory for each license decision and material path.\n"
     ).encode())
+    # The Nix recipes rebuild the bundle, so they belong to nas itself.
     components.append(component("nas", config["nasVersion"], "repository license", "nas repository",
-                                [], [own_notice], [own_source]))
+                                [], [own_notice], [own_source] + recipe_paths))
     for id_ in ("nas-hostexec", "nas-maskfs", "nas-mask-filter"):
         components.append(component(id_, config["nasVersion"], "repository license", "nas repository",
                                     [], [own_notice], [own_source]))
-    gcc_source = add_file(root, "sources/native/gcc-runtime.tar.xz", Path(config["gccSource"]))
-    gcc_notice = add_file(root, "licenses/native/gcc-runtime/COPYING.RUNTIME",
-                          extract_notice(Path(config["gccSource"]), "COPYING.RUNTIME"))
-    gcc_gpl = add_file(root, "licenses/native/gcc-runtime/COPYING3",
-                       extract_notice(Path(config["gccSource"]), "COPYING3"))
-    components.append(component("gcc-runtime", config["gccVersion"], "GPL-3.0-or-later WITH GCC-exception-3.1",
-                                "nixpkgs GCC runtime", [], [gcc_notice, gcc_gpl], [gcc_source] + recipe_paths))
+    # libgcc_s is resolvable for the bundle but not always copied into it.
+    # Only a copied library is GPL object code needing GCC's source; code
+    # compiled in under the runtime library exception carries no obligation.
+    if "gcc-runtime" in shipped:
+        gcc_source = add_file(root, "sources/native/gcc-runtime.tar.xz", Path(config["gccSource"]))
+        gcc_notice = add_file(root, "licenses/native/gcc-runtime/COPYING.RUNTIME",
+                              extract_notice(Path(config["gccSource"]), "COPYING.RUNTIME"))
+        gcc_gpl = add_file(root, "licenses/native/gcc-runtime/COPYING3",
+                           extract_notice(Path(config["gccSource"]), "COPYING3"))
+        components.append(component("gcc-runtime", config["gccVersion"],
+                                    "GPL-3.0-or-later WITH GCC-exception-3.1", "nixpkgs GCC runtime",
+                                    [], [gcc_notice, gcc_gpl], [gcc_source]))
 
     bundler_recipe = next(path for path in recipe_paths if path.startswith("recipes/nix-bundle-elf."))
     bundler_notice = add_file(root, "licenses/native/nix-bundle-elf-runtime/LICENSE",
@@ -472,9 +503,6 @@ def main() -> None:
     components.append(component("nix-bundle-elf-runtime", config["bundlerRevision"], "MIT",
                                 "pinned nix-bundle-elf", ["BUNDLE-1"],
                                 [bundler_notice], [bundler_recipe]))
-    origins, unknown = elf_origins(Path(config["rawPayload"]), config)
-    if unknown:
-        raise ValueError("Unregistered ELF paths: " + ", ".join(unknown))
     manifest = {"schemaVersion": 1, "system": config["system"],
                 "components": components, "payloadOrigins": origins}
     (root / "components.json").write_text(json.dumps(manifest, indent=2) + "\n")

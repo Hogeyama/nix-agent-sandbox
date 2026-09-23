@@ -24,11 +24,14 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function supportsLinux(value: unknown): boolean {
+const releaseCpus = ["x64", "arm64"] as const;
+export type ReleaseCpu = (typeof releaseCpus)[number];
+
+function supportsLinux(value: unknown, cpus: readonly string[]): boolean {
   const metadata = object(value);
   for (const [key, allowed] of [
     ["os", ["linux"]],
-    ["cpu", ["x64", "arm64"]],
+    ["cpu", cpus],
   ] as const) {
     const field = metadata[key];
     if (field === undefined) continue;
@@ -50,13 +53,18 @@ export const lockPaths = [
   "src/node-fallbacks/bun.lock",
 ] as const;
 
+/** Without `cpu`, both release architectures; with it, the archives one architecture installs. */
 export function pinsFromLock(
   lockText: string,
   bunVersion: string,
   lock: string = "bun.lock",
+  cpu?: string,
 ): BunNpmPins {
   if (!/^\d+\.\d+\.\d+/.test(bunVersion))
     throw new Error(`invalid Bun version: ${bunVersion}`);
+  if (cpu !== undefined && !releaseCpus.includes(cpu as ReleaseCpu))
+    throw new Error(`unsupported release CPU: ${cpu}`);
+  const cpus = cpu === undefined ? releaseCpus : [cpu];
   const parsed = object(Bun.JSONC.parse(lockText));
   const packages = object(parsed.packages);
   const pins: PackagePin[] = [];
@@ -73,7 +81,7 @@ export function pinsFromLock(
       !/^[A-Za-z0-9][A-Za-z0-9.+-]*$/.test(version)
     )
       throw new Error(`unexpected Bun package version: ${entry[0]}`);
-    if (!supportsLinux(entry[2])) continue;
+    if (!supportsLinux(entry[2], cpus)) continue;
     const integrity = entry[3];
     if (
       typeof integrity !== "string" ||
@@ -101,7 +109,10 @@ export function pinsFromLock(
   return { schemaVersion: 1, bunVersion, packages: pins };
 }
 
-export async function pinsFromSource(bunSource: string): Promise<BunNpmPins> {
+export async function pinsFromSource(
+  bunSource: string,
+  cpu?: string,
+): Promise<BunNpmPins> {
   const manifest = object(
     JSON.parse(await readFile(join(bunSource, "package.json"), "utf8")),
   );
@@ -113,6 +124,7 @@ export async function pinsFromSource(bunSource: string): Promise<BunNpmPins> {
       await readFile(join(bunSource, lock), "utf8"),
       manifest.version,
       lock,
+      cpu,
     );
     packages.push(...pins.packages);
   }
@@ -123,8 +135,9 @@ export async function verifyArchives(
   bunSource: string,
   pins: BunNpmPins,
   archiveDir: string,
+  cpu?: string,
 ): Promise<void> {
-  const expected = await pinsFromSource(bunSource);
+  const expected = await pinsFromSource(bunSource, cpu);
   if (JSON.stringify(pins) !== JSON.stringify(expected))
     throw new Error("Bun npm pins differ from bun.lock");
   for (const pin of pins.packages) {
@@ -139,19 +152,27 @@ export async function verifyArchives(
 if (import.meta.main) {
   const [operation, ...args] = Bun.argv.slice(2);
   try {
-    if (operation === "pins" && args.length === 2) {
-      const [source, output] = args as [string, string];
+    if (operation === "pins" && (args.length === 2 || args.length === 3)) {
+      const [source, output, cpu] = args as [string, string, string?];
       await writeFile(
         output,
-        `${JSON.stringify(await pinsFromSource(source), null, 2)}\n`,
+        `${JSON.stringify(await pinsFromSource(source, cpu), null, 2)}\n`,
       );
-    } else if (operation === "verify" && args.length === 3) {
-      const [source, pinsFile, archives] = args as [string, string, string];
+    } else if (
+      operation === "verify" &&
+      (args.length === 3 || args.length === 4)
+    ) {
+      const [source, pinsFile, archives, cpu] = args as [
+        string,
+        string,
+        string,
+        string?,
+      ];
       const pins = JSON.parse(await readFile(pinsFile, "utf8")) as BunNpmPins;
-      await verifyArchives(source, pins, archives);
+      await verifyArchives(source, pins, archives, cpu);
     } else
       throw new Error(
-        "usage: bun_npm.ts pins BUN_SOURCE OUT | verify BUN_SOURCE PINS ARCHIVES",
+        "usage: bun_npm.ts pins BUN_SOURCE OUT [CPU] | verify BUN_SOURCE PINS ARCHIVES [CPU]",
       );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

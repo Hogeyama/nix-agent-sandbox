@@ -106,6 +106,15 @@ nas が指定した別の Bun runtime から再生成できることを確認す
 
 材料は固定版の build 定義・lockfile と照合する。全依存をオフラインで再構築する専用環境や、初回の隔離環境での全ビルドを公開の一律条件にはしない。材料の不足や再リンクを妨げる具体的な問題が見つかった場合は、その問題に絞って調査・検証し、公開前に解消する。ファイルの存在確認だけで再リンク可能性を証明したとは扱わない。
 
+##### 材料の収録範囲
+
+固定した pin に対応する archive を、原則としてそのまま収録する。build に使わない部分を細かく除く方法は採らない。除外対象の一覧は依存を更新するたびに見直しと再検証が必要になり、その保守の負担に対して、減るのはほとんど取得されない source asset の容量だけだからである。source asset は GitHub Release の 1 ファイルの上限（2 GiB）に収まる範囲で受け入れる。上限に近づいた場合は、asset の分割を検討する。
+
+例外は、見直しを必要としない次の規則だけとする。
+
+- **WebKit fork:** test data と website の tree（`LayoutTests`・`JSTests`・`PerformanceTests`・`Websites`）を除く。これらが改名・新設された場合は、そのまま収録されて容量が増えるだけで、build 材料の欠落にはならない。
+- **Bun の npm 依存:** 各 architecture の Release に、その CPU で `bun install` が取得する archive だけを収録する。
+
 A の経路に不足する非公開・取得不能の材料などが判明した場合は、B/C を含めて選び直す。その場合は不足した材料と、選択を変更した理由をここに記録する。
 
 #### JSC-3: 利用者による変更と、そのデバッグを許す
@@ -212,7 +221,7 @@ Bun の [WebKit build 定義](https://github.com/oven-sh/bun/blob/bun-v1.4.2/scr
 
 **要求（LICENSE）:** Unicode の本文が認めるコピーへの添付または関連文書への記載によって、著作権・許諾を渡し、無許可の権利者名による宣伝をしない。辞書等に付く個別表示も保持する。
 
-**選択と理由（POLICY）:** ICU library、WebKit の ICU headers、Unicode data のそれぞれに対応した原文を notice tree に収録する。Bun が示す ICU 78 系の [本文の例](https://github.com/unicode-org/icu/blob/release-78.1/LICENSE)には同梱第三者の表示もあるため、Unicode の一般的なテンプレートだけに置き換えない。再ビルド材料には実際の ICU source / data も含める。JSC の source だけでは ICU を再生成できないためである。
+**選択と理由（POLICY）:** ICU library、WebKit の ICU headers、Unicode data のそれぞれに対応した原文を notice tree に収録する。Bun が示す ICU 78 系の [本文の例](https://github.com/unicode-org/icu/blob/release-78.1/LICENSE)には同梱第三者の表示もあるため、Unicode の一般的なテンプレートだけに置き換えない。ICU の source / data は source asset に収録しない。Unicode の許諾は source 提供を求めず、JSC-2 の再生成経路でも、Bun の [WebKit build 定義](https://github.com/oven-sh/bun/blob/bun-v1.4.2/scripts/build/deps/webkit.ts)は Linux で system ICU（libicu-dev）を使うためである。
 
 #### WebKit の MIT / BSD / Apache 部分
 
@@ -400,6 +409,9 @@ nas の helper に含まれる runtime code、コピーされる native library�
 最終成果物と build 入力から実際の対象を特定し、component ごとに本文・例外を確認する。例えば compiler runtime にライセンス例外が付く場合、例外の原文と、その条件を満たす根拠も記録する。build tool 自体を配っていない場合と、tool が出力に組み込むコードを配る場合を分ける。
 
 本文・表示の収録で足りるのか、source や再リンク材料も必要なのかを決め、その component の節に候補と選択理由を残す。共有 library の方法を流用する際も、適用条件が同じであることを確認する。この対象の列挙と個別判断は、配布前に完了させる。
+
+- **表示だけを収録する:** zlib（Zlib）、OpenSSL（Apache-2.0）、Zig と同梱の musl（MIT）、vendored graphql-core（MIT）は、表示の保持で配布条件を満たす。これらの source は source asset に入れない。
+- **payload に入るときだけ扱う:** OpenSSL・zlib・GCC runtime（`libgcc_s`）は、bundler が解決できる library であっても、payload に実際にコピーされたときだけ component にする。GCC runtime の library 自体をコピーして配る場合は GPL の object code になるので、GCC の source を収録する。runtime library exception の下で executable に組み込まれたコードには、source 提供の義務はない。
 
 ## 共通の梱包と公開
 

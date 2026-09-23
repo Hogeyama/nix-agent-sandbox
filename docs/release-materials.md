@@ -24,8 +24,14 @@ and material paths. The reasons for those choices are in the
 
 The Bun archive includes its `patches/`, `scripts/`, `Cargo.lock`, npm
 lockfiles, and `rust-toolchain.toml`. Node headers and Rust sources selected
-by that Bun version are also under `sources/bun/`. Source URLs and lockfiles
-record provenance; the archives provide the corresponding bytes.
+by that Bun version are also under `sources/bun/`. `sources/bun/npm/` holds
+the archives `bun install` fetches on this architecture. Source URLs and
+lockfiles record provenance; the archives provide the corresponding bytes.
+
+The WebKit archive omits only the fork's test data and website trees
+(`LayoutTests`, `JSTests`, `PerformanceTests`, `Websites`). As Bun's build
+definition states, the Linux build uses the system ICU (for example
+`libicu-dev`); ICU's license notices are in `licenses/`.
 
 The JavaScript sources contain the packages selected by the CLI/UI build's
 emitted inputs, including their original source files and package metadata.

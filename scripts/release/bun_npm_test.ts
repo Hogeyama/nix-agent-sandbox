@@ -34,6 +34,24 @@ test("selects exact Linux x64 and arm64 archives from Bun's lock", () => {
   );
 });
 
+test("narrows platform archives to the release architecture", () => {
+  const lock = `{
+    "packages": {
+      "@scope/core": ["@scope/core@1.2.3", "", {}, "sha512-${"A".repeat(86)}=="],
+      "@scope/linux-x64": ["@scope/linux-x64@1.0.0", "", {"os":"linux","cpu":"x64"}, "sha512-${"B".repeat(86)}=="],
+      "@scope/linux-arm64": ["@scope/linux-arm64@1.0.0", "", {"os":"linux","cpu":"arm64"}, "sha512-${"C".repeat(86)}=="],
+    },
+  }`;
+  expect(
+    pinsFromLock(lock, "1.4.2", "bun.lock", "arm64").packages.map(
+      (p) => p.name,
+    ),
+  ).toEqual(["@scope/core", "@scope/linux-arm64"]);
+  expect(() => pinsFromLock(lock, "1.4.2", "bun.lock", "s390x")).toThrow(
+    "unsupported release CPU",
+  );
+});
+
 test("rejects changed source archive bytes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "nas-bun-npm-"));
   temporary.push(dir);
