@@ -123,7 +123,7 @@ test("the live service resolves a host port to its claiming session", async () =
     let received: unknown;
     const server = await createUnixServer(firstSocket, (socket) => {
       void (async () => {
-        const line = await readJsonLine(socket);
+        const line = await readJsonLine(socket, 8 * 1024 * 1024);
         received = line === null ? null : JSON.parse(line);
         await writeJsonLine(socket, { ok: true });
         socket.end();
@@ -182,7 +182,7 @@ test("binding rejects malformed success responses from the broker", async () => 
     let responseIndex = 0;
     const server = await createUnixServer(socketPath, (socket) => {
       void (async () => {
-        await readJsonLine(socket);
+        await readJsonLine(socket, 8 * 1024 * 1024);
         await writeJsonLine(socket, responses[responseIndex]);
         responseIndex += 1;
         socket.end();
@@ -225,7 +225,7 @@ async function withFakeBroker<T>(
     await mkdir(path.dirname(socketPath), { recursive: true });
     const server = await createUnixServer(socketPath, (socket) => {
       void (async () => {
-        const line = await readJsonLine(socket);
+        const line = await readJsonLine(socket, 8 * 1024 * 1024);
         await writeJsonLine(
           socket,
           await reply(

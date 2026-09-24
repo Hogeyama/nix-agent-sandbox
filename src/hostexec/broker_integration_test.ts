@@ -63,7 +63,7 @@ async function sendTestRawRequest<
   const socket = await connectUnix(socketPath);
   try {
     await writeJsonLine(socket, message);
-    const response = await readJsonLine(socket);
+    const response = await readJsonLine(socket, 8 * 1024 * 1024);
     if (!response) throw new Error("empty broker response");
     return JSON.parse(response) as T;
   } finally {
@@ -439,7 +439,7 @@ async function assertPostExitDisconnectStopsFilters(
       void approvalResult.catch(() => {});
     }
 
-    const startLine = await readJsonLine(socket);
+    const startLine = await readJsonLine(socket, 8 * 1024 * 1024);
     if (!startLine) throw new Error("gateway disconnected before start");
     const start = JSON.parse(startLine) as Record<string, unknown>;
     expect(start).toMatchObject({ type: "start", requestId });
@@ -2926,7 +2926,7 @@ test("HostExecBroker: close tears down a pending approval session", async () => 
     expect(await broker.listPending()).toHaveLength(1);
     expect(await listHostExecPendingEntries(paths, sessionId)).toHaveLength(1);
 
-    const responsePromise = readJsonLine(handler);
+    const responsePromise = readJsonLine(handler, 8 * 1024 * 1024);
     await broker.close();
     brokerClosed = true;
     const responseLine = await Promise.race([
@@ -3419,7 +3419,7 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     // しない）ことがあり、broker.close() が無限に待機してしまうため。deny 応答の
     // 読み取りリスナーは deny 送信前に登録する（送信後に登録すると、データが
     // 既に到着済みでも取りこぼすことがあるため）。
-    const responsePromise = readJsonLine(execSocket);
+    const responsePromise = readJsonLine(execSocket, 8 * 1024 * 1024);
     await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_1",
@@ -3553,7 +3553,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
     expect(hit).toBeDefined();
     expect(hit?.integrityChanged).toBe(true);
 
-    const responsePromise = readJsonLine(execSocket);
+    const responsePromise = readJsonLine(execSocket, 8 * 1024 * 1024);
     await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_cache_2",
@@ -3730,7 +3730,7 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
     expect(hit).toBeDefined();
     expect(hit?.integrityChanged).toBe(true);
 
-    const responsePromise = readJsonLine(execSocket);
+    const responsePromise = readJsonLine(execSocket, 8 * 1024 * 1024);
     await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_rel_1",
@@ -3922,7 +3922,7 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
     expect(hit).toBeDefined();
     expect(hit?.integrityChanged).toBe(true);
 
-    const responsePromise = readJsonLine(execSocket);
+    const responsePromise = readJsonLine(execSocket, 8 * 1024 * 1024);
     await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_eacces_1",

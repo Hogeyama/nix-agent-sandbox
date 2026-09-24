@@ -178,6 +178,50 @@ type BrokerMessage =
   | { type: "deny"; requestId: string; scope?: ApprovalScope }
   | { type: "list_pending" };
 
+/**
+ * broker ソケットに届く 1 行の上限。最大の正規メッセージは本文保持つきの
+ * authorize で、`requestBodyAudit.maxBodyBytes` の上限 32 MiB を base64 に
+ * した約 42.7 MiB になる。残りのフィールドは小さいので 48 MiB で足りる。
+ */
+export const BROKER_REQUEST_MAX_BYTES = 48 * 1024 * 1024;
+
+/**
+ * broker からの応答を読むときの上限。相手はホスト側の broker だが、pending
+ * 一覧は件数に比例して育つので要求より大きく取る。
+ */
+const BROKER_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+
+const BROKER_MESSAGE_TYPES: ReadonlySet<unknown> = new Set([
+  "authorize",
+  "request_policy_outcome",
+  "request_policy_review",
+  "approve",
+  "deny",
+  "list_pending",
+]);
+
+/**
+ * ソケット境界での包みの検査。authorize などの中身は `handleMessage` の先の
+ * 種別ごとの検証 (`validateAuthorizeRequest` など) が見るので、ここでは種別と
+ * approve/deny の引数の型だけを確かめる。scope の値そのものは approve/deny が
+ * 宣伝済みの `allowedScopes` と照らして、理由つきのエラーで断る。知らない
+ * 種別を `list_pending` として扱わないためでもある。
+ */
+export function parseBrokerMessage(value: unknown): BrokerMessage | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const message = value as Record<string, unknown>;
+  if (!BROKER_MESSAGE_TYPES.has(message.type)) return null;
+  if (message.type === "approve" || message.type === "deny") {
+    if (typeof message.requestId !== "string") return null;
+    if (message.scope !== undefined && typeof message.scope !== "string") {
+      return null;
+    }
+  }
+  return message as unknown as BrokerMessage;
+}
+
 type BrokerResponse =
   | DecisionResponse
   | RequestPolicyOutcomeResponse
@@ -325,10 +369,14 @@ export class SessionBroker {
 
   private async handleConnection(socket: Socket): Promise<void> {
     try {
-      let line = await readJsonLine(socket, 48 * 1024 * 1024);
+      let line = await readJsonLine(socket, BROKER_REQUEST_MAX_BYTES);
       if (!line) return;
-      const message = JSON.parse(line) as BrokerMessage;
+      const message = parseBrokerMessage(JSON.parse(line));
       line = null;
+      if (!message) {
+        logInfo("[nas] NetworkBroker: dropping malformed request");
+        return;
+      }
       const response = await this.handleMessage(message);
       try {
         await writeJsonLine(socket, response);
@@ -377,7 +425,11 @@ export class SessionBroker {
     if (message.type === "request_policy_review") {
       return await this.reviewViolations(message);
     }
-    return { type: "pending", items: await this.listPending() };
+    if (message.type === "list_pending") {
+      return { type: "pending", items: await this.listPending() };
+    }
+    const unexpected: never = message;
+    throw new Error(`unexpected broker message: ${JSON.stringify(unexpected)}`);
   }
 
   private async recordRequestPolicyOutcome(
@@ -1665,7 +1717,7 @@ export async function sendBrokerRequest<T extends BrokerResponse>(
   const socket = await connectUnix(socketPath);
   try {
     await writeJsonLine(socket, message);
-    const response = await readJsonLine(socket);
+    const response = await readJsonLine(socket, BROKER_RESPONSE_MAX_BYTES);
     if (!response) {
       throw new Error("empty broker response");
     }

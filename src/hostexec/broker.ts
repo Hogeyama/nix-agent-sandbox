@@ -257,6 +257,65 @@ const ALLOWED_HOSTEXEC_SCOPES: ReadonlySet<HostExecPromptScope> = new Set([
   "capability",
 ]);
 
+/**
+ * Upper bound for one control-socket line. Requests are approve/deny/
+ * list_pending (a request ID and an optional scope), far below 64 KiB; the
+ * bound stops a peer that never sends a newline from exhausting host memory.
+ */
+export const HOSTEXEC_CONTROL_REQUEST_MAX_BYTES = 64 * 1024;
+
+/**
+ * An execute frame sent to the control socket by mistake. It is answered
+ * with an error rather than dropped so the caller learns which socket to use.
+ */
+interface MisroutedExecuteRequest {
+  type: "execute";
+  requestId: string;
+}
+
+type ControlChannelMessage = HostExecControlRequest | MisroutedExecuteRequest;
+
+/**
+ * Structural check at the control socket boundary. Returns null for anything
+ * that is not a well-formed approve/deny/list_pending (or misrouted execute)
+ * request, so handlers never see an unchecked `JSON.parse` result.
+ */
+export function parseHostExecControlMessage(
+  value: unknown,
+): ControlChannelMessage | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const message = value as Record<string, unknown>;
+  if (message.type === "list_pending") return { type: "list_pending" };
+  if (typeof message.requestId !== "string") return null;
+  if (message.type === "deny") {
+    return { type: "deny", requestId: message.requestId };
+  }
+  if (message.type === "execute") {
+    return { type: "execute", requestId: message.requestId };
+  }
+  if (message.type !== "approve") return null;
+  if (message.scope === undefined) {
+    return { type: "approve", requestId: message.requestId };
+  }
+  // Only the type is checked here: `approve` compares the value against the
+  // group's advertised `allowedScopes` and answers "scope not allowed".
+  if (typeof message.scope !== "string") return null;
+  return {
+    type: "approve",
+    requestId: message.requestId,
+    scope: message.scope as HostExecPromptScope,
+  };
+}
+
+/**
+ * Upper bound for a control response read by the host CLI/UI. A pending list
+ * grows with queued requests (each up to the gateway's 4 MiB frame limit), so
+ * this is generous; the broker on the other end is a trusted host process.
+ */
+const BROKER_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+
 const MINIMAL_ENV_KEYS = ["HOME", "PATH", "LANG", "TERM", "USER", "LOGNAME"];
 const DEFAULT_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -470,11 +529,20 @@ export class HostExecBroker {
         }
         return;
       }
-      const line = await readJsonLine(socket);
+      const line = await readJsonLine(
+        socket,
+        HOSTEXEC_CONTROL_REQUEST_MAX_BYTES,
+      );
       if (!line) return;
-      const message = JSON.parse(line) as
-        | HostExecControlRequest
-        | ExecuteRequest;
+      const message = parseHostExecControlMessage(JSON.parse(line));
+      if (!message) {
+        await writeJsonLine(socket, {
+          type: "error",
+          requestId: "",
+          message: "invalid control request",
+        } satisfies HostExecErrorResponse);
+        return;
+      }
       const response = await this.handleControlMessage(message).catch((error) =>
         toErrorResponse(message, (error as Error).message),
       );
@@ -485,6 +553,11 @@ export class HostExecBroker {
         if (code === "EPIPE" || code === "ECONNRESET") return;
         throw e;
       }
+    } catch {
+      // Oversized or unparseable input. This handler is not awaited
+      // (`void this.handleConnection`), so letting it escape would become an
+      // unhandled rejection in the host process. Close without a reply.
+      logInfo("[nas] HostExecBroker: dropping malformed control request");
     } finally {
       socket.destroy();
     }
@@ -628,7 +701,7 @@ export class HostExecBroker {
   }
 
   private async handleControlMessage(
-    message: HostExecControlRequest | ExecuteRequest,
+    message: ControlChannelMessage,
   ): Promise<HostExecControlResponse> {
     if (message.type === "list_pending") {
       return { type: "pending", items: await this.listPending() };
@@ -1401,7 +1474,7 @@ export async function sendHostExecControlRequest<
   const socket = await connectUnix(socketPath);
   try {
     await writeJsonLine(socket, message);
-    const response = await readJsonLine(socket);
+    const response = await readJsonLine(socket, BROKER_RESPONSE_MAX_BYTES);
     if (!response) throw new Error("empty broker response");
     return JSON.parse(response) as T;
   } finally {
@@ -1563,7 +1636,7 @@ function toPendingEntry(
 }
 
 function toErrorResponse(
-  message: HostExecControlRequest | ExecuteRequest,
+  message: ControlChannelMessage,
   errorMessage: string,
 ): HostExecControlResponse {
   if ("requestId" in message) {

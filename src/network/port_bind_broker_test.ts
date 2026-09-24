@@ -886,7 +886,7 @@ test("the control socket answers forward and unforward requests", async () => {
       const ask = async (request: unknown) => {
         const socket = await connectUnix(controlSocketPath);
         await writeJsonLine(socket, request);
-        const line = await readJsonLine(socket);
+        const line = await readJsonLine(socket, 8 * 1024 * 1024);
         socket.destroy();
         return line === null ? null : JSON.parse(line);
       };
@@ -918,7 +918,7 @@ test("the common control wire validates shape and returns managed state", async 
       const ask = async (request: unknown) => {
         const socket = await connectUnix(controlSocketPath);
         await writeJsonLine(socket, request);
-        const line = await readJsonLine(socket);
+        const line = await readJsonLine(socket, 8 * 1024 * 1024);
         socket.destroy();
         return line === null ? null : JSON.parse(line);
       };
