@@ -1784,3 +1784,72 @@ test("validateConfig: the refusal never repeats the value it refused", () => {
     expect(String(error)).not.toContain("s3cret-token");
   }
 });
+
+// ---------------------------------------------------------------------------
+// agentState.auth
+// ---------------------------------------------------------------------------
+
+test("validate: agentState.auth proxy is rejected for agents other than claude", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "codex",
+        agentState: { protectSettings: false, auth: "proxy" },
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(
+    /agentState\.auth = "proxy" currently supports only agent "claude"/,
+  );
+});
+
+test("validate: proxied Claude credentials reject a static ANTHROPIC_API_KEY env", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(
+    /ANTHROPIC_API_KEY[\s\S]*agentState\.auth = "shared"/,
+  );
+});
+
+test("validate: proxied Claude credentials reject a static ANTHROPIC_AUTH_TOKEN env", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        env: [{ key: "ANTHROPIC_AUTH_TOKEN", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(/ANTHROPIC_AUTH_TOKEN/);
+});
+
+test("validate: shared Claude credentials accept an API key env", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        agentState: { protectSettings: false, auth: "shared" },
+        env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+});
+
+test("validate: an API key env on codex is not checked", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "codex",
+        env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+});

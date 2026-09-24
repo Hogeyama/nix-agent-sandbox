@@ -11,6 +11,10 @@ import { Context, Effect, Layer, type Scope } from "effect";
 import type { ProtectedClaudeState } from "../../agents/types.ts";
 import { FsService } from "../../services/fs.ts";
 import {
+  prepareDummyClaudeCredentials,
+  removeDummyClaudeCredentials,
+} from "./claude_credentials_fs.ts";
+import {
   prepareProtectedClaudeState,
   removeProtectedClaudeState,
 } from "./claude_state_fs.ts";
@@ -33,7 +37,11 @@ export class MountSetupService extends Context.Tag("nas/MountSetupService")<
   {
     readonly prepareClaudeState: (
       hostHome: string,
+      options?: { shareCredentials?: boolean; protectSettings?: boolean },
     ) => Effect.Effect<ProtectedClaudeState, unknown, Scope.Scope>;
+    readonly prepareClaudeCredentials: (
+      hostHome: string,
+    ) => Effect.Effect<string, unknown, Scope.Scope>;
     readonly ensureDirectories: (
       dirs: ReadonlyArray<MountDirectoryEntry>,
     ) => Effect.Effect<void>;
@@ -54,11 +62,25 @@ export const MountSetupServiceLive: Layer.Layer<
     const fs = yield* FsService;
 
     return MountSetupService.of({
-      prepareClaudeState: (hostHome) =>
+      prepareClaudeState: (hostHome, options) =>
         Effect.acquireRelease(
-          Effect.tryPromise(() => prepareProtectedClaudeState(hostHome)),
+          Effect.tryPromise({
+            try: () => prepareProtectedClaudeState(hostHome, options),
+            // Preserve the original error (e.g. ClaudeOAuthUnavailableError's
+            // login guidance) instead of letting tryPromise's default catch
+            // wrap it in an UnknownException and discard its message.
+            catch: (error) => error,
+          }),
           (state) => Effect.promise(() => removeProtectedClaudeState(state)),
         ),
+      prepareClaudeCredentials: (hostHome) =>
+        Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => prepareDummyClaudeCredentials(hostHome),
+            catch: (error) => error,
+          }),
+          (state) => Effect.promise(() => removeDummyClaudeCredentials(state)),
+        ).pipe(Effect.map((state) => state.file)),
       ensureDirectories: (dirs) =>
         Effect.gen(function* () {
           for (const dir of dirs) {
@@ -76,7 +98,11 @@ export const MountSetupServiceLive: Layer.Layer<
 export interface MountSetupServiceFakeConfig {
   readonly prepareClaudeState?: (
     hostHome: string,
+    options?: { shareCredentials?: boolean; protectSettings?: boolean },
   ) => Effect.Effect<ProtectedClaudeState, unknown, Scope.Scope>;
+  readonly prepareClaudeCredentials?: (
+    hostHome: string,
+  ) => Effect.Effect<string, unknown, Scope.Scope>;
   readonly ensureDirectories?: (
     dirs: ReadonlyArray<MountDirectoryEntry>,
   ) => Effect.Effect<void>;
@@ -91,6 +117,9 @@ export function makeMountSetupServiceFake(
       prepareClaudeState:
         overrides.prepareClaudeState ??
         (() => Effect.die("prepareClaudeState fake is required")),
+      prepareClaudeCredentials:
+        overrides.prepareClaudeCredentials ??
+        (() => Effect.die("prepareClaudeCredentials fake is required")),
       ensureDirectories: overrides.ensureDirectories ?? (() => Effect.void),
     }),
   );

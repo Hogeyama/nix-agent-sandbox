@@ -167,6 +167,67 @@ for (const mode of ["terminal", "acp"] as const) {
   });
 }
 
+test("configureClaude: a dummy credentials file fails closed without protected state", () => {
+  expect(() =>
+    configureClaude({
+      ...input,
+      claudeCredentialsFile: "/private/dummy/.credentials.json",
+    }),
+  ).toThrow("protected Claude state");
+});
+
+test("configureClaude: a dummy credentials file fails closed even with dedicated state paths", () => {
+  expect(() =>
+    configureClaude({
+      ...input,
+      claudeState: {
+        claudeDir: "/host/home/.claude",
+        claudeJson: "/host/home/.claude.json",
+      },
+      claudeCredentialsFile: "/private/dummy/.credentials.json",
+    }),
+  ).toThrow("protected Claude state");
+});
+
+test("configureClaude: a dummy credentials file is mounted last onto the private root, never a host directory", () => {
+  const result = configureClaude({
+    ...input,
+    protectSettings: true,
+    protectedClaudeState: protectedState,
+    claudeCredentialsFile: "/private/dummy/.credentials.json",
+  });
+  expect(result.mounts?.at(-1)).toEqual({
+    source: "/private/dummy/.credentials.json",
+    target: "/home/nas/.claude/.credentials.json",
+  });
+  expect(
+    result.mounts?.filter((m) => m.target === "/home/nas/.claude"),
+  ).toEqual([
+    { source: protectedState.runtimeDir, target: "/home/nas/.claude" },
+  ]);
+});
+
+test("configureClaude: ACP also mounts the dummy credentials file last onto the private root", () => {
+  const result = configureClaude({
+    ...input,
+    mode: "acp",
+    protectSettings: true,
+    protectedClaudeState: protectedState,
+    claudeCredentialsFile: "/private/dummy/.credentials.json",
+  });
+  expect(result.mounts?.at(-1)).toEqual({
+    source: "/private/dummy/.credentials.json",
+    target: "/home/nas/.claude/.credentials.json",
+  });
+});
+
+test("configureClaude: without a dummy file no credentials mount is added", () => {
+  const result = configureClaude(input);
+  expect(
+    (result.mounts ?? []).some((m) => m.target.endsWith(".credentials.json")),
+  ).toBe(false);
+});
+
 test("protected Dev Container uses the same layout without a native binary mount", () => {
   const result = configureClaude({
     ...input,

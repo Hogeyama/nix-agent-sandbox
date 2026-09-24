@@ -1,6 +1,6 @@
 ---
 title: ホストの認証情報の利用
-description: 秘密値の注入、エージェント設定ファイルの保護、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
+description: 秘密値の注入、Claude 認証情報の保持、エージェント設定ファイルの保護、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
 ---
 
 認証が必要な作業では、エージェント自身に値を読ませる必要があるかを先に決めます。値を渡さずに済む API 呼び出しやホストコマンドは、その実行時にだけ注入できます。
@@ -12,6 +12,7 @@ description: 秘密値の注入、エージェント設定ファイルの保護�
 | ホストのクラウド CLI・GPG を利用 | [廃止した設定ディレクトリの共有](#廃止した設定ディレクトリの共有) |
 | キーリングに保存済みの Codex 認証を利用 | [Codex のキーリング](#codex-のキーリング) |
 | エージェントの設定ファイルをコンテナ内から書き換える | [エージェント設定ファイルの保護](#エージェント設定ファイルの保護) |
+| API key で Claude を使う | [Claude の認証情報の保持](#claude-の認証情報の保持) |
 
 ## 秘密値の取得元
 
@@ -38,6 +39,40 @@ lines は複数の値になるため、ヘッダー注入や単一値のホス�
 
 登録だけではファイル表示や出力はマスクされません。値を読ませないための設定は[ファイルの非公開・マスク](/nix-agent-sandbox/configuration/files/)にあります。
 
+## Claude の認証情報の保持
+
+`agentState.auth` は、Claude Code のログイン情報をコンテナへどう渡すかを選びます。値は `"proxy"` と `"shared"` の2つで、指定しなければ既定値は Claude で `"proxy"`、Codex・Copilot で `"shared"` になります。
+
+```pkl
+agentState {
+  auth = "shared"
+}
+```
+
+`"proxy"` では、ホストの `~/.claude/.credentials.json` をコンテナと共有しません。コンテナから見えるのはセッションごとに作るダミーファイルで、実際のアクセストークンは書き込まれません。Claude Code が `api.anthropic.com` と `mcp-proxy.anthropic.com` へ送る通信は nas のプロキシが中継し、`Authorization` ヘッダーをホストのトークンで上書きしたうえで `x-api-key` ヘッダーを取り除きます。トークンの期限が近づいたときの更新もホストの nas が行い、コンテナ内では起きません。
+
+ログインはホストで行ってください。コンテナ内で `/login` を実行しても、書き込まれる先はそのセッション限りのダミーファイルで、セッションの終了とともに消えます。ホストが未ログインの場合、セッションは起動せず、ホストで `claude /login` を実行するか `agentState.auth = "shared"` に切り替えるよう案内するメッセージが出ます。
+
+API key で Claude を使うプロファイルには `agentState.auth = "shared"` を指定してください。`"proxy"` のまま `env` に `ANTHROPIC_API_KEY` や `ANTHROPIC_AUTH_TOKEN` を設定すると、起動前の検証でエラーになります。
+
+### `"proxy"` の制限
+
+起動前の検証は、`env` の `ANTHROPIC_API_KEY` と `ANTHROPIC_AUTH_TOKEN` だけを調べます。
+Bedrock（`CLAUDE_CODE_USE_BEDROCK`）、Vertex（`CLAUDE_CODE_USE_VERTEX`）、`apiKeyHelper`、`ANTHROPIC_BASE_URL` で指定するゲートウェイを使うプロファイルは検出できず、エラーになりません。
+これらのプロファイルにも `agentState.auth = "shared"` を指定してください。
+
+`"proxy"` では、コンテナの `~/.claude` はセッションごとに作るディレクトリで、ホストの `~/.claude` 直下にある項目を1つずつそこへマウントします。
+ただし、次の2種類の項目はマウントしません。
+
+- `.credentials.json`：ホストのファイルの代わりに、ダミーファイルをマウントします。
+- シンボリックリンク（`agentState.protectSettings = false` のとき）：同じリンク先を指すシンボリックリンクをセッションのディレクトリに作ります。リンク先はコンテナ内で解決するので、リンク先がコンテナにマウントされていなければ、コンテナからはたどれません。
+
+セッション開始時にホストにある項目は読み書き可能で、変更はホストに残ります。
+セッション中に Claude がコンテナ内で `~/.claude` 直下に新しく作った項目は、ホストには作られず、セッションの終了とともに消えます。
+たとえば、初めての `/plugin install` が作る `plugins/` は、ホストに残りません。
+残したい項目は、先にホストで作成するか、ホストの Claude Code で操作してください。
+`agentState.protectSettings` を有効にしたときの扱いは、[エージェント設定ファイルの保護](#エージェント設定ファイルの保護)の表のとおりです。
+
 ## エージェント設定ファイルの保護
 
 `agentState.protectSettings` を有効にすると、ホストから共有する設定をコンテナ内で書き換えられなくなります。既定は無効です。
@@ -52,12 +87,13 @@ Claude では、ホストの設定・plugins・skills・agents・commands・hook
 
 | Claude の保存先 | 扱い |
 | --- | --- |
-| `~/.claude.json`、`~/.claude/.credentials.json` | 読み書き可能で共有 |
+| `~/.claude.json` | 読み書き可能で共有 |
+| `~/.claude/.credentials.json` | `agentState.auth = "proxy"`（既定）ならダミーファイルを見せ、ホストの実体とは共有しない。`"shared"` なら読み書き可能で共有 |
 | `~/.claude/history.jsonl`、`projects/`、`file-history/` | 読み書き可能で共有。`projects/` 内の auto memory も含む |
 | ログ・キャッシュ・shell snapshots | セッション専用。終了時に削除 |
 | その他の `~/.claude/` 直下の項目 | ホストにあれば読み取り専用で共有。なければセッション専用 |
 
-認証・履歴の共有先がなければ、起動時に作成します。ホストの設定変更や既存 plugin の更新はホストで行ってください。コンテナ内からの更新は読み取り専用のため失敗します。
+履歴・プロジェクトなど共有先がなければ、起動時に作成します。`~/.claude/.credentials.json` も `agentState.auth = "shared"` のときは同様に、なければ作成したうえで共有します。ホストの設定変更や既存 plugin の更新はホストで行ってください。コンテナ内からの更新は読み取り専用のため失敗します。
 
 Codex / Copilot は状態ディレクトリを読み書き可能で共有し、次の実在する設定ファイルだけを読み取り専用にします。
 

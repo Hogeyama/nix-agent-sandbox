@@ -12,6 +12,7 @@ import { sharedDockerResources } from "../../docker/shared_resources.ts";
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
+import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
 import type {
   RequestBodyAuditConfig,
   SecretConfig,
@@ -97,6 +98,11 @@ export interface ProxyPlan {
   readonly proxyMasking: boolean;
   /** 秘密の解決に使うホスト環境変数のスナップショット。 */
   readonly hostEnv: Record<string, string | undefined>;
+  /** ホストが保持する OAuth credential を broker に注入させるか。 */
+  readonly agentCredential?: {
+    readonly kind: "claude-oauth";
+    readonly hostHome: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +198,10 @@ export function planProxy(
     caCertPath: caCertFilePath(runtimePaths),
   };
 
+  const agentCredential = usesProxiedClaudeCredentials(input.profile)
+    ? { kind: "claude-oauth" as const, hostHome: input.host.home }
+    : undefined;
+
   return {
     proxyContainerName,
     proxyImage: PROXY_IMAGE,
@@ -218,6 +228,7 @@ export function planProxy(
     secretRegistry: { ...input.profile.secrets },
     proxyMasking,
     hostEnv,
+    ...(agentCredential ? { agentCredential } : {}),
     outputOverrides: {
       network,
       prompt: promptState,
@@ -388,6 +399,7 @@ function runProxy(
         tokenHash,
         secretValues,
         proxyMasking: plan.proxyMasking,
+        agentCredential: plan.agentCredential,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );

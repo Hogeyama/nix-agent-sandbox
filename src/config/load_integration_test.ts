@@ -286,6 +286,24 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
+  "loadConfig: agentState.auth is undefined when unset and kept when set",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["a"] { agent = "claude" }
+  ["b"] { agent = "claude"; agentState { auth = "shared" } }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      expect(config.profiles.a.agentState.auth).toBeUndefined();
+      expect(config.profiles.b.agentState.auth).toBe("shared");
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: searches upward for .nas/config.pkl",
   async () => {
     await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {

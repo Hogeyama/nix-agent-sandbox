@@ -1460,6 +1460,7 @@ test("MountStage: display records shared memory size as structured state", () =>
 test("MountStage run(): creates directories via MountSetupService and returns result", async () => {
   const profile = makeProfile({
     nix: { enable: true, mountSocket: true },
+    agentState: { protectSettings: false, auth: "shared" },
   });
   const hostEnv: HostEnv = {
     ...defaultHostEnv,
@@ -1549,7 +1550,11 @@ test("MountStage run(): creates directories via MountSetupService and returns re
 });
 
 test("MountStage run(): no directories when nix disabled", async () => {
-  const { sharedInput, slices, mountProbes } = makeInput();
+  const { sharedInput, slices, mountProbes } = makeInput({
+    profile: makeProfile({
+      agentState: { protectSettings: false, auth: "shared" },
+    }),
+  });
 
   const createdDirs: MountDirectoryEntry[] = [];
   const layer = makeMountSetupServiceFake({
@@ -1575,7 +1580,9 @@ test("MountStage run(): no directories when nix disabled", async () => {
 
 test("MountStage run(): preserves structured base container state", async () => {
   const mountProbes = makeMountProbes({});
-  const profile = makeProfile({});
+  const profile = makeProfile({
+    agentState: { protectSettings: false, auth: "shared" },
+  });
   const { sharedInput, slices } = makeInput({
     profile,
     mountProbes,
@@ -1832,7 +1839,9 @@ test("IDE with maskfs refuses a linked worktree outside the main repository root
 test("MountStage run(): prepares protected Claude state before planning and retains it until scope closes", async () => {
   const mountProbes = makeMountProbes();
   const { sharedInput, slices } = makeInput({
-    profile: makeProfile({ agentState: { protectSettings: true } }),
+    profile: makeProfile({
+      agentState: { protectSettings: true, auth: "shared" },
+    }),
     mountProbes,
   });
   const prepared = {
@@ -1898,4 +1907,104 @@ test("MountStage run(): a failed protected-state preparation cannot fall back to
     ),
   ).rejects.toThrow("invalid shared path");
   expect(created).toBe(false);
+});
+
+for (const protectSettings of [true, false] as const) {
+  test(`MountStage run(): proxied Claude credentials use the private root (protectSettings=${protectSettings})`, async () => {
+    const mountProbes = makeMountProbes();
+    const { sharedInput, slices } = makeInput({
+      profile: makeProfile({ agentState: { protectSettings } }),
+      mountProbes,
+    });
+    const prepared = {
+      runtimeDir: "/private/claude-state",
+      claudeJson: `${TEST_HOME}/.claude.json`,
+      entries: [],
+    };
+    let receivedOptions: unknown;
+    const events: string[] = [];
+    const layer = makeMountSetupServiceFake({
+      prepareClaudeState: (home, options) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            expect(home).toBe(TEST_HOME);
+            receivedOptions = options;
+            events.push("prepare-state");
+            return prepared;
+          }),
+          () =>
+            Effect.sync(() => {
+              events.push("release-state");
+            }),
+        ),
+      prepareClaudeCredentials: () =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            events.push("prepare-credentials");
+            return "/private/dummy/.credentials.json";
+          }),
+          () =>
+            Effect.sync(() => {
+              events.push("release-credentials");
+            }),
+        ),
+      ensureDirectories: () => Effect.void,
+    });
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        createMountStage(sharedInput, mountProbes).run(slices),
+      ).pipe(Effect.provide(layer)),
+    );
+    // Proxied credentials always share a session-private root; protectSettings
+    // only decides whether that root also protects the rest of ~/.claude.
+    expect(receivedOptions).toEqual({
+      shareCredentials: false,
+      protectSettings,
+    });
+    // The dummy must land after the runtime-root mount in the final mount
+    // list — it overrides one entry inside that root, not a bare directory.
+    const mounts = result.container?.mounts ?? [];
+    const runtimeRootIndex = mounts.findIndex(
+      (m) => m.source === prepared.runtimeDir,
+    );
+    const dummyIndex = mounts.findIndex(
+      (m) => m.source === "/private/dummy/.credentials.json",
+    );
+    expect(runtimeRootIndex).toBeGreaterThanOrEqual(0);
+    expect(mounts[runtimeRootIndex]).toEqual({
+      source: prepared.runtimeDir,
+      target: `${CONTAINER_HOME}/.claude`,
+    });
+    expect(mounts[dummyIndex]).toEqual({
+      source: "/private/dummy/.credentials.json",
+      target: `${CONTAINER_HOME}/.claude/.credentials.json`,
+    });
+    expect(dummyIndex).toBeGreaterThan(runtimeRootIndex);
+    expect(events).toEqual([
+      "prepare-state",
+      "prepare-credentials",
+      "release-credentials",
+      "release-state",
+    ]);
+  });
+}
+
+test("MountStage run(): shared Claude credentials do not prepare a dummy file", async () => {
+  const mountProbes = makeMountProbes();
+  const { sharedInput, slices } = makeInput({
+    profile: makeProfile({
+      agentState: { protectSettings: false, auth: "shared" },
+    }),
+    mountProbes,
+  });
+  const layer = makeMountSetupServiceFake({
+    ensureDirectories: () => Effect.void,
+  });
+  // prepareClaudeCredentials fake is deliberately absent: dying if it were
+  // called is how this test proves the dummy file is not prepared.
+  await Effect.runPromise(
+    Effect.scoped(createMountStage(sharedInput, mountProbes).run(slices)).pipe(
+      Effect.provide(layer),
+    ),
+  );
 });

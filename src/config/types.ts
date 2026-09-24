@@ -209,6 +209,9 @@ export const DEFAULT_GUIDE_CONFIG: GuideConfig = {
   enable: false,
 };
 
+/** エージェント自身のログイン情報の扱い */
+export type AgentCredentialsMode = "proxy" | "shared";
+
 /** ホストのエージェント状態ディレクトリ (`~/.claude` 等) の扱い */
 export interface AgentStateConfig {
   /**
@@ -216,6 +219,11 @@ export interface AgentStateConfig {
    * Codex / Copilot は実在する設定ファイルを RO で上乗せする。
    */
   protectSettings: boolean;
+  /**
+   * 未指定ならエージェントごとの既定値 (`resolveAgentCredentials`) に従う。
+   * Pkl は null のプロパティを JSON に出力しないので、未指定は undefined になる。
+   */
+  auth?: AgentCredentialsMode;
 }
 
 export const DEFAULT_AGENT_STATE_CONFIG: AgentStateConfig = {

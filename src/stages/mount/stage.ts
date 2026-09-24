@@ -8,6 +8,7 @@
 
 import * as path from "node:path";
 import { Effect } from "effect";
+import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
 import { configureAgent } from "../../agents/registry.ts";
 import type {
   AgentConfigResult,
@@ -104,16 +105,28 @@ export function createMountStage(
       };
       return Effect.gen(function* () {
         const mountSetupService = yield* MountSetupService;
-        const protectedState =
+        const proxiedClaudeCredentials = usesProxiedClaudeCredentials(
+          shared.profile,
+        );
+        const usesPrivateClaudeRoot =
           shared.profile.agent === "claude" &&
-          shared.profile.agentState.protectSettings
-            ? yield* mountSetupService.prepareClaudeState(shared.host.home)
-            : undefined;
+          (shared.profile.agentState.protectSettings ||
+            proxiedClaudeCredentials);
+        const protectedState = usesPrivateClaudeRoot
+          ? yield* mountSetupService.prepareClaudeState(shared.host.home, {
+              shareCredentials: !proxiedClaudeCredentials,
+              protectSettings: shared.profile.agentState.protectSettings,
+            })
+          : undefined;
+        const claudeCredentialsFile = proxiedClaudeCredentials
+          ? yield* mountSetupService.prepareClaudeCredentials(shared.host.home)
+          : undefined;
         const plan = planMount(
           stageInput,
           mountProbes,
           devcontainer,
           protectedState,
+          claudeCredentialsFile,
         );
         const workspace = resolveWorkspace(input);
         const container = mergeContainerPlan(
@@ -153,6 +166,7 @@ export function planMount(
   probes: MountProbes,
   devcontainer?: DevcontainerMountInput,
   protectedClaudeState?: ProtectedClaudeState,
+  claudeCredentialsFile?: string,
 ): MountPlan {
   const { host, profile } = input;
   if (
@@ -504,6 +518,7 @@ export function planMount(
       protectSettings: profile.agentState.protectSettings,
       priorDockerArgs,
       priorEnvVars,
+      claudeCredentialsFile,
     }),
   );
 

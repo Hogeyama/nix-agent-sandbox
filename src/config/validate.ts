@@ -5,6 +5,10 @@
  * ここでは Pkl では表現しにくいクロスフィールド制約や実行時セマンティクスのみ検証する。
  */
 
+import {
+  supportsProxiedCredentials,
+  usesProxiedClaudeCredentials,
+} from "../agents/credentials.ts";
 import { DIND_INTERNAL_PORT } from "../docker/dind.ts";
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
@@ -55,6 +59,8 @@ export function validateConfig(config: Config): Config {
 
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
+
+  errors.push(...validateAgentCredentials(name, profile));
 
   if (profile.mode === "acp") {
     if (profile.agent !== "claude") {
@@ -164,6 +170,34 @@ function validateProfile(name: string, profile: Profile): string[] {
     }
   }
 
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
+// agentState.auth
+// ---------------------------------------------------------------------------
+
+// ホストの API key を container へ渡す設定は、proxy が x-api-key を削除し
+// Authorization を上書きするので動かない。起動前に opt-out を案内する。
+const API_KEY_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+
+function validateAgentCredentials(name: string, profile: Profile): string[] {
+  const errors: string[] = [];
+  const configured = profile.agentState.auth;
+  if (configured === "proxy" && !supportsProxiedCredentials(profile.agent)) {
+    errors.push(
+      `profile "${name}": agentState.auth = "proxy" currently supports only agent "claude"; use "shared" for agent "${profile.agent}"`,
+    );
+  }
+  if (usesProxiedClaudeCredentials(profile)) {
+    for (const entry of profile.env) {
+      // keyCmd のキー名はホストでコマンドを実行するまで決まらない。
+      if (!("key" in entry) || !API_KEY_ENV_KEYS.includes(entry.key)) continue;
+      errors.push(
+        `profile "${name}": env ${entry.key} does not work while Claude credentials are injected by the proxy; set agentState.auth = "shared" to use an API key`,
+      );
+    }
+  }
   return errors;
 }
 
