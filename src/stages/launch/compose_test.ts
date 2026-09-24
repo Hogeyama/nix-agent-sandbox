@@ -72,6 +72,7 @@ test("compileCompose: preserves launch fields in Compose-native structure", () =
           "SETGID",
           "KILL",
         ],
+        init: true,
         volumes: [
           {
             type: "bind",

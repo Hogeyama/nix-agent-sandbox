@@ -622,6 +622,7 @@ test("buildDindSidecarArgs: always mounts session data and shared tmp", () => {
     ),
   ).toEqual([
     "--privileged",
+    "--init",
     "-v",
     "nas-dind-data-session-a:/home/rootless/.local/share/docker",
     "-v",

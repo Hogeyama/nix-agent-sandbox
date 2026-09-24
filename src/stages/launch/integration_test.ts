@@ -665,6 +665,7 @@ async function runConfiguredRemoteSession(
     // works with the capabilities a real session keeps.
     const extraArgs = [
       ...agentPrivilegeRunArgs(),
+      "--init",
       "--mount",
       `type=bind,src=${socketPath},dst=${CONTAINER_RELAY_SOCKET},readonly`,
       "--mount",
@@ -805,6 +806,44 @@ test.skipIf(!canRunImage)(
     expect(result.stdout.trim()).toEqual("https://example.com?foo=bar&baz=qux");
   },
 );
+
+/**
+ * The payload orphans a `sleep` (its `sh` parent exits first), waits for it
+ * to finish, and counts zombies. The payload is Bun, which like the Node
+ * agents only reaps children it started, so the count shows whether PID 1
+ * reaps. The control without `--init` keeps the test honest: if the payload
+ * itself reaped, both runs would report zero.
+ */
+const ORPHAN_REAP_SCRIPT = [
+  'import { spawnSync } from "node:child_process";',
+  'import { readdirSync, readFileSync } from "node:fs";',
+  'spawnSync("sh", ["-c", "sleep 0.2 &"]);',
+  "await Bun.sleep(1000);",
+  "const zombies = readdirSync('/proc').filter((d) => /^\\d+$/.test(d)).filter((d) => { try { return /^State:\\s+Z/m.test(readFileSync(`/proc/${d}/status`, 'utf8')); } catch { return false; } });",
+  "console.log(`zombies=${zombies.length} pid1=${readFileSync('/proc/1/comm', 'utf8').trim()}`);",
+].join("\n");
+
+for (const init of [true, false]) {
+  test.skipIf(!canRunImage)(
+    `Integration: orphaned processes are ${init ? "reaped with" : "left as zombies without"} --init`,
+    async () => {
+      // compileLaunchOpts passes --init after the privilege arguments.
+      const result = await dockerRun(
+        ["/usr/local/bin/bun", "-e", ORPHAN_REAP_SCRIPT],
+        {
+          extraArgs: [...agentPrivilegeRunArgs(), ...(init ? ["--init"] : [])],
+        },
+      );
+      expect(result.code, result.stderr).toEqual(0);
+      if (init) {
+        expect(result.stdout).toContain("zombies=0 pid1=docker-init");
+      } else {
+        expect(result.stdout).toMatch(/zombies=[1-9]/);
+      }
+    },
+    30_000,
+  );
+}
 
 // ============================================================
 // bind mount テスト (共有 tmp 経由 — DinD/ホスト両対応)

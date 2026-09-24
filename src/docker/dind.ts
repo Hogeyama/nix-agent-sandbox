@@ -686,6 +686,9 @@ export function buildDindSidecarArgs(
 ): string[] {
   const args = [
     "--privileged",
+    // The image's PID 1 is rootlesskit, which never reaps the containerd-shim
+    // each inner container leaves orphaned; docker-init does.
+    "--init",
     "-v",
     `${dindDataVolume}:${DIND_DATA_DIR}`,
     "-v",
