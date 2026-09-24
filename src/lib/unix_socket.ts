@@ -31,12 +31,22 @@ export function connectUnix(socketPath: string): Promise<Socket> {
   });
 }
 
+/**
+ * Reads one newline-terminated line, holding at most `maxBytes` raw bytes
+ * before the newline. The bound is mandatory: a peer that never sends `\n`
+ * would otherwise grow the buffer until the host process runs out of memory.
+ * On overflow the promise rejects without echoing any payload; the caller
+ * owns the socket and is expected to destroy it.
+ *
+ * Bytes are accumulated as Buffers and decoded once, so a multi-byte UTF-8
+ * character split across two reads is not corrupted.
+ */
 export async function readJsonLine(
   socket: Socket,
-  maxBytes?: number,
+  maxBytes: number,
 ): Promise<string | null> {
   return new Promise((resolve, reject) => {
-    let text = "";
+    const chunks: Buffer[] = [];
     let bytesBeforeNewline = 0;
     const cleanup = () => {
       socket.off("data", onData);
@@ -45,22 +55,27 @@ export async function readJsonLine(
     };
     const onData = (chunk: Buffer) => {
       const newlineIndex = chunk.indexOf(0x0a);
-      bytesBeforeNewline += newlineIndex === -1 ? chunk.length : newlineIndex;
-      if (maxBytes !== undefined && bytesBeforeNewline > maxBytes) {
+      const lineBytes = newlineIndex === -1 ? chunk.length : newlineIndex;
+      bytesBeforeNewline += lineBytes;
+      if (bytesBeforeNewline > maxBytes) {
         cleanup();
+        chunks.length = 0;
         reject(new Error("JSON line exceeds byte limit"));
         return;
       }
-      text += chunk.toString();
-      const nl = text.indexOf("\n");
-      if (nl !== -1) {
-        cleanup();
-        resolve(text.slice(0, nl));
+      if (newlineIndex === -1) {
+        chunks.push(chunk);
+        return;
       }
+      chunks.push(chunk.subarray(0, newlineIndex));
+      cleanup();
+      resolve(Buffer.concat(chunks, bytesBeforeNewline).toString("utf8"));
     };
     const onEnd = () => {
       cleanup();
-      const trimmed = text.trim();
+      const trimmed = Buffer.concat(chunks, bytesBeforeNewline)
+        .toString("utf8")
+        .trim();
       resolve(trimmed.length > 0 ? trimmed : null);
     };
     const onError = (err: Error) => {

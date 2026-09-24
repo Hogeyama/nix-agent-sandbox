@@ -144,7 +144,7 @@ async function withPortControlApi<T>(
   const requests: unknown[] = [];
   const server = await createUnixServer(socketPath, (socket) => {
     void (async () => {
-      const line = await readJsonLine(socket);
+      const line = await readJsonLine(socket, 8 * 1024 * 1024);
       const request = line === null ? null : JSON.parse(line);
       requests.push(request);
       await writeJsonLine(socket, reply(request));
