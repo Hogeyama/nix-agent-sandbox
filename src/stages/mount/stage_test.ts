@@ -34,7 +34,7 @@ import {
   type MountDirectoryEntry,
   makeMountSetupServiceFake,
 } from "./mount_setup_service.ts";
-import { createMountStage, planMount } from "./stage.ts";
+import { createMountStage, mergeGitMetadata, planMount } from "./stage.ts";
 
 // ============================================================
 // テスト用ヘルパー — 全て純粋なリテラル構築
@@ -1478,6 +1478,7 @@ test("MountStage: .git/config and .git/hooks are RO mounted, .git pinned in betw
       gitMetadata: {
         readOnlyPaths: [`${gitDir}/config`, `${gitDir}/hooks`],
         missingHookDirs: [],
+        missingCommonDirFiles: [],
         skippedSymlinks: [],
       },
     }),
@@ -1507,6 +1508,7 @@ test("MountStage: missing hooks dir is created on the host and RO mounted", () =
       gitMetadata: {
         readOnlyPaths: [],
         missingHookDirs: [hooks, "/elsewhere/hooks"],
+        missingCommonDirFiles: [],
         skippedSymlinks: [],
       },
     }),
@@ -1520,6 +1522,53 @@ test("MountStage: missing hooks dir is created on the host and RO mounted", () =
   expect(plan.dockerArgs.some((a) => a.includes("/elsewhere"))).toBe(false);
 });
 
+test("MountStage: missing commondir is created pointing at its own gitdir and RO mounted", () => {
+  const commondir = `${TEST_WORK_DIR}/.git/commondir`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [],
+        missingHookDirs: [],
+        missingCommonDirFiles: [commondir, "/elsewhere/.git/commondir"],
+        skippedSymlinks: [],
+      },
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  // `.` は commondir が無いのと同じ。空ファイルだと git が読み込みで失敗する。
+  expect(plan.files).toEqual([
+    { path: commondir, content: ".\n", mode: 0o644 },
+  ]);
+  expect(plan.dockerArgs).toContain(`${commondir}:${commondir}:ro`);
+  expect(plan.dockerArgs).toContain(
+    `${TEST_WORK_DIR}/.git:${TEST_WORK_DIR}/.git`,
+  );
+  expect(plan.dockerArgs.some((a) => a.includes("/elsewhere"))).toBe(false);
+});
+
+test("mergeGitMetadata: unions both probes and keeps one when the other is null", () => {
+  const main = {
+    readOnlyPaths: ["/r/.git/config"],
+    missingHookDirs: ["/r/.git/hooks"],
+    missingCommonDirFiles: ["/r/.git/commondir"],
+    skippedSymlinks: [],
+  };
+  const worktree = {
+    readOnlyPaths: ["/r/.git/config", "/r/.git/worktrees/w/commondir"],
+    missingHookDirs: ["/r/.git/hooks"],
+    missingCommonDirFiles: ["/r/.git/commondir"],
+    skippedSymlinks: [],
+  };
+  expect(mergeGitMetadata(main, null)).toBe(main);
+  expect(mergeGitMetadata(null, worktree)).toBe(worktree);
+  expect(mergeGitMetadata(main, worktree)).toEqual({
+    readOnlyPaths: ["/r/.git/config", "/r/.git/worktrees/w/commondir"],
+    missingHookDirs: ["/r/.git/hooks"],
+    missingCommonDirFiles: ["/r/.git/commondir"],
+    skippedSymlinks: [],
+  });
+});
+
 test("MountStage: core.hooksPath inside the worktree is RO without pinning the root", () => {
   const husky = `${TEST_WORK_DIR}/.husky`;
   const { input, mountProbes } = makeInput({
@@ -1527,6 +1576,7 @@ test("MountStage: core.hooksPath inside the worktree is RO without pinning the r
       gitMetadata: {
         readOnlyPaths: [husky],
         missingHookDirs: [],
+        missingCommonDirFiles: [],
         skippedSymlinks: [],
       },
     }),
@@ -1547,6 +1597,7 @@ test("MountStage: nas worktree .git file is RO and its ancestors up to the repo 
       gitMetadata: {
         readOnlyPaths: [`${repoRoot}/.git/config`],
         missingHookDirs: [],
+        missingCommonDirFiles: [],
         skippedSymlinks: [],
       },
     }),
@@ -1581,6 +1632,7 @@ test("MountStage: git metadata RO source follows the maskfs view", () => {
       gitMetadata: {
         readOnlyPaths: [config],
         missingHookDirs: [],
+        missingCommonDirFiles: [],
         skippedSymlinks: [],
       },
     }),
@@ -1602,6 +1654,7 @@ test("MountStage: git metadata outside mountSource or symlinked is not mounted",
       gitMetadata: {
         readOnlyPaths: ["/other/repo/.git/config"],
         missingHookDirs: [],
+        missingCommonDirFiles: [],
         skippedSymlinks: [`${TEST_WORK_DIR}/.git/hooks`],
       },
     }),
@@ -1853,6 +1906,62 @@ test("MountStage run(): creates directories via MountSetupService and returns re
   });
   expect(result.container!.env.static.NAS_USER).toEqual(TEST_USER);
   expect(result.container!.env.static.NIX_ENABLED).toEqual("true");
+});
+
+test("MountStage run(): a nas worktree's gitdir, made after the probe, is re-probed and protected", async () => {
+  const repoRoot = "/repo";
+  const worktree = `${repoRoot}/.nas/worktrees/nas-1`;
+  const worktreeCommondir = `${repoRoot}/.git/worktrees/nas-1/commondir`;
+  const { sharedInput, slices, mountProbes } = makeInput({
+    profile: makeProfile({
+      agentState: { protectSettings: false, auth: "shared" },
+    }),
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [`${repoRoot}/.git/config`],
+        missingHookDirs: [],
+        missingCommonDirFiles: [`${repoRoot}/.git/commondir`],
+        skippedSymlinks: [],
+      },
+    }),
+    slices: {
+      workspace: { workDir: worktree, mountDir: repoRoot, imageName: "nas" },
+    },
+  });
+
+  const probed: string[] = [];
+  const createdFiles: string[] = [];
+  const layer = makeMountSetupServiceFake({
+    probeWorktreeGitMetadata: (dir) =>
+      Effect.sync(() => {
+        probed.push(dir);
+        return {
+          readOnlyPaths: [`${repoRoot}/.git/config`, worktreeCommondir],
+          missingHookDirs: [],
+          missingCommonDirFiles: [`${repoRoot}/.git/commondir`],
+          skippedSymlinks: [],
+        };
+      }),
+    ensureFiles: (files) =>
+      Effect.sync(() => {
+        createdFiles.push(...files.map((f) => f.path));
+      }),
+  });
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    createMountStage(sharedInput, mountProbes)
+      .run(slices)
+      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(probed).toEqual([worktree]);
+  expect(createdFiles).toEqual([`${repoRoot}/.git/commondir`]);
+  expect(result.container!.mounts).toContainEqual({
+    source: worktreeCommondir,
+    target: worktreeCommondir,
+    readOnly: true,
+  });
 });
 
 test("MountStage run(): no directories when nix disabled", async () => {

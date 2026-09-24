@@ -42,7 +42,7 @@ import type {
   WorkspaceState,
 } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
-import type { MountProbes } from "./mount_probes.ts";
+import type { GitMetadataProbe, MountProbes } from "./mount_probes.ts";
 import { MountSetupService } from "./mount_setup_service.ts";
 
 export type {
@@ -74,8 +74,20 @@ export interface MountPlanDirectory {
   readonly removeOnTeardown: boolean;
 }
 
+/**
+ * RO mount の source として、無ければ作るファイル。既にあれば中身に触れない。
+ * mount point なので teardown でも消さない: 同じリポジトリの別セッションが
+ * 同じファイルを mount していれば、消すとそちらの mount が外れる。
+ */
+export interface MountPlanFile {
+  readonly path: string;
+  readonly content: string;
+  readonly mode: number;
+}
+
 export interface MountPlan {
   readonly directories: readonly MountPlanDirectory[];
+  readonly files: readonly MountPlanFile[];
   readonly dockerArgs: readonly string[];
   readonly envVars: Readonly<Record<string, string>>;
   readonly containerPatch: ContainerPatch;
@@ -134,9 +146,22 @@ export function createMountStage(
         })
           ? yield* mountSetupService.prepareCodexCredentials(shared.host.home)
           : undefined;
+        // WorktreeStage が作った worktree の管理ディレクトリは probe の後に
+        // できるので、その worktree で git メタデータを解決し直して足す。
+        const worktreeGitMetadata = input.workspace.mountDir
+          ? yield* mountSetupService.probeWorktreeGitMetadata(
+              path.resolve(input.workspace.workDir),
+            )
+          : null;
         const plan = planMount(
           stageInput,
-          mountProbes,
+          {
+            ...mountProbes,
+            gitMetadata: mergeGitMetadata(
+              mountProbes.gitMetadata,
+              worktreeGitMetadata,
+            ),
+          },
           devcontainer,
           protectedState,
           claudeCredentialsFile,
@@ -149,6 +174,7 @@ export function createMountStage(
         );
 
         yield* mountSetupService.ensureDirectories(plan.directories);
+        yield* mountSetupService.ensureFiles(plan.files);
 
         return {
           container,
@@ -214,6 +240,7 @@ export function planMount(
 
   const dbus = resolveDbusRuntime(input);
   const directories: MountPlanDirectory[] = [];
+  const files: MountPlanFile[] = [];
   const args: string[] = [];
   const mounts: MountSpec[] = [];
   const extraRunArgs: string[] = [];
@@ -304,6 +331,10 @@ export function planMount(
   );
   for (const dir of gitProtection.createDirs) {
     directories.push({ path: dir, mode: 0o755, removeOnTeardown: false });
+  }
+  for (const file of gitProtection.createCommonDirFiles) {
+    // `.` は自分自身の gitdir を指し、commondir が無いのと同じに振る舞う。
+    files.push({ path: file, content: ".\n", mode: 0o644 });
   }
   for (const target of gitProtection.readOnlyPaths) {
     protectedMounts.push({ source: viewSource(target), target });
@@ -628,6 +659,7 @@ export function planMount(
 
   return {
     directories,
+    files,
     dockerArgs: args,
     envVars,
     containerPatch: {
@@ -690,10 +722,33 @@ function assertPathWithin(
   }
 }
 
+/** 2 つの git メタデータ probe の和。どちらかが null ならもう一方。 */
+export function mergeGitMetadata(
+  a: GitMetadataProbe | null,
+  b: GitMetadataProbe | null,
+): GitMetadataProbe | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  const union = (x: readonly string[], y: readonly string[]) => [
+    ...new Set([...x, ...y]),
+  ];
+  return {
+    readOnlyPaths: union(a.readOnlyPaths, b.readOnlyPaths),
+    missingHookDirs: union(a.missingHookDirs, b.missingHookDirs),
+    missingCommonDirFiles: union(
+      a.missingCommonDirFiles,
+      b.missingCommonDirFiles,
+    ),
+    skippedSymlinks: union(a.skippedSymlinks, b.skippedSymlinks),
+  };
+}
+
 interface GitProtectionPlan {
   readonly readOnlyPaths: readonly string[];
   /** RO mount の source として事前に作る空の hooks ディレクトリ */
   readonly createDirs: readonly string[];
+  /** RO mount の source として事前に作る、自分自身を指す commondir */
+  readonly createCommonDirFiles: readonly string[];
   readonly skippedSymlinks: readonly string[];
 }
 
@@ -710,13 +765,18 @@ function planGitProtection(
   const inScope = (p: string) =>
     p !== mountSource && isPathWithin(p, mountSource) && !mountedTargets.has(p);
   const createDirs = (probe?.missingHookDirs ?? []).filter(inScope);
+  const createCommonDirFiles = (probe?.missingCommonDirFiles ?? []).filter(
+    inScope,
+  );
   const readOnly = new Set([
     ...[...(probe?.readOnlyPaths ?? []), ...extraGitFiles].filter(inScope),
     ...createDirs,
+    ...createCommonDirFiles,
   ]);
   return {
     readOnlyPaths: [...readOnly].sort(byPathDepth),
     createDirs,
+    createCommonDirFiles,
     skippedSymlinks: (probe?.skippedSymlinks ?? []).filter(inScope),
   };
 }
