@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **extraAgents**: `agentState.auth` now applies to agents listed in `extraAgents` too, so a Claude provisioned next to Codex also gets proxied credentials by default.
 - **Config**: `agentState.auth` also accepts a per-agent Mapping, for example `auth = new Mapping { ["codex"] = "shared" }`. Agents not listed keep their default; the string form still applies to every agent. This lets a Claude profile with `extraAgents { "codex" }` share only Codex's credentials (for an API key or the keyring) while Claude's stay on the host. An explicit `"proxy"` for Copilot in the Mapping is a config error.
 
+### Fixed
+
+- **Container**: agent containers (`docker run`, ACP and Dev Container) and the DinD sidecar start with Docker's `--init`, so `docker-init` is PID 1 and reaps orphaned processes. Before, the agent (or `rootlesskit` in the sidecar) was PID 1 and did not reap them, so they stayed as zombies until the session ended: exited `git`, shells and `nas-mask-filter` in the agent container, and the `containerd-shim` of each finished inner container in the sidecar.
+
 ### Removed
 
 - **HostExec**: `HostExecRule.fallback` has been removed. It never had any effect: a request no rule matches always falls back to running in the container. Configs that still set it fail to load with "Cannot find property `fallback`"; delete the line. The legacy YAML/JSON migration drops it automatically.

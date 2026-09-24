@@ -934,3 +934,90 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
   },
   90_000,
 );
+
+/**
+ * Every inner container leaves its containerd-shim orphaned when it exits.
+ * The image's own PID 1 is rootlesskit, which never reaps them, so a
+ * long-running session collected one zombie per inner container.
+ */
+test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
+  "DindStage: the sidecar reaps the shims of exited inner containers",
+  async () => {
+    const profile = makeProfile({ docker: { enable: true, shared: false } });
+    const sessionId = `reap-${crypto.randomUUID()}`;
+    const sharedInput = makeSharedInput(profile, sessionId);
+    const stageState = makeStageState({
+      network: {
+        networkName: `nas-session-net-${sessionId}`,
+        runtimeDir: "/run/user/1000/nas/network",
+      },
+    });
+    const plan = planDind(
+      { ...sharedInput, ...stageState },
+      { disablePullCache: true, readinessTimeoutMs: 20_000 },
+    );
+    expect(plan).not.toBeNull();
+
+    const containerName = plan!.containerName;
+    const scope = Effect.runSync(Scope.make());
+    try {
+      await dockerNetworkCreateInternal(plan!.networkName);
+      const stage = createDindStageWithOptions(sharedInput, {
+        disablePullCache: true,
+        readinessTimeoutMs: 20_000,
+      });
+      await Effect.runPromise(
+        stage
+          .run(stageState)
+          .pipe(
+            Effect.provideService(Scope.Scope, scope),
+            Effect.provide(DindServiceLive),
+          ),
+      );
+      await waitForDindReadyForTest(containerName);
+      expect(await loadImageIntoSidecar(containerName, INNER_IMAGE)).toBe(true);
+
+      for (let i = 0; i < 3; i++) {
+        const run = await innerRun(containerName, INNER_IMAGE, "true");
+        expect(run.exitCode, run.output).toBe(0);
+      }
+
+      // Reaping is asynchronous; give PID 1 a moment before counting.
+      let zombies = "";
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const proc = Bun.spawn(
+          [
+            "docker",
+            "exec",
+            containerName,
+            "sh",
+            "-c",
+            'for f in /proc/[0-9]*/status; do grep -q "^State:.*Z" "$f" 2>/dev/null && grep "^Name:" "$f"; done; true',
+          ],
+          { stdout: "pipe", stderr: "ignore" },
+        );
+        const [, stdout] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+        ]);
+        zombies = stdout.trim();
+        if (zombies === "") break;
+        await Bun.sleep(250);
+      }
+      expect(zombies, "zombie processes left in the DinD sidecar").toBe("");
+    } finally {
+      try {
+        await Effect.runPromise(Scope.close(scope, Exit.void));
+      } finally {
+        await forceCleanup(
+          containerName,
+          plan!.networkName,
+          plan!.sharedTmpVolume,
+          plan!.dindDataVolume,
+        );
+      }
+    }
+  },
+  90_000,
+);

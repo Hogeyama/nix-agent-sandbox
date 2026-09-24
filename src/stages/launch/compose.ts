@@ -30,6 +30,8 @@ export interface ComposeAgentService {
   readonly security_opt: readonly string[];
   readonly cap_drop: readonly string[];
   readonly cap_add: readonly string[];
+  /** Run docker-init as PID 1 to reap orphans, as compileLaunchOpts does. */
+  readonly init: true;
   readonly volumes: readonly ComposeMount[];
   /**
    * `network_mode: "container:<name>"` joins the named container's network
@@ -132,6 +134,7 @@ export function compileCompose(
     security_opt: [AGENT_NO_NEW_PRIVILEGES],
     cap_drop: ["ALL"],
     cap_add: [...AGENT_CAP_ADD],
+    init: true,
     volumes,
     ...(containerNetns
       ? {

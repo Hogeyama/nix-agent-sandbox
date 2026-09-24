@@ -91,6 +91,7 @@ test("planLaunch: produces correct plan with composed command", () => {
     "-w",
     "/workspace",
     ...PRIVILEGE_ARGS,
+    "--init",
     "-v",
     "/tmp:/workspace",
     "--network",
@@ -137,6 +138,7 @@ test("planLaunch: composes launch opts from container slice", () => {
     "-w",
     "/slice-workdir",
     ...PRIVILEGE_ARGS,
+    "--init",
     "-v",
     "/repo:/workspace",
     "--network",
@@ -239,6 +241,7 @@ test("LaunchStage: run() calls ContainerLaunchService.launch", async () => {
     "-w",
     "/workspace",
     ...PRIVILEGE_ARGS,
+    "--init",
     "-v",
     "/src:/work",
   ]);
@@ -279,6 +282,7 @@ test("compileLaunchOpts: baseline plan produces correct LaunchOpts", () => {
     "-w",
     "/workspace",
     ...PRIVILEGE_ARGS,
+    "--init",
   ]);
   expect(opts.envVars).toEqual({ TOKEN: "abc", MODE: "test" });
   expect(opts.command).toEqual(["claude", "serve", "--fast"]);

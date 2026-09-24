@@ -65,6 +65,11 @@ export function compileLaunchOpts(
   // Before extraRunArgs so a caller's own --cap-add still takes effect.
   args.push(...agentPrivilegeRunArgs());
 
+  // The entrypoint execs the agent, which would otherwise be PID 1 and
+  // inherit every orphaned descendant (git, shells, sleep, nas-mask-filter)
+  // without reaping it. docker-init reaps them.
+  args.push("--init");
+
   for (const mount of plan.mounts) {
     const suffix = mount.readOnly ? ":ro" : "";
     args.push("-v", `${mount.source}:${mount.target}${suffix}`);
