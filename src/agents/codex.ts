@@ -9,7 +9,11 @@ import {
   settingsMountArgs,
   settingsMountSpecs,
 } from "./settings_protection.ts";
-import type { AgentConfigResult, CodexStatePaths } from "./types.ts";
+import type {
+  AgentConfigResult,
+  AgentProvisionResult,
+  CodexStatePaths,
+} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Probe types & resolver (side-effectful)
@@ -51,8 +55,12 @@ export function resolveCodexProbes(hostHome: string): CodexProbes {
 // ---------------------------------------------------------------------------
 
 /** configureCodex の入力 */
-export interface CodexConfigInput {
+export interface CodexConfigInput extends CodexProvisionInput {
   readonly codexState?: CodexStatePaths;
+}
+
+/** provisionCodex の入力 */
+export interface CodexProvisionInput {
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: CodexProbes;
@@ -62,8 +70,13 @@ export interface CodexConfigInput {
   readonly priorEnvVars: Readonly<Record<string, string>>;
 }
 
-/** Codex 固有のマウントと環境変数を決定する (純粋関数) */
-export function configureCodex(input: CodexConfigInput): AgentConfigResult {
+/**
+ * Codex をコンテナ内で使えるようにするマウントと環境変数を決定する
+ * (純粋関数)。起動コマンドは configureCodex が足す。
+ */
+export function provisionCodex(
+  input: CodexProvisionInput & { readonly codexState?: CodexStatePaths },
+): AgentProvisionResult {
   const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
     input;
   const args = [...priorDockerArgs];
@@ -78,7 +91,6 @@ export function configureCodex(input: CodexConfigInput): AgentConfigResult {
     return {
       dockerArgs: args,
       envVars,
-      agentCommand: ["codex"],
       mounts: [
         {
           source: input.codexState.codexDir,
@@ -117,11 +129,19 @@ export function configureCodex(input: CodexConfigInput): AgentConfigResult {
     );
   }
 
-  const agentCommand: string[] = probes.codexBinPath
+  return { dockerArgs: [...args], envVars };
+}
+
+/** Codex 固有のマウントと環境変数、起動コマンドを決定する (純粋関数) */
+export function configureCodex(input: CodexConfigInput): AgentConfigResult {
+  const provisioned = provisionCodex(input);
+  if (input.codexState) {
+    return { ...provisioned, agentCommand: ["codex"] };
+  }
+  const agentCommand: string[] = input.probes.codexBinPath
     ? ["codex", "-c", "shell_environment_policy.inherit=all"]
     : ["bash", "-c", "echo 'codex binary not found'; exit 1"];
-
-  return { dockerArgs: [...args], envVars, agentCommand };
+  return { ...provisioned, agentCommand };
 }
 
 // ---------------------------------------------------------------------------

@@ -8,10 +8,17 @@
 
 import * as path from "node:path";
 import { Effect } from "effect";
-import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
-import { configureAgent } from "../../agents/registry.ts";
+import {
+  usesClaude,
+  usesProxiedClaudeCredentials,
+} from "../../agents/credentials.ts";
+import {
+  agentBinaryFound,
+  configureAgent,
+  provisionAgent,
+} from "../../agents/registry.ts";
 import type {
-  AgentConfigResult,
+  AgentProvisionResult,
   DevcontainerAgentState,
   ProtectedClaudeState,
 } from "../../agents/types.ts";
@@ -144,11 +151,6 @@ export function createMountStage(
       });
     },
   };
-}
-
-/** 起動するか extraAgents に含むかを問わず、コンテナに Claude を用意するか */
-function usesClaude(profile: Profile): boolean {
-  return profile.agent === "claude" || profile.extraAgents.includes("claude");
 }
 
 /**
@@ -495,12 +497,12 @@ export function planMount(
   // (prior stages + this stage + earlier agents) and returns them extended.
   let agentCommand: readonly string[] = resolvePriorAgentCommand(input);
 
-  const applyAgent = (
+  const applyAgent = <R extends AgentProvisionResult>(
     configure: (
       priorDockerArgs: readonly string[],
       priorEnvVars: Readonly<Record<string, string>>,
-    ) => AgentConfigResult,
-  ): AgentConfigResult => {
+    ) => R,
+  ): R => {
     const priorDockerArgs = [...args];
     const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
     const agentResult = configure(priorDockerArgs, priorEnvVars);
@@ -535,15 +537,21 @@ export function planMount(
     }),
   ).agentCommand;
 
-  // extraAgents: バイナリと状態ディレクトリだけを用意し、起動コマンドは
-  // 捨てる。起動しないので ACP でも terminal として組み立てる。Dev Container
-  // は extraAgents を拒否するので、その状態パスはここでは渡さない。
+  // extraAgents: 起動はせず、バイナリと状態ディレクトリだけを用意する。
+  // Dev Container は extraAgents を拒否するので、その状態パスは渡さない。
   for (const extra of probes.extraAgentProbes) {
+    // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
+    // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
+    // なので、ここで言っておく。
+    if (!agentBinaryFound(extra.agent, extra.probes)) {
+      logWarn(
+        `[nas] extraAgents: "${extra.agent}" binary not found on the host; it will be unavailable in the container`,
+      );
+    }
     applyAgent((priorDockerArgs, priorEnvVars) =>
-      configureAgent({
+      provisionAgent({
         protectedClaudeState,
         agent: extra.agent,
-        mode: "terminal",
         containerHome,
         hostHome: host.home,
         probes: extra.probes,

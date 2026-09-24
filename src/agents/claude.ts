@@ -10,6 +10,7 @@ import {
 import type {
   AgentConfigResult,
   AgentMode,
+  AgentProvisionResult,
   ClaudeStatePaths,
   ProtectedClaudeState,
 } from "./types.ts";
@@ -58,9 +59,13 @@ export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
 // ---------------------------------------------------------------------------
 
 /** configureClaude の入力 */
-export interface ClaudeConfigInput {
+export interface ClaudeConfigInput extends ClaudeProvisionInput {
   readonly mode?: AgentMode;
   readonly claudeState?: ClaudeStatePaths;
+}
+
+/** provisionClaude の入力 */
+export interface ClaudeProvisionInput {
   readonly protectedClaudeState?: ProtectedClaudeState;
   readonly containerHome: string;
   readonly hostHome: string;
@@ -76,14 +81,18 @@ export interface ClaudeConfigInput {
   readonly claudeCredentialsFile?: string;
 }
 
-/** Claude Code 固有のマウントと環境変数を決定する (純粋関数) */
-export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
+/**
+ * Claude Code をコンテナ内で使えるようにするマウントと環境変数を決定する
+ * (純粋関数)。起動コマンドと起動時だけの設定は configureClaude が足す。
+ */
+export function provisionClaude(
+  input: ClaudeProvisionInput & { readonly claudeState?: ClaudeStatePaths },
+): AgentProvisionResult {
   const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
     input;
   const args = [...priorDockerArgs];
   const envVars = { ...priorEnvVars };
   const containerLocalBin = `${containerHome}/.local/bin`;
-  const mode = input.mode ?? "terminal";
 
   envVars.PATH = `${containerLocalBin}:${
     envVars.PATH ?? DEFAULT_CONTAINER_PATH
@@ -143,7 +152,6 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     return {
       dockerArgs: args,
       envVars,
-      agentCommand: ["claude"],
       mounts: withCredentials(
         stateMounts ?? [
           {
@@ -174,23 +182,40 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     args.push("-v", `${probes.claudeBinPath}:${containerLocalBin}/claude:ro`);
   }
 
+  return {
+    dockerArgs: [...args],
+    mounts: withCredentials(stateMounts),
+    envVars,
+  };
+}
+
+/** Claude Code 固有のマウントと環境変数、起動コマンドを決定する (純粋関数) */
+export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
+  const provisioned = provisionClaude(input);
+  const mode = input.mode ?? "terminal";
+
+  if (input.claudeState) {
+    return { ...provisioned, agentCommand: ["claude"] };
+  }
+
   if (mode === "acp") {
-    if (!probes.claudeBinPath) {
+    if (!input.probes.claudeBinPath) {
       throw new Error(
         "[nas] ACP mode requires Claude Code installed on the host; install and log in to Claude on the host before starting nas",
       );
     }
-    envVars.CLAUDE_CODE_EXECUTABLE = `${containerLocalBin}/claude`;
-    envVars.NODE_EXTRA_CA_CERTS = NAS_PROXY_CA_CERT_PATH;
     return {
-      dockerArgs: [...args],
-      mounts: withCredentials(stateMounts),
-      envVars,
+      ...provisioned,
+      envVars: {
+        ...provisioned.envVars,
+        CLAUDE_CODE_EXECUTABLE: `${input.containerHome}/.local/bin/claude`,
+        NODE_EXTRA_CA_CERTS: NAS_PROXY_CA_CERT_PATH,
+      },
       agentCommand: [CLAUDE_AGENT_ACP_COMMAND],
     };
   }
 
-  const agentCommand: string[] = probes.claudeBinPath
+  const agentCommand: string[] = input.probes.claudeBinPath
     ? ["claude"]
     : [
         "bash",
@@ -205,12 +230,7 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
         "claude",
       ];
 
-  return {
-    dockerArgs: [...args],
-    mounts: withCredentials(stateMounts),
-    envVars,
-    agentCommand,
-  };
+  return { ...provisioned, agentCommand };
 }
 
 // ---------------------------------------------------------------------------

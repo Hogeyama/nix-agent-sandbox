@@ -1,6 +1,13 @@
 import type { AgentCredentialsMode, Profile } from "../config/types.ts";
 import type { AgentType } from "./types.ts";
 
+/** 起動するか extraAgents に含むかを問わず、コンテナに Claude を用意するか */
+export function usesClaude(
+  profile: Pick<Profile, "agent" | "extraAgents">,
+): boolean {
+  return profile.agent === "claude" || profile.extraAgents.includes("claude");
+}
+
 /** ホスト側で認証情報を保持し proxy で注入する方式を実装済みのエージェントか。 */
 export function supportsProxiedCredentials(agent: AgentType): boolean {
   return agent === "claude";

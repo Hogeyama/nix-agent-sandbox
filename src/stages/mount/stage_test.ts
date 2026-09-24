@@ -1082,6 +1082,31 @@ test("MountStage: extraAgents are provisioned without replacing the launched com
   );
 });
 
+// REMOTE_CONTAINERS is for Copilot's interactive clipboard; as a
+// container-wide variable it would also reach the launched agent.
+test("MountStage: an extra Copilot does not set its launch-only env", () => {
+  const profile = makeProfile({ agent: "claude", extraAgents: ["copilot"] });
+  const mountProbes = makeMountProbes({
+    extraAgentProbes: [
+      {
+        agent: "copilot",
+        probes: {
+          copilotBinPath: "/usr/bin/copilot",
+          copilotLegacyDirExists: true,
+          copilotSettingsFiles: [],
+        },
+      },
+    ],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.dockerArgs).toContain(
+    "/usr/bin/copilot:/usr/local/bin/copilot:ro",
+  );
+  expect(plan.envVars.REMOTE_CONTAINERS).toBeUndefined();
+});
+
 // protectSettings covers Claude's state whether Claude is launched or only
 // provisioned: the host ~/.claude is mounted either way.
 test("MountStage: protectSettings requires protected Claude state when Claude is an extra agent", () => {
