@@ -39,6 +39,7 @@ import {
   dockerVolumeRemove,
 } from "../../docker/client.ts";
 import {
+  buildDindDaemonArgs,
   buildDindSidecarArgs,
   buildDindSidecarEnv,
   DIND_IMAGE,
@@ -444,6 +445,28 @@ async function sidecarNetworks(sidecar: string): Promise<string[]> {
     .filter((s) => s.length > 0);
 }
 
+/** The sidecar's IPv4 address on `networkName`, or "" if it has none. */
+async function sidecarAddress(
+  sidecar: string,
+  networkName: string,
+): Promise<string> {
+  const proc = Bun.spawn(
+    [
+      "docker",
+      "inspect",
+      "-f",
+      `{{(index .NetworkSettings.Networks "${networkName}").IPAddress}}`,
+      sidecar,
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const [code, out] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+  ]);
+  return code === 0 ? out.trim() : "";
+}
+
 // Pre-pull the inner image on the host once, so the confinement test below can
 // side-load it post-severance. Gated on Docker being usable at all.
 const innerImageReady =
@@ -548,6 +571,7 @@ async function startDindWithoutCa(
     image: DIND_IMAGE,
     args: buildDindSidecarArgs(dindDataVolume, sharedTmpVolume, []),
     envVars: buildDindSidecarEnv({ proxyEndpoint, caCertPath: "" }, null),
+    command: buildDindDaemonArgs(null),
   });
   await waitForDindReadyForTest(containerName);
   await dockerNetworkConnect(networkName, containerName);
@@ -857,6 +881,41 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
         `egress probe failed but output did not match any known network-reach ` +
           `failure pattern, so confinement-by-network cannot be confirmed. Output:\n${probe.output}`,
       ).toEqual(true);
+
+      // The Docker API answers the joiner on loopback and nobody else: not an
+      // inner container going through the sidecar's session-network address,
+      // nor one going through its own bridge gateway or the slirp4netns
+      // address, both of which sit in the namespace dockerd listens in.
+      const joinerApi = await joinerRun(
+        containerName,
+        INNER_IMAGE,
+        "wget -qO- -T 3 http://127.0.0.1:2375/_ping",
+      );
+      expect(joinerApi.exitCode, joinerApi.output).toEqual(0);
+      expect(joinerApi.output).toContain("OK");
+
+      const sessionIp = await sidecarAddress(containerName, plan!.networkName);
+      expect(sessionIp).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+      const apiProbe = await innerRun(
+        containerName,
+        INNER_IMAGE,
+        [
+          "command -v wget >/dev/null || exit 127;",
+          "gw=$(ip route | awk '/^default/ {print $3}');",
+          `for h in ${sessionIp} "$gw" 10.0.2.100; do`,
+          'wget -T 3 -q -O- "http://$h:2375/_ping"; echo "api-$h-exit=$?";',
+          "done",
+        ].join(" "),
+      );
+      expect(apiProbe.exitCode, apiProbe.output).toBe(0);
+      const apiExits = apiProbe.output.match(/api-[^=]+-exit=\d+/g) ?? [];
+      expect(apiExits.length, apiProbe.output).toBe(3);
+      for (const line of apiExits) {
+        expect(
+          line.endsWith("exit=0"),
+          `an inner container reached the Docker API (${line}). Output:\n${apiProbe.output}`,
+        ).toBe(false);
+      }
     } finally {
       try {
         await Effect.runPromise(Scope.close(scope, Exit.void));

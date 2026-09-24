@@ -73,12 +73,40 @@ export function buildDindSidecarMounts(caCertPath: string): ProxyCaCertMount[] {
   return [proxyCaCertMount(caCertPath)];
 }
 
+/**
+ * rootlesskit flag that publishes dockerd's TCP listener, loopback only.
+ *
+ * The agent shares the sidecar's network namespace and reaches the daemon at
+ * 127.0.0.1, so nothing needs the listener on any other address. Published on
+ * 0.0.0.0 (the image default), a container started inside DinD could reach
+ * the whole Docker API through the sidecar's own address.
+ */
+export const DIND_ROOTLESSKIT_PORT_FLAGS = `-p 127.0.0.1:${DIND_INTERNAL_PORT}:${DIND_INTERNAL_PORT}/tcp`;
+
+/**
+ * Build the sidecar's command: a full `dockerd` invocation.
+ *
+ * Starting the command with `dockerd` keeps the image entrypoint from adding
+ * its defaults, `--host=tcp://0.0.0.0:2375` plus a rootlesskit
+ * `-p 0.0.0.0:2375:2375/tcp` appended after DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS
+ * that the environment cannot take back. The TCP host is loopback in
+ * rootlesskit's namespace as well, where the builtin port driver delivers
+ * forwarded connections, so an inner container cannot reach dockerd through
+ * its bridge gateway either. Pair it with buildDindSidecarEnv, which supplies
+ * the publish flag; without it the daemon is unreachable over TCP.
+ */
 export function buildDindDaemonArgs(
   registryMirrorName: string | null,
 ): string[] {
-  if (registryMirrorName === null) return [];
+  const args = [
+    "dockerd",
+    `--host=unix://${DIND_ROOTLESS_SOCKET_PATH}`,
+    `--host=tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+  ];
+  if (registryMirrorName === null) return args;
   const url = registryMirrorUrl(registryMirrorName);
   return [
+    ...args,
     `--registry-mirror=${url}`,
     `--insecure-registry=${registryMirrorName}:5000`,
   ];
@@ -619,8 +647,10 @@ async function runDindSidecar(params: StartDindSidecarParams): Promise<void> {
  * Forces dockerd's outbound image pulls through the session proxy: dockerd reads the
  * upper-case HTTP(S)_PROXY forms, and we set both cases so any tooling inside
  * the sidecar sees a consistent proxy config. NO_PROXY keeps loopback (the 2375
- * listener / local socket) direct. DOCKER_TLS_CERTDIR is cleared so dockerd
- * listens on plain TCP 2375.
+ * listener / local socket) direct. DOCKER_TLS_CERTDIR is cleared so the
+ * entrypoint does not generate TLS certificates for a listener that is plain
+ * TCP 2375. DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS publishes that listener on
+ * loopback only, for the command buildDindDaemonArgs builds.
  */
 export function buildDindSidecarEnv(
   proxy: {
@@ -635,6 +665,7 @@ export function buildDindSidecarEnv(
       : `localhost,127.0.0.1,${registryMirrorName}`;
   return {
     DOCKER_TLS_CERTDIR: "",
+    DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS: DIND_ROOTLESSKIT_PORT_FLAGS,
     HTTP_PROXY: proxy.proxyEndpoint,
     HTTPS_PROXY: proxy.proxyEndpoint,
     NO_PROXY: noProxy,
