@@ -3903,6 +3903,374 @@ test("SessionBroker: deny decision does not include injectHeaders", async () => 
   }
 });
 
+test("SessionBroker: agent credential overrides Authorization on Anthropic hosts", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const auditDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-audit-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          anthropic: { targets: ["api.anthropic.com"], fallback: "allow" },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+    agentCredential: { current: () => "host-token", close: async () => {} },
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_agentcred", "req_1", "/v1/messages", "api.anthropic.com", 443),
+    );
+    expect(response.decision).toBe("allow");
+    expect(response.injectHeaders).toEqual([
+      { name: "Authorization", value: "Bearer host-token" },
+    ]);
+    expect(response.removeHeaders).toEqual(["x-api-key"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: container token refresh is denied before policy evaluation", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const auditDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-audit-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred2",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          claude: { targets: ["platform.claude.com"], fallback: "allow" },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+    agentCredential: { current: () => "host-token", close: async () => {} },
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred2/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred2",
+        "req_1",
+        "/v1/oauth/token",
+        "platform.claude.com",
+        443,
+      ),
+    );
+    expect(response.decision).toBe("deny");
+    expect(response.reason).toBe("credential-refresh-owned-by-host");
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs.at(-1)?.reason).toBe("credential-refresh-owned-by-host");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: without an agent credential the token refresh follows the policy", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred3",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          claude: { targets: ["platform.claude.com"], fallback: "allow" },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred3/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred3",
+        "req_1",
+        "/v1/oauth/token",
+        "platform.claude.com",
+        443,
+      ),
+    );
+    expect(response.decision).toBe("allow");
+    expect(response.removeHeaders).toBeUndefined();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: agent credential overrides Authorization from the approved-cache path", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred_cache",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          anthropic: {
+            targets: ["api.anthropic.com"],
+            rules: {
+              ask: { match: { paths: ["/**"] }, onMatch: "review" },
+            },
+          },
+        },
+        fallback: "review",
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    agentCredential: { current: () => "host-token", close: async () => {} },
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred_cache/sock`;
+  await broker.start(socketPath);
+  try {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred_cache",
+        "req_first",
+        "/v1/messages",
+        "api.anthropic.com",
+        443,
+        "anthropic.ask",
+      ),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_first",
+      scope: "host-port",
+    });
+    expect((await first).decision).toEqual("allow");
+
+    // The second request answers straight from the approved-rule cache
+    // (authorize()'s identityKeys branch), not through a pending group.
+    const second = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred_cache",
+        "req_second",
+        "/v1/messages",
+        "api.anthropic.com",
+        443,
+        "anthropic.ask",
+      ),
+    );
+    expect(second.decision).toEqual("allow");
+    expect(second.reason).toEqual("approved");
+    expect(second.injectHeaders).toEqual([
+      { name: "Authorization", value: "Bearer host-token" },
+    ]);
+    expect(second.removeHeaders).toEqual(["x-api-key"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: agent credential overrides Authorization from a per-request (once) approval", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred_once",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          anthropic: { targets: ["api.anthropic.com"], fallback: "review" },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    agentCredential: { current: () => "host-token", close: async () => {} },
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred_once/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred_once",
+        "req_once",
+        "/v1/messages",
+        "api.anthropic.com",
+        443,
+      ),
+    );
+    await waitForPending(socketPath);
+    // scope: "once" resolves through resolveRequest, not resolveAuthorizeGroup.
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_once",
+      scope: "once",
+    });
+    const decision = await waiting;
+    expect(decision.decision).toEqual("allow");
+    expect(decision.injectHeaders).toEqual([
+      { name: "Authorization", value: "Bearer host-token" },
+    ]);
+    expect(decision.removeHeaders).toEqual(["x-api-key"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: agent credential overrides Authorization from a group approval", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred_group",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          anthropic: {
+            targets: ["api.anthropic.com"],
+            rules: {
+              ask: { match: { paths: ["/**"] }, onMatch: "review" },
+            },
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    agentCredential: { current: () => "host-token", close: async () => {} },
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred_group/sock`;
+  await broker.start(socketPath);
+  try {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred_group",
+        "req_g1",
+        "/v1/messages",
+        "api.anthropic.com",
+        443,
+        "anthropic.ask",
+      ),
+    );
+    const second = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred_group",
+        "req_g2",
+        "/v1/messages",
+        "api.anthropic.com",
+        443,
+        "anthropic.ask",
+      ),
+    );
+    await waitForPending(socketPath, 2);
+    // A scope other than "once" resolves the whole pending group through
+    // resolveAuthorizeGroup, answering both requests at once.
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_g1",
+      scope: "host-port",
+    });
+    for (const pending of [first, second]) {
+      const decision = await pending;
+      expect(decision.decision).toEqual("allow");
+      expect(decision.injectHeaders).toEqual([
+        { name: "Authorization", value: "Bearer host-token" },
+      ]);
+      expect(decision.removeHeaders).toEqual(["x-api-key"]);
+    }
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: agent credential replaces a user-configured Authorization inject", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-agentcred-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_agentcred_userinject",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          anthropic: {
+            targets: ["api.anthropic.com"],
+            fallback: "allow",
+            inject: [{ name: "Authorization", value: "literal:user-value" }],
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    agentCredential: { current: () => "host-token", close: async () => {} },
+  });
+  const socketPath = `${paths.brokersDir}/sess_agentcred_userinject/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_agentcred_userinject",
+        "req_1",
+        "/v1/messages",
+        "api.anthropic.com",
+        443,
+      ),
+    );
+    expect(response.decision).toEqual("allow");
+    expect(response.injectHeaders).toEqual([
+      { name: "Authorization", value: "Bearer host-token" },
+    ]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: allow decision includes maskValues", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);

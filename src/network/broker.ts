@@ -17,6 +17,11 @@ import {
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
 import {
+  applyAgentCredential,
+  CREDENTIAL_REFRESH_DENY_REASON,
+  isHostOwnedCredentialRefresh,
+} from "./agent_credential.ts";
+import {
   type Decision as AuthzDecision,
   type DecisionReason,
   decide,
@@ -25,6 +30,7 @@ import {
   type ResolvedRule,
   type ResolvedScope,
 } from "./authz/resolve.ts";
+import type { AgentCredentialSource } from "./claude_oauth_source.ts";
 import {
   expandMaskPatterns,
   maskReviewContextWithPatterns,
@@ -98,6 +104,12 @@ interface BrokerOptions {
   proxyMasking?: boolean;
   /** Opt-in retention limits. Direct callers default to disabled. */
   requestBodyAudit?: RequestBodyAuditConfig;
+  /**
+   * ホストが保持するエージェントの credential。与えられたセッションでは、
+   * 注入先のホストで Authorization を上書きし、container からの token 更新を
+   * 拒否する。
+   */
+  agentCredential?: AgentCredentialSource;
 }
 
 interface PendingWaiter {
@@ -190,6 +202,7 @@ export class SessionBroker {
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
   private readonly secretValues: SecretValues;
+  private readonly agentCredential: AgentCredentialSource | undefined;
   private readonly proxyMasking: boolean;
   private readonly requestBodyAudit: RequestBodyAuditConfig;
   private readonly maskPatterns: string[];
@@ -235,6 +248,7 @@ export class SessionBroker {
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
     this.secretValues = options.secretValues ?? {};
+    this.agentCredential = options.agentCredential;
     this.proxyMasking = options.proxyMasking !== false;
     this.requestBodyAudit =
       options.requestBodyAudit ?? DEFAULT_REQUEST_BODY_AUDIT_CONFIG;
@@ -654,6 +668,31 @@ export class SessionBroker {
       return denyDecision(message.requestId, denyReason);
     }
 
+    // container が持つ refresh token はダミー値であり、body の refresh_token を
+    // プロキシが書き換える仕組みは無い。つまりこの request を policy に通しても、
+    // container 自身が本物の token で更新する経路には辿り着けない。本物の token
+    // への更新はホスト側の AgentCredentialSource が担うので、評価より前に拒否する。
+    if (
+      this.agentCredential !== undefined &&
+      isHostOwnedCredentialRefresh(
+        message.target.host,
+        message.method,
+        message.reviewContext?.path,
+      )
+    ) {
+      await this.recordAudit(
+        message,
+        "deny",
+        CREDENTIAL_REFRESH_DENY_REASON,
+        targetStr,
+        undefined,
+        undefined,
+        undefined,
+        requestBodyAuditStatus,
+      );
+      return denyDecision(message.requestId, CREDENTIAL_REFRESH_DENY_REASON);
+    }
+
     // 認可の判定はドキュメントの上で 1 度だけ行う。addon も同じドキュメントを
     // 読んで同じ選択を再現し、broker が名指ししたルールと食い違ったら fail-closed
     // で止める。セッション中のキャッシュは、帰結が review になったルールの
@@ -685,6 +724,7 @@ export class SessionBroker {
       const decision = this.decorateAllow(
         allowDecision(message.requestId, decided.reason),
         decided,
+        message.target,
       );
       if (shouldAudit) {
         const headerNames = decision.injectHeaders?.map((h) => h.name);
@@ -730,6 +770,7 @@ export class SessionBroker {
       const decision = this.decorateAllow(
         allowDecision(message.requestId, "approved"),
         decided,
+        message.target,
       );
       const headerNames = decision.injectHeaders?.map((h) => h.name);
       if (shouldAudit) {
@@ -977,7 +1018,7 @@ export class SessionBroker {
     const baseWithId: DecisionResponse = { ...baseDecision, requestId };
     const decision =
       outcome === "allow"
-        ? this.decorateAllow(baseWithId, decided)
+        ? this.decorateAllow(baseWithId, decided, request.target)
         : baseWithId;
     if (
       (decided?.audit ?? this.document.defaults.audit) !== "off" ||
@@ -1055,7 +1096,7 @@ export class SessionBroker {
       const decided = group.decisions.get(requestId);
       const decision =
         outcome === "allow"
-          ? this.decorateAllow(baseWithId, decided)
+          ? this.decorateAllow(baseWithId, decided, request.target)
           : baseWithId;
       if (
         (decided?.audit ?? this.document.defaults.audit) !== "off" ||
@@ -1320,13 +1361,34 @@ export class SessionBroker {
   }
 
   /**
+   * allow 決定に注入ヘッダーと秘密の扱いを加え、ホストが保持する credential が
+   * あれば Authorization をその値で上書きする。
+   *
+   * policy による装飾のあとに credential の上書きを行う。順序を逆にすると、
+   * 利用者設定の inject がホストの Authorization を後から上書きする。
+   */
+  private decorateAllow(
+    decision: DecisionResponse,
+    decided: AuthzDecision | undefined,
+    target: { readonly host: string },
+  ): DecisionResponse {
+    const decorated = this.decorateWithPolicy(decision, decided);
+    if (this.agentCredential === undefined) return decorated;
+    return applyAgentCredential(
+      decorated,
+      target.host,
+      this.agentCredential.current(),
+    );
+  }
+
+  /**
    * allow 決定に注入ヘッダーと秘密の扱いを載せる。
    *
    * 注入は最終的な帰結が allow になったときにだけ行う。拒否したリクエストには
    * 注入しない。マスクは注入より前に走るので、注入する秘密をマスクの対象から
    * 外す必要はなく、外してもならない。
    */
-  private decorateAllow(
+  private decorateWithPolicy(
     decision: DecisionResponse,
     decided: AuthzDecision | undefined,
   ): DecisionResponse {

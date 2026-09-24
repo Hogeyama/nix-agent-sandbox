@@ -184,6 +184,8 @@ export interface DecisionResponse {
   maskValues?: string[];
   /** allow のとき、出現したらリクエストを拒否すべき秘密値。 */
   forbidValues?: string[];
+  /** 上流へ送る前に削除する header 名。injectHeaders より前に適用する。 */
+  removeHeaders?: string[];
 }
 
 export const REQUEST_POLICY_SUCCESS_REASONS = [
