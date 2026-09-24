@@ -9,8 +9,10 @@
  */
 
 import {
+  chmod,
   copyFile,
   cp,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -42,6 +44,7 @@ export async function useRepoSchemaAsset(): Promise<() => Promise<void>> {
         await cp(path.join(previous, entry), path.join(assetDir, entry), {
           recursive: true,
         });
+        await addOwnerWrite(path.join(assetDir, entry));
         const relayPath = path.join(
           assetDir,
           "docker",
@@ -106,4 +109,19 @@ export async function useRepoSchemaAsset(): Promise<() => Promise<void>> {
     else process.env.NAS_ASSET_DIR = previous;
     await rm(assetDir, { recursive: true, force: true });
   };
+}
+
+/**
+ * インストール済みの nas (Nix store や展開したリリース) のアセットは読み取り
+ * 専用で、`cp` はその mode をそのまま写す。書き込みを足さないと、relay の
+ * 差し替えも後始末の `rm` も EACCES で落ちる。symlink は辿らない。
+ */
+async function addOwnerWrite(target: string): Promise<void> {
+  const info = await lstat(target);
+  if (info.isSymbolicLink()) return;
+  await chmod(target, info.mode | 0o200);
+  if (!info.isDirectory()) return;
+  for (const entry of await readdir(target)) {
+    await addOwnerWrite(path.join(target, entry));
+  }
 }
