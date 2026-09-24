@@ -11,6 +11,7 @@ import { Effect } from "effect";
 import {
   usesClaude,
   usesProxiedClaudeCredentials,
+  usesProxiedCodexCredentials,
 } from "../../agents/credentials.ts";
 import {
   agentBinaryFound,
@@ -22,7 +23,6 @@ import type {
   DevcontainerAgentState,
   ProtectedClaudeState,
 } from "../../agents/types.ts";
-import type { Profile } from "../../config/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
 import {
@@ -129,12 +129,18 @@ export function createMountStage(
         const claudeCredentialsFile = proxiedClaudeCredentials
           ? yield* mountSetupService.prepareClaudeCredentials(shared.host.home)
           : undefined;
+        const codexAuthFile = usesProxiedCodexCredentials(shared.profile, {
+          devcontainer: devcontainer !== undefined,
+        })
+          ? yield* mountSetupService.prepareCodexCredentials(shared.host.home)
+          : undefined;
         const plan = planMount(
           stageInput,
           mountProbes,
           devcontainer,
           protectedState,
           claudeCredentialsFile,
+          codexAuthFile,
         );
         const workspace = resolveWorkspace(input);
         const container = mergeContainerPlan(
@@ -175,6 +181,7 @@ export function planMount(
   devcontainer?: DevcontainerMountInput,
   protectedClaudeState?: ProtectedClaudeState,
   claudeCredentialsFile?: string,
+  codexAuthFile?: string,
 ): MountPlan {
   const { host, profile } = input;
   if (
@@ -534,11 +541,13 @@ export function planMount(
       priorDockerArgs,
       priorEnvVars,
       claudeCredentialsFile,
+      codexAuthFile,
     }),
   ).agentCommand;
 
   // extraAgents: 起動はせず、バイナリと状態ディレクトリだけを用意する。
   // Dev Container は extraAgents を拒否するので、その状態パスは渡さない。
+  // credential のダミーは起動するエージェントと同じく渡す。
   for (const extra of probes.extraAgentProbes) {
     // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
     // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
@@ -558,6 +567,8 @@ export function planMount(
         protectSettings: profile.agentState.protectSettings,
         priorDockerArgs,
         priorEnvVars,
+        claudeCredentialsFile,
+        codexAuthFile,
       }),
     );
   }

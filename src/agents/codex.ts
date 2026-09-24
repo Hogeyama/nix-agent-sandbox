@@ -3,6 +3,7 @@
  */
 
 import path from "node:path";
+import type { MountSpec } from "../pipeline/state.ts";
 import {
   CODEX_SETTINGS_FILES,
   existingSettingsFiles,
@@ -68,6 +69,11 @@ export interface CodexProvisionInput {
   readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
+  /**
+   * container の `~/.codex/auth.json` に bind mount するダミーファイルの、
+   * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
+   */
+  readonly codexAuthFile?: string;
 }
 
 /**
@@ -81,6 +87,12 @@ export function provisionCodex(
     input;
   const args = [...priorDockerArgs];
   const envVars = { ...priorEnvVars };
+
+  if (input.codexState && input.codexAuthFile) {
+    throw new Error(
+      "[nas] Dummy Codex credentials are not supported for Dev Container sessions",
+    );
+  }
 
   // Dev Container (Compose) path: ~/.codex always mounts — the runtime
   // creates it on the host first — as structured MountSpecs so colon-bearing
@@ -129,7 +141,23 @@ export function provisionCodex(
     );
   }
 
-  return { dockerArgs: [...args], envVars };
+  // ~/.codex のマウントより後に置き、ホストの auth.json を隠す。ホストの
+  // Codex は auth.json を同じファイルへの上書きで保存するので、この mount は
+  // 普段の更新では外れない。
+  const credentialsMount: MountSpec[] = input.codexAuthFile
+    ? [
+        {
+          source: input.codexAuthFile,
+          target: `${containerHome}/.codex/auth.json`,
+        },
+      ]
+    : [];
+
+  return {
+    dockerArgs: [...args],
+    envVars,
+    ...(credentialsMount.length > 0 ? { mounts: credentialsMount } : {}),
+  };
 }
 
 /** Codex 固有のマウントと環境変数、起動コマンドを決定する (純粋関数) */

@@ -88,6 +88,7 @@ export function provisionAgent(
         protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
+        codexAuthFile: input.codexAuthFile,
       });
   }
   throw new Error(`Unknown agent: ${input.agent}`);
@@ -132,6 +133,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
+        codexAuthFile: input.codexAuthFile,
       });
   }
   throw new Error(`Unknown agent: ${input.agent}`);

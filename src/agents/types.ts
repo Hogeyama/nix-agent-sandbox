@@ -84,6 +84,11 @@ export interface AgentProvisionInput {
    * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
    */
   readonly claudeCredentialsFile?: string;
+  /**
+   * container の `~/.codex/auth.json` に bind mount するダミーファイルの、
+   * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
+   */
+  readonly codexAuthFile?: string;
 }
 
 /** エージェント固有 probe 結果 */
