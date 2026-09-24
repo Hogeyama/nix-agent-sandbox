@@ -51,3 +51,19 @@ test("extraAgents is rejected: a session carries a single agent's state", () => 
   expect(errors).toHaveLength(1);
   expect(errors[0]).toContain("extraAgents");
 });
+
+test("validateDevcontainerProfile: rejects an explicit proxy for Codex", () => {
+  const profile = {
+    ...devcontainerProfile(),
+    agent: "codex" as const,
+    agentState: { protectSettings: false, auth: "proxy" as const },
+  };
+  expect(validateDevcontainerProfile(profile)).toContain(
+    'agentState.auth = "proxy" is unsupported for Codex devcontainer sessions; use "shared"',
+  );
+});
+
+test("validateDevcontainerProfile: accepts Codex with auth unset", () => {
+  const profile = { ...devcontainerProfile(), agent: "codex" as const };
+  expect(validateDevcontainerProfile(profile)).toEqual([]);
+});

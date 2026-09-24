@@ -120,11 +120,14 @@ class AgentStateConfig {
   ///
   /// `"proxy"` はホスト側で認証情報を保持・更新し、network proxy が許可した
   /// request にだけ注入する。container にはダミー値を見せ、ホストの認証情報
-  /// ファイルは共有しない。現在は Claude だけが対応する。
+  /// ファイルは共有しない。Claude と Codex が対応し、起動するエージェントと
+  /// `extraAgents` のどちらにも適用する。Copilot には適用しない。
   /// `"shared"` はホストの認証情報ファイルを container と共有する。
-  /// API key で Claude を使う場合は `"shared"` を指定する。
+  /// API key を使う場合と、Codex の認証情報をキーリングに保存している場合は
+  /// `"shared"` を指定する。
   ///
-  /// 未指定 (null) なら、Claude は `"proxy"`、それ以外は `"shared"`。
+  /// 未指定 (null) なら、Claude と Codex は `"proxy"`、Copilot は `"shared"`。
+  /// Dev Container の Codex は `"shared"`。
   auth: ("proxy"|"shared")? = null
 }
 
