@@ -1,5 +1,6 @@
 import { encodeDynamicEnvOps } from "../../pipeline/env_ops.ts";
 import type { ContainerPlan } from "../../pipeline/state.ts";
+import { AGENT_CAP_ADD, AGENT_NO_NEW_PRIVILEGES } from "./hardening.ts";
 
 export interface ComposeBindMount {
   readonly type: "bind";
@@ -25,6 +26,10 @@ export interface ComposeAgentService {
   readonly command: readonly string[];
   readonly restart: "no";
   readonly logging: { readonly driver: "none" };
+  /** Same privilege settings as compileLaunchOpts; see hardening.ts. */
+  readonly security_opt: readonly string[];
+  readonly cap_drop: readonly string[];
+  readonly cap_add: readonly string[];
   readonly volumes: readonly ComposeMount[];
   /**
    * `network_mode: "container:<name>"` joins the named container's network
@@ -124,6 +129,9 @@ export function compileCompose(
     ],
     restart: "no",
     logging: { driver: "none" },
+    security_opt: [AGENT_NO_NEW_PRIVILEGES],
+    cap_drop: ["ALL"],
+    cap_add: [...AGENT_CAP_ADD],
     volumes,
     ...(containerNetns
       ? {
