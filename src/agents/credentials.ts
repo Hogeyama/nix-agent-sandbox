@@ -1,4 +1,8 @@
-import type { AgentCredentialsMode, Profile } from "../config/types.ts";
+import type {
+  AgentCredentialsConfig,
+  AgentCredentialsMode,
+  Profile,
+} from "../config/types.ts";
 import type { AgentType } from "./types.ts";
 
 /** 起動するか extraAgents に含むかを問わず、コンテナに Claude を用意するか */
@@ -27,6 +31,18 @@ export function supportsProxiedCredentials(agent: AgentType): boolean {
 }
 
 /**
+ * `agentState.auth` がエージェントに明示している値を返す。文字列はすべての
+ * エージェントに、Mapping は書いたエージェントにだけ当てはまる。
+ */
+export function configuredAgentCredentials(
+  auth: AgentCredentialsConfig | undefined,
+  agent: AgentType,
+): AgentCredentialsMode | undefined {
+  if (auth === undefined || typeof auth === "string") return auth;
+  return auth[agent];
+}
+
+/**
  * エージェントの `agentState.auth` の実効値を返す。
  *
  * 未実装のエージェントは、明示されていても `"shared"` になる。Copilot の
@@ -36,10 +52,11 @@ export function supportsProxiedCredentials(agent: AgentType): boolean {
  */
 export function resolveAgentCredentials(
   agent: AgentType,
-  configured: AgentCredentialsMode | undefined,
+  auth: AgentCredentialsConfig | undefined,
   context: CredentialsContext = {},
 ): AgentCredentialsMode {
   if (!supportsProxiedCredentials(agent)) return "shared";
+  const configured = configuredAgentCredentials(auth, agent);
   if (configured !== undefined) return configured;
   if (agent === "codex" && context.devcontainer) return "shared";
   return "proxy";

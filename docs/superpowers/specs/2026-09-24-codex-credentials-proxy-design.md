@@ -42,12 +42,18 @@ Codex の token は、ファイルに保存する代わりに OS のキーリン
   - 解決はエージェントごとに行う。未指定なら、そのエージェントの既定値になる。
   - `"proxy"` を明示したとき、対応していないエージェント（Copilot）は `"shared"` として扱う。Copilot は `~/.copilot` に token を持たないので、これで保護が弱まることはない。
   - `"proxy"` を明示し、起動するエージェントも `extraAgents` も `"proxy"` に対応していないときは、設定エラーとする。
+- `agentState.auth` は、文字列のほかに、エージェント名をキーにした Mapping でも書ける（例：`auth = new Mapping { ["codex"] = "shared" }`）。
+  - 文字列は、起動するエージェントと `extraAgents` のすべてに適用する。Mapping は、書いたエージェントにだけ適用し、書かなかったエージェントは既定値になる。
+  - 文字列だけでは、Claude のプロファイルに `extraAgents { "codex" }` を足し、ホストの Codex がキーリングや API key を使う場合に、Codex だけを `"shared"` にできない。`"shared"` にすると Claude の認証情報も共有してしまう。
+  - Mapping で対応していないエージェント（Copilot）に `"proxy"` を明示したときは、設定エラーとする。そのエージェントを名指しした `"proxy"` は、保護するつもりで書いたものなので、`"shared"` として扱うと書き手の意図と逆になる。
+  - キーと値の型は Pkl の schema で制限し、未知のエージェント名は Pkl の評価で失敗する。
+  - Dev Container の Codex に `"proxy"` を明示したときは、どちらの書き方でも Dev Container の検証で拒否する。
 
 設定の解決では、Claude の既存の検証に加えて次を検証する。
 
 - Codex の解決結果が `"proxy"` で、profile の `env` に `OPENAI_API_KEY` または `CODEX_API_KEY` がある。
   - 判定の対象は `key` を静的に書いたエントリだけとする（Claude と同じ理由）。
-  - エラーメッセージで `auth = "shared"` による opt-out を案内する。
+  - エラーメッセージで `auth = "shared"` と、Codex だけの `auth = new Mapping { ["codex"] = "shared" }` による opt-out を案内する。
 
 既定値の変更によって、既存の Codex profile の挙動が変わる。リリースノートに記載する。
 

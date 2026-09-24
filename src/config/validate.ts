@@ -21,7 +21,13 @@ import {
   GPG_FORWARD_AGENT_MIGRATION,
   NIX_EXTRA_PACKAGES_MIGRATION,
 } from "./retired.ts";
-import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
+import type {
+  AgentType,
+  Config,
+  HostExecRule,
+  Profile,
+  SecretConfig,
+} from "./types.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -209,6 +215,7 @@ function apiKeyEnvErrors(
   name: string,
   profile: Profile,
   keys: readonly string[],
+  agent: AgentType,
   label: string,
 ): string[] {
   const errors: string[] = [];
@@ -216,7 +223,7 @@ function apiKeyEnvErrors(
     // keyCmd のキー名はホストでコマンドを実行するまで決まらない。
     if (!("key" in entry) || !keys.includes(entry.key)) continue;
     errors.push(
-      `profile "${name}": env ${entry.key} does not work while ${label} credentials are injected by the proxy; set agentState.auth = "shared" to use an API key`,
+      `profile "${name}": env ${entry.key} does not work while ${label} credentials are injected by the proxy; set agentState.auth = "shared" (or new Mapping { ["${agent}"] = "shared" } for ${label} only) to use an API key`,
     );
   }
   return errors;
@@ -224,18 +231,34 @@ function apiKeyEnvErrors(
 
 function validateAgentCredentials(name: string, profile: Profile): string[] {
   const errors: string[] = [];
+  const auth = profile.agentState.auth;
   const provisioned = [profile.agent, ...profile.extraAgents];
-  if (
-    profile.agentState.auth === "proxy" &&
-    !provisioned.some(supportsProxiedCredentials)
-  ) {
+  if (auth === "proxy" && !provisioned.some(supportsProxiedCredentials)) {
     errors.push(
       `profile "${name}": agentState.auth = "proxy" supports only agents "claude" and "codex"; use "shared" for agent "${profile.agent}"`,
     );
   }
+  // 文字列の "proxy" は対応するエージェントにだけ効くと読めるが、エージェントを
+  // 名指しした "proxy" は、そのエージェントを保護するつもりで書いたものである。
+  // 黙って "shared" にすると書き手の意図と逆になる。
+  if (auth !== undefined && typeof auth !== "string") {
+    for (const [agent, mode] of Object.entries(auth)) {
+      if (mode === "proxy" && !supportsProxiedCredentials(agent as AgentType)) {
+        errors.push(
+          `profile "${name}": agentState.auth["${agent}"] = "proxy" is unsupported; only agents "claude" and "codex" support "proxy"`,
+        );
+      }
+    }
+  }
   if (usesProxiedClaudeCredentials(profile)) {
     errors.push(
-      ...apiKeyEnvErrors(name, profile, CLAUDE_API_KEY_ENV_KEYS, "Claude"),
+      ...apiKeyEnvErrors(
+        name,
+        profile,
+        CLAUDE_API_KEY_ENV_KEYS,
+        "claude",
+        "Claude",
+      ),
     );
   }
   // 検証の時点では Dev Container かどうか分からないので、Dev Container でない
@@ -243,7 +266,13 @@ function validateAgentCredentials(name: string, profile: Profile): string[] {
   // 明示する。
   if (usesProxiedCodexCredentials(profile)) {
     errors.push(
-      ...apiKeyEnvErrors(name, profile, CODEX_API_KEY_ENV_KEYS, "Codex"),
+      ...apiKeyEnvErrors(
+        name,
+        profile,
+        CODEX_API_KEY_ENV_KEYS,
+        "codex",
+        "Codex",
+      ),
     );
   }
   return errors;

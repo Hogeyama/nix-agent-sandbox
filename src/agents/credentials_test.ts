@@ -36,6 +36,34 @@ test("resolveAgentCredentials: Dev Container Codex defaults to shared", () => {
   ).toBe("proxy");
 });
 
+test("resolveAgentCredentials: a per-agent entry applies only to its agent", () => {
+  const auth = { codex: "shared" } as const;
+  expect(resolveAgentCredentials("codex", auth)).toBe("shared");
+  // 書かれていないエージェントは既定値になる。
+  expect(resolveAgentCredentials("claude", auth)).toBe("proxy");
+  expect(resolveAgentCredentials("copilot", auth)).toBe("shared");
+  expect(resolveAgentCredentials("claude", { claude: "shared" })).toBe(
+    "shared",
+  );
+  expect(resolveAgentCredentials("copilot", { copilot: "proxy" })).toBe(
+    "shared",
+  );
+  expect(
+    resolveAgentCredentials(
+      "codex",
+      { claude: "shared" },
+      { devcontainer: true },
+    ),
+  ).toBe("shared");
+  expect(
+    resolveAgentCredentials(
+      "codex",
+      { codex: "proxy" },
+      { devcontainer: true },
+    ),
+  ).toBe("proxy");
+});
+
 test("supportsProxiedCredentials: Claude and Codex are implemented", () => {
   expect(supportsProxiedCredentials("claude")).toBe(true);
   expect(supportsProxiedCredentials("codex")).toBe(true);
@@ -112,4 +140,14 @@ test("usesProxiedCodexCredentials: launched or extra Codex outside Dev Container
       agentState: { protectSettings: false, auth: "shared" },
     }),
   ).toBe(false);
+});
+
+test("usesProxied*Credentials: a per-agent entry opts out only that agent", () => {
+  const profile = {
+    agent: "claude" as const,
+    extraAgents: ["codex" as const],
+    agentState: { protectSettings: false, auth: { codex: "shared" as const } },
+  };
+  expect(usesProxiedClaudeCredentials(profile)).toBe(true);
+  expect(usesProxiedCodexCredentials(profile)).toBe(false);
 });

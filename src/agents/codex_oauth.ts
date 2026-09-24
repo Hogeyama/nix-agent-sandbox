@@ -56,7 +56,7 @@ export class CodexOAuthUnavailableError extends Error {
   constructor(detail: string) {
     super(
       `[nas] Codex ChatGPT credentials are not available in the host ~/.codex/auth.json (${detail}). ` +
-        `Run "codex login" on the host, or set agentState.auth = "shared" (required for API key use and for credentials stored in the keyring).`,
+        `Run "codex login" on the host, or set agentState.auth = "shared" (or new Mapping { ["codex"] = "shared" } for Codex only; required for API key use and for credentials stored in the keyring).`,
     );
     this.name = "CodexOAuthUnavailableError";
   }

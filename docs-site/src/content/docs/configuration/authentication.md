@@ -41,13 +41,26 @@ lines は複数の値になるため、ヘッダー注入や単一値のホス�
 
 ## エージェントの認証情報の保持
 
-`agentState.auth` は、エージェントのログイン情報をコンテナへどう渡すかを選びます。値は `"proxy"` と `"shared"` の2つで、指定しなければ既定値は Claude と Codex で `"proxy"`、Copilot で `"shared"` です。Dev Container の Codex は `"shared"` です。起動するエージェントにも `extraAgents` のエージェントにも同じ値を使います。Copilot の認証情報は `~/.copilot` に無いので、`"proxy"` を指定しても `"shared"` として扱います。
+`agentState.auth` は、エージェントのログイン情報をコンテナへどう渡すかを選びます。値は `"proxy"` と `"shared"` の2つで、指定しなければ既定値は Claude と Codex で `"proxy"`、Copilot で `"shared"` です。Dev Container の Codex は `"shared"` です。
+
+文字列で書くと、起動するエージェントにも `extraAgents` のエージェントにも同じ値を使います。Copilot の認証情報は `~/.copilot` に無いので、`"proxy"` を指定しても `"shared"` として扱います。
 
 ```pkl
 agentState {
   auth = "shared"
 }
 ```
+
+エージェントごとに変えるときは、エージェント名をキーにした Mapping で書きます。書かなかったエージェントは既定値になります。次は、Claude のプロファイルで `extraAgents { "codex" }` を使い、ホストの Codex が認証情報をキーリングに保存している例です。Claude の認証情報は `"proxy"` のままホストに残し、Codex だけを `"shared"` にします。
+
+```pkl
+extraAgents { "codex" }
+agentState {
+  auth = new Mapping { ["codex"] = "shared" }
+}
+```
+
+Mapping で Copilot に `"proxy"` を指定すると、起動前の検証でエラーになります。
 
 ### Claude
 

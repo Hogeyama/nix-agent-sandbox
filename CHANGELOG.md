@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Codex credentials**: `agentState.auth` now defaults to `"proxy"` for Codex, as it does for Claude. The ChatGPT OAuth tokens in the host `~/.codex/auth.json` stay on the host; the container sees a dummy `auth.json` over the shared `~/.codex`, and nas's network proxy injects the host's access token and account id into requests to `chatgpt.com` under `/backend-api/` (other `chatgpt.com` paths get no credentials). nas refreshes the token on the host. Profiles that use an API key (`OPENAI_API_KEY` / `CODEX_API_KEY`) or keep Codex credentials in the keyring must set `agentState.auth = "shared"`. Dev Container Codex sessions keep `"shared"`.
   - If the host `~/.codex/auth.json` is removed or replaced while a session runs (for example by `codex logout`), nas stops that session's container.
 - **extraAgents**: `agentState.auth` now applies to agents listed in `extraAgents` too, so a Claude provisioned next to Codex also gets proxied credentials by default.
+- **Config**: `agentState.auth` also accepts a per-agent Mapping, for example `auth = new Mapping { ["codex"] = "shared" }`. Agents not listed keep their default; the string form still applies to every agent. This lets a Claude profile with `extraAgents { "codex" }` share only Codex's credentials (for an API key or the keyring) while Claude's stay on the host. An explicit `"proxy"` for Copilot in the Mapping is a config error.
 
 ## [0.19.1] - 2026-09-24
 
