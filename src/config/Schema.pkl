@@ -922,7 +922,8 @@ class HostExecCwdConfig {
 
 class HostExecInheritEnvConfig {
   /// - `"minimal"`: 最小限の環境変数のみ継承
-  /// - `"unsafe-inherit-all"`: ホストの環境変数を広く継承（secret 漏えいリスクあり）
+  /// - `"unsafe-inherit-all"`: ホストの環境変数を広く継承（secret 漏えいリスクあり）。
+  ///   nas 自身の `NAS_*` と、URL に資格情報を含む proxy 変数は除く（`keys` に書けば継承）
   mode: "minimal"|"unsafe-inherit-all" = "minimal"
 
   /// `"minimal"` に追加で継承するホスト環境変数。

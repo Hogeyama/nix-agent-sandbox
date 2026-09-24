@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { connectUnix, readJsonLine } from "../lib/unix_socket.ts";
 import {
+  buildInheritedEnv,
   HOSTEXEC_CONTROL_REQUEST_MAX_BYTES,
   HostExecBroker,
   parseHostExecControlMessage,
@@ -190,4 +191,77 @@ test("resolveAllowEntry: rejects session_tmp: entries that escape via absolute p
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
     await rm(sessionTmp, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("buildInheritedEnv: unsafe-inherit-all leaves out nas's own and proxy credential variables", () => {
+  const hostEnv = {
+    HOME: "/home/alice",
+    GITHUB_TOKEN: "user-token",
+    NAS_UPSTREAM_PROXY: "http://sess:tok@nas-proxy:3128",
+    NAS_CONFIG_TRUST_ALL: "1",
+    NAS_SESSION_ID: "sess",
+    HTTPS_PROXY: "http://bob:hunter2@corp:8080",
+    http_proxy: "http://corp:8080",
+  };
+  expect(
+    buildInheritedEnv(
+      { mode: "unsafe-inherit-all", keys: ["NAS_SESSION_ID"] },
+      hostEnv,
+    ),
+  ).toEqual({
+    HOME: "/home/alice",
+    GITHUB_TOKEN: "user-token",
+    http_proxy: "http://corp:8080",
+    // Named explicitly in keys, so it is still passed.
+    NAS_SESSION_ID: "sess",
+  });
+});
+
+test("buildInheritedEnv: recognises proxy credentials in every proxy variable spelling", () => {
+  const hostEnv = {
+    ALL_PROXY: "socks5://u:p@corp:1080",
+    all_proxy: "u@corp:1080",
+    FTP_PROXY: "http://:secret@corp:21",
+    https_proxy: "corp:8080",
+    NO_PROXY: "localhost,127.0.0.1",
+    PROXY_NOTE: "http://u:p@not-a-proxy-var",
+    HTTP_PROXY: "::not a url::",
+  };
+  expect(
+    buildInheritedEnv({ mode: "unsafe-inherit-all", keys: [] }, hostEnv),
+  ).toEqual({
+    https_proxy: "corp:8080",
+    NO_PROXY: "localhost,127.0.0.1",
+    PROXY_NOTE: "http://u:p@not-a-proxy-var",
+    HTTP_PROXY: "::not a url::",
+  });
+});
+
+test("buildInheritedEnv: explicit keys still pass a proxy credential through", () => {
+  expect(
+    buildInheritedEnv(
+      { mode: "unsafe-inherit-all", keys: ["HTTPS_PROXY"] },
+      { HTTPS_PROXY: "http://bob:pw@corp:8080" },
+    ),
+  ).toEqual({ HTTPS_PROXY: "http://bob:pw@corp:8080" });
+});
+
+test("buildInheritedEnv: minimal mode is unchanged", () => {
+  expect(
+    buildInheritedEnv(
+      { mode: "minimal", keys: ["NAS_SESSION_ID", "UNSET_KEY"] },
+      {
+        HOME: "/home/alice",
+        LANG: "C.UTF-8",
+        GITHUB_TOKEN: "user-token",
+        NAS_SESSION_ID: "sess",
+        NAS_UPSTREAM_PROXY: "http://sess:tok@nas-proxy:3128",
+      },
+    ),
+  ).toEqual({
+    HOME: "/home/alice",
+    LANG: "C.UTF-8",
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    NAS_SESSION_ID: "sess",
+  });
 });

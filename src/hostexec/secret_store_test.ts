@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -104,6 +104,169 @@ test("assertSafeSecretPath: rejects /var/lib/onlyuser (<2 segments)", () => {
   expect(() =>
     assertSafeSecretPath("/var/lib/onlyuser", { HOME: "/home/a" }),
   ).toThrow(/\/var\/lib/);
+});
+
+// ---------------------------------------------------------------------------
+// assertSafeSecretPath — credential stores beneath HOME
+// ---------------------------------------------------------------------------
+
+test("assertSafeSecretPath: rejects well-known credential stores beneath HOME", () => {
+  const env = { HOME: "/home/alice" };
+  for (const p of [
+    "/home/alice/.ssh/id_rsa",
+    "/home/alice/.ssh",
+    "/home/alice/.gnupg/private-keys-v1.d/key",
+    "/home/alice/.aws/credentials",
+    "/home/alice/.kube/config",
+    "/home/alice/.docker/config.json",
+    "/home/alice/.netrc",
+    "/home/alice/.git-credentials",
+    "/home/alice/.config/gcloud/application_default_credentials.json",
+    "/home/alice/.config/gh/hosts.yml",
+    "/home/alice/.claude/.credentials.json",
+    "/home/alice/.codex/auth.json",
+  ]) {
+    expect(() => assertSafeSecretPath(p, env)).toThrow(
+      /sensitive credential location/,
+    );
+  }
+});
+
+test("assertSafeSecretPath: a relative path that resolves into ~/.ssh is rejected", () => {
+  const cwd = process.cwd();
+  expect(() =>
+    assertSafeSecretPath("x/.ssh/id_rsa", { HOME: path.join(cwd, "x") }),
+  ).toThrow(/sensitive credential location/);
+});
+
+test("assertSafeSecretPath: rejects nas's own state and runtime dirs", () => {
+  const env = {
+    HOME: "/home/alice",
+    XDG_CONFIG_HOME: "/cfg",
+    XDG_DATA_HOME: "/data",
+    XDG_STATE_HOME: "/state",
+    XDG_RUNTIME_DIR: "/run/user/1000",
+  };
+  for (const p of [
+    "/cfg/nas/trusted.json",
+    "/home/alice/.config/nas/trusted.json",
+    "/data/nas/audit/2026-09-24.jsonl",
+    "/home/alice/.local/share/nas/history.db",
+    "/state/nas/recent_dirs.json",
+    "/run/user/1000/nas/hostexec/brokers/s/mask-secrets.frame",
+  ]) {
+    expect(() => assertSafeSecretPath(p, env)).toThrow(
+      /sensitive credential location/,
+    );
+  }
+});
+
+test("assertSafeSecretPath: other files in HOME and ~/.config/nas stay allowed", () => {
+  const env = { HOME: "/home/alice" };
+  for (const p of [
+    "/home/alice/.config/nas/token",
+    "/home/alice/project/.env",
+    "/home/alice/.sshrc",
+    "/home/alice/.aws-notes",
+    "/home/alice/.docker/other.json",
+  ]) {
+    expect(() => assertSafeSecretPath(p, env)).not.toThrow();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// resolveSecret — symlinks are resolved before the path check
+// ---------------------------------------------------------------------------
+
+async function withFakeHome(
+  body: (home: string) => Promise<void>,
+): Promise<void> {
+  const home = await mkdtemp(path.join(tmpdir(), "nas-secret-store-home-"));
+  try {
+    await mkdir(path.join(home, ".ssh"));
+    await writeFile(path.join(home, ".ssh", "id_rsa"), "PRIVATE KEY\n");
+    await body(home);
+  } finally {
+    await rm(home, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test("resolveSecret: rejects a symlink in HOME that points into ~/.ssh", async () => {
+  await withFakeHome(async (home) => {
+    await symlink(path.join(home, ".ssh", "id_rsa"), path.join(home, "token"));
+    for (const source of [
+      "file:~/token",
+      "lines:~/token",
+      "dotenv:~/token#K",
+    ]) {
+      await expect(resolveSecret(source, { HOME: home })).rejects.toThrow(
+        /sensitive credential location/,
+      );
+    }
+  });
+});
+
+test("resolveSecret: rejects a symlinked directory in HOME that leads into ~/.ssh", async () => {
+  await withFakeHome(async (home) => {
+    await symlink(path.join(home, ".ssh"), path.join(home, "keys"));
+    await expect(
+      resolveSecret("file:~/keys/id_rsa", { HOME: home }),
+    ).rejects.toThrow(/sensitive credential location/);
+  });
+});
+
+test("resolveSecret: rejects a file reached through a symlinked ~/.ssh", async () => {
+  // ~/.ssh -> ~/dotfiles/ssh: the key's real home is outside the literal
+  // ~/.ssh, but it is still the SSH key.
+  const home = await mkdtemp(path.join(tmpdir(), "nas-secret-store-home-"));
+  try {
+    await mkdir(path.join(home, "dotfiles", "ssh"), { recursive: true });
+    await writeFile(path.join(home, "dotfiles", "ssh", "id_rsa"), "KEY\n");
+    await symlink(path.join(home, "dotfiles", "ssh"), path.join(home, ".ssh"));
+    await expect(
+      resolveSecret("file:~/dotfiles/ssh/id_rsa", { HOME: home }),
+    ).rejects.toThrow(/sensitive credential location/);
+  } finally {
+    await rm(home, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resolveSecret: rejects a symlink in HOME that points at a system path", async () => {
+  await withFakeHome(async (home) => {
+    await symlink("/etc/passwd", path.join(home, "token"));
+    await expect(resolveSecret("file:~/token", { HOME: home })).rejects.toThrow(
+      // macOS resolves /etc to /private/etc.
+      /sensitive prefix (\/private)?\/etc/,
+    );
+  });
+});
+
+test("resolveSecret: rejects ~/.ssh reached through a symlinked HOME", async () => {
+  await withFakeHome(async (realHome) => {
+    const linkParent = await mkdtemp(
+      path.join(tmpdir(), "nas-secret-store-link-"),
+    );
+    try {
+      const linkedHome = path.join(linkParent, "home");
+      await symlink(realHome, linkedHome);
+      // HOME names the symlink; the source names the real directory.
+      await expect(
+        resolveSecret(`file:${realHome}/.ssh/id_rsa`, { HOME: linkedHome }),
+      ).rejects.toThrow(/sensitive credential location/);
+    } finally {
+      await rm(linkParent, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("resolveSecret: follows a harmless symlink and reads its target", async () => {
+  await withFakeHome(async (home) => {
+    await writeFile(path.join(home, "real-token"), "ok-value\n");
+    await symlink(path.join(home, "real-token"), path.join(home, "token"));
+    expect(await resolveSecret("file:~/token", { HOME: home })).toEqual(
+      "ok-value",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
