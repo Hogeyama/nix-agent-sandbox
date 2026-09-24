@@ -12,7 +12,7 @@ import { sharedDockerResources } from "../../docker/shared_resources.ts";
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import { resolveAgentCredentials } from "../../agents/credentials.ts";
+import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
 import type {
   RequestBodyAuditConfig,
   SecretConfig,
@@ -198,14 +198,9 @@ export function planProxy(
     caCertPath: caCertFilePath(runtimePaths),
   };
 
-  const agentCredential =
-    input.profile.agent === "claude" &&
-    resolveAgentCredentials(
-      input.profile.agent,
-      input.profile.agentState.auth,
-    ) === "proxy"
-      ? { kind: "claude-oauth" as const, hostHome: input.host.home }
-      : undefined;
+  const agentCredential = usesProxiedClaudeCredentials(input.profile)
+    ? { kind: "claude-oauth" as const, hostHome: input.host.home }
+    : undefined;
 
   return {
     proxyContainerName,

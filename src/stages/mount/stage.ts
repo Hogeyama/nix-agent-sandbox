@@ -8,7 +8,7 @@
 
 import * as path from "node:path";
 import { Effect } from "effect";
-import { resolveAgentCredentials } from "../../agents/credentials.ts";
+import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
 import { configureAgent } from "../../agents/registry.ts";
 import type {
   AgentConfigResult,
@@ -105,12 +105,9 @@ export function createMountStage(
       };
       return Effect.gen(function* () {
         const mountSetupService = yield* MountSetupService;
-        const proxiedClaudeCredentials =
-          shared.profile.agent === "claude" &&
-          resolveAgentCredentials(
-            shared.profile.agent,
-            shared.profile.agentState.auth,
-          ) === "proxy";
+        const proxiedClaudeCredentials = usesProxiedClaudeCredentials(
+          shared.profile,
+        );
         const usesPrivateClaudeRoot =
           shared.profile.agent === "claude" &&
           (shared.profile.agentState.protectSettings ||

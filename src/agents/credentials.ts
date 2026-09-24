@@ -1,4 +1,4 @@
-import type { AgentCredentialsMode } from "../config/types.ts";
+import type { AgentCredentialsMode, Profile } from "../config/types.ts";
 import type { AgentType } from "./types.ts";
 
 /** ホスト側で認証情報を保持し proxy で注入する方式を実装済みのエージェントか。 */
@@ -16,4 +16,17 @@ export function resolveAgentCredentials(
 ): AgentCredentialsMode {
   if (configured !== undefined) return configured;
   return supportsProxiedCredentials(agent) ? "proxy" : "shared";
+}
+
+/**
+ * Claude を、ホストが保持する credential を proxy で注入する方式で動かすか
+ * を返す。
+ */
+export function usesProxiedClaudeCredentials(
+  profile: Pick<Profile, "agent" | "agentState">,
+): boolean {
+  return (
+    profile.agent === "claude" &&
+    resolveAgentCredentials(profile.agent, profile.agentState.auth) === "proxy"
+  );
 }

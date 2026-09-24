@@ -6,8 +6,8 @@
  */
 
 import {
-  resolveAgentCredentials,
   supportsProxiedCredentials,
+  usesProxiedClaudeCredentials,
 } from "../agents/credentials.ts";
 import { DIND_INTERNAL_PORT } from "../docker/dind.ts";
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
@@ -189,10 +189,7 @@ function validateAgentCredentials(name: string, profile: Profile): string[] {
       `profile "${name}": agentState.auth = "proxy" currently supports only agent "claude"; use "shared" for agent "${profile.agent}"`,
     );
   }
-  if (
-    profile.agent === "claude" &&
-    resolveAgentCredentials(profile.agent, configured) === "proxy"
-  ) {
+  if (usesProxiedClaudeCredentials(profile)) {
     for (const entry of profile.env) {
       // keyCmd のキー名はホストでコマンドを実行するまで決まらない。
       if (!("key" in entry) || !API_KEY_ENV_KEYS.includes(entry.key)) continue;
