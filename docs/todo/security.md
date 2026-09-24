@@ -174,6 +174,21 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
   `NAS_*`/proxy トークンを除外するフィルタ無し。opt-in かつ "unsafe" 命名で半ば受容だが、
   **対応**: `NAS_*` / proxy 資格情報だけは除外。
 
+### 平文 HTTP の request にも inject の header を付ける
+- **脅威**: broker は許可した request に inject の header を注入するが、request が TLS かどうかを見ない。
+  agent（またはプロンプトインジェクションで操られた agent）が、許可先へ平文の HTTP で request を送ると、
+  secret を含む header（GitHub の token、`agentState.auth = "proxy"` で注入するホストの Claude の
+  OAuth token など）が proxy から上流まで平文で送られる。経路上で盗聴できる者がそれを読める。
+- **経路**:
+  - `http://<許可先>/...` の forward proxy request。scope の `targets` に port を書いていなければ、port 80 への request も対象になる。
+  - 443 番への CONNECT のトンネルの中で平文の HTTP を送る request。mitmproxy は CONNECT の後の内容が
+    TLS でなければ HTTP の flow として扱い、上流にも平文でつなぐと理解している（未検証）。この場合は
+    `targets` に `:443` を書いても防げない。
+- **案**: addon の inject の適用を `flow.request.scheme == "https"` のときに限る。`removeHeaders` の削除は
+  scheme に関係なく行う。利用者の設定した inject も平文では付かなくなるので、CHANGELOG に書く。
+  broker は request の scheme を知らない（`AuthorizeRequest` に該当する項目がない）ので、判定は addon で行う。
+- **最初にやること**: 443 番への CONNECT の中で平文の HTTP を送り、mitmproxy が上流へ平文でつなぐかを実測する。
+
 ### その他 P2
 - [ ] **DinD サイドカーが `--privileged`** — [検証] CONFIRMED `src/docker/dind.ts:484`。rootless なら通常不要。
 - [ ] **L1: broker/hostexec ソケットに schema 検証・サイズ上限が無い** — [検証] CONFIRMED
