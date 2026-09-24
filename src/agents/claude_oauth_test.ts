@@ -6,6 +6,7 @@ import {
   CLAUDE_OAUTH_DUMMY_EXPIRES_AT,
   CLAUDE_OAUTH_DUMMY_REFRESH_TOKEN,
   ClaudeOAuthUnavailableError,
+  claudeCredentialsReadError,
   parseClaudeOAuthTokens,
 } from "./claude_oauth.ts";
 
@@ -184,4 +185,22 @@ test("applyRefreshedTokens: rejects a host file without OAuth tokens", () => {
   expect(() => applyRefreshedTokens("{}", tokens)).toThrow(
     ClaudeOAuthUnavailableError,
   );
+});
+
+test("claudeCredentialsReadError: maps ENOENT and ENOTDIR to the login guidance", () => {
+  for (const code of ["ENOENT", "ENOTDIR"]) {
+    const error = Object.assign(new Error(code), { code });
+    expect(claudeCredentialsReadError(error)).toBeInstanceOf(
+      ClaudeOAuthUnavailableError,
+    );
+  }
+});
+
+test("claudeCredentialsReadError: returns other errors unchanged", () => {
+  const eacces = Object.assign(new Error("permission denied"), {
+    code: "EACCES",
+  });
+  expect(claudeCredentialsReadError(eacces)).toBe(eacces);
+  const plain = new Error("boom");
+  expect(claudeCredentialsReadError(plain)).toBe(plain);
 });

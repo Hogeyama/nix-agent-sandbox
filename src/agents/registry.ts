@@ -39,6 +39,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
+        claudeCredentialsFile: input.claudeCredentialsFile,
       });
     case "copilot":
       if (input.mode !== "terminal") {

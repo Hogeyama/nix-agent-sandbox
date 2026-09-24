@@ -3,7 +3,9 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readlink,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -72,34 +74,122 @@ async function ensureSharedPath(
   }
 }
 
-/** Prepare bind sources without copying credentials or executing host configuration. */
+async function isExistingSymlink(file: string): Promise<boolean> {
+  try {
+    return (await lstat(file)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+async function ensureFileCreated(file: string, content: string): Promise<void> {
+  try {
+    await writeFile(file, content, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+}
+
+/**
+ * Prepare bind sources for a session-private Claude state root: entries
+ * under `~/.claude` are exposed individually instead of bind-mounting the
+ * directory itself, so the caller can mount something else (a dummy
+ * credentials file) in place of one specific entry without that mount
+ * living inside a read-write bind of the host directory.
+ *
+ * `protectSettings` (default true) is "protected mode": configuration
+ * stays read-only, `PRIVATE_ENTRIES` are left out entirely (fresh in the
+ * private root), and only `CLAUDE_SHARED_DIRECTORIES` / `CLAUDE_SHARED_FILES`
+ * are writable. `protectSettings: false` exposes every entry read-write
+ * with nothing excluded, matching a direct read-write bind of `~/.claude`;
+ * this is the layout used when Claude's credentials are proxied but
+ * `protectSettings` itself was not requested.
+ *
+ * `shareCredentials` (default true) controls `.credentials.json`
+ * specifically: `false` neither creates nor exposes it, for callers that
+ * mount a dummy credentials file in its place.
+ *
+ * A top-level entry that is a symlink is never bind-mounted: Docker
+ * resolves a bind source on the host, so mounting a symlink would expose
+ * whatever it points to — possibly outside `~/.claude` — at that host
+ * path, rather than resolving inside the container's own filesystem
+ * namespace. With `protectSettings: false` (where such an entry would
+ * otherwise be bound read-write), the symlink itself is replicated into
+ * the private root, so it resolves in the container's namespace. The
+ * known shared paths (`CLAUDE_SHARED_DIRECTORIES`, `CLAUDE_SHARED_FILES`)
+ * follow the same rule when they are symlinks: they are replicated like
+ * any other entry rather than failing the regular-file/directory check
+ * that applies under `protectSettings: true`.
+ *
+ * `~/.claude.json` sits outside `~/.claude` and is bound on its own, not
+ * through the private root. With `protectSettings: false` it is created if
+ * missing and bound as-is even when it is a symlink, so the container
+ * reads and writes the same file the host's Claude Code uses as its
+ * `~/.claude.json`. With `protectSettings: true` it must be a regular
+ * file.
+ */
 export async function prepareProtectedClaudeState(
   hostHome: string,
+  options: { shareCredentials?: boolean; protectSettings?: boolean } = {},
 ): Promise<ProtectedClaudeState> {
+  const protectSettings = options.protectSettings !== false;
+  const shareCredentials = options.shareCredentials !== false;
   const claudeDir = path.join(hostHome, ".claude");
   const claudeJson = path.join(hostHome, ".claude.json");
+  const sharedFiles = CLAUDE_SHARED_FILES.filter(
+    (name) => shareCredentials || name !== ".credentials.json",
+  );
   await mkdir(claudeDir, { recursive: true, mode: 0o700 });
-  await ensureSharedPath(claudeJson, false);
-  for (const name of CLAUDE_SHARED_DIRECTORIES)
-    await ensureSharedPath(path.join(claudeDir, name), true);
-  for (const name of CLAUDE_SHARED_FILES)
-    await ensureSharedPath(path.join(claudeDir, name), false);
+  if (protectSettings) {
+    await ensureSharedPath(claudeJson, false);
+  } else {
+    // Bound as-is even when it is a symlink; see the doc comment above.
+    await ensureFileCreated(claudeJson, "{}\n");
+  }
+  for (const name of CLAUDE_SHARED_DIRECTORIES) {
+    const target = path.join(claudeDir, name);
+    if (!protectSettings && (await isExistingSymlink(target))) continue;
+    await ensureSharedPath(target, true);
+  }
+  for (const name of sharedFiles) {
+    const target = path.join(claudeDir, name);
+    if (!protectSettings && (await isExistingSymlink(target))) continue;
+    await ensureSharedPath(target, false);
+  }
 
   const writable = new Set<string>([
     ...CLAUDE_SHARED_DIRECTORIES,
-    ...CLAUDE_SHARED_FILES,
+    ...sharedFiles,
   ]);
-  const entries = (await readdir(claudeDir))
+  const names = (await readdir(claudeDir))
     .sort()
-    .filter((name) => !PRIVATE_ENTRIES.has(name))
-    .map((name) => ({
-      source: path.join(claudeDir, name),
-      name,
-      readOnly: !writable.has(name),
-    }));
+    .filter((name) => !protectSettings || !PRIVATE_ENTRIES.has(name))
+    .filter((name) => shareCredentials || name !== ".credentials.json");
+
   // Keep the parent writable: Claude creates sibling temporary files before
   // replacing credentials, then falls back to in-place writes for bind mounts.
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-claude-state-"));
+
+  type Entry = ProtectedClaudeState["entries"][number];
+  const entries: Entry[] = [];
+  try {
+    for (const name of names) {
+      const source = path.join(claudeDir, name);
+      if (!protectSettings && (await isExistingSymlink(source))) {
+        const linkTarget = await readlink(source);
+        await symlink(linkTarget, path.join(runtimeDir, name));
+        continue;
+      }
+      entries.push({
+        source,
+        name,
+        readOnly: protectSettings && !writable.has(name),
+      });
+    }
+  } catch (error) {
+    await rm(runtimeDir, { recursive: true, force: true });
+    throw error;
+  }
   return { runtimeDir, claudeJson, entries };
 }
 

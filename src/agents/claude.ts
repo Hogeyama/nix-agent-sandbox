@@ -2,6 +2,7 @@
  * Claude Code エージェント対応
  */
 
+import type { MountSpec } from "../pipeline/state.ts";
 import {
   CLAUDE_SETTINGS_FILES,
   existingSettingsFiles,
@@ -68,6 +69,11 @@ export interface ClaudeConfigInput {
   readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
+  /**
+   * container の `~/.claude/.credentials.json` に bind mount するダミーファイルの、
+   * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
+   */
+  readonly claudeCredentialsFile?: string;
 }
 
 /** Claude Code 固有のマウントと環境変数を決定する (純粋関数) */
@@ -89,6 +95,16 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     );
   }
 
+  // A dummy credentials file may only replace a single entry inside the
+  // private state root (see ProtectedClaudeState); bind-mounting it over a
+  // path still reachable through a read-write host directory bind is not
+  // safe, since Claude's own token refresh replaces the file by rename.
+  if (input.claudeCredentialsFile && !input.protectedClaudeState) {
+    throw new Error(
+      "[nas] Dummy Claude credentials must be mounted onto protected Claude state",
+    );
+  }
+
   const stateMounts = input.protectedClaudeState
     ? [
         {
@@ -107,21 +123,39 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
       ]
     : undefined;
 
+  // ~/.claude のディレクトリのマウントより後に置き、同じ位置のファイルを隠す。
+  const credentialsMount: MountSpec[] = input.claudeCredentialsFile
+    ? [
+        {
+          source: input.claudeCredentialsFile,
+          target: `${containerHome}/.claude/.credentials.json`,
+        },
+      ]
+    : [];
+  const withCredentials = (
+    mounts: readonly MountSpec[] | undefined,
+  ): MountSpec[] | undefined =>
+    mounts === undefined && credentialsMount.length === 0
+      ? undefined
+      : [...(mounts ?? []), ...credentialsMount];
+
   if (input.claudeState) {
     return {
       dockerArgs: args,
       envVars,
       agentCommand: ["claude"],
-      mounts: stateMounts ?? [
-        {
-          source: input.claudeState.claudeDir,
-          target: `${containerHome}/.claude`,
-        },
-        {
-          source: input.claudeState.claudeJson,
-          target: `${containerHome}/.claude.json`,
-        },
-      ],
+      mounts: withCredentials(
+        stateMounts ?? [
+          {
+            source: input.claudeState.claudeDir,
+            target: `${containerHome}/.claude`,
+          },
+          {
+            source: input.claudeState.claudeJson,
+            target: `${containerHome}/.claude.json`,
+          },
+        ],
+      ),
     };
   }
 
@@ -150,7 +184,7 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     envVars.NODE_EXTRA_CA_CERTS = NAS_PROXY_CA_CERT_PATH;
     return {
       dockerArgs: [...args],
-      mounts: stateMounts,
+      mounts: withCredentials(stateMounts),
       envVars,
       agentCommand: [CLAUDE_AGENT_ACP_COMMAND],
     };
@@ -171,7 +205,12 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
         "claude",
       ];
 
-  return { dockerArgs: [...args], mounts: stateMounts, envVars, agentCommand };
+  return {
+    dockerArgs: [...args],
+    mounts: withCredentials(stateMounts),
+    envVars,
+    agentCommand,
+  };
 }
 
 // ---------------------------------------------------------------------------

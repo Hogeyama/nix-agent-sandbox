@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   rm,
   stat,
   symlink,
@@ -140,6 +142,130 @@ for (const entry of [
     });
   });
 }
+
+test("protected state does not share credentials when they are injected by the proxy", async () => {
+  await withHome(async (home) => {
+    const state = await prepareProtectedClaudeState(home, {
+      shareCredentials: false,
+    });
+    try {
+      expect(state.entries.some((e) => e.name === ".credentials.json")).toBe(
+        false,
+      );
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+  });
+});
+
+test("protectSettings: false mounts every entry read-write, including PRIVATE_ENTRIES", async () => {
+  await withHome(async (home) => {
+    const dir = path.join(home, ".claude");
+    await mkdir(dir);
+    await mkdir(path.join(dir, "cache"));
+    await writeFile(path.join(dir, "settings.json"), '{"kept":true}');
+    const state = await prepareProtectedClaudeState(home, {
+      protectSettings: false,
+    });
+    try {
+      expect(
+        state.entries.find((entry) => entry.name === "settings.json")?.readOnly,
+      ).toBe(false);
+      expect(
+        state.entries.find((entry) => entry.name === "cache")?.readOnly,
+      ).toBe(false);
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+  });
+});
+
+test("protectSettings: false replicates a symlinked entry instead of binding it, while a regular entry stays read-write", async () => {
+  await withHome(async (home) => {
+    const dir = path.join(home, ".claude");
+    await mkdir(dir);
+    const outsideTarget = path.join(home, "outside-secret");
+    await writeFile(outsideTarget, "secret");
+    await symlink(outsideTarget, path.join(dir, "linked-plugin"));
+    await mkdir(path.join(dir, "cache"));
+    const state = await prepareProtectedClaudeState(home, {
+      protectSettings: false,
+    });
+    try {
+      // A bind mount resolves its source on the host, so mounting the
+      // symlink itself (rather than replicating it) would have exposed
+      // outsideTarget's host path inside the container.
+      expect(state.entries.some((e) => e.name === "linked-plugin")).toBe(false);
+      const replicated = path.join(state.runtimeDir, "linked-plugin");
+      expect((await lstat(replicated)).isSymbolicLink()).toBe(true);
+      expect(await readlink(replicated)).toBe(outsideTarget);
+      expect(state.entries.find((e) => e.name === "cache")?.readOnly).toBe(
+        false,
+      );
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+  });
+});
+
+test("protectSettings: false replicates a symlinked shared directory (projects) instead of binding it", async () => {
+  await withHome(async (home) => {
+    const dir = path.join(home, ".claude");
+    await mkdir(dir);
+    const outsideTarget = path.join(home, "outside-projects");
+    await mkdir(outsideTarget);
+    await symlink(outsideTarget, path.join(dir, "projects"));
+    const state = await prepareProtectedClaudeState(home, {
+      protectSettings: false,
+    });
+    try {
+      expect(state.entries.some((e) => e.name === "projects")).toBe(false);
+      const replicated = path.join(state.runtimeDir, "projects");
+      expect((await lstat(replicated)).isSymbolicLink()).toBe(true);
+      expect(await readlink(replicated)).toBe(outsideTarget);
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+  });
+});
+
+test("protectSettings: false binds a symlinked ~/.claude.json as-is instead of rejecting it", async () => {
+  await withHome(async (home) => {
+    await mkdir(path.join(home, ".claude"));
+    await writeFile(path.join(home, "unrelated"), "untouched");
+    await symlink(
+      path.join(home, "unrelated"),
+      path.join(home, ".claude.json"),
+    );
+    const state = await prepareProtectedClaudeState(home, {
+      protectSettings: false,
+    });
+    try {
+      expect(state.claudeJson).toBe(path.join(home, ".claude.json"));
+      expect((await lstat(state.claudeJson)).isSymbolicLink()).toBe(true);
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+  });
+});
+
+test("mount setup surfaces the original error when Claude credentials cannot be prepared", async () => {
+  await withHome(async (home) => {
+    const program = Effect.gen(function* () {
+      const service = yield* MountSetupService;
+      return yield* service.prepareClaudeCredentials(home);
+    }).pipe(
+      Effect.provide(MountSetupServiceLive),
+      Effect.provide(makeFsServiceFake().layer),
+      Effect.scoped,
+    );
+    // Without a ~/.claude/.credentials.json, prepareDummyClaudeCredentials
+    // throws ClaudeOAuthUnavailableError with login guidance; the live
+    // service must propagate that message rather than losing it behind a
+    // generic Effect.tryPromise UnknownException.
+    await expect(Effect.runPromise(program)).rejects.toThrow(/claude \/login/);
+  });
+});
 
 test("mount setup releases private state on failure while preserving shared history", async () => {
   await withHome(async (home) => {

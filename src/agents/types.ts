@@ -12,7 +12,14 @@ export interface ClaudeStatePaths {
   readonly claudeJson: string;
 }
 
-/** Host state exposed through a private, writable container state root. */
+/**
+ * Host `~/.claude` state exposed through a private, per-session container
+ * root instead of a direct bind of the host directory. Used both for
+ * `agentState.protectSettings` (protected mode) and whenever Claude
+ * credentials are proxied, so a dummy credentials file can be bind-mounted
+ * in place of the real one without a read-write bind of the host directory
+ * underneath it.
+ */
 export interface ProtectedClaudeState {
   readonly runtimeDir: string;
   readonly claudeJson: string;
@@ -58,6 +65,11 @@ export interface AgentConfigInput {
   readonly protectSettings: boolean;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
+  /**
+   * container の `~/.claude/.credentials.json` に bind mount するダミーファイルの、
+   * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
+   */
+  readonly claudeCredentialsFile?: string;
 }
 
 /** エージェント固有 probe 結果 */

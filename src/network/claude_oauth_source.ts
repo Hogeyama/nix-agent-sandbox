@@ -13,7 +13,7 @@ import * as path from "node:path";
 import {
   applyRefreshedTokens,
   type ClaudeOAuthTokens,
-  ClaudeOAuthUnavailableError,
+  claudeCredentialsReadError,
   parseClaudeOAuthTokens,
   type RefreshedClaudeTokens,
 } from "../agents/claude_oauth.ts";
@@ -39,10 +39,10 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /**
  * open() での初回読み込みだけが対象。credentials ファイルどころか
- * `~/.claude` すらまだ無いホストは珍しくないので、その ENOENT は
- * ClaudeOAuthUnavailableError に読み替え、`claude /login` の案内を出す。
- * それ以外のエラー (権限など) はそのまま投げ、refresh 経路のファイル読み
- * (refreshUnderLock/acquireLockOrAdopt) には影響しない。
+ * `~/.claude` すらまだ無いホストは珍しくないので、その場合は
+ * ClaudeOAuthUnavailableError にして `claude /login` を案内する
+ * (claudeCredentialsReadError)。refresh 経路のファイル読み
+ * (refreshUnderLock/acquireLockOrAdopt) はこの変換を通さない。
  */
 async function readCredentialsForOpen(
   deps: ClaudeOAuthSourceDeps,
@@ -50,10 +50,7 @@ async function readCredentialsForOpen(
   try {
     return await deps.readCredentials();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      throw new ClaudeOAuthUnavailableError("no credentials file");
-    }
-    throw error;
+    throw claudeCredentialsReadError(error);
   }
 }
 

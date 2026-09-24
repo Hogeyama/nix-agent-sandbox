@@ -36,6 +36,23 @@ export class ClaudeOAuthUnavailableError extends Error {
   }
 }
 
+/**
+ * host の credentials file を読んだときのエラーを、呼び出し元が投げるエラーに
+ * 変換する。
+ *
+ * file か `~/.claude` が無い (ENOENT)、または `~/.claude` がディレクトリでない
+ * (ENOTDIR) ときは、host で未ログインとみなし、`claude /login` を案内する
+ * ClaudeOAuthUnavailableError にする。権限などそれ以外のエラーは、原因を
+ * 隠さないよう元のエラーをそのまま返す。
+ */
+export function claudeCredentialsReadError(error: unknown): unknown {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return new ClaudeOAuthUnavailableError("no credentials file");
+  }
+  return error;
+}
+
 // ログイン状態の判定に使われる項目だけをダミーへ写す。未知の項目は秘密を
 // 含みうるので写さない。
 const DUMMY_OAUTH_FIELDS = ["scopes", "subscriptionType", "rateLimitTier"];
