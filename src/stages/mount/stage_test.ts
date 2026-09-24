@@ -120,6 +120,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     takenX11Displays: new Set<number>(),
     x11UnixDirReadOnly: false,
     localConfigPaths: [],
+    gitMetadata: null,
     ...overrides,
   };
 }
@@ -1386,6 +1387,227 @@ test("MountStage: RO mount is emitted AFTER the workspace RW mount", () => {
   const configIdx = plan.dockerArgs.indexOf(`${configPath}:${configPath}:ro`);
   expect(wsIdx).toBeGreaterThanOrEqual(0);
   expect(configIdx).toBeGreaterThan(wsIdx);
+});
+
+/** 自分自身への RW bind mount (rename 防止の pin) の target 一覧 */
+function pinnedTargets(plan: {
+  containerPatch: { mounts?: readonly MountSpecLike[] };
+}): string[] {
+  return (plan.containerPatch.mounts ?? [])
+    .filter((m) => !m.readOnly && m.source === m.target)
+    .map((m) => m.target)
+    .filter((t) => t !== TEST_WORK_DIR && t !== "/repo");
+}
+type MountSpecLike = { source: string; target: string; readOnly?: boolean };
+
+test("MountStage: .nas is pinned so `mv .nas .nas.old` cannot drop the config.pkl RO mount", () => {
+  const configPath = `${TEST_WORK_DIR}/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+  expect(pinnedTargets(plan)).toEqual([`${TEST_WORK_DIR}/.nas`]);
+});
+
+test("MountStage: nested config.pkl pins every intermediate dir", () => {
+  const configPath = `${TEST_WORK_DIR}/sub/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(pinnedTargets(plan)).toEqual([
+    `${TEST_WORK_DIR}/sub`,
+    `${TEST_WORK_DIR}/sub/.nas`,
+  ]);
+});
+
+test("MountStage: nas worktree pins .nas once for both config.pkl and the worktree .git file", () => {
+  const repoRoot = "/repo";
+  const worktree = `${repoRoot}/.nas/worktrees/nas-1`;
+  const configPath = `${repoRoot}/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+    slices: {
+      workspace: {
+        workDir: worktree,
+        mountDir: repoRoot,
+        imageName: "nas-sandbox",
+      },
+    },
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+  expect(plan.dockerArgs).toContain(`${worktree}/.git:${worktree}/.git:ro`);
+  expect(pinnedTargets(plan)).toEqual([
+    `${repoRoot}/.nas`,
+    `${repoRoot}/.nas/worktrees`,
+    worktree,
+  ]);
+});
+
+test("MountStage: IDE .nas RO dir is itself a mount point, so only its ancestors are pinned", () => {
+  const configPath = `${TEST_WORK_DIR}/sub/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes, ideMounts);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: `${TEST_WORK_DIR}/sub/.nas`,
+    target: `${TEST_WORK_DIR}/sub/.nas`,
+    readOnly: true,
+  });
+  expect(pinnedTargets(plan)).toEqual([`${TEST_WORK_DIR}/sub`]);
+  // 同じ target への重複 mount は作らない
+  const targets = (plan.containerPatch.mounts ?? []).map((m) => m.target);
+  expect(new Set(targets).size).toBe(targets.length);
+});
+
+// ============================================================
+// .git/config / hooks RO bind mount (ホストでのコード実行防止)
+// ============================================================
+
+function mountIndex(plan: { dockerArgs: readonly string[] }, spec: string) {
+  return plan.dockerArgs.indexOf(spec);
+}
+
+test("MountStage: .git/config and .git/hooks are RO mounted, .git pinned in between", () => {
+  const gitDir = `${TEST_WORK_DIR}/.git`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [`${gitDir}/config`, `${gitDir}/hooks`],
+        missingHookDirs: [],
+        skippedSymlinks: [],
+      },
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  const ws = mountIndex(plan, `${TEST_WORK_DIR}:${TEST_WORK_DIR}`);
+  // `mv .git .git.old` で RO を外せないよう .git 自体を mount point にする
+  const pin = mountIndex(plan, `${gitDir}:${gitDir}`);
+  const config = mountIndex(plan, `${gitDir}/config:${gitDir}/config:ro`);
+  const hooks = mountIndex(plan, `${gitDir}/hooks:${gitDir}/hooks:ro`);
+  expect(ws).toBeGreaterThanOrEqual(0);
+  expect(pin).toBeGreaterThan(ws);
+  expect(config).toBeGreaterThan(pin);
+  expect(hooks).toBeGreaterThan(pin);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: `${gitDir}/config`,
+    target: `${gitDir}/config`,
+    readOnly: true,
+  });
+  expect(plan.directories).toEqual([]);
+});
+
+test("MountStage: missing hooks dir is created on the host and RO mounted", () => {
+  const hooks = `${TEST_WORK_DIR}/.git/hooks`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [],
+        missingHookDirs: [hooks, "/elsewhere/hooks"],
+        skippedSymlinks: [],
+      },
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.directories).toEqual([
+    { path: hooks, mode: 0o755, removeOnTeardown: false },
+  ]);
+  expect(plan.dockerArgs).toContain(`${hooks}:${hooks}:ro`);
+  // mountSource 外はコンテナから見えないので作らない・mount しない
+  expect(plan.dockerArgs.some((a) => a.includes("/elsewhere"))).toBe(false);
+});
+
+test("MountStage: core.hooksPath inside the worktree is RO without pinning the root", () => {
+  const husky = `${TEST_WORK_DIR}/.husky`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [husky],
+        missingHookDirs: [],
+        skippedSymlinks: [],
+      },
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${husky}:${husky}:ro`);
+  // workspace mount 以外に mountSource 自体の mount は増えない
+  expect(
+    plan.dockerArgs.filter((a) => a === `${TEST_WORK_DIR}:${TEST_WORK_DIR}`),
+  ).toHaveLength(1);
+});
+
+test("MountStage: nas worktree .git file is RO and its ancestors up to the repo root are pinned", () => {
+  const repoRoot = "/repo";
+  const worktree = `${repoRoot}/.nas/worktrees/nas-1`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [`${repoRoot}/.git/config`],
+        missingHookDirs: [],
+        skippedSymlinks: [],
+      },
+    }),
+    slices: {
+      workspace: {
+        workDir: worktree,
+        mountDir: repoRoot,
+        imageName: "nas-sandbox",
+      },
+    },
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${worktree}/.git:${worktree}/.git:ro`);
+  for (const dir of [
+    `${repoRoot}/.git`,
+    `${repoRoot}/.nas`,
+    `${repoRoot}/.nas/worktrees`,
+    worktree,
+  ]) {
+    expect(plan.dockerArgs).toContain(`${dir}:${dir}`);
+  }
+  expect(mountIndex(plan, `${repoRoot}/.nas:${repoRoot}/.nas`)).toBeLessThan(
+    mountIndex(plan, `${worktree}:${worktree}`),
+  );
+});
+
+test("MountStage: git metadata RO source follows the maskfs view", () => {
+  const maskedRoot = "/run/user/1000/nas/maskfs/sessions/s1/mnt";
+  const config = `${TEST_WORK_DIR}/.git/config`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: [config],
+        missingHookDirs: [],
+        skippedSymlinks: [],
+      },
+    }),
+    slices: {
+      workspace: {
+        workDir: TEST_WORK_DIR,
+        imageName: "nas-sandbox",
+        maskedRoot,
+      },
+    },
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${maskedRoot}/.git/config:${config}:ro`);
+});
+
+test("MountStage: git metadata outside mountSource or symlinked is not mounted", () => {
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitMetadata: {
+        readOnlyPaths: ["/other/repo/.git/config"],
+        missingHookDirs: [],
+        skippedSymlinks: [`${TEST_WORK_DIR}/.git/hooks`],
+      },
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs.some((a) => a.includes(".git"))).toBe(false);
 });
 
 test("MountStage: structured workspace, nix, and dbus slices drive planning", () => {

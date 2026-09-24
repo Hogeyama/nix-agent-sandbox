@@ -6,6 +6,7 @@
  */
 
 import {
+  lstat,
   mkdir,
   readdir,
   realpath,
@@ -114,6 +115,34 @@ export interface MountProbes {
    * mountSource 内にあるものは RO bind mount で保護する。
    */
   localConfigPaths: readonly string[];
+  /**
+   * workDir の git リポジトリで、ホストの git が実行コードとして解釈する
+   * メタデータの場所。
+   *
+   * エージェントが書き換えると、次にユーザーがホストで git を実行したときに
+   * hook や core.fsmonitor 等で任意コードが走るため、mountSource 内にある
+   * ものは RO bind mount で保護する。git リポジトリ外 (または bare) なら null。
+   */
+  gitMetadata: GitMetadataProbe | null;
+}
+
+/** git メタデータ保護用の事前解決結果 */
+export interface GitMetadataProbe {
+  /**
+   * 実在し RO にすべきパス: `<common-dir>/config`、実在する hooks
+   * ディレクトリ、`config.worktree`、worktree トップの `.git` ファイル
+   * (gitdir: ポインタ)。linked worktree でも hooks と config は common dir
+   * 側にあるため per-worktree gitdir ではなく common dir を基準にする。
+   */
+  readonly readOnlyPaths: readonly string[];
+  /**
+   * 存在しない hooks ディレクトリ (`<common-dir>/hooks` と core.hooksPath)。
+   * 無いままだとエージェントが作成して hook を置けるので、nas が空で作って
+   * RO mount する。
+   */
+  readonly missingHookDirs: readonly string[];
+  /** symlink のため保護対象外にしたパス (警告用) */
+  readonly skippedSymlinks: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +201,7 @@ export async function resolveMountProbes(
   // .agent-sandbox.{yml,nix} の列挙（後で RO bind mount 対象にする）
   preparationSignal()?.throwIfAborted();
   const localConfigPaths = await resolveLocalConfigPaths(workDir);
+  const gitMetadata = await resolveGitMetadata(workDir);
 
   // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
   preparationSignal()?.throwIfAborted();
@@ -198,6 +228,7 @@ export async function resolveMountProbes(
     takenX11Displays,
     x11UnixDirReadOnly,
     localConfigPaths,
+    gitMetadata,
   };
 }
 
@@ -466,6 +497,102 @@ async function resolveGitWorktreeMainRoot(
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * workDir の git リポジトリについて、RO 保護すべきメタデータを列挙する。
+ * リポジトリ外・bare リポジトリ (--show-toplevel が失敗) では null。
+ */
+export async function resolveGitMetadata(
+  workDir: string,
+): Promise<GitMetadataProbe | null> {
+  let revParse: { stdout: string; exitCode: number };
+  let hooksPathConfig: { stdout: string; exitCode: number };
+  try {
+    [revParse, hooksPathConfig] = await Promise.all([
+      runProbeCommand([
+        "git",
+        "-C",
+        workDir,
+        "rev-parse",
+        "--git-common-dir",
+        "--git-dir",
+        "--show-toplevel",
+      ]),
+      runProbeCommand([
+        "git",
+        "-C",
+        workDir,
+        "config",
+        "--type=path",
+        "--get",
+        "core.hooksPath",
+      ]),
+    ]);
+  } catch {
+    return null;
+  }
+  if (revParse.exitCode !== 0) return null;
+  const [commonDirRaw, gitDirRaw, toplevel] = revParse.stdout
+    .trim()
+    .split("\n");
+  if (!commonDirRaw || !gitDirRaw || !toplevel) return null;
+  const commonDir = path.resolve(workDir, commonDirRaw);
+  const gitDir = path.resolve(workDir, gitDirRaw);
+
+  const files = [
+    path.join(commonDir, "config"),
+    path.join(commonDir, "config.worktree"),
+    path.join(gitDir, "config.worktree"),
+  ];
+  const hookDirs = [path.join(commonDir, "hooks")];
+  // core.hooksPath の相対パスは hook の実行ディレクトリ (worktree トップ) 基準
+  const hooksPath = hooksPathConfig.stdout.trim();
+  if (hooksPathConfig.exitCode === 0 && hooksPath !== "") {
+    hookDirs.push(path.resolve(toplevel, hooksPath));
+  }
+
+  const readOnlyPaths: string[] = [];
+  const missingHookDirs: string[] = [];
+  const skippedSymlinks: string[] = [];
+  // linked worktree / --separate-git-dir の `.git` は gitdir: ポインタの
+  // ファイル。書き換えると任意の gitdir (= 任意の config) を読ませられる。
+  const dotGit = path.join(toplevel, ".git");
+  if ((await lstatOrNull(dotGit))?.isFile()) readOnlyPaths.push(dotGit);
+  for (const [candidate, isHookDir] of [
+    ...files.map((p) => [p, false] as const),
+    ...hookDirs.map((p) => [p, true] as const),
+  ]) {
+    if (
+      readOnlyPaths.includes(candidate) ||
+      missingHookDirs.includes(candidate)
+    ) {
+      continue;
+    }
+    const st = await lstatOrNull(candidate);
+    if (st === null) {
+      if (isHookDir) missingHookDirs.push(candidate);
+    } else if (st.isSymbolicLink()) {
+      // bind target の symlink は runc がコンテナ内で解決するうえ、
+      // リンク自体の差し替えも防げないので保護対象にしない。
+      skippedSymlinks.push(candidate);
+    } else {
+      readOnlyPaths.push(candidate);
+    }
+  }
+  return { readOnlyPaths, missingHookDirs, skippedSymlinks };
+}
+
+async function lstatOrNull(
+  target: string,
+): Promise<Awaited<ReturnType<typeof lstat>> | null> {
+  try {
+    return await lstat(target);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw e;
   }
 }
 
