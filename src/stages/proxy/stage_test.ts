@@ -443,6 +443,39 @@ test("planProxy: carries requestBodyAudit without changing it", () => {
   expect(result.requestBodyAudit).toEqual(REQUEST_BODY_AUDIT_CONFIG);
 });
 
+test("planProxy: Claude with default credentials asks for the host OAuth source", () => {
+  const profile = makeProfile({ agent: "claude" });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.agentCredential).toEqual({
+    kind: "claude-oauth",
+    hostHome: shared.host.home,
+  });
+});
+
+test("planProxy: shared credentials do not start a host OAuth source", () => {
+  const profile = makeProfile({
+    agent: "claude",
+    agentState: { protectSettings: false, auth: "shared" },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.agentCredential).toBeUndefined();
+});
+
+test("planProxy: other agents do not start a host OAuth source", () => {
+  const profile = makeProfile({ agent: "codex" });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.agentCredential).toBeUndefined();
+});
+
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {
   const profile = makeProfile({
     network: { scopes: ALLOW_EXAMPLE },
@@ -968,6 +1001,26 @@ test("runProxy: hands requestBodyAudit to SessionBrokerService", async () => {
   expect(capturedBrokerConfigs[0]!.requestBodyAudit).toEqual(
     REQUEST_BODY_AUDIT_CONFIG,
   );
+});
+
+test("runProxy: hands agentCredential to SessionBrokerService", async () => {
+  const profile = makeProfile({ agent: "claude" });
+  const capturedBrokerConfigs: SessionBrokerConfig[] = [];
+
+  await runStageWithFakes(profile, {
+    sessionBroker: makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          capturedBrokerConfigs.push(config);
+          return { close: () => Effect.void };
+        }),
+    }),
+  });
+
+  expect(capturedBrokerConfigs[0]!.agentCredential).toEqual({
+    kind: "claude-oauth",
+    hostHome: makeHostEnv().home,
+  });
 });
 
 // ---------------------------------------------------------------------------

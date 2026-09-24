@@ -59,3 +59,45 @@ test("SessionBrokerService: writes the session registry entry", async () => {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("SessionBrokerService: fails closed when the host has no Claude OAuth credentials", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-svc-"));
+  const hostHome = await mkdtemp(path.join(tmpdir(), "nas-broker-svc-home-"));
+  try {
+    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+    const sessionId = "sess_no_credentials";
+    const socketPath = `${paths.brokersDir}/${sessionId}/sock`;
+    const document = documentWithScopes({});
+    const config: SessionBrokerConfig = {
+      paths,
+      sessionId,
+      socketPath,
+      profileName: "test",
+      agent: "claude",
+      document,
+      requestBodyAudit: {
+        enable: true,
+        retentionSeconds: 86_400,
+        maxBodyBytes: 4_194_304,
+        maxTotalBytes: 67_108_864,
+      },
+      pendingTimeoutSeconds: 30,
+      pendingNotify: "off",
+      tokenHash: "hash",
+      agentCredential: { kind: "claude-oauth", hostHome },
+    };
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const svc = yield* SessionBrokerService;
+          return yield* svc.start(config);
+        }).pipe(Effect.provide(SessionBrokerServiceLive)),
+      ),
+    ).rejects.toThrow();
+    expect(await readSessionRegistry(paths, sessionId)).toBeNull();
+  } finally {
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(hostHome, { recursive: true, force: true }).catch(() => {});
+  }
+});
