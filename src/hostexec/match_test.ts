@@ -5,7 +5,7 @@ import {
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
 } from "../config/types.ts";
 import type { MatchContext } from "./match.ts";
-import { hostCommandArgv0, matchRule } from "./match.ts";
+import { effectiveApproval, hostCommandArgv0, matchRule } from "./match.ts";
 
 function makeRule(
   id: string,
@@ -272,6 +272,58 @@ test("hostCommandArgv0: bare-name rule runs the host PATH command, whatever path
     ).not.toBeNull();
     expect(hostCommandArgv0("git", requested)).toEqual("git");
   }
+});
+
+test("effectiveApproval: an allow argRegex cannot auto-approve args packed across a boundary", () => {
+  // The regex was written for `gpg --status-fd=2 -bsau <keyid>` (sign). Packing
+  // two tokens into one argument still produces the same joined string, but
+  // gpg now sees a different command line, so auto-approval would widen the
+  // rule beyond what its author allowed.
+  const rule = makeRule("gpg-sign", {
+    argv0: "gpg",
+    argRegex: "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$",
+  });
+  const intended = ["--status-fd=2", "-bsau", "0123ABCD"];
+  const packed = ["--status-fd=2 -bsau", "0123ABCD"];
+  expect(matchRule([rule], "gpg", intended)?.rule.id).toEqual("gpg-sign");
+  expect(effectiveApproval(rule, intended)).toEqual("allow");
+  expect(matchRule([rule], "gpg", packed)?.rule.id).toEqual("gpg-sign");
+  expect(effectiveApproval(rule, packed)).toEqual("prompt");
+});
+
+test("effectiveApproval: whitespace other than space and empty args are ambiguous too", () => {
+  const rule = makeRule("deno-test", {
+    argv0: "deno",
+    argRegex: "^-A\\s+test$",
+  });
+  expect(matchRule([rule], "deno", ["-A\ttest"])).not.toBeNull();
+  expect(effectiveApproval(rule, ["-A\ttest"])).toEqual("prompt");
+  expect(effectiveApproval(rule, ["-A", "test"])).toEqual("allow");
+
+  const noArgs = makeRule("uptime", { argv0: "uptime", argRegex: "^$" });
+  expect(matchRule([noArgs], "uptime", [""])).not.toBeNull();
+  expect(effectiveApproval(noArgs, [""])).toEqual("prompt");
+  expect(effectiveApproval(noArgs, [])).toEqual("allow");
+});
+
+test("effectiveApproval: prompt, deny, and argv0-only allow rules are unchanged", () => {
+  const packed = ["a b"];
+  expect(
+    effectiveApproval(
+      makeRule("p", { argv0: "x", argRegex: "^a b$" }, "prompt"),
+      packed,
+    ),
+  ).toEqual("prompt");
+  expect(
+    effectiveApproval(
+      makeRule("d", { argv0: "x", argRegex: "^a b$" }, "deny"),
+      packed,
+    ),
+  ).toEqual("deny");
+  // Without argRegex the rule already allows every argument list.
+  expect(effectiveApproval(makeRule("any", { argv0: "x" }), packed)).toEqual(
+    "allow",
+  );
 });
 
 test("hostCommandArgv0: path rules run the requested path as given", () => {

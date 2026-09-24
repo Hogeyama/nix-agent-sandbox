@@ -39,6 +39,7 @@ import {
 } from "./integrity.ts";
 import type { MatchContext } from "./match.ts";
 import {
+  effectiveApproval,
   hostCommandArgv0,
   isRelativeHostExecArgv0,
   matchRule,
@@ -823,7 +824,7 @@ export class HostExecBroker {
       return;
     }
     const commandStr = [resolved.capability.argv0, ...message.args].join(" ");
-    if (resolved.rule.approval === "deny") {
+    if (resolved.approval === "deny") {
       if (await wasCancelled()) return;
       await this.recordAudit(
         message.requestId,
@@ -903,11 +904,11 @@ export class HostExecBroker {
 
     if (
       integrity === "pass" &&
-      (resolved.rule.approval === "allow" ||
+      (resolved.approval === "allow" ||
         this.approvedKeys.has(approvalKey) ||
         !this.config.prompt.enable)
     ) {
-      if (resolved.rule.approval === "prompt" && !this.config.prompt.enable) {
+      if (resolved.approval === "prompt" && !this.config.prompt.enable) {
         if (await wasCancelled()) return;
         await this.recordAudit(
           message.requestId,
@@ -929,7 +930,7 @@ export class HostExecBroker {
         return;
       }
       const reason =
-        resolved.rule.approval === "allow" ? "rule-allow" : "approved-cached";
+        resolved.approval === "allow" ? "rule-allow" : "approved-cached";
       if (await wasCancelled()) return;
       await this.recordAudit(message.requestId, "allow", reason, commandStr);
       if (await wasCancelled()) return;
@@ -1383,6 +1384,7 @@ export class HostExecBroker {
       : hostCommandArgv0(rule.match.argv0, argv0);
     return {
       rule,
+      approval: effectiveApproval(rule, message.args),
       cwd: normalizedCwd,
       envVars,
       capability: {

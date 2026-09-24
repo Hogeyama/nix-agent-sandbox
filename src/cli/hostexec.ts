@@ -7,6 +7,7 @@ import type { HostExecPromptScope } from "../config/types.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import {
   buildArgsString,
+  effectiveApproval,
   hostCommandArgv0,
   matchRule,
 } from "../hostexec/match.ts";
@@ -157,6 +158,12 @@ async function runHostExecTestCommand(nasArgs: string[]): Promise<void> {
     console.log(
       `Host command: ${hostCommandArgv0(result.rule.match.argv0, argv0)}`,
     );
+    const approval = effectiveApproval(result.rule, args);
+    if (approval !== result.rule.approval) {
+      console.log(
+        `Effective approval: ${approval} (an argument is empty or contains whitespace, so argRegex cannot tell where arguments start and end)`,
+      );
+    }
   } else {
     console.log("No rule matched (fallback applies)");
   }

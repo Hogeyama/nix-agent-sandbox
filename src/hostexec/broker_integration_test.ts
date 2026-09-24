@@ -1606,6 +1606,83 @@ test("HostExecBroker: PATH rule approval shows the host command it will run, not
   }
 });
 
+for (const promptEnabled of [true, false]) {
+  test(`HostExecBroker: allow argRegex does not auto-run args with an ambiguous boundary (prompt ${promptEnabled ? "enabled" : "disabled"})`, async () => {
+    // The regex sees `-c printf pwned` for both ["-c", "printf", "pwned"] and
+    // ["-c", "printf pwned"]; only the first is what a space-separated regex
+    // describes, so the second must not run without the user seeing it.
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+    const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+    const paths = await resolveHostExecRuntimePaths(runtimeDir);
+    const workspace = await mkdtemp(
+      path.join(tmpdir(), "nas-hostexec-workspace-"),
+    );
+    const broker = new HostExecBroker({
+      paths,
+      sessionId: "sess_test",
+      profileName: "test",
+      notify: "off",
+      workspaceRoot: workspace,
+      sessionTmpDir: `${runtimeDir}/tmp`,
+      auditDir,
+      hostexec: makeConfig({
+        prompt: { enable: promptEnabled },
+        rules: [
+          {
+            id: "sh-printf-word",
+            match: { argv0: "sh", argRegex: "^-c printf [a-z]+$" },
+            cwd: { mode: "workspace-only", allow: [] },
+            env: {},
+            inheritEnv: { mode: "minimal", keys: [] },
+            approval: "allow",
+          },
+        ],
+      }),
+    });
+    const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+    const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+    await broker.start(execSocketPath, controlSocketPath);
+    try {
+      const execPromise = sendStreamingRequest(
+        execSocketPath,
+        request(["-c", "printf pwned"], workspace, "req_packed", "sh"),
+      );
+      if (promptEnabled) {
+        const pending = await waitForPendingEntries(paths, 1);
+        expect(pending[0].ruleId).toEqual("sh-printf-word");
+        expect(pending[0].args).toEqual(["-c", "printf pwned"]);
+        await sendHostExecControlRequest(controlSocketPath, {
+          type: "approve",
+          requestId: "req_packed",
+        });
+        const result = await execPromise;
+        expect(collectStdout(result)).toEqual("pwned");
+        const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+        expect(logs.map((log) => log.reason)).toEqual(["approved-by-user"]);
+      } else {
+        await expect(execPromise).rejects.toThrow(/prompt is disabled/);
+        const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+        expect(logs.map((log) => log.reason)).toEqual(["prompt-disabled"]);
+      }
+
+      // The same rule still auto-runs when every argument is a plain token.
+      const direct = await sendStreamingRequest(
+        execSocketPath,
+        request(["-c", "printf", "ok"], workspace, "req_plain", "sh"),
+      );
+      // `sh -c printf` exits non-zero on its own; what matters is that it ran
+      // without a pending approval.
+      expect(typeof direct.exitCode).toEqual("number");
+      expect(await broker.listPending()).toEqual([]);
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(workspace, { recursive: true, force: true }).catch(() => {});
+      await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
 test("HostExecBroker: installed command unwraps payload and keeps local usage fallback", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);

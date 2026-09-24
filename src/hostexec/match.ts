@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { HostExecRule } from "../config/types.ts";
+import type { HostExecApproval, HostExecRule } from "../config/types.ts";
 
 export interface MatchResult {
   rule: HostExecRule;
@@ -106,6 +106,45 @@ function argv0MatchesRule(
     return path.normalize(ruleArgv0) === path.normalize(actualArgv0);
   }
   return path.basename(actualArgv0) === ruleArgv0;
+}
+
+/**
+ * argRegex が見る文字列（引数のスペース連結）から、引数の境界を一意に
+ * 復元できないか。
+ *
+ * 空白を含む引数は複数の引数と区別できない（`["a b"]` と `["a", "b"]` は
+ * どちらも `"a b"`。`\s` を区切りに書いたルールならタブや改行も同じ）。
+ * 空の引数は `[]` と `[""]` を区別できない。どちらでもなければ連結は単射で、
+ * argRegex は引数列そのものを見ているのと同じになる。
+ */
+export function argsAmbiguousForArgRegex(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "" || /\s/.test(arg));
+}
+
+/**
+ * 一致したルールを、この引数列に対してどの承認で扱うか。
+ *
+ * `approval = "allow"` のルールの argRegex は、引数の境界が曖昧な要求に対して
+ * 作者の意図より広く一致しうる（`^-u [^ ]+ --sign$` のような境界前提の正規表現が、
+ * 1 引数に詰めた別の引数列にも一致する）。その場合だけ自動許可せず承認に回す。
+ * integrity 変化時の格上げと同じく、黙ってルールを外してコンテナや後続ルールへ
+ * 落とすより、ユーザーに実際の要求を見せる方を選ぶ。
+ *
+ * `"prompt"` と `"deny"` はそのまま返す。広く一致しても、承認を求めるか拒否する
+ * だけで、許可が広がることはない。
+ */
+export function effectiveApproval(
+  rule: HostExecRule,
+  args: readonly string[],
+): HostExecApproval {
+  if (
+    rule.approval === "allow" &&
+    rule.match.argRegex !== undefined &&
+    argsAmbiguousForArgRegex(args)
+  ) {
+    return "prompt";
+  }
+  return rule.approval;
 }
 
 /**

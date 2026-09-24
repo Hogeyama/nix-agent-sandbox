@@ -1,4 +1,8 @@
-import type { HostExecPromptScope, HostExecRule } from "../config/types.ts";
+import type {
+  HostExecApproval,
+  HostExecPromptScope,
+  HostExecRule,
+} from "../config/types.ts";
 
 export interface HostExecSessionRegistryEntry {
   version: 1;
@@ -105,6 +109,12 @@ export interface ResolvedExecutionCapability {
 
 export interface ResolvedExecution {
   rule: HostExecRule;
+  /**
+   * The approval this request is handled with. Usually `rule.approval`, but an
+   * `allow` rule whose argRegex cannot see argument boundaries in this request
+   * is raised to `prompt` (see `effectiveApproval`).
+   */
+  approval: HostExecApproval;
   cwd: string;
   capability: ResolvedExecutionCapability;
   envVars: Record<string, string>;
