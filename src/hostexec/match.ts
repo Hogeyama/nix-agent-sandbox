@@ -49,6 +49,27 @@ export function isBareCommandHostExecArgv0(argv0: string): boolean {
   return !path.isAbsolute(argv0) && !argv0.includes("/");
 }
 
+/**
+ * ルールに一致した要求について、ホストで起動する argv0 を返す。
+ *
+ * bare name のルールは、コンテナ側でどのパスから呼ばれたか
+ * (`/opt/nas/hostexec/bin/git`, `tools/git` など) にかかわらずホスト PATH 上の
+ * 同名コマンドを起動するので basename を返す。絶対・相対パスのルールは要求の
+ * argv0 をそのまま起動する。
+ *
+ * 承認表示・承認キー・監査・実行のすべてがこの値を使う。表示だけ要求の生の
+ * argv0 を見せると、ユーザーはワークスペースのスクリプトを承認したつもりで
+ * ホストの別バイナリを走らせることになる。
+ */
+export function hostCommandArgv0(
+  ruleArgv0: string,
+  requestArgv0: string,
+): string {
+  return isBareCommandHostExecArgv0(ruleArgv0)
+    ? path.basename(requestArgv0)
+    : requestArgv0;
+}
+
 function argv0MatchesRule(
   ruleArgv0: string,
   actualArgv0: string,

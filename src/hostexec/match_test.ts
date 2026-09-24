@@ -5,7 +5,7 @@ import {
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
 } from "../config/types.ts";
 import type { MatchContext } from "./match.ts";
-import { matchRule } from "./match.ts";
+import { hostCommandArgv0, matchRule } from "./match.ts";
 
 function makeRule(
   id: string,
@@ -261,4 +261,25 @@ test("matchRule: relative argv0 rule does not match absolute invocation without 
     "ps",
   ]);
   expect(result).toEqual(null);
+});
+
+test("hostCommandArgv0: bare-name rule runs the host PATH command, whatever path was requested", () => {
+  // matchRule accepts these because the basename is "git"; the host then runs
+  // its own git, so that is what approval must show and key on.
+  for (const requested of ["git", "/opt/nas/hostexec/bin/git", "tools/git"]) {
+    expect(
+      matchRule([makeRule("git", { argv0: "git" })], requested, []),
+    ).not.toBeNull();
+    expect(hostCommandArgv0("git", requested)).toEqual("git");
+  }
+});
+
+test("hostCommandArgv0: path rules run the requested path as given", () => {
+  expect(hostCommandArgv0("/usr/bin/git", "/usr/bin/git")).toEqual(
+    "/usr/bin/git",
+  );
+  expect(hostCommandArgv0("./gradlew", "./gradlew")).toEqual("./gradlew");
+  expect(hostCommandArgv0("./gradlew", "/workspace/gradlew")).toEqual(
+    "/workspace/gradlew",
+  );
 });

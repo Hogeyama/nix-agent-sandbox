@@ -1531,6 +1531,81 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
   }
 });
 
+test("HostExecBroker: PATH rule approval shows the host command it will run, not the requested path", async () => {
+  // A bare-name rule runs the host PATH command even when the container asks
+  // for a workspace file of the same basename. The approval must name the
+  // host command; showing `tools/sh` would have the user approve a workspace
+  // script while the host's sh runs.
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  await mkdir(path.join(workspace, "tools"));
+  const workspaceSh = path.join(workspace, "tools", "sh");
+  await writeFile(workspaceSh, "#!/bin/sh\nprintf workspace-sh\n");
+  await chmod(workspaceSh, 0o755);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "sh-any",
+          match: { argv0: "sh" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const execPromise = sendStreamingRequest(
+      execSocketPath,
+      request(
+        ["-c", "printf host-sh"],
+        workspace,
+        "req_sh_display",
+        "tools/sh",
+      ),
+    );
+    const pending = await waitForPendingEntries(paths, 1);
+    expect(pending[0].argv0).toEqual("sh");
+    expect(pending[0].capability?.argv0).toEqual("sh");
+    expect(pending[0].capability?.normalizedArgv).toEqual([
+      "sh",
+      "-c",
+      "printf host-sh",
+    ]);
+    await sendHostExecControlRequest(controlSocketPath, {
+      type: "approve",
+      requestId: "req_sh_display",
+    });
+    const result = await execPromise;
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result)).toEqual("host-sh");
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    expect(logs.map((log) => log.command)).toEqual(["sh -c printf host-sh"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("HostExecBroker: installed command unwraps payload and keeps local usage fallback", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);

@@ -5,7 +5,11 @@
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
-import { buildArgsString, matchRule } from "../hostexec/match.ts";
+import {
+  buildArgsString,
+  hostCommandArgv0,
+  matchRule,
+} from "../hostexec/match.ts";
 import {
   readHostExecSessionRegistry,
   resolveHostExecRuntimePaths,
@@ -149,6 +153,9 @@ async function runHostExecTestCommand(nasArgs: string[]): Promise<void> {
     const envPart = envKeys.length > 0 ? `, env: [${envKeys.join(", ")}]` : "";
     console.log(
       `Matched rule: ${result.rule.id} (approval: ${result.rule.approval}${envPart})`,
+    );
+    console.log(
+      `Host command: ${hostCommandArgv0(result.rule.match.argv0, argv0)}`,
     );
   } else {
     console.log("No rule matched (fallback applies)");

@@ -38,7 +38,11 @@ import {
   readFileIntegrity,
 } from "./integrity.ts";
 import type { MatchContext } from "./match.ts";
-import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
+import {
+  hostCommandArgv0,
+  isRelativeHostExecArgv0,
+  matchRule,
+} from "./match.ts";
 import {
   closeNotification,
   notifyHostExecPendingRequest,
@@ -818,7 +822,7 @@ export class HostExecBroker {
       lifecycle.markTerminal();
       return;
     }
-    const commandStr = [message.argv0, ...message.args].join(" ");
+    const commandStr = [resolved.capability.argv0, ...message.args].join(" ");
     if (resolved.rule.approval === "deny") {
       if (await wasCancelled()) return;
       await this.recordAudit(
@@ -1185,9 +1189,10 @@ export class HostExecBroker {
         group.notificationAbort.abort();
         await closeNotification();
       }
-      const commandStr = [pending.request.argv0, ...pending.request.args].join(
-        " ",
-      );
+      const commandStr = [
+        pending.resolved.capability.argv0,
+        ...pending.request.args,
+      ].join(" ");
       if (!waiter) continue;
       try {
         if (mode === "deny") {
@@ -1370,17 +1375,20 @@ export class HostExecBroker {
       rule,
     );
     const envVars = await this.buildEnv(rule);
+    // The installed wrapper is never run on the host: its args carry the
+    // payload, so keeping the wrapper path shows the user `hostexec -- <cmd>`
+    // exactly as requested instead of a basename no host command answers to.
+    const hostArgv0 = this.isInstalledScriptRequest(argv0)
+      ? argv0
+      : hostCommandArgv0(rule.match.argv0, argv0);
     return {
       rule,
       cwd: normalizedCwd,
       envVars,
       capability: {
         ruleId: rule.id,
-        argv0: path.isAbsolute(argv0) ? argv0 : path.basename(argv0),
-        normalizedArgv: [
-          path.isAbsolute(argv0) ? argv0 : path.basename(argv0),
-          ...message.args,
-        ],
+        argv0: hostArgv0,
+        normalizedArgv: [hostArgv0, ...message.args],
         normalizedCwd: normalizedCwd,
         envBindings: Object.entries(rule.env)
           .map(([key, source]) => ({ key, source }))
@@ -1424,12 +1432,10 @@ export class HostExecBroker {
       );
       return;
     }
+    // Execute exactly the argv0 the approval showed and keyed on.
     const commandArgv0 = installedPayload
       ? installedPayload.argv0
-      : isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
-          path.isAbsolute(resolved.rule.match.argv0)
-        ? request.argv0
-        : path.basename(request.argv0);
+      : resolved.capability.argv0;
     const commandArgs = installedPayload?.args ?? request.args;
     resolved.envVars.PWD = resolved.cwd;
     let processIdentity: Awaited<
@@ -1675,7 +1681,9 @@ function toPendingEntry(
     requestId: request.requestId,
     approvalKey,
     ruleId: resolved.rule.id,
-    argv0: request.argv0,
+    // Every approval surface renders `argv0 + args`, so this must be what
+    // will run on the host, not the path the container happened to call.
+    argv0: resolved.capability.argv0,
     args: request.args,
     cwd: resolved.cwd,
     state: "pending",
