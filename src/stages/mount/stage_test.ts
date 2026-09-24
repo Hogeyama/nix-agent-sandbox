@@ -1389,6 +1389,80 @@ test("MountStage: RO mount is emitted AFTER the workspace RW mount", () => {
   expect(configIdx).toBeGreaterThan(wsIdx);
 });
 
+/** 自分自身への RW bind mount (rename 防止の pin) の target 一覧 */
+function pinnedTargets(plan: {
+  containerPatch: { mounts?: readonly MountSpecLike[] };
+}): string[] {
+  return (plan.containerPatch.mounts ?? [])
+    .filter((m) => !m.readOnly && m.source === m.target)
+    .map((m) => m.target)
+    .filter((t) => t !== TEST_WORK_DIR && t !== "/repo");
+}
+type MountSpecLike = { source: string; target: string; readOnly?: boolean };
+
+test("MountStage: .nas is pinned so `mv .nas .nas.old` cannot drop the config.pkl RO mount", () => {
+  const configPath = `${TEST_WORK_DIR}/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+  expect(pinnedTargets(plan)).toEqual([`${TEST_WORK_DIR}/.nas`]);
+});
+
+test("MountStage: nested config.pkl pins every intermediate dir", () => {
+  const configPath = `${TEST_WORK_DIR}/sub/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(pinnedTargets(plan)).toEqual([
+    `${TEST_WORK_DIR}/sub`,
+    `${TEST_WORK_DIR}/sub/.nas`,
+  ]);
+});
+
+test("MountStage: nas worktree pins .nas once for both config.pkl and the worktree .git file", () => {
+  const repoRoot = "/repo";
+  const worktree = `${repoRoot}/.nas/worktrees/nas-1`;
+  const configPath = `${repoRoot}/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+    slices: {
+      workspace: {
+        workDir: worktree,
+        mountDir: repoRoot,
+        imageName: "nas-sandbox",
+      },
+    },
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+  expect(plan.dockerArgs).toContain(`${worktree}/.git:${worktree}/.git:ro`);
+  expect(pinnedTargets(plan)).toEqual([
+    `${repoRoot}/.nas`,
+    `${repoRoot}/.nas/worktrees`,
+    worktree,
+  ]);
+});
+
+test("MountStage: IDE .nas RO dir is itself a mount point, so only its ancestors are pinned", () => {
+  const configPath = `${TEST_WORK_DIR}/sub/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes, ideMounts);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: `${TEST_WORK_DIR}/sub/.nas`,
+    target: `${TEST_WORK_DIR}/sub/.nas`,
+    readOnly: true,
+  });
+  expect(pinnedTargets(plan)).toEqual([`${TEST_WORK_DIR}/sub`]);
+  // 同じ target への重複 mount は作らない
+  const targets = (plan.containerPatch.mounts ?? []).map((m) => m.target);
+  expect(new Set(targets).size).toBe(targets.length);
+});
+
 // ============================================================
 // .git/config / hooks RO bind mount (ホストでのコード実行防止)
 // ============================================================
