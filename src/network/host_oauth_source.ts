@@ -80,6 +80,13 @@ export class HostOAuthCredentialSource<T extends HostOAuthTokens, Req, R> {
   private cancelScheduled: (() => void) | null = null;
   private closed = false;
   /**
+   * abandon() されたかどうか。closed とは別に持つ: abandon() の時点で
+   * 進行中の refresh (deps.refresh 待ち) が既にあると、それは closed を
+   * 見ずに完了まで走り続けるので、その完了後の書き戻しを止めるにはこの
+   * フラグが要る。
+   */
+  private abandoned = false;
+  /**
    * refresh には成功したがファイルへの書き戻しに失敗した分。次の
    * refreshUnderLock はまずこれの書き戻しだけをやり直す。
    */
@@ -103,10 +110,15 @@ export class HostOAuthCredentialSource<T extends HostOAuthTokens, Req, R> {
   /**
    * 以後の更新と書き戻しをやめる。ファイルが別のログインのものに置き換わった
    * ときに使う。書き戻し待ちの token は、置き換わった後のファイルへ書くと
-   * 新しいログインを壊すので捨てる。
+   * 新しいログインを壊すので捨てる。これを呼ぶ前から進行中だった refresh
+   * (deps.refresh 待ち) にも及ぶ: その refresh token は既に使い切っており、
+   * 再開したときに得る新しい token を書き戻す先はもう別のログインのファイル
+   * なので、refreshUnderLock と persistPendingWriteBack は abandoned を見て
+   * 書き戻しを行わない。
    */
   protected abandon(): void {
     this.closed = true;
+    this.abandoned = true;
     this.cancelScheduled?.();
     this.cancelScheduled = null;
     this.pendingWriteBack = null;
@@ -131,7 +143,12 @@ export class HostOAuthCredentialSource<T extends HostOAuthTokens, Req, R> {
     if (this.inFlightRefresh !== null) {
       await this.inFlightRefresh;
     }
-    if (this.pendingWriteBack !== null) {
+    if (this.abandoned) {
+      // abandon() 済みなら、待っていた in-flight refresh が書き戻しを
+      // 済ませずに戻ってきていてもここで諦める。書き戻し先のファイルは
+      // もう別のログインのものになっている。
+      this.pendingWriteBack = null;
+    } else if (this.pendingWriteBack !== null) {
       try {
         await this.refreshUnderLock();
       } catch (error) {
@@ -199,6 +216,12 @@ export class HostOAuthCredentialSource<T extends HostOAuthTokens, Req, R> {
       const refreshed = await this.deps.refresh(
         this.flavor.refreshRequest(onDisk),
       );
+      if (this.abandoned) {
+        // 待っている間に abandon() された。refresh token は既に使い切って
+        // いるが、書き戻す先のファイルはもう別のログインのものなので、得た
+        // 結果は捨てて何もしない。
+        return;
+      }
       // refresh はここで成功済み。この refresh token は使い切りで、サーバー
       // 側は既に新しいものへ入れ替えている。lock がこの後奪われていても、
       // 奪った側がこの refresh token で有効な token を得ることはあり得ない
@@ -227,9 +250,14 @@ export class HostOAuthCredentialSource<T extends HostOAuthTokens, Req, R> {
   /**
    * pendingWriteBack をファイルへ反映する。失敗しても pendingWriteBack は
    * 保持したままにし、呼び出し元へ投げて通常の失敗経路 (30秒後の再試行) に
-   * 委ねる。
+   * 委ねる。abandon() 済みなら、待ち分があっても書き戻さずに捨てる: 書き戻す
+   * 先のファイルはもう別のログインのものになっている。
    */
   private async persistPendingWriteBack(text: string): Promise<void> {
+    if (this.abandoned) {
+      this.pendingWriteBack = null;
+      return;
+    }
     const pending = this.pendingWriteBack;
     if (pending === null) return;
     try {
