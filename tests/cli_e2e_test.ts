@@ -985,6 +985,11 @@ async function withFakeCodexProject(
         "profiles {",
         '  ["test"] {',
         '    agent = "codex"',
+        // The fake HOME has no ChatGPT login to proxy; these tests cover the
+        // launch pipeline, not credential handling.
+        "    agentState {",
+        '      auth = "shared"',
+        "    }",
         "    nix {",
         "      enable = false",
         "    }",
