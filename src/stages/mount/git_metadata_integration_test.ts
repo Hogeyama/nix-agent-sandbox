@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveGitMetadata } from "./mount_probes.ts";
@@ -60,6 +68,7 @@ test.skipIf(!gitAvailable)(
       expect(probe).toEqual({
         readOnlyPaths: [path.join(root, ".git/config")],
         missingHookDirs: [path.join(root, ".git/hooks")],
+        missingCommonDirFiles: [path.join(root, ".git/commondir")],
         skippedSymlinks: [],
       });
 
@@ -102,10 +111,71 @@ test.skipIf(!gitAvailable)(
       expect(probe?.readOnlyPaths).toEqual([
         path.join(worktree, ".git"),
         path.join(root, ".git/config"),
+        path.join(root, ".git/worktrees/w1/commondir"),
       ]);
       expect(probe?.missingHookDirs).toEqual([path.join(root, ".git/hooks")]);
+      expect(probe?.missingCommonDirFiles).toEqual([
+        path.join(root, ".git/commondir"),
+      ]);
+
+      // 他の worktree の commondir も、その worktree で host の git が読むので
+      // 元の checkout からの probe で保護する。
+      const fromMain = await resolveGitMetadata(root);
+      expect(fromMain?.readOnlyPaths).toContain(
+        path.join(root, ".git/worktrees/w1/commondir"),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+/**
+ * git は linked worktree に限らずどの gitdir でも `commondir` を読み、そこを
+ * common dir として config と hooks を読む。nas が作る `.` の placeholder が
+ * 無害であることと、placeholder が無ければ本当に迂回できることを実物の git で
+ * 確かめる。後者が通らなくなったら (git が plain repo で commondir を読まなく
+ * なったら) この保護は不要になる。
+ */
+test.skipIf(!gitAvailable)(
+  "git honors commondir in a plain repo; the '.' placeholder behaves as if absent",
+  async () => {
+    const root = await makeRepo();
+    const evil = `${root}-evil`;
+    try {
+      const probe = await resolveGitMetadata(root);
+      const [commondir] = probe?.missingCommonDirFiles ?? [];
+      expect(commondir).toBe(path.join(root, ".git/commondir"));
+
+      await cp(path.join(root, ".git"), evil, { recursive: true });
+      git(evil, "config", "--file", "config", "core.fsmonitor", "exit 1");
+      git(evil, "config", "--file", "config", "nas.marker", "redirected");
+      await writeFile(commondir, `${evil}\n`);
+      const redirected = Bun.spawnSync(
+        ["git", "-C", root, "config", "nas.marker"],
+        { env: GIT_ENV },
+      );
+      expect(redirected.stdout.toString().trim()).toBe("redirected");
+
+      await writeFile(commondir, ".\n");
+      git(root, "config", "nas.marker", "own");
+      git(root, "status", "--short");
+      git(root, "commit", "-q", "--allow-empty", "-m", "second");
+      git(root, "worktree", "add", "-q", path.join(root, "wt"));
+      const own = Bun.spawnSync(["git", "-C", root, "config", "nas.marker"], {
+        env: GIT_ENV,
+      });
+      expect(own.stdout.toString().trim()).toBe("own");
+      const common = Bun.spawnSync(
+        ["git", "-C", root, "rev-parse", "--git-common-dir"],
+        { env: GIT_ENV },
+      );
+      expect(path.resolve(root, common.stdout.toString().trim())).toBe(
+        path.join(root, ".git"),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(evil, { recursive: true, force: true });
     }
   },
 );

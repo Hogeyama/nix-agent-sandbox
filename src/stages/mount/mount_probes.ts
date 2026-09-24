@@ -141,6 +141,14 @@ export interface GitMetadataProbe {
    * RO mount する。
    */
   readonly missingHookDirs: readonly string[];
+  /**
+   * 存在しない `commondir` (`<git-dir>/commondir` と `<common-dir>/commondir`)。
+   * git は linked worktree に限らずどの gitdir でもこのファイルを読み、書かれた
+   * パスを common dir として config と hooks をそこから読む。無いままだと
+   * エージェントが作成して RO の config / hooks を丸ごと迂回できるので、nas が
+   * 自分自身を指す `.` で作って RO mount する。
+   */
+  readonly missingCommonDirFiles: readonly string[];
   /** symlink のため保護対象外にしたパス (警告用) */
   readonly skippedSymlinks: readonly string[];
 }
@@ -553,26 +561,39 @@ export async function resolveGitMetadata(
     hookDirs.push(path.resolve(toplevel, hooksPath));
   }
 
+  // commondir は gitdir の config / hooks を丸ごと差し替える。自分の gitdir と
+  // common dir のものに加え、他の linked worktree の管理ディレクトリにある
+  // ものも、その worktree でホストの git が読むので保護する。
+  const commonDirFiles = [
+    path.join(gitDir, "commondir"),
+    path.join(commonDir, "commondir"),
+    ...(await listWorktreeCommonDirFiles(commonDir)),
+  ];
+
   const readOnlyPaths: string[] = [];
   const missingHookDirs: string[] = [];
+  const missingCommonDirFiles: string[] = [];
   const skippedSymlinks: string[] = [];
   // linked worktree / --separate-git-dir の `.git` は gitdir: ポインタの
   // ファイル。書き換えると任意の gitdir (= 任意の config) を読ませられる。
   const dotGit = path.join(toplevel, ".git");
   if ((await lstatOrNull(dotGit))?.isFile()) readOnlyPaths.push(dotGit);
-  for (const [candidate, isHookDir] of [
-    ...files.map((p) => [p, false] as const),
-    ...hookDirs.map((p) => [p, true] as const),
+  for (const [candidate, kind] of [
+    ...files.map((p) => [p, "file"] as const),
+    ...commonDirFiles.map((p) => [p, "commondir"] as const),
+    ...hookDirs.map((p) => [p, "hooks"] as const),
   ]) {
     if (
       readOnlyPaths.includes(candidate) ||
-      missingHookDirs.includes(candidate)
+      missingHookDirs.includes(candidate) ||
+      missingCommonDirFiles.includes(candidate)
     ) {
       continue;
     }
     const st = await lstatOrNull(candidate);
     if (st === null) {
-      if (isHookDir) missingHookDirs.push(candidate);
+      if (kind === "hooks") missingHookDirs.push(candidate);
+      if (kind === "commondir") missingCommonDirFiles.push(candidate);
     } else if (st.isSymbolicLink()) {
       // bind target の symlink は runc がコンテナ内で解決するうえ、
       // リンク自体の差し替えも防げないので保護対象にしない。
@@ -581,7 +602,33 @@ export async function resolveGitMetadata(
       readOnlyPaths.push(candidate);
     }
   }
-  return { readOnlyPaths, missingHookDirs, skippedSymlinks };
+  return {
+    readOnlyPaths,
+    missingHookDirs,
+    missingCommonDirFiles,
+    skippedSymlinks,
+  };
+}
+
+/** 既存の linked worktree の管理ディレクトリにある `commondir`。 */
+async function listWorktreeCommonDirFiles(
+  commonDir: string,
+): Promise<string[]> {
+  const worktreesDir = path.join(commonDir, "worktrees");
+  let entries: string[];
+  try {
+    entries = await readdir(worktreesDir);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    throw e;
+  }
+  const files: string[] = [];
+  for (const entry of entries.sort()) {
+    const file = path.join(worktreesDir, entry, "commondir");
+    if ((await lstatOrNull(file)) !== null) files.push(file);
+  }
+  return files;
 }
 
 async function lstatOrNull(

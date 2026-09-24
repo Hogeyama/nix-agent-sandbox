@@ -22,6 +22,7 @@ import {
   prepareDummyCodexCredentials,
   removeDummyCodexCredentials,
 } from "./codex_credentials_fs.ts";
+import { type GitMetadataProbe, resolveGitMetadata } from "./mount_probes.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local plan interface (avoids service -> stage dependency)
@@ -30,6 +31,12 @@ import {
 export interface MountDirectoryEntry {
   readonly path: string;
   readonly mode?: number;
+}
+
+export interface MountFileEntry {
+  readonly path: string;
+  readonly content: string;
+  readonly mode: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +58,18 @@ export class MountSetupService extends Context.Tag("nas/MountSetupService")<
     ) => Effect.Effect<string, unknown, Scope.Scope>;
     readonly ensureDirectories: (
       dirs: ReadonlyArray<MountDirectoryEntry>,
+    ) => Effect.Effect<void>;
+    /**
+     * WorktreeStage が作った worktree の git メタデータを解決する。
+     * mount probe は worktree を作る前に元の cwd で走るので、その worktree の
+     * 管理ディレクトリ (`<common-dir>/worktrees/<id>`) はここで補う。
+     */
+    readonly probeWorktreeGitMetadata: (
+      worktreeDir: string,
+    ) => Effect.Effect<GitMetadataProbe | null>;
+    /** 無いファイルだけを作る。既にあるファイルの中身には触れない。 */
+    readonly ensureFiles: (
+      files: ReadonlyArray<MountFileEntry>,
     ) => Effect.Effect<void>;
   }
 >() {}
@@ -104,6 +123,18 @@ export const MountSetupServiceLive: Layer.Layer<
             yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
           }
         }),
+      probeWorktreeGitMetadata: (worktreeDir) =>
+        Effect.tryPromise({
+          try: () => resolveGitMetadata(worktreeDir),
+          catch: (error) => error,
+        }).pipe(Effect.orDie),
+      ensureFiles: (files) =>
+        Effect.gen(function* () {
+          for (const file of files) {
+            if (yield* fs.exists(file.path)) continue;
+            yield* fs.writeFile(file.path, file.content, { mode: file.mode });
+          }
+        }),
     });
   }),
 );
@@ -126,6 +157,12 @@ export interface MountSetupServiceFakeConfig {
   readonly ensureDirectories?: (
     dirs: ReadonlyArray<MountDirectoryEntry>,
   ) => Effect.Effect<void>;
+  readonly probeWorktreeGitMetadata?: (
+    worktreeDir: string,
+  ) => Effect.Effect<GitMetadataProbe | null>;
+  readonly ensureFiles?: (
+    files: ReadonlyArray<MountFileEntry>,
+  ) => Effect.Effect<void>;
 }
 
 export function makeMountSetupServiceFake(
@@ -144,6 +181,9 @@ export function makeMountSetupServiceFake(
         overrides.prepareCodexCredentials ??
         (() => Effect.die("prepareCodexCredentials fake is required")),
       ensureDirectories: overrides.ensureDirectories ?? (() => Effect.void),
+      probeWorktreeGitMetadata:
+        overrides.probeWorktreeGitMetadata ?? (() => Effect.succeed(null)),
+      ensureFiles: overrides.ensureFiles ?? (() => Effect.void),
     }),
   );
 }
