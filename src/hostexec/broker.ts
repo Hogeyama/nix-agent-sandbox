@@ -320,6 +320,72 @@ const MINIMAL_ENV_KEYS = ["HOME", "PATH", "LANG", "TERM", "USER", "LOGNAME"];
 const DEFAULT_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
+/**
+ * Whether a host variable belongs to nas itself rather than to the user.
+ *
+ * `NAS_*` is nas's own namespace, and some of it is credential material:
+ * `NAS_UPSTREAM_PROXY` carries the session's proxy token, `NAS_MASK_SECRETS_FILE`
+ * points at the secret frame, `NAS_CONFIG_TRUST_ALL` bypasses the workspace
+ * trust gate for any nas the command starts, and the session and socket
+ * variables address nas's control plane. `unsafe-inherit-all` means "the
+ * user's environment", and the command's output reaches the agent, so these
+ * are left out of the blanket copy.
+ */
+function isNasOwnedEnvKey(key: string): boolean {
+  return key.startsWith("NAS_");
+}
+
+const PROXY_ENV_KEYS = new Set([
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "ftp_proxy",
+]);
+
+/** A proxy variable whose URL embeds a username or password. */
+function isProxyCredentialEnv(key: string, value: string): boolean {
+  if (!PROXY_ENV_KEYS.has(key.toLowerCase())) return false;
+  try {
+    const url = new URL(value.includes("://") ? value : `http://${value}`);
+    return url.username !== "" || url.password !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The host environment a rule inherits, before its `env` secrets are added.
+ *
+ * `minimal` copies a fixed set; `unsafe-inherit-all` copies everything except
+ * nas's own variables and proxy variables with credentials in the URL. Names listed in `keys` are copied in either mode, even
+ * a `NAS_*` one: naming a variable is an explicit choice, which is how the
+ * built-in `nas hook` rule passes `NAS_SESSION_ID` through.
+ */
+export function buildInheritedEnv(
+  inheritEnv: HostExecRule["inheritEnv"],
+  hostEnv: Record<string, string | undefined>,
+): Record<string, string> {
+  const envVars: Record<string, string> = {};
+  if (inheritEnv.mode === "unsafe-inherit-all") {
+    for (const [key, value] of Object.entries(hostEnv)) {
+      if (value === undefined || isNasOwnedEnvKey(key)) continue;
+      if (isProxyCredentialEnv(key, value)) continue;
+      envVars[key] = value;
+    }
+  } else {
+    for (const key of MINIMAL_ENV_KEYS) {
+      const value = hostEnv[key];
+      if (value !== undefined) envVars[key] = value;
+    }
+    envVars.PATH = envVars.PATH ?? DEFAULT_PATH;
+  }
+  for (const key of inheritEnv.keys) {
+    const value = hostEnv[key];
+    if (value !== undefined) envVars[key] = value;
+  }
+  return envVars;
+}
+
 export class HostExecBroker {
   private readonly paths: HostExecRuntimePaths;
   private readonly sessionId: string;
@@ -1328,21 +1394,7 @@ export class HostExecBroker {
   }
 
   private async buildEnv(rule: HostExecRule): Promise<Record<string, string>> {
-    const hostEnv = process.env;
-    const envVars: Record<string, string> = {};
-    if (rule.inheritEnv.mode === "unsafe-inherit-all") {
-      Object.assign(envVars, hostEnv);
-    } else {
-      for (const key of MINIMAL_ENV_KEYS) {
-        const value = hostEnv[key];
-        if (value !== undefined) envVars[key] = value;
-      }
-      envVars.PATH = envVars.PATH ?? DEFAULT_PATH;
-    }
-    for (const key of rule.inheritEnv.keys) {
-      const value = hostEnv[key];
-      if (value !== undefined) envVars[key] = value;
-    }
+    const envVars = buildInheritedEnv(rule.inheritEnv, process.env);
     for (const [key, ref] of Object.entries(rule.env)) {
       const secretName = ref.slice("secret:".length);
       envVars[key] = await this.secretStore.require(secretName);
