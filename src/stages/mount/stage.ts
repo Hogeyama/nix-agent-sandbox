@@ -281,6 +281,34 @@ export function planMount(
     }
   }
 
+  // .git/config や hooks を RO bind mount で保護する。
+  // どちらもユーザーが次にホストで git を実行したときに実行される
+  // (hook 本体、core.hooksPath / core.fsmonitor / alias 等)。
+  // 代償としてコンテナ内の `git config` / `git remote add` / `push -u` 等の
+  // config 書き込みは失敗する (ホストか hostexec 経由で行う)。
+  const gitProtection = planGitProtection(
+    probes.gitMetadata,
+    mountSource,
+    // WorktreeStage が作った worktree の `.git` ファイル。probe は
+    // WorktreeStage より前に元の cwd で走るのでここで補う。
+    workspace.mountDir ? [path.join(containerWorkDir, ".git")] : [],
+    new Set(mounts.map((m) => m.target)),
+  );
+  for (const dir of gitProtection.createDirs) {
+    directories.push({ path: dir, mode: 0o755, removeOnTeardown: false });
+  }
+  for (const dir of gitProtection.pinnedDirs) {
+    addMount(args, mounts, viewSource(dir), dir);
+  }
+  for (const target of gitProtection.readOnlyPaths) {
+    addMount(args, mounts, viewSource(target), target, true);
+  }
+  for (const skipped of gitProtection.skippedSymlinks) {
+    logWarn(
+      `[nas] Not protecting ${skipped} read-only because it is a symlink; the agent can modify what it points to`,
+    );
+  }
+
   // UID/GID
   const uid = host.uid;
   const gid = host.gid;
@@ -638,6 +666,59 @@ function assertPathWithin(
         `resolved to ${resolved}`,
     );
   }
+}
+
+interface GitProtectionPlan {
+  /** rename 防止のため自分自身へ RW bind mount する中間ディレクトリ */
+  readonly pinnedDirs: readonly string[];
+  readonly readOnlyPaths: readonly string[];
+  /** RO mount の source として事前に作る空の hooks ディレクトリ */
+  readonly createDirs: readonly string[];
+  readonly skippedSymlinks: readonly string[];
+}
+
+/**
+ * git メタデータの RO 保護計画。mountSource 外のもの (コンテナから
+ * 見えない) と、既に mount target になっているものは除く。
+ *
+ * 保護対象を RO にするだけでは足りない。rename(2) は mount point 自体には
+ * EBUSY を返すが、mount point を含む親ディレクトリの rename は許す
+ * (`mv .git .git.old && cp -a .git.old .git` で素通りできる)。そこで
+ * mountSource から保護対象までの中間ディレクトリを自分自身へ RW bind mount
+ * し、rename できない mount point にする (pin)。
+ */
+function planGitProtection(
+  probe: MountProbes["gitMetadata"],
+  mountSource: string,
+  extraGitFiles: readonly string[],
+  mountedTargets: ReadonlySet<string>,
+): GitProtectionPlan {
+  const inScope = (p: string) =>
+    p !== mountSource && isPathWithin(p, mountSource) && !mountedTargets.has(p);
+  const createDirs = (probe?.missingHookDirs ?? []).filter(inScope);
+  const readOnly = new Set([
+    ...[...(probe?.readOnlyPaths ?? []), ...extraGitFiles].filter(inScope),
+    ...createDirs,
+  ]);
+  const pinned = new Set<string>();
+  for (const target of readOnly) {
+    for (
+      let dir = path.dirname(target);
+      dir !== mountSource && isPathWithin(dir, mountSource);
+      dir = path.dirname(dir)
+    ) {
+      if (!readOnly.has(dir) && !mountedTargets.has(dir)) pinned.add(dir);
+    }
+  }
+  // Docker は target の深さ順に mount するが、args 上も親を先に並べておく
+  const byDepth = (a: string, b: string) =>
+    a.split(path.sep).length - b.split(path.sep).length || a.localeCompare(b);
+  return {
+    pinnedDirs: [...pinned].sort(byDepth),
+    readOnlyPaths: [...readOnly].sort(byDepth),
+    createDirs,
+    skippedSymlinks: (probe?.skippedSymlinks ?? []).filter(inScope),
+  };
 }
 
 function isPathWithin(target: string, root: string): boolean {
