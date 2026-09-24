@@ -3809,6 +3809,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         review_decision="allow",
         review_response=None,
         request_body_audit=None,
+        remove_headers=None,
     ):
         """rule_id は broker が返す答え。addon の選択と食い違えば止まる。"""
         request_headers = list(headers or [])
@@ -3841,6 +3842,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
                     decision["injectHeaders"] = [
                         {"name": "x-api-key", "value": "injected-value"}
                     ]
+                if remove_headers is not None:
+                    decision["removeHeaders"] = remove_headers
                 return decision
             if request["type"] == "request_policy_review":
                 # review_response は「契約の形をしていない答え」を作るための
@@ -4376,6 +4379,34 @@ class RequestPolicyFlowTest(unittest.TestCase):
             [(m["result"], m["reason"]) for m in self._outcomes(messages)],
             [("pass", "empty-body")],
         )
+
+    def test_remove_headers_drop_the_named_header_before_injection(self):
+        flow, _messages, _stderr = self._run(
+            document=_flow_document([_models_rule()]),
+            rule_id="api.models",
+            method="GET",
+            path="/v1/models",
+            content=b"",
+            headers=[("x-api-key", "attacker-key")],
+            inject=False,
+            remove_headers=["x-api-key"],
+        )
+        self.assertIsNone(flow.response)
+        self.assertNotIn("x-api-key", flow.request.headers)
+
+    def test_injected_header_survives_a_removal_of_the_same_name(self):
+        flow, _messages, _stderr = self._run(
+            document=_flow_document([_models_rule()]),
+            rule_id="api.models",
+            method="GET",
+            path="/v1/models",
+            content=b"",
+            headers=[("x-api-key", "attacker-key")],
+            inject=True,
+            remove_headers=["x-api-key"],
+        )
+        self.assertIsNone(flow.response)
+        self.assertEqual(self._injected(flow), "injected-value")
 
     def test_rewrite_injects_credentials_after_the_inspection(self):
         flow, _messages, _stderr = self._run(

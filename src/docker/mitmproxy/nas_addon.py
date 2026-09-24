@@ -3807,6 +3807,13 @@ class NasAddon:
             )
             return
 
+        # Drop headers the broker names before injecting, so an
+        # agent-supplied credential never reaches upstream and an injected
+        # header is never removed by its own removal.
+        for name in decision.get("removeHeaders", []):
+            if name in flow.request.headers:
+                del flow.request.headers[name]
+
         # Inject headers from the broker decision (overwrites existing).
         # These lines carry the request path, so they stay off for
         # rule-governed requests: those log only the closed outcome fields.
