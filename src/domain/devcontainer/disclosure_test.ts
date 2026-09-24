@@ -51,7 +51,6 @@ test("host command execution counts the rules that allow it", () => {
     env: {},
     inheritEnv: defaults.DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
     approval: "prompt",
-    fallback: "container",
   });
   const hostexec = {
     installScript: true,

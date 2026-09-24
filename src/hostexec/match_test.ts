@@ -19,7 +19,6 @@ function makeRule(
     env: {},
     inheritEnv: DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
     approval,
-    fallback: "container",
   };
 }
 

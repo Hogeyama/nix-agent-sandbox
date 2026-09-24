@@ -31,7 +31,6 @@ hostexec = new HostExecConfig {
       cwd { mode = "workspace-only" }
       inheritEnv { mode = "minimal" }
       approval = "prompt"
-      fallback = "container"
     }
   }
 }
@@ -104,7 +103,6 @@ hostexec = new HostExecConfig {
       env { ["API_TOKEN"] = "secret:build_api_token" }
       inheritEnv { mode = "minimal" }
       approval = "prompt"
-      fallback = "deny"
     }
   }
 }
@@ -121,8 +119,6 @@ nas hostexec test --profile claude -- pnpm build
 ```
 
 そのプロファイルで起動し、エージェントに pnpm build を要求させます。UI で作業ディレクトリとコマンドを確認し、This request only → Approve で一回だけ許可します。ビルド結果が返り、出力にトークンが現れた場合はマスクされることを確認します。
-
-例にある fallback の deny は、現在の実装ではルール不一致時の動作を変えません。次の「ルール不一致の要求」の扱いになります。
 
 ## 相対パスのコマンド
 
@@ -150,6 +146,6 @@ hostexec = new HostExecConfig {
 
 ## ルール不一致の要求
 
-不一致の要求はコンテナ実行へのフォールバック応答になります。コンテナにも必要な実行ファイルと環境がなければ失敗します。HostExecRule.fallback を変更しても、現在の実装ではこの動作は変わりません。
+不一致の要求はコンテナ実行へのフォールバック応答になります。コンテナにも必要な実行ファイルと環境がなければ失敗します。
 
 hostexec スクリプトはフォールバック時に実行場所を stderr に表示します。一致したルールの `approval = "deny"`、承認拒否、時間切れはエラーで、同じ扱いではありません。

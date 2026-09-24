@@ -61,7 +61,6 @@ test.skipIf(!available)(
                       env: {},
                       inheritEnv: { mode: "minimal", keys: [] },
                       approval: "allow",
-                      fallback: "deny",
                     },
                   ],
                 },

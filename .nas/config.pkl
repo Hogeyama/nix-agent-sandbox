@@ -381,7 +381,6 @@ local commonHostexec: HostExecConfig = new {
         mode = "workspace-or-session-tmp"
       }
       approval = "allow"
-      fallback = "container"
     }
     new {
       // エスケープハッチ
@@ -390,7 +389,6 @@ local commonHostexec: HostExecConfig = new {
       cwd { mode = "workspace-or-session-tmp" }
       inheritEnv { mode = "unsafe-inherit-all" }
       approval = "prompt"
-      fallback = "container"
     }
   }
 }
@@ -559,7 +557,6 @@ profiles {
             ["HOSTEXEC_DEMO_API_TOKEN"] = "secret:hostexec_demo_api_token"
           }
           approval = "prompt"
-          fallback = "container"
         }
       }
     }
