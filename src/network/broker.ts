@@ -17,9 +17,12 @@ import {
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
 import {
-  applyAgentCredential,
+  type AgentCredential,
+  applyAgentCredentials,
   CREDENTIAL_REFRESH_DENY_REASON,
+  CREDENTIAL_REVOKED_DENY_REASON,
   isHostOwnedCredentialRefresh,
+  isRevokedCredentialHost,
 } from "./agent_credential.ts";
 import {
   type Decision as AuthzDecision,
@@ -30,7 +33,6 @@ import {
   type ResolvedRule,
   type ResolvedScope,
 } from "./authz/resolve.ts";
-import type { AgentCredentialSource } from "./claude_oauth_source.ts";
 import {
   expandMaskPatterns,
   maskReviewContextWithPatterns,
@@ -105,11 +107,11 @@ interface BrokerOptions {
   /** Opt-in retention limits. Direct callers default to disabled. */
   requestBodyAudit?: RequestBodyAuditConfig;
   /**
-   * ホストが保持するエージェントの credential。与えられたセッションでは、
-   * 注入先のホストで Authorization を上書きし、container からの token 更新を
-   * 拒否する。
+   * ホストが保持するエージェントの credential。注入先のホストで認証の header
+   * を上書きし、container からの token 更新を拒否する。ホストの credential が
+   * 使えなくなったエージェントの注入先への request は拒否する。
    */
-  agentCredential?: AgentCredentialSource;
+  agentCredentials?: readonly AgentCredential[];
 }
 
 interface PendingWaiter {
@@ -202,7 +204,7 @@ export class SessionBroker {
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
   private readonly secretValues: SecretValues;
-  private readonly agentCredential: AgentCredentialSource | undefined;
+  private readonly agentCredentials: readonly AgentCredential[];
   private readonly proxyMasking: boolean;
   private readonly requestBodyAudit: RequestBodyAuditConfig;
   private readonly maskPatterns: string[];
@@ -248,7 +250,7 @@ export class SessionBroker {
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
     this.secretValues = options.secretValues ?? {};
-    this.agentCredential = options.agentCredential;
+    this.agentCredentials = options.agentCredentials ?? [];
     this.proxyMasking = options.proxyMasking !== false;
     this.requestBodyAudit =
       options.requestBodyAudit ?? DEFAULT_REQUEST_BODY_AUDIT_CONFIG;
@@ -671,10 +673,10 @@ export class SessionBroker {
     // container が持つ refresh token はダミー値であり、body の refresh_token を
     // プロキシが書き換える仕組みは無い。つまりこの request を policy に通しても、
     // container 自身が本物の token で更新する経路には辿り着けない。本物の token
-    // への更新はホスト側の AgentCredentialSource が担うので、評価より前に拒否する。
+    // への更新はホスト側の credential source が担うので、評価より前に拒否する。
     if (
-      this.agentCredential !== undefined &&
       isHostOwnedCredentialRefresh(
+        this.agentCredentials,
         message.target.host,
         message.method,
         message.reviewContext?.path,
@@ -691,6 +693,22 @@ export class SessionBroker {
         requestBodyAuditStatus,
       );
       return denyDecision(message.requestId, CREDENTIAL_REFRESH_DENY_REASON);
+    }
+
+    // ホストの credential が使えなくなった (ホストでファイルが置き換わった)
+    // エージェントの注入先へは、container の付けた credential のまま通さない。
+    if (isRevokedCredentialHost(this.agentCredentials, message.target.host)) {
+      await this.recordAudit(
+        message,
+        "deny",
+        CREDENTIAL_REVOKED_DENY_REASON,
+        targetStr,
+        undefined,
+        undefined,
+        undefined,
+        requestBodyAuditStatus,
+      );
+      return denyDecision(message.requestId, CREDENTIAL_REVOKED_DENY_REASON);
     }
 
     // 認可の判定はドキュメントの上で 1 度だけ行う。addon も同じドキュメントを
@@ -1373,12 +1391,7 @@ export class SessionBroker {
     target: { readonly host: string },
   ): DecisionResponse {
     const decorated = this.decorateWithPolicy(decision, decided);
-    if (this.agentCredential === undefined) return decorated;
-    return applyAgentCredential(
-      decorated,
-      target.host,
-      this.agentCredential.current(),
-    );
+    return applyAgentCredentials(decorated, target.host, this.agentCredentials);
   }
 
   /**

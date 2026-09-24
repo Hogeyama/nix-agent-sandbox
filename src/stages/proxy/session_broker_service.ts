@@ -11,6 +11,7 @@ import { Context, Effect, Layer } from "effect";
 import type { RequestBodyAuditConfig } from "../../config/types.ts";
 import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../../log.ts";
+import { claudeAgentCredential } from "../../network/agent_credential.ts";
 import type { ResolvedDocument } from "../../network/authz/resolve.ts";
 import { SessionBroker } from "../../network/broker.ts";
 import {
@@ -140,7 +141,9 @@ export async function startSessionBroker(
       secretValues: config.secretValues,
       proxyMasking: config.proxyMasking,
       requestBodyAudit: config.requestBodyAudit,
-      agentCredential,
+      agentCredentials: agentCredential
+        ? [claudeAgentCredential(agentCredential)]
+        : undefined,
     });
     await broker.start(config.socketPath);
   } catch (error) {

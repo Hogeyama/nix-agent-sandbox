@@ -6,6 +6,10 @@ import path from "node:path";
 import { getRequestBody, queryAuditLogs } from "../audit/store.ts";
 import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 import {
+  claudeAgentCredential,
+  codexAgentCredential,
+} from "./agent_credential.ts";
+import {
   type ResolvedDocument,
   withoutInjectLiterals,
 } from "./authz/resolve.ts";
@@ -3924,7 +3928,12 @@ test("SessionBroker: agent credential overrides Authorization on Anthropic hosts
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
     auditDir,
-    agentCredential: { current: () => "host-token", close: async () => {} },
+    agentCredentials: [
+      claudeAgentCredential({
+        current: () => "host-token",
+        close: async () => {},
+      }),
+    ],
   });
   const socketPath = `${paths.brokersDir}/sess_agentcred/sock`;
   await broker.start(socketPath);
@@ -3966,7 +3975,12 @@ test("SessionBroker: container token refresh is denied before policy evaluation"
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
     auditDir,
-    agentCredential: { current: () => "host-token", close: async () => {} },
+    agentCredentials: [
+      claudeAgentCredential({
+        current: () => "host-token",
+        close: async () => {},
+      }),
+    ],
   });
   const socketPath = `${paths.brokersDir}/sess_agentcred2/sock`;
   await broker.start(socketPath);
@@ -3985,6 +3999,83 @@ test("SessionBroker: container token refresh is denied before policy evaluation"
     expect(response.reason).toBe("credential-refresh-owned-by-host");
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
     expect(logs.at(-1)?.reason).toBe("credential-refresh-owned-by-host");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: Codex credential overrides Authorization and the account on chatgpt.com", async () => {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-codexcred-"),
+  );
+  const auditDir = await mkdtemp(
+    path.join(tmpdir(), "nas-broker-codexcred-audit-"),
+  );
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  let current: { accessToken: string; accountId: string | null } | null = {
+    accessToken: "codex-token",
+    accountId: "acct-1",
+  };
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_codexcred",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          chatgpt: { targets: ["chatgpt.com"], fallback: "allow" },
+          openai: { targets: ["auth.openai.com"], fallback: "allow" },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+    agentCredentials: [
+      codexAgentCredential({ current: () => current, close: async () => {} }),
+    ],
+  });
+  const socketPath = `${paths.brokersDir}/sess_codexcred/sock`;
+  await broker.start(socketPath);
+  try {
+    const allowed = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_codexcred",
+        "req_1",
+        "/backend-api/codex/responses",
+        "chatgpt.com",
+        443,
+      ),
+    );
+    expect(allowed.decision).toBe("allow");
+    expect(allowed.injectHeaders).toEqual([
+      { name: "Authorization", value: "Bearer codex-token" },
+      { name: "chatgpt-account-id", value: "acct-1" },
+    ]);
+
+    const refresh = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_codexcred", "req_2", "/oauth/token", "auth.openai.com", 443),
+    );
+    expect(refresh.decision).toBe("deny");
+    expect(refresh.reason).toBe("credential-refresh-owned-by-host");
+
+    current = null;
+    const revoked = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post(
+        "sess_codexcred",
+        "req_3",
+        "/backend-api/codex/responses",
+        "chatgpt.com",
+        443,
+      ),
+    );
+    expect(revoked.decision).toBe("deny");
+    expect(revoked.reason).toBe("credential-revoked-on-host");
+    expect(revoked.injectHeaders).toBeUndefined();
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -4054,7 +4145,12 @@ test("SessionBroker: agent credential overrides Authorization from the approved-
     }),
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
-    agentCredential: { current: () => "host-token", close: async () => {} },
+    agentCredentials: [
+      claudeAgentCredential({
+        current: () => "host-token",
+        close: async () => {},
+      }),
+    ],
   });
   const socketPath = `${paths.brokersDir}/sess_agentcred_cache/sock`;
   await broker.start(socketPath);
@@ -4120,7 +4216,12 @@ test("SessionBroker: agent credential overrides Authorization from a per-request
     }),
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
-    agentCredential: { current: () => "host-token", close: async () => {} },
+    agentCredentials: [
+      claudeAgentCredential({
+        current: () => "host-token",
+        close: async () => {},
+      }),
+    ],
   });
   const socketPath = `${paths.brokersDir}/sess_agentcred_once/sock`;
   await broker.start(socketPath);
@@ -4176,7 +4277,12 @@ test("SessionBroker: agent credential overrides Authorization from a group appro
     }),
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
-    agentCredential: { current: () => "host-token", close: async () => {} },
+    agentCredentials: [
+      claudeAgentCredential({
+        current: () => "host-token",
+        close: async () => {},
+      }),
+    ],
   });
   const socketPath = `${paths.brokersDir}/sess_agentcred_group/sock`;
   await broker.start(socketPath);
@@ -4246,7 +4352,12 @@ test("SessionBroker: agent credential replaces a user-configured Authorization i
     }),
     pendingTimeoutSeconds: 30,
     pendingNotify: "off",
-    agentCredential: { current: () => "host-token", close: async () => {} },
+    agentCredentials: [
+      claudeAgentCredential({
+        current: () => "host-token",
+        close: async () => {},
+      }),
+    ],
   });
   const socketPath = `${paths.brokersDir}/sess_agentcred_userinject/sock`;
   await broker.start(socketPath);

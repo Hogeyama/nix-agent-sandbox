@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import {
-  applyAgentCredential,
+  type AgentCredential,
+  applyAgentCredentials,
+  claudeAgentCredential,
+  codexAgentCredential,
   isHostOwnedCredentialRefresh,
+  isRevokedCredentialHost,
 } from "./agent_credential.ts";
 import type { DecisionResponse } from "./protocol.ts";
 
@@ -16,9 +20,26 @@ function allow(extra: Partial<DecisionResponse> = {}): DecisionResponse {
   };
 }
 
-test("applyAgentCredential: injects the bearer token and removes x-api-key for Anthropic hosts", () => {
+const claude = claudeAgentCredential({
+  current: () => "tok",
+  close: async () => {},
+});
+
+function codex(
+  current: { accessToken: string; accountId: string | null } | null = {
+    accessToken: "ctok",
+    accountId: "acct-1",
+  },
+): AgentCredential {
+  return codexAgentCredential({
+    current: () => current,
+    close: async () => {},
+  });
+}
+
+test("applyAgentCredentials: injects the bearer token and removes x-api-key for Anthropic hosts", () => {
   for (const host of ["api.anthropic.com", "mcp-proxy.anthropic.com"]) {
-    expect(applyAgentCredential(allow(), host, "tok")).toEqual(
+    expect(applyAgentCredentials(allow(), host, [claude])).toEqual(
       allow({
         injectHeaders: [{ name: "Authorization", value: "Bearer tok" }],
         removeHeaders: ["x-api-key"],
@@ -27,8 +48,8 @@ test("applyAgentCredential: injects the bearer token and removes x-api-key for A
   }
 });
 
-test("applyAgentCredential: replaces a user-configured Authorization inject of any case", () => {
-  const result = applyAgentCredential(
+test("applyAgentCredentials: replaces a user-configured Authorization inject of any case", () => {
+  const result = applyAgentCredentials(
     allow({
       injectHeaders: [
         { name: "authorization", value: "user" },
@@ -36,7 +57,7 @@ test("applyAgentCredential: replaces a user-configured Authorization inject of a
       ],
     }),
     "api.anthropic.com",
-    "tok",
+    [claude],
   );
   expect(result.injectHeaders).toEqual([
     { name: "x-extra", value: "kept" },
@@ -44,50 +65,78 @@ test("applyAgentCredential: replaces a user-configured Authorization inject of a
   ]);
 });
 
-test("applyAgentCredential: leaves other hosts and non-allow decisions untouched", () => {
-  const other = allow();
-  expect(applyAgentCredential(other, "platform.claude.com", "tok")).toBe(other);
-  const denied = allow({ decision: "deny" });
-  expect(applyAgentCredential(denied, "api.anthropic.com", "tok")).toBe(denied);
+test("applyAgentCredentials: injects the Codex token and account id on chatgpt.com", () => {
+  const result = applyAgentCredentials(
+    allow({ injectHeaders: [{ name: "ChatGPT-Account-Id", value: "other" }] }),
+    "chatgpt.com",
+    [claude, codex()],
+  );
+  expect(result.injectHeaders).toEqual([
+    { name: "Authorization", value: "Bearer ctok" },
+    { name: "chatgpt-account-id", value: "acct-1" },
+  ]);
+  expect(result.removeHeaders).toBeUndefined();
 });
 
-test("isHostOwnedCredentialRefresh: matches only POST /v1/oauth/token on platform.claude.com", () => {
+test("applyAgentCredentials: omits the account header when the account is unknown", () => {
+  const result = applyAgentCredentials(allow(), "chatgpt.com", [
+    codex({ accessToken: "ctok", accountId: null }),
+  ]);
+  expect(result.injectHeaders).toEqual([
+    { name: "Authorization", value: "Bearer ctok" },
+  ]);
+});
+
+test("applyAgentCredentials: leaves other hosts and denials unchanged", () => {
+  expect(
+    applyAgentCredentials(allow(), "example.com", [claude, codex()]),
+  ).toEqual(allow());
+  const deny: DecisionResponse = { ...allow(), decision: "deny" };
+  expect(applyAgentCredentials(deny, "chatgpt.com", [codex()])).toEqual(deny);
+});
+
+test("isHostOwnedCredentialRefresh: matches each agent's token endpoint", () => {
+  const creds = [claude, codex()];
   expect(
     isHostOwnedCredentialRefresh(
+      creds,
       "platform.claude.com",
       "POST",
-      "/v1/oauth/token",
-    ),
-  ).toBe(true);
-  expect(
-    isHostOwnedCredentialRefresh(
-      "platform.claude.com",
-      "post",
       "/v1/oauth/token?x=1",
     ),
   ).toBe(true);
   expect(
     isHostOwnedCredentialRefresh(
-      "platform.claude.com",
+      creds,
+      "auth.openai.com",
+      "post",
+      "/oauth/token",
+    ),
+  ).toBe(true);
+  expect(
+    isHostOwnedCredentialRefresh(
+      creds,
+      "auth.openai.com",
       "GET",
-      "/v1/oauth/token",
+      "/oauth/token",
     ),
   ).toBe(false);
   expect(
     isHostOwnedCredentialRefresh(
-      "platform.claude.com",
+      [claude],
+      "auth.openai.com",
       "POST",
-      "/v1/oauth/other",
+      "/oauth/token",
     ),
   ).toBe(false);
   expect(
-    isHostOwnedCredentialRefresh(
-      "api.anthropic.com",
-      "POST",
-      "/v1/oauth/token",
-    ),
+    isHostOwnedCredentialRefresh(creds, "auth.openai.com", "POST", undefined),
   ).toBe(false);
-  expect(
-    isHostOwnedCredentialRefresh("platform.claude.com", "POST", undefined),
-  ).toBe(false);
+});
+
+test("isRevokedCredentialHost: only the revoked agent's hosts", () => {
+  const creds = [claude, codex(null)];
+  expect(isRevokedCredentialHost(creds, "chatgpt.com")).toBe(true);
+  expect(isRevokedCredentialHost(creds, "api.anthropic.com")).toBe(false);
+  expect(isRevokedCredentialHost(creds, "example.com")).toBe(false);
 });
