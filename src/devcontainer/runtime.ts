@@ -14,6 +14,7 @@ import { createPreparationPipelineBuilder } from "../pipeline/cli_builder.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import { createPipelineLiveLayer } from "../pipeline/live.ts";
 import type { HostEnv } from "../pipeline/types.ts";
+import { claimSessionId } from "../sessions/ownership.ts";
 import { resolveBuildProbes } from "../stages/docker_build.ts";
 import {
   ComposeSessionOps,
@@ -51,31 +52,36 @@ export async function runDevcontainerServeEntry(
   deadlineAt: number,
 ): Promise<void> {
   const host = buildHostEnv();
-  await serveDevcontainerRuntime({
-    host,
-    workspace,
-    sessionId,
-    deadlineAt,
-    runRuntime: async (registration, signal, startupDeadlineAt) => {
-      const config = await loadConfig({ startDir: registration.workspace });
-      const resolved = resolveProfile(config, registration.profileName);
-      const result = await runDevcontainerRuntime({
-        registration,
-        config,
-        profile: resolved.profile,
-        sessionId,
-        signal,
-        startupDeadlineAt,
-        host,
-      });
-      return Exit.isSuccess(result.exit)
-        ? { ok: true }
-        : {
-            ok: false,
-            diagnostic: `devcontainer runtime failed: ${describeExitFailure(result.exit.cause).split("\n", 1)[0]}`,
-          };
-    },
-  });
+  const ownership = claimSessionId(sessionId);
+  try {
+    await serveDevcontainerRuntime({
+      host,
+      workspace,
+      sessionId,
+      deadlineAt,
+      runRuntime: async (registration, signal, startupDeadlineAt) => {
+        const config = await loadConfig({ startDir: registration.workspace });
+        const resolved = resolveProfile(config, registration.profileName);
+        const result = await runDevcontainerRuntime({
+          registration,
+          config,
+          profile: resolved.profile,
+          sessionId,
+          signal,
+          startupDeadlineAt,
+          host,
+        });
+        return Exit.isSuccess(result.exit)
+          ? { ok: true }
+          : {
+              ok: false,
+              diagnostic: `devcontainer runtime failed: ${describeExitFailure(result.exit.cause).split("\n", 1)[0]}`,
+            };
+      },
+    });
+  } finally {
+    ownership.release();
+  }
 }
 
 /**

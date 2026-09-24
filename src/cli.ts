@@ -33,6 +33,7 @@ import { runNetworkCommand } from "./cli/network.ts";
 import { createCliInitialState } from "./cli/pipeline_state.ts";
 import { runRebuild } from "./cli/rebuild.ts";
 import { runSessionCommand } from "./cli/session.ts";
+import { resolveSessionId } from "./cli/session_id.ts";
 import { runUiCommand } from "./cli/ui.ts";
 import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
@@ -68,6 +69,7 @@ import {
 import { createCliPipelineBuilder } from "./pipeline/cli_builder.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { createPipelineLiveLayer } from "./pipeline/live.ts";
+import { claimSessionId } from "./sessions/ownership.ts";
 import { addRecentDir } from "./sessions/recent_dirs.ts";
 import { resolveBuildProbes } from "./stages/docker_build.ts";
 import { resolveMountProbes } from "./stages/mount.ts";
@@ -274,7 +276,10 @@ async function runMain(
     );
     const acp = effectiveProfile.mode === "acp";
     setDiagnosticStderr(acp);
-    const sessionId = process.env.NAS_SESSION_ID || `sess_${randomHex(6)}`;
+    const sessionId = resolveSessionId(
+      process.env,
+      () => `sess_${randomHex(6)}`,
+    );
     // 起動した側がセッションを名指しできるようにする。`nas <domain> watch
     // --session` や `approve` に渡す値で、stdout がプロトコル専用になる ACP
     // ではこれが唯一の入手経路になる。
@@ -294,6 +299,11 @@ async function runMain(
       logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
       return;
     }
+
+    // セッション単位のリソースに触れる前に id を確保する。SIGKILL で解放
+    // されなかった場合は、次に同じ id を確保するプロセスが引き継ぐ。
+    const ownership = claimSessionId(sessionId);
+    process.once("exit", () => ownership.release());
 
     // ACP clients may SIGKILL nas, which skips every Scope finalizer.
     if (acp) spawnAcpSessionReaper(sessionId);
@@ -450,6 +460,7 @@ async function runMain(
         await runPrepared();
       }
     } finally {
+      ownership.release();
       connection?.dispose();
       if (acp) {
         process.off("SIGINT", interruptBySigint);
