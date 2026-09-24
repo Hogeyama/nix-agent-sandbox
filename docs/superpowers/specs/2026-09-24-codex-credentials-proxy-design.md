@@ -109,7 +109,10 @@ Linux では、別の mount namespace で mount point になっているファ�
 - `~/.codex` を `fs.watch` で監視し、`auth.json` に関するイベントのたびに inode を確かめる。イベントの取りこぼしに備え、5秒ごとにも確かめる。
 - ファイルが無くなった、または inode が変わったら、次のことを行う。
   - `chatgpt.com` への request への注入をやめ、以後その request を deny する。
-  - セッションの container を停止する。
+  - セッションを止める。
+    - container をまだ起動していなければ、準備の pipeline を中断し、container を起動しない。監視は proxy の段階で始まり、DinD の起動などが container の起動より前にあるので、この間に置き換わることがある。
+    - container を起動した後なら、container を猶予なしで kill する（SIGKILL）。`docker stop` の SIGTERM の後の猶予（既定で10秒）を与えると、SIGTERM を無視する agent がその間に本物のファイルを読める。
+    - `docker run` を始めた直後は、container がまだ動いていないため kill が失敗する。kill が通るか、セッションが終わるまで、やり直す。失敗は warn として nas のログに出す。
   - 理由を nas のログに出し、ホストでの logout や置き換えが原因であることを示す。
 
 `codex logout` はまずファイルを削除するので、再び `codex login` で本物が書かれる前に container を止められる。

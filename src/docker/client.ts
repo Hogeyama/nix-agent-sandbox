@@ -629,6 +629,17 @@ export async function dockerStop(
   await $`docker ${args}`.quiet();
 }
 
+/**
+ * container を SIGKILL で止める。docker stop と違い、SIGTERM の後の猶予を
+ * 与えない。container が無いか動いていなければ失敗する。
+ */
+export async function dockerKill(
+  containerName: string,
+  options: Pick<DockerCommandOptions, "executable"> = {},
+): Promise<void> {
+  await runDockerCommand(["kill", "--signal", "KILL", containerName], options);
+}
+
 /** docker rm を実行 */
 export async function dockerRm(containerName: string): Promise<void> {
   await $`docker rm ${containerName}`.quiet();
