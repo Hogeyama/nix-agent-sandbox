@@ -232,7 +232,10 @@ export const DEFAULT_AGENT_STATE_CONFIG: AgentStateConfig = {
 
 /** プロファイル */
 export interface Profile {
+  /** 起動するエージェント */
   agent: AgentType;
+  /** 起動はしないがコンテナ内で使えるようにするエージェント */
+  extraAgents: AgentType[];
   mode?: "terminal" | "acp";
   agentArgs: string[];
   agentState: AgentStateConfig;

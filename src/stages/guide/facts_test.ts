@@ -12,6 +12,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     session: { multiplex: false, detachKey: "^\\", notify: "auto" },
     direnv: { enable: false },
     nix: { enable: "auto", mountSocket: true },

@@ -45,6 +45,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
@@ -101,6 +102,7 @@ function makeStageInput(
 function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
   return {
     agentProbes: {} as MountProbes["agentProbes"],
+    extraAgentProbes: [],
     direnvDataDir: null,
     nixConfRealPath: null,
     nixBinPath: null,

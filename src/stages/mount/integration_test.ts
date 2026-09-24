@@ -31,6 +31,7 @@ import { planMount, resolveMountProbes } from "../mount.ts";
 const baseProfile: Profile = {
   agent: "claude",
   agentArgs: [],
+  extraAgents: [],
   agentState: DEFAULT_AGENT_STATE_CONFIG,
   direnv: { enable: false },
   nix: { enable: false, mountSocket: false },

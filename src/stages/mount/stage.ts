@@ -15,6 +15,7 @@ import type {
   DevcontainerAgentState,
   ProtectedClaudeState,
 } from "../../agents/types.ts";
+import type { Profile } from "../../config/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
 import {
@@ -109,7 +110,7 @@ export function createMountStage(
           shared.profile,
         );
         const usesPrivateClaudeRoot =
-          shared.profile.agent === "claude" &&
+          usesClaude(shared.profile) &&
           (shared.profile.agentState.protectSettings ||
             proxiedClaudeCredentials);
         const protectedState = usesPrivateClaudeRoot
@@ -145,6 +146,11 @@ export function createMountStage(
   };
 }
 
+/** 起動するか extraAgents に含むかを問わず、コンテナに Claude を用意するか */
+function usesClaude(profile: Profile): boolean {
+  return profile.agent === "claude" || profile.extraAgents.includes("claude");
+}
+
 /**
  * MountStage がワークスペースのバインドソース/ターゲットに使う実パスを解決する。
  * MaskFsStage も同じパスをマスク対象のソースディレクトリとして使う。
@@ -170,7 +176,7 @@ export function planMount(
 ): MountPlan {
   const { host, profile } = input;
   if (
-    profile.agent === "claude" &&
+    usesClaude(profile) &&
     profile.agentState.protectSettings &&
     !protectedClaudeState
   ) {
@@ -485,12 +491,19 @@ export function planMount(
   }
 
   // エージェント固有の設定
-  // Build priorDockerArgs and priorEnvVars by combining prior + current stage's args
-  const priorDockerArgs = [...args];
-  const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
+  // Each configureAgent call sees the args and env accumulated so far
+  // (prior stages + this stage + earlier agents) and returns them extended.
   let agentCommand: readonly string[] = resolvePriorAgentCommand(input);
 
-  const applyAgentResult = (agentResult: AgentConfigResult) => {
+  const applyAgent = (
+    configure: (
+      priorDockerArgs: readonly string[],
+      priorEnvVars: Readonly<Record<string, string>>,
+    ) => AgentConfigResult,
+  ): AgentConfigResult => {
+    const priorDockerArgs = [...args];
+    const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
+    const agentResult = configure(priorDockerArgs, priorEnvVars);
     const agentArgs = agentResult.dockerArgs.slice(priorDockerArgs.length);
     const agentEnv: Record<string, string> = {};
     for (const [k, v] of Object.entries(agentResult.envVars)) {
@@ -502,10 +515,10 @@ export function planMount(
     appendStructuredArgs(agentArgs, mounts, extraRunArgs);
     mounts.push(...(agentResult.mounts ?? []));
     Object.assign(envVars, agentEnv);
-    agentCommand = agentResult.agentCommand;
+    return agentResult;
   };
 
-  applyAgentResult(
+  agentCommand = applyAgent((priorDockerArgs, priorEnvVars) =>
     configureAgent({
       claudeState: devcontainer?.claudeState,
       codexState: devcontainer?.codexState,
@@ -520,7 +533,26 @@ export function planMount(
       priorEnvVars,
       claudeCredentialsFile,
     }),
-  );
+  ).agentCommand;
+
+  // extraAgents: バイナリと状態ディレクトリだけを用意し、起動コマンドは
+  // 捨てる。起動しないので ACP でも terminal として組み立てる。Dev Container
+  // は extraAgents を拒否するので、その状態パスはここでは渡さない。
+  for (const extra of probes.extraAgentProbes) {
+    applyAgent((priorDockerArgs, priorEnvVars) =>
+      configureAgent({
+        protectedClaudeState,
+        agent: extra.agent,
+        mode: "terminal",
+        containerHome,
+        hostHome: host.home,
+        probes: extra.probes,
+        protectSettings: profile.agentState.protectSettings,
+        priorDockerArgs,
+        priorEnvVars,
+      }),
+    );
+  }
 
   const staticEnvVars = { ...envVars };
   delete staticEnvVars.NAS_ENV_OPS;

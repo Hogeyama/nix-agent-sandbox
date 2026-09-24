@@ -184,6 +184,7 @@ Profile agent-args (in .nas/config.pkl):
     ["codex-nix"] {
       agent = "codex"
       agentArgs = new Listing { "--model"; "gpt-5-codex" }
+      extraAgents { "claude" }             // claude usable inside, not launched
     }
   }
 `);

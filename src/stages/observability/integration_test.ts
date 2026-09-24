@@ -64,6 +64,7 @@ function makeProfile(agent: AgentType): Profile {
   return {
     agent,
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },

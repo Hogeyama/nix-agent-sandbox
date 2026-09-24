@@ -57,10 +57,32 @@ export function validateConfig(config: Config): Config {
   return config;
 }
 
+/**
+ * extraAgents は「起動するもの以外に用意するもの」なので、起動する agent を
+ * 重ねて書くのも同じものを二度書くのも意味がない。黙って捨てると書き手の
+ * 意図 (起動対象を差し替えたつもり等) を取り違えるので、誤りとして返す。
+ */
+function validateExtraAgents(name: string, profile: Profile): string[] {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const extra of profile.extraAgents) {
+    if (extra === profile.agent) {
+      errors.push(
+        `profile "${name}": extraAgents must not include the launched agent "${extra}"`,
+      );
+    } else if (seen.has(extra)) {
+      errors.push(`profile "${name}": extraAgents lists "${extra}" twice`);
+    }
+    seen.add(extra);
+  }
+  return errors;
+}
+
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
 
   errors.push(...validateAgentCredentials(name, profile));
+  errors.push(...validateExtraAgents(name, profile));
 
   if (profile.mode === "acp") {
     if (profile.agent !== "claude") {

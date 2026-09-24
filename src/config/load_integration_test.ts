@@ -1102,6 +1102,7 @@ test("resolveProfile: resolves by explicit name", () => {
       "default-profile": {
         agent: "claude",
         agentArgs: [],
+        extraAgents: [],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
@@ -1118,6 +1119,7 @@ test("resolveProfile: resolves by explicit name", () => {
       },
       "other-profile": {
         agent: "copilot",
+        extraAgents: [],
         agentArgs: ["--yolo"],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
@@ -1151,6 +1153,7 @@ test("resolveProfile: falls back to default profile", () => {
       "my-default": {
         agent: "claude",
         agentArgs: [],
+        extraAgents: [],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
@@ -1181,6 +1184,7 @@ test("resolveProfile: auto-selects when only one profile and no default", () => 
       "only-one": {
         agent: "copilot",
         agentArgs: [],
+        extraAgents: [],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: false, mountSocket: false },
@@ -1211,6 +1215,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       a: {
         agent: "claude",
         agentArgs: [],
+        extraAgents: [],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
@@ -1228,6 +1233,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       b: {
         agent: "copilot",
         agentArgs: [],
+        extraAgents: [],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: false, mountSocket: false },
@@ -1258,6 +1264,7 @@ test("resolveProfile: throws for nonexistent profile name", () => {
       exists: {
         agent: "claude",
         agentArgs: [],
+        extraAgents: [],
         agentState: DEFAULT_AGENT_STATE_CONFIG,
         direnv: { enable: false },
         nix: { enable: "auto", mountSocket: true },
