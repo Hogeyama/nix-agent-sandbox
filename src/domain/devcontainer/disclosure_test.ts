@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import type { HostExecRule, Profile } from "../../config/types.ts";
+import type {
+  AgentCredentialsMode,
+  HostExecRule,
+  Profile,
+} from "../../config/types.ts";
 import * as defaults from "../../config/types.ts";
 import { describeDevcontainerSharing } from "./disclosure.ts";
 import { devcontainerProfile } from "./fixtures.ts";
@@ -108,6 +112,59 @@ test("the credentials shared from the host home are always disclosed", () => {
   const detailText = detail(devcontainerProfile(), "Claude credentials");
   expect(detailText).toContain("~/.claude");
   expect(detailText).toContain("after down");
+});
+
+test("describeDevcontainerSharing: proxied Claude credentials are not described as shared", () => {
+  const lines = describeDevcontainerSharing(devcontainerProfile());
+  const text = JSON.stringify(lines);
+  expect(text).not.toMatch(/Claude credentials[^"]*read-write/);
+  expect(text).toMatch(/injected by the proxy/);
+});
+
+test("describeDevcontainerSharing: Claude credentials shared for API-key profiles are described as shared", () => {
+  const profile = {
+    ...devcontainerProfile(),
+    agentState: {
+      ...devcontainerProfile().agentState,
+      auth: "shared" as const,
+    },
+  };
+  const text = detail(profile, "Claude credentials");
+  expect(text).not.toMatch(/injected by the proxy/);
+  expect(text).toContain("~/.claude and ~/.claude.json, read-write");
+});
+
+test("describeDevcontainerSharing: Claude credentials text is pinned for each auth x protectSettings combination", () => {
+  const cases: ReadonlyArray<readonly [AgentCredentialsMode, boolean, string]> =
+    [
+      [
+        "proxy",
+        false,
+        "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; ~/.claude.json and the ~/.claude entries present on the host at session start, read-write and kept on the host after down; top-level ~/.claude entries created in the container, session-private and discarded on down",
+      ],
+      [
+        "proxy",
+        true,
+        "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down",
+      ],
+      [
+        "shared",
+        false,
+        "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
+      ],
+      [
+        "shared",
+        true,
+        "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down",
+      ],
+    ];
+  for (const [auth, protectSettings, expected] of cases) {
+    const profile = {
+      ...devcontainerProfile(),
+      agentState: { protectSettings, auth },
+    };
+    expect(detail(profile, "Claude credentials")).toBe(expected);
+  }
 });
 
 test("protected Claude state discloses both writable sharing and private runtime data", () => {
