@@ -5,7 +5,7 @@ import {
   claudeAgentCredential,
   codexAgentCredential,
   isHostOwnedCredentialRefresh,
-  isRevokedCredentialHost,
+  isRevokedCredentialTarget,
 } from "./agent_credential.ts";
 import type { DecisionResponse } from "./protocol.ts";
 
@@ -39,7 +39,9 @@ function codex(
 
 test("applyAgentCredentials: injects the bearer token and removes x-api-key for Anthropic hosts", () => {
   for (const host of ["api.anthropic.com", "mcp-proxy.anthropic.com"]) {
-    expect(applyAgentCredentials(allow(), host, [claude])).toEqual(
+    expect(
+      applyAgentCredentials(allow(), host, "/v1/messages", [claude]),
+    ).toEqual(
       allow({
         injectHeaders: [{ name: "Authorization", value: "Bearer tok" }],
         removeHeaders: ["x-api-key"],
@@ -57,6 +59,7 @@ test("applyAgentCredentials: replaces a user-configured Authorization inject of 
       ],
     }),
     "api.anthropic.com",
+    "/v1/messages",
     [claude],
   );
   expect(result.injectHeaders).toEqual([
@@ -69,6 +72,7 @@ test("applyAgentCredentials: injects the Codex token and account id on chatgpt.c
   const result = applyAgentCredentials(
     allow({ injectHeaders: [{ name: "ChatGPT-Account-Id", value: "other" }] }),
     "chatgpt.com",
+    "/backend-api/codex/responses",
     [claude, codex()],
   );
   expect(result.injectHeaders).toEqual([
@@ -79,7 +83,7 @@ test("applyAgentCredentials: injects the Codex token and account id on chatgpt.c
 });
 
 test("applyAgentCredentials: omits the account header when the account is unknown", () => {
-  const result = applyAgentCredentials(allow(), "chatgpt.com", [
+  const result = applyAgentCredentials(allow(), "chatgpt.com", "/backend-api", [
     codex({ accessToken: "ctok", accountId: null }),
   ]);
   expect(result.injectHeaders).toEqual([
@@ -89,10 +93,40 @@ test("applyAgentCredentials: omits the account header when the account is unknow
 
 test("applyAgentCredentials: leaves other hosts and denials unchanged", () => {
   expect(
-    applyAgentCredentials(allow(), "example.com", [claude, codex()]),
+    applyAgentCredentials(allow(), "example.com", "/", [claude, codex()]),
   ).toEqual(allow());
   const deny: DecisionResponse = { ...allow(), decision: "deny" };
-  expect(applyAgentCredentials(deny, "chatgpt.com", [codex()])).toEqual(deny);
+  expect(
+    applyAgentCredentials(deny, "chatgpt.com", "/backend-api/x", [codex()]),
+  ).toEqual(deny);
+});
+
+test("applyAgentCredentials: injects the Codex credential only under /backend-api on chatgpt.com", () => {
+  for (const path of [
+    "/backend-api",
+    "/backend-api/",
+    "/backend-api/codex/responses",
+    "/backend-api?x=1",
+    "/backend-api/wham/usage?x=/y",
+  ]) {
+    expect(
+      applyAgentCredentials(allow(), "chatgpt.com", path, [codex()])
+        .injectHeaders,
+    ).toBeDefined();
+  }
+  for (const path of [
+    "/",
+    "/c/abc",
+    "/backend-apix",
+    "/backend-api-v2/x",
+    "/api/backend-api/x",
+    "/?next=/backend-api/",
+    undefined,
+  ]) {
+    expect(
+      applyAgentCredentials(allow(), "chatgpt.com", path, [codex()]),
+    ).toEqual(allow());
+  }
 });
 
 test("isHostOwnedCredentialRefresh: matches each agent's token endpoint", () => {
@@ -134,9 +168,17 @@ test("isHostOwnedCredentialRefresh: matches each agent's token endpoint", () => 
   ).toBe(false);
 });
 
-test("isRevokedCredentialHost: only the revoked agent's hosts", () => {
+test("isRevokedCredentialTarget: only where the revoked agent's credential is injected", () => {
   const creds = [claude, codex(null)];
-  expect(isRevokedCredentialHost(creds, "chatgpt.com")).toBe(true);
-  expect(isRevokedCredentialHost(creds, "api.anthropic.com")).toBe(false);
-  expect(isRevokedCredentialHost(creds, "example.com")).toBe(false);
+  expect(
+    isRevokedCredentialTarget(creds, "chatgpt.com", "/backend-api/x"),
+  ).toBe(true);
+  expect(isRevokedCredentialTarget(creds, "chatgpt.com", "/c/abc")).toBe(false);
+  expect(isRevokedCredentialTarget(creds, "chatgpt.com", undefined)).toBe(
+    false,
+  );
+  expect(
+    isRevokedCredentialTarget(creds, "api.anthropic.com", "/v1/messages"),
+  ).toBe(false);
+  expect(isRevokedCredentialTarget(creds, "example.com", "/")).toBe(false);
 });

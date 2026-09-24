@@ -77,7 +77,7 @@ Bedrock（`CLAUDE_CODE_USE_BEDROCK`）、Vertex（`CLAUDE_CODE_USE_VERTEX`）、
 
 ### Codex
 
-`"proxy"` では、ホストの `~/.codex` を今までどおり共有したうえで、`~/.codex/auth.json` の位置にだけセッションごとのダミーファイルを被せます。ダミーには実際のトークンは入っていません。Codex が `chatgpt.com` へ送る通信は nas のプロキシが中継し、`Authorization` と `chatgpt-account-id` をホストの値で上書きします。トークンの更新はホストの nas が行い、コンテナ内では起きません。
+`"proxy"` では、ホストの `~/.codex` を今までどおり共有したうえで、`~/.codex/auth.json` の位置にだけセッションごとのダミーファイルを被せます。ダミーには実際のトークンは入っていません。Codex が `chatgpt.com` の `/backend-api/` の下へ送る通信は nas のプロキシが中継し、`Authorization` と `chatgpt-account-id` をホストの値で上書きします。`chatgpt.com` の他の path への通信にはホストの値を付けません。トークンの更新はホストの nas が行い、コンテナ内では起きません。
 
 ログインはホストで `codex login` を実行してください。ホストの `~/.codex/auth.json` に ChatGPT のログイン情報が無い場合、セッションは起動しません。次の場合は `agentState.auth = "shared"` を指定してください。
 

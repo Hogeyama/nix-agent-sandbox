@@ -108,7 +108,7 @@ Linux では、別の mount namespace で mount point になっているファ�
 - セッション開始時に、ダミーを mount した時点のホストのファイルの inode（device と inode 番号）を記録する。
 - `~/.codex` を `fs.watch` で監視し、`auth.json` に関するイベントのたびに inode を確かめる。イベントの取りこぼしに備え、5秒ごとにも確かめる。
 - ファイルが無くなった、または inode が変わったら、次のことを行う。
-  - `chatgpt.com` への request への注入をやめ、以後その request を deny する。
+  - `chatgpt.com` の `/backend-api` の下への request への注入をやめ、以後その request を deny する。
   - セッションを止める。
     - container をまだ起動していなければ、準備の pipeline を中断し、container を起動しない。監視は proxy の段階で始まり、DinD の起動などが container の起動より前にあるので、この間に置き換わることがある。
     - container を起動した後なら、container を猶予なしで kill する（SIGKILL）。`docker stop` の SIGTERM の後の猶予（既定で10秒）を与えると、SIGTERM を無視する agent がその間に本物のファイルを読める。
@@ -154,7 +154,7 @@ refresh token は rotation するので、2つのプロセスが同じ refresh t
 
 broker は、Codex の解決結果が `"proxy"` のセッションで、次の request の判定を変える。
 
-- 宛先が `chatgpt.com` で、最終的な帰結が allow の request
+- 宛先が `chatgpt.com` で、path が `/backend-api` か `/backend-api/` で始まり（query を除いて比べる）、最終的な帰結が allow の request
   - `Authorization: Bearer <access token>` を注入する。
   - `chatgpt-account-id: <account id>` を注入する。container が付けた値はダミーファイルからのものなので同じ値になるが、ホストの token と異なる account を指定できないよう、上書きする。
   - 利用者の設定がこのホストに同じ header の `inject` を持っていても、こちらを優先する。
@@ -162,6 +162,10 @@ broker は、Codex の解決結果が `"proxy"` のセッションで、次の r
   - policy の評価より前に deny とする。container が持つ refresh token はダミー値なので、通しても失敗するだけである。
 
 拒否した request には注入しない。
+
+`chatgpt.com` の他の path（ChatGPT の画面や、consumer 向けの API）には注入せず、通常の policy のとおりに扱う。
+Codex が ChatGPT のアカウントで使う API は `/backend-api/` の下にあり、それ以外の path にホストの token を付ける理由がない。
+path が分からない request（CONNECT など）にも注入しない。
 
 Claude と Codex の両方が `"proxy"` のセッション（`extraAgents` で両方を用意した場合）では、broker はそれぞれの credential source を持ち、宛先のホストで使い分ける。
 注入するホスト、削除する header、deny する更新の request を、エージェントごとの定義にまとめる。
@@ -183,7 +187,7 @@ Claude と Codex の両方が `"proxy"` のセッション（`extraAgents` で�
 - ホストの Codex との間で refresh token の更新が競合すると、片方が `refresh_token_reused` で失敗する。nas が失敗した場合は、ホストの Codex が更新したファイルを読み直して回復する。ホストの Codex が失敗した場合は、ホストで再ログインが必要になることがある。
 - container の Codex が 401 を受けると、ダミーの refresh token で更新を試み、deny される。Codex はこれを回復できない失敗として扱い、ログインを求める可能性がある。そのセッションはやり直しが必要になる。
 - container 内で `codex login` すると、本物の token がダミーファイルに書き込まれ、container から見える。上流へ送る `Authorization` は broker が上書きするので、使われる credential はホストのものになる。ログインはホストで行う。
-- 注入するのは `chatgpt.com` だけである。Codex は `*.chatgpt.com` も ChatGPT の通信として扱うが、既定の送信先は `https://chatgpt.com/backend-api/` である。他のホストへの認証付きの通信が必要になれば、定義に追加する。
+- 注入するのは `chatgpt.com` の `/backend-api` の下だけである。Codex は `*.chatgpt.com` も ChatGPT の通信として扱うが、既定の送信先は `https://chatgpt.com/backend-api/` である。他のホストや path への認証付きの通信が必要になれば、定義に追加する。
 - refresh の request の形式と `client_id` は、Codex の実装に合わせたものである。Codex がこれを変えると更新処理が失敗する。その場合も、ホストの Codex が更新したファイルを読み直すことで、ホストで Codex を使っていれば動き続ける。
 - inject が平文の HTTP の request にも適用されうる問題は、Claude と同じく `docs/todo/security.md` で扱う。
 
@@ -197,7 +201,7 @@ Claude と Codex の両方が `"proxy"` のセッション（`extraAgents` で�
   - credential source の更新処理。ファイル読み取り、ロック、refresh の request を fake に差し替え、期限内、他プロセスによる更新済み、自分で更新して書き戻し、更新失敗とやり直し、response で token が省略された場合を確認する。
   - 書き戻し。一時ディレクトリで、inode が変わらないこと、`tokens` の対象外の項目と他の項目が残ること、mode が保たれることを確認する。
   - 監視。一時ディレクトリで、ファイルの削除、rename による置き換え、同じファイルへの上書きのそれぞれで、停止の通知が出る・出ないことを確認する。
-  - broker の判定。`chatgpt.com` への allow で `Authorization` と `chatgpt-account-id` の注入が載ること、deny では載らないこと、利用者の `inject` より優先されること、`POST auth.openai.com/oauth/token` が deny になること、Claude と Codex の両方がある場合にホストで使い分けること、監視が停止を通知した後は deny になることを確認する。
+  - broker の判定。`chatgpt.com` の `/backend-api` の下への allow で `Authorization` と `chatgpt-account-id` の注入が載ること、他の path には載らないこと、deny では載らないこと、利用者の `inject` より優先されること、`POST auth.openai.com/oauth/token` が deny になること、Claude と Codex の両方がある場合にホストで使い分けること、監視が停止を通知した後は deny になることを確認する。
   - Codex の mount の組み立て。`"proxy"` ではダミーファイルがホストの `~/.codex` の mount より後に並ぶこと、`"shared"` では並ばないことを確認する。
 
 ## Why — なぜこのアプローチを選んだか

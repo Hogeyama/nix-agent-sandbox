@@ -65,7 +65,7 @@ function makeConfig(sessionId: string): SessionBrokerConfig {
 function makeSource(): AgentCredential & { closed: number } {
   const source = {
     closed: 0,
-    injectHosts: [],
+    injectsInto: () => false,
     removeHeaders: [],
     isHostOwnedRefresh: () => false,
     headers: () => [],
@@ -143,7 +143,7 @@ test("startSessionBroker: handle.close closes the source and cleans up even when
 test("startSessionBroker: handle.close closes the source after the broker", async () => {
   const order: string[] = [];
   const source: AgentCredential = {
-    injectHosts: [],
+    injectsInto: () => false,
     removeHeaders: [],
     isHostOwnedRefresh: () => false,
     headers: () => [],

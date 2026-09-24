@@ -22,7 +22,7 @@ import {
   CREDENTIAL_REFRESH_DENY_REASON,
   CREDENTIAL_REVOKED_DENY_REASON,
   isHostOwnedCredentialRefresh,
-  isRevokedCredentialHost,
+  isRevokedCredentialTarget,
 } from "./agent_credential.ts";
 import {
   type Decision as AuthzDecision,
@@ -697,7 +697,13 @@ export class SessionBroker {
 
     // ホストの credential が使えなくなった (ホストでファイルが置き換わった)
     // エージェントの注入先へは、container の付けた credential のまま通さない。
-    if (isRevokedCredentialHost(this.agentCredentials, message.target.host)) {
+    if (
+      isRevokedCredentialTarget(
+        this.agentCredentials,
+        message.target.host,
+        message.reviewContext?.path,
+      )
+    ) {
       await this.recordAudit(
         message,
         "deny",
@@ -742,7 +748,7 @@ export class SessionBroker {
       const decision = this.decorateAllow(
         allowDecision(message.requestId, decided.reason),
         decided,
-        message.target,
+        message,
       );
       if (shouldAudit) {
         const headerNames = decision.injectHeaders?.map((h) => h.name);
@@ -788,7 +794,7 @@ export class SessionBroker {
       const decision = this.decorateAllow(
         allowDecision(message.requestId, "approved"),
         decided,
-        message.target,
+        message,
       );
       const headerNames = decision.injectHeaders?.map((h) => h.name);
       if (shouldAudit) {
@@ -1036,7 +1042,7 @@ export class SessionBroker {
     const baseWithId: DecisionResponse = { ...baseDecision, requestId };
     const decision =
       outcome === "allow"
-        ? this.decorateAllow(baseWithId, decided, request.target)
+        ? this.decorateAllow(baseWithId, decided, request)
         : baseWithId;
     if (
       (decided?.audit ?? this.document.defaults.audit) !== "off" ||
@@ -1114,7 +1120,7 @@ export class SessionBroker {
       const decided = group.decisions.get(requestId);
       const decision =
         outcome === "allow"
-          ? this.decorateAllow(baseWithId, decided, request.target)
+          ? this.decorateAllow(baseWithId, decided, request)
           : baseWithId;
       if (
         (decided?.audit ?? this.document.defaults.audit) !== "off" ||
@@ -1388,10 +1394,15 @@ export class SessionBroker {
   private decorateAllow(
     decision: DecisionResponse,
     decided: AuthzDecision | undefined,
-    target: { readonly host: string },
+    request: Pick<AuthorizeRequest, "target" | "reviewContext">,
   ): DecisionResponse {
     const decorated = this.decorateWithPolicy(decision, decided);
-    return applyAgentCredentials(decorated, target.host, this.agentCredentials);
+    return applyAgentCredentials(
+      decorated,
+      request.target.host,
+      request.reviewContext?.path,
+      this.agentCredentials,
+    );
   }
 
   /**

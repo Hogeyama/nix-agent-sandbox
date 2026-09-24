@@ -4055,6 +4055,14 @@ test("SessionBroker: Codex credential overrides Authorization and the account on
       { name: "chatgpt-account-id", value: "acct-1" },
     ]);
 
+    // ChatGPT の consumer 向けの path には注入しない。
+    const consumer = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_codexcred", "req_1b", "/c/abc", "chatgpt.com", 443),
+    );
+    expect(consumer.decision).toBe("allow");
+    expect(consumer.injectHeaders).toBeUndefined();
+
     const refresh = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       post("sess_codexcred", "req_2", "/oauth/token", "auth.openai.com", 443),
@@ -4076,6 +4084,14 @@ test("SessionBroker: Codex credential overrides Authorization and the account on
     expect(revoked.decision).toBe("deny");
     expect(revoked.reason).toBe("credential-revoked-on-host");
     expect(revoked.injectHeaders).toBeUndefined();
+
+    // 注入の対象でない path は、失効後も通常の policy に従う。
+    const consumerAfterRevoke = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_codexcred", "req_4", "/c/abc", "chatgpt.com", 443),
+    );
+    expect(consumerAfterRevoke.decision).toBe("allow");
+    expect(consumerAfterRevoke.injectHeaders).toBeUndefined();
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
