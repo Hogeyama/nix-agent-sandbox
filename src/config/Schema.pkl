@@ -939,6 +939,9 @@ class HostExecMatchConfig {
 
   /// argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。
   /// 省略時はその argv0 の全コマンドにマッチ。
+  /// アンカーは付かない（部分一致）ので、許可ルールでは `^...$` で全体を固定する。
+  /// 連結文字列では空白を含む引数や空の引数の境界が分からないため、
+  /// `approval = "allow"` のルールはそうした引数を含む要求を自動許可せず承認に回す。
   argRegex: String? = null
 }
 
@@ -958,11 +961,6 @@ class HostExecRule {
   /// - `"prompt"`: 承認キューに入れる
   /// - `"deny"`: 常に拒否
   approval: "allow"|"prompt"|"deny" = "prompt"
-
-  /// ルール不一致や不許可時の動作。
-  /// - `"container"`: コンテナ内で実行へフォールバック
-  /// - `"deny"`: 即拒否
-  fallback: "container"|"deny" = "container"
 }
 
 class HostExecConfig {

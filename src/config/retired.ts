@@ -82,6 +82,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * hostexec ルールの `fallback` を落とす。
+ *
+ * このフィールドはどの値でも挙動を変えなかった（不一致の要求は常にコンテナ
+ * 実行へのフォールバック応答になる）。値にかかわらず落としても挙動は同じなので、
+ * 他の廃止設定のように移行を止めない。残すと Schema に無いプロパティになり、
+ * 生成した Pkl が評価できない。
+ */
+function dropHostExecRuleFallback(
+  profile: Record<string, unknown>,
+): Record<string, unknown> {
+  const hostexec = profile.hostexec;
+  if (!isRecord(hostexec) || !Array.isArray(hostexec.rules)) return profile;
+  if (!hostexec.rules.some((rule) => isRecord(rule) && "fallback" in rule)) {
+    return profile;
+  }
+  const rules = hostexec.rules.map((rule) => {
+    if (!isRecord(rule) || !("fallback" in rule)) return rule;
+    const { fallback: _dropped, ...rest } = rule;
+    return rest;
+  });
+  return { ...profile, hostexec: { ...hostexec, rules } };
+}
+
+/**
  * 旧 YAML/Nix 設定から、廃止した設定を落とす。
  *
  * 空になったセクションはセクションごと落とす。`gcloud`/`aws`/`gpg` は
@@ -114,7 +138,7 @@ export function normalizeRetiredSettings(
           next = { ...next, [section]: stripped };
         }
       }
-      return [name, next];
+      return [name, dropHostExecRuleFallback(next)];
     }),
   );
   return { ...raw, profiles };

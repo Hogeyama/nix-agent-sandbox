@@ -5,7 +5,7 @@ import {
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
 } from "../config/types.ts";
 import type { MatchContext } from "./match.ts";
-import { matchRule } from "./match.ts";
+import { effectiveApproval, hostCommandArgv0, matchRule } from "./match.ts";
 
 function makeRule(
   id: string,
@@ -19,7 +19,6 @@ function makeRule(
     env: {},
     inheritEnv: DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
     approval,
-    fallback: "container",
   };
 }
 
@@ -262,4 +261,77 @@ test("matchRule: relative argv0 rule does not match absolute invocation without 
     "ps",
   ]);
   expect(result).toEqual(null);
+});
+
+test("hostCommandArgv0: bare-name rule runs the host PATH command, whatever path was requested", () => {
+  // matchRule accepts these because the basename is "git"; the host then runs
+  // its own git, so that is what approval must show and key on.
+  for (const requested of ["git", "/opt/nas/hostexec/bin/git", "tools/git"]) {
+    expect(
+      matchRule([makeRule("git", { argv0: "git" })], requested, []),
+    ).not.toBeNull();
+    expect(hostCommandArgv0("git", requested)).toEqual("git");
+  }
+});
+
+test("effectiveApproval: an allow argRegex cannot auto-approve args packed across a boundary", () => {
+  // The regex was written for `gpg --status-fd=2 -bsau <keyid>` (sign). Packing
+  // two tokens into one argument still produces the same joined string, but
+  // gpg now sees a different command line, so auto-approval would widen the
+  // rule beyond what its author allowed.
+  const rule = makeRule("gpg-sign", {
+    argv0: "gpg",
+    argRegex: "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$",
+  });
+  const intended = ["--status-fd=2", "-bsau", "0123ABCD"];
+  const packed = ["--status-fd=2 -bsau", "0123ABCD"];
+  expect(matchRule([rule], "gpg", intended)?.rule.id).toEqual("gpg-sign");
+  expect(effectiveApproval(rule, intended)).toEqual("allow");
+  expect(matchRule([rule], "gpg", packed)?.rule.id).toEqual("gpg-sign");
+  expect(effectiveApproval(rule, packed)).toEqual("prompt");
+});
+
+test("effectiveApproval: whitespace other than space and empty args are ambiguous too", () => {
+  const rule = makeRule("deno-test", {
+    argv0: "deno",
+    argRegex: "^-A\\s+test$",
+  });
+  expect(matchRule([rule], "deno", ["-A\ttest"])).not.toBeNull();
+  expect(effectiveApproval(rule, ["-A\ttest"])).toEqual("prompt");
+  expect(effectiveApproval(rule, ["-A", "test"])).toEqual("allow");
+
+  const noArgs = makeRule("uptime", { argv0: "uptime", argRegex: "^$" });
+  expect(matchRule([noArgs], "uptime", [""])).not.toBeNull();
+  expect(effectiveApproval(noArgs, [""])).toEqual("prompt");
+  expect(effectiveApproval(noArgs, [])).toEqual("allow");
+});
+
+test("effectiveApproval: prompt, deny, and argv0-only allow rules are unchanged", () => {
+  const packed = ["a b"];
+  expect(
+    effectiveApproval(
+      makeRule("p", { argv0: "x", argRegex: "^a b$" }, "prompt"),
+      packed,
+    ),
+  ).toEqual("prompt");
+  expect(
+    effectiveApproval(
+      makeRule("d", { argv0: "x", argRegex: "^a b$" }, "deny"),
+      packed,
+    ),
+  ).toEqual("deny");
+  // Without argRegex the rule already allows every argument list.
+  expect(effectiveApproval(makeRule("any", { argv0: "x" }), packed)).toEqual(
+    "allow",
+  );
+});
+
+test("hostCommandArgv0: path rules run the requested path as given", () => {
+  expect(hostCommandArgv0("/usr/bin/git", "/usr/bin/git")).toEqual(
+    "/usr/bin/git",
+  );
+  expect(hostCommandArgv0("./gradlew", "./gradlew")).toEqual("./gradlew");
+  expect(hostCommandArgv0("./gradlew", "/workspace/gradlew")).toEqual(
+    "/workspace/gradlew",
+  );
 });

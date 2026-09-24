@@ -88,7 +88,6 @@ function makeProfile(): Profile {
           env: { GITHUB_TOKEN: "secret:token" },
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     },
@@ -349,7 +348,6 @@ test("HostExecStage plan: sets LD_PRELOAD for relative argv0 intercept", async (
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
     },
   ];
   const runtimeDir = "/tmp/nas-test-runtime";
@@ -436,7 +434,6 @@ test("HostExecStage plan: installation alone provides a prompted host command", 
     env: {},
     inheritEnv: { mode: "unsafe-inherit-all", keys: [] },
     approval: "prompt",
-    fallback: "container",
   });
   for (const args of [[], ["--help"], ["-h"], ["--"]]) {
     expect(matchRule(rules, installed, args)).toBeNull();
@@ -456,7 +453,6 @@ test("HostExecStage plan: user denial takes precedence over installed hostexec d
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "deny",
-      fallback: "container",
     },
   ];
   const plan = planHostExec({
@@ -480,7 +476,6 @@ test("HostExecStage plan: leaves an ordinary hostexec rule on the client path wh
     env: {},
     inheritEnv: { mode: "unsafe-inherit-all", keys: [] },
     approval: "prompt",
-    fallback: "container",
   });
   const input = {
     ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
@@ -549,7 +544,6 @@ test("HostExecStage plan: uses workspace slice for LD_PRELOAD intercept and brok
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
     },
   ];
   const input = {
@@ -584,7 +578,6 @@ test("HostExecStage plan: sets LD_PRELOAD for absolute argv0 intercept", async (
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "deny",
     },
   ];
   const runtimeDir = "/tmp/nas-test-runtime";
@@ -627,7 +620,6 @@ test("HostExecStage plan: throws when a relative/absolute rule has no intercept 
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
     },
   ];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
@@ -650,7 +642,6 @@ test("HostExecStage plan: broker.integrityTargets lists resolved LD_PRELOAD argv
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "deny",
     },
     {
       id: "rel",
@@ -659,7 +650,6 @@ test("HostExecStage plan: broker.integrityTargets lists resolved LD_PRELOAD argv
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
     },
   ];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
@@ -691,7 +681,6 @@ test("HostExecStage plan: LD_PRELOAD value has no spurious colons when set", asy
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
     },
   ];
   const runtimeDir = "/tmp/nas-test-runtime";
@@ -723,7 +712,6 @@ test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line 
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
     },
     {
       id: "tool",
@@ -732,7 +720,6 @@ test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line 
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "deny",
     },
   ];
   const runtimeDir = "/tmp/nas-test-runtime";
@@ -975,7 +962,6 @@ test("HostExecStage plan: absolute argv0 pointing at a sensitive container path 
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "deny",
     },
   ];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");

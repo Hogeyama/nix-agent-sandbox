@@ -401,7 +401,6 @@ async function assertPostExitDisconnectStopsFilters(
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval,
-          fallback: "deny",
         },
       ],
     }),
@@ -552,7 +551,6 @@ test("HostExecBroker: preserves a coalesced frame after the execute request", as
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -645,7 +643,6 @@ test("HostExecBroker: rejects duplicate request IDs while direct execution is ac
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -729,7 +726,6 @@ test("HostExecBroker: rejects duplicate request IDs across approval groups", asy
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "deny",
         },
         {
           id: "node-version",
@@ -738,7 +734,6 @@ test("HostExecBroker: rejects duplicate request IDs across approval groups", asy
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "deny",
         },
       ],
     }),
@@ -804,7 +799,6 @@ test("HostExecBroker: records command process lifecycle diagnostics", async () =
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -875,7 +869,6 @@ test("HostExecBroker: records command exit even when process identity is unavail
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -940,7 +933,6 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1018,7 +1010,6 @@ test("HostExecBroker: pending request can be denied via broker", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1078,7 +1069,6 @@ test("HostExecBroker: disconnect during policy resolution clears pending state",
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1135,7 +1125,6 @@ test("HostExecBroker: cancellation removes pending request before approval", asy
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1203,7 +1192,6 @@ test("HostExecBroker: cancellation and approval race cleanup is idempotent", asy
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1264,7 +1252,6 @@ test("HostExecBroker: internal gateway channel cannot approve a pending request"
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1336,7 +1323,6 @@ test("HostExecBroker: control channel rejects execute", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -1387,7 +1373,6 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
           env: { TOKEN: "secret:token_a" },
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
         {
           id: "deno-secret-b",
@@ -1396,7 +1381,6 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
           env: { TOKEN: "secret:token_b" },
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1478,7 +1462,6 @@ test("HostExecBroker: argv0-only rule matches any args", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -1522,7 +1505,6 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -1549,6 +1531,158 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
   }
 });
 
+test("HostExecBroker: PATH rule approval shows the host command it will run, not the requested path", async () => {
+  // A bare-name rule runs the host PATH command even when the container asks
+  // for a workspace file of the same basename. The approval must name the
+  // host command; showing `tools/sh` would have the user approve a workspace
+  // script while the host's sh runs.
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  await mkdir(path.join(workspace, "tools"));
+  const workspaceSh = path.join(workspace, "tools", "sh");
+  await writeFile(workspaceSh, "#!/bin/sh\nprintf workspace-sh\n");
+  await chmod(workspaceSh, 0o755);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "sh-any",
+          match: { argv0: "sh" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const execPromise = sendStreamingRequest(
+      execSocketPath,
+      request(
+        ["-c", "printf host-sh"],
+        workspace,
+        "req_sh_display",
+        "tools/sh",
+      ),
+    );
+    const pending = await waitForPendingEntries(paths, 1);
+    expect(pending[0].argv0).toEqual("sh");
+    expect(pending[0].capability?.argv0).toEqual("sh");
+    expect(pending[0].capability?.normalizedArgv).toEqual([
+      "sh",
+      "-c",
+      "printf host-sh",
+    ]);
+    await sendHostExecControlRequest(controlSocketPath, {
+      type: "approve",
+      requestId: "req_sh_display",
+    });
+    const result = await execPromise;
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result)).toEqual("host-sh");
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    expect(logs.map((log) => log.command)).toEqual(["sh -c printf host-sh"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+for (const promptEnabled of [true, false]) {
+  test(`HostExecBroker: allow argRegex does not auto-run args with an ambiguous boundary (prompt ${promptEnabled ? "enabled" : "disabled"})`, async () => {
+    // The regex sees `-c printf pwned` for both ["-c", "printf", "pwned"] and
+    // ["-c", "printf pwned"]; only the first is what a space-separated regex
+    // describes, so the second must not run without the user seeing it.
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+    const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+    const paths = await resolveHostExecRuntimePaths(runtimeDir);
+    const workspace = await mkdtemp(
+      path.join(tmpdir(), "nas-hostexec-workspace-"),
+    );
+    const broker = new HostExecBroker({
+      paths,
+      sessionId: "sess_test",
+      profileName: "test",
+      notify: "off",
+      workspaceRoot: workspace,
+      sessionTmpDir: `${runtimeDir}/tmp`,
+      auditDir,
+      hostexec: makeConfig({
+        prompt: { enable: promptEnabled },
+        rules: [
+          {
+            id: "sh-printf-word",
+            match: { argv0: "sh", argRegex: "^-c printf [a-z]+$" },
+            cwd: { mode: "workspace-only", allow: [] },
+            env: {},
+            inheritEnv: { mode: "minimal", keys: [] },
+            approval: "allow",
+          },
+        ],
+      }),
+    });
+    const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+    const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+    await broker.start(execSocketPath, controlSocketPath);
+    try {
+      const execPromise = sendStreamingRequest(
+        execSocketPath,
+        request(["-c", "printf pwned"], workspace, "req_packed", "sh"),
+      );
+      if (promptEnabled) {
+        const pending = await waitForPendingEntries(paths, 1);
+        expect(pending[0].ruleId).toEqual("sh-printf-word");
+        expect(pending[0].args).toEqual(["-c", "printf pwned"]);
+        await sendHostExecControlRequest(controlSocketPath, {
+          type: "approve",
+          requestId: "req_packed",
+        });
+        const result = await execPromise;
+        expect(collectStdout(result)).toEqual("pwned");
+        const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+        expect(logs.map((log) => log.reason)).toEqual(["approved-by-user"]);
+      } else {
+        await expect(execPromise).rejects.toThrow(/prompt is disabled/);
+        const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+        expect(logs.map((log) => log.reason)).toEqual(["prompt-disabled"]);
+      }
+
+      // The same rule still auto-runs when every argument is a plain token.
+      const direct = await sendStreamingRequest(
+        execSocketPath,
+        request(["-c", "printf", "ok"], workspace, "req_plain", "sh"),
+      );
+      // `sh -c printf` exits non-zero on its own; what matters is that it ran
+      // without a pending approval.
+      expect(typeof direct.exitCode).toEqual("number");
+      expect(await broker.listPending()).toEqual([]);
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(workspace, { recursive: true, force: true }).catch(() => {});
+      await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
 test("HostExecBroker: installed command unwraps payload and keeps local usage fallback", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
@@ -1573,7 +1707,6 @@ test("HostExecBroker: installed command unwraps payload and keeps local usage fa
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -1646,7 +1779,6 @@ test("HostExecBroker: installed payload approval retains wrapper request identit
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -1708,7 +1840,6 @@ test("HostExecBroker: installed command requires exact configured path and prese
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "deny",
-          fallback: "container",
         },
       ],
     }),
@@ -1773,7 +1904,6 @@ test("HostExecBroker: disabled or differently configured installed path executes
             env: {},
             inheritEnv: { mode: "minimal", keys: [] },
             approval: "allow",
-            fallback: "deny",
           },
         ],
       }),
@@ -1830,7 +1960,6 @@ test("HostExecBroker: installed absolute rule bypasses only its own integrity ta
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
         {
           id: "checked-absolute",
@@ -1839,7 +1968,6 @@ test("HostExecBroker: installed absolute rule bypasses only its own integrity ta
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -1896,7 +2024,6 @@ test("HostExecBroker: relative rule executes original relative argv0", async () 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -1949,7 +2076,6 @@ test("HostExecBroker: absolute rule executes exact absolute binary path", async 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -1999,7 +2125,6 @@ test("HostExecBroker: absolute rule does not match bare-name invocation", async 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -2043,7 +2168,6 @@ test("HostExecBroker: argv0-only rule also matches no-args command", async () =>
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -2089,7 +2213,6 @@ test("HostExecBroker: rejects cwd outside workspace with workspace-only mode", a
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -2138,7 +2261,6 @@ test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mo
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -2181,7 +2303,6 @@ test("HostExecBroker: fallback deny returns error for unmatched command", async 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "deny",
-          fallback: "deny",
         },
       ],
     }),
@@ -2241,7 +2362,6 @@ test("HostExecBroker: capability key differs by inheritEnv", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
         {
           id: "deno-with-keys",
@@ -2250,7 +2370,6 @@ test("HostExecBroker: capability key differs by inheritEnv", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -2317,7 +2436,6 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -2419,7 +2537,6 @@ for (const scenario of [
               env: { TOKEN: "secret:metadata_token" },
               inheritEnv: { mode: "minimal", keys: [] },
               approval: "prompt",
-              fallback: "container",
             },
           ],
         }),
@@ -2535,7 +2652,6 @@ test("HostExecBroker: scope capability caches approval key", async () => {
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -2595,7 +2711,6 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -2673,7 +2788,6 @@ test("HostExecBroker: streaming produces chunks for multi-line output", async ()
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -2732,7 +2846,6 @@ test("HostExecBroker: streaming produces zero chunks for silent command", async 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -2781,7 +2894,6 @@ test("HostExecBroker: secret env binding injects resolved value into command", a
           env: { TOKEN: "secret:test_token" },
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "container",
         },
       ],
     }),
@@ -2881,7 +2993,6 @@ test("HostExecBroker: close tears down a pending approval session", async () => 
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     }),
@@ -3085,7 +3196,6 @@ test("HostExecBroker: masks secrets in streaming output when maskFilter configur
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -3135,7 +3245,6 @@ test("HostExecBroker: does not mask when maskFilter is not configured", async ()
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -3201,7 +3310,6 @@ test("HostExecBroker: surfaces an error instead of a truncated result when the m
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -3253,7 +3361,6 @@ test("HostExecBroker: records command exit before mask-filter finish failure", a
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     }),
@@ -3350,7 +3457,6 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
           env: { TOKEN: "secret:metadata_token" },
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "allow",
-          fallback: "deny",
         },
       ],
     };
@@ -3464,7 +3570,6 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
         approval: "prompt",
-        fallback: "deny",
       },
     ],
   };
@@ -3595,7 +3700,6 @@ test("HostExecBroker: allow rule denies when target changed and prompt is disabl
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
         approval: "allow",
-        fallback: "deny",
       },
     ],
   };
@@ -3676,7 +3780,6 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
         approval: "allow",
-        fallback: "deny",
       },
     ],
   };
@@ -3786,7 +3889,6 @@ test("HostExecBroker: symlinked workspace root does not break the integrity base
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
         approval: "allow",
-        fallback: "deny",
       },
     ],
   };
@@ -3868,7 +3970,6 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
         approval: "allow",
-        fallback: "deny",
       },
     ],
   };
@@ -3976,7 +4077,6 @@ test("HostExecBroker: an integrity check error is audited and reported instead o
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
         approval: "allow",
-        fallback: "deny",
       },
     ],
   };

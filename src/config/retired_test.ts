@@ -119,3 +119,31 @@ test("legacy normalization preserves unrelated data and removes both empty spell
     expect(normalizeRetiredSettings(input)).toEqual(input);
   }
 });
+test("legacy hostexec rules lose the removed fallback field and keep the rest", () => {
+  const raw = {
+    profiles: {
+      dev: {
+        hostexec: {
+          rules: [
+            { id: "gh", match: { argv0: "gh" }, fallback: "deny" },
+            { id: "git", match: { argv0: "git" } },
+          ],
+        },
+      },
+    },
+  };
+  const before = structuredClone(raw);
+  expect(normalizeRetiredSettings(raw)).toEqual({
+    profiles: {
+      dev: {
+        hostexec: {
+          rules: [
+            { id: "gh", match: { argv0: "gh" } },
+            { id: "git", match: { argv0: "git" } },
+          ],
+        },
+      },
+    },
+  });
+  expect(raw).toEqual(before);
+});

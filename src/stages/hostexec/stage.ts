@@ -211,7 +211,6 @@ const NAS_HOOK_RULE: HostExecRule = {
     keys: ["NAS_SESSION_ID", "NAS_SESSION_STORE_DIR", "XDG_RUNTIME_DIR"],
   },
   approval: "allow",
-  fallback: "container",
 };
 
 /** Opt-in escape hatch: ask before running the payload in the host environment. */
@@ -225,7 +224,6 @@ const NAS_HOSTEXEC_RULE: HostExecRule = {
   env: {},
   inheritEnv: { mode: "unsafe-inherit-all", keys: [] },
   approval: "prompt",
-  fallback: "container",
 };
 
 export function planHostExec(input: HostExecStageInput): HostExecPlan | null {

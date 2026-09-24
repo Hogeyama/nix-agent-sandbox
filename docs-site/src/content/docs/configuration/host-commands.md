@@ -31,13 +31,18 @@ hostexec = new HostExecConfig {
       cwd { mode = "workspace-only" }
       inheritEnv { mode = "minimal" }
       approval = "prompt"
-      fallback = "container"
     }
   }
 }
 ```
 
 argv0 はコマンド名・絶対パス・相対パスの完全一致、argRegex は引数をスペースで連結した文字列への正規表現です。この例は引数なしに限定しています。workspace-only は作業フォルダーとその子ディレクトリからの要求を許します。
+
+argRegex にはアンカーが付かず、連結した文字列のどこかに一致すれば通ります。`status` と書くと `-c core.pager=… status` にも一致するので、許可するルールでは `^...$` で全体を固定してください。
+
+連結した文字列からは、引数の境界を復元できない場合があります。`["-u", "KEY", "--sign"]` と `["-u KEY", "--sign"]` はどちらも `-u KEY --sign` になり、空の引数は引数なしと区別できません。そのため `approval = "allow"` で argRegex を持つルールは、空白（スペース・タブ・改行など）を含む引数か空の引数がある要求を自動許可せず、`prompt` と同じく承認に回します。承認が無効なら拒否されます。コミットメッセージのように空白を含む引数を渡すコマンドを自動許可したい場合は、argRegex を持たないルールにするか、承認を前提にしてください。`nas hostexec test` はこの格上げが起きるときに `Effective approval: prompt` と表示します。`prompt` と `deny` のルールの一致は変わりません。
+
+コマンド名だけのルール（`argv0 = "git"` など）は、コンテナ側で `tools/git` や `/opt/nas/hostexec/bin/git` のようにどのパスから呼ばれても、ホストの PATH にある同名コマンドを実行します。承認画面・`nas hostexec pending`・監査ログに出るのも、この実行されるコマンド名です。
 
 設定を確認して信頼した後、ホストでルールの一致を調べます。`<profile>` は追加したプロファイル名です。
 
@@ -104,7 +109,6 @@ hostexec = new HostExecConfig {
       env { ["API_TOKEN"] = "secret:build_api_token" }
       inheritEnv { mode = "minimal" }
       approval = "prompt"
-      fallback = "deny"
     }
   }
 }
@@ -121,8 +125,6 @@ nas hostexec test --profile claude -- pnpm build
 ```
 
 そのプロファイルで起動し、エージェントに pnpm build を要求させます。UI で作業ディレクトリとコマンドを確認し、This request only → Approve で一回だけ許可します。ビルド結果が返り、出力にトークンが現れた場合はマスクされることを確認します。
-
-例にある fallback の deny は、現在の実装ではルール不一致時の動作を変えません。次の「ルール不一致の要求」の扱いになります。
 
 ## 相対パスのコマンド
 
@@ -150,6 +152,6 @@ hostexec = new HostExecConfig {
 
 ## ルール不一致の要求
 
-不一致の要求はコンテナ実行へのフォールバック応答になります。コンテナにも必要な実行ファイルと環境がなければ失敗します。HostExecRule.fallback を変更しても、現在の実装ではこの動作は変わりません。
+不一致の要求はコンテナ実行へのフォールバック応答になります。コンテナにも必要な実行ファイルと環境がなければ失敗します。
 
 hostexec スクリプトはフォールバック時に実行場所を stderr に表示します。一致したルールの `approval = "deny"`、承認拒否、時間切れはエラーで、同じ扱いではありません。

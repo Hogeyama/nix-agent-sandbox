@@ -155,3 +155,43 @@ profiles {
     }
   },
 );
+
+test.skipIf(!hasPkl)(
+  "a hostexec rule that still sets the removed fallback field fails to load",
+  async () => {
+    // HostExecRule.fallback は何にも配線されていなかった。受け入れ続けると
+    // `fallback = "deny"` で不一致時のコンテナ実行も止まるという誤解が残るので、
+    // Schema から消して設定側で気付けるようにしている。
+    const tmpDir = await mkdtemp(
+      path.join(tmpdir(), "nas-repo-pkl-hostexec-fallback-"),
+    );
+    try {
+      await setupNasDir(
+        tmpDir,
+        `amends "Schema.pkl"
+
+profiles {
+  ["claude"] {
+    agent = "claude"
+    hostexec = new HostExecConfig {
+      rules {
+        new {
+          id = "gh-cli"
+          match { argv0 = "gh" }
+          fallback = "deny"
+        }
+      }
+    }
+  }
+}
+`,
+      );
+
+      await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
+        /Cannot find property `fallback`/,
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
