@@ -57,6 +57,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
@@ -106,6 +107,7 @@ const defaultClaudeProbes: AgentProbes = {
 function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
   return {
     agentProbes: defaultClaudeProbes,
+    extraAgentProbes: [],
     direnvDataDir: null,
     nixConfRealPath: null,
     nixBinPath: null,
@@ -1044,6 +1046,63 @@ test("MountStage: codex agent sets agentCommand", () => {
     "-c",
     "shell_environment_policy.inherit=all",
   ]);
+});
+
+test("MountStage: extraAgents are provisioned without replacing the launched command", () => {
+  const codexProbes: AgentProbes = {
+    codexDirExists: true,
+    codexBinPath: "/usr/bin/codex",
+    codexCodeModeHostBinPath: null,
+    codexSettingsFiles: [],
+  };
+  const claudeProbes: AgentProbes = {
+    ...defaultClaudeProbes,
+    claudeDirExists: true,
+    claudeBinPath: "/nix/store/claude/bin/claude",
+  };
+  const profile = makeProfile({ agent: "codex", extraAgents: ["claude"] });
+  const mountProbes = makeMountProbes({
+    agentProbes: codexProbes,
+    extraAgentProbes: [{ agent: "claude", probes: claudeProbes }],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.containerPatch.command!.agentCommand).toEqual([
+    "codex",
+    "-c",
+    "shell_environment_policy.inherit=all",
+  ]);
+  const targets = plan.containerPatch.mounts!.map((m) => m.target);
+  expect(targets).toContain(`${CONTAINER_HOME}/.codex`);
+  expect(targets).toContain(`${CONTAINER_HOME}/.claude`);
+  expect(targets).toContain(`${CONTAINER_HOME}/.local/bin/claude`);
+  expect(plan.envVars.PATH?.startsWith(`${CONTAINER_HOME}/.local/bin:`)).toBe(
+    true,
+  );
+});
+
+// protectSettings covers Claude's state whether Claude is launched or only
+// provisioned: the host ~/.claude is mounted either way.
+test("MountStage: protectSettings requires protected Claude state when Claude is an extra agent", () => {
+  const profile = makeProfile({
+    agent: "codex",
+    extraAgents: ["claude"],
+    agentState: { protectSettings: true },
+  });
+  const mountProbes = makeMountProbes({
+    agentProbes: {
+      codexDirExists: false,
+      codexBinPath: null,
+      codexCodeModeHostBinPath: null,
+      codexSettingsFiles: [],
+    },
+    extraAgentProbes: [{ agent: "claude", probes: defaultClaudeProbes }],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  expect(() => planMount(input, mountProbes)).toThrow(
+    "Protected Claude state must be prepared",
+  );
 });
 
 // ============================================================

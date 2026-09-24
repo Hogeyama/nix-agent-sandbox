@@ -82,6 +82,27 @@ extraMounts {
 
 プロファイル名を省略した `nas` の起動には、トップレベルの `default` が使われます。初期設定は `"claude"` です。変更する場合は `profiles` の外に `default = "dev"` のように指定します。
 
+## 別のエージェントの併用
+
+起動したエージェントから別のエージェントを呼ぶ場合、たとえば Codex の中で `claude -p` を使う場合は、`extraAgents` に呼ぶ側を追加します。
+
+```pkl
+["codex"] = (super["codex"]) {
+  extraAgents { "claude" }
+}
+```
+
+`agent` のエージェントを起動し、`extraAgents` のエージェントはコンテナ内で使える状態にするだけです。ホストのバイナリと、認証情報を含む状態ディレクトリ（`~/.claude` など）を `agent` と同じ扱いで共有します。ホストにバイナリがなければ起動時に警告し、そのエージェントは使えません。`agent` と同じエージェントや重複は指定できません。
+
+起動するエージェントとは次の点が異なります。
+
+| 項目 | `extraAgents` のエージェント |
+| --- | --- |
+| `agentArgs` | 渡さない。呼び出すときに引数で指定する |
+| `guide`（サンドボックスの説明文） | Codex と Copilot は読む。Claude には起動引数で渡すため届かない |
+| [記録](/nix-agent-sandbox/configuration/recording/) | 対象外。記録の対象は `agent` だけ |
+| Dev Container | 未対応。`extraAgents` を指定したプロファイルは使えない |
+
 ## UI の設定
 
 UI は既定でエージェントとともに自動起動します。`ui` はプロファイルごとの項目ではなく、`profiles` の外側に置きます。

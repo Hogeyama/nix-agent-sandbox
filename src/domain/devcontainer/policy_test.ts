@@ -42,3 +42,12 @@ test("worktrees are rejected: init must run inside the worktree itself", () => {
   expect(errors).toHaveLength(1);
   expect(errors[0]).toContain("worktree");
 });
+
+test("extraAgents is rejected: a session carries a single agent's state", () => {
+  const errors = validateDevcontainerProfile({
+    ...devcontainerProfile(),
+    extraAgents: ["codex"],
+  });
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toContain("extraAgents");
+});

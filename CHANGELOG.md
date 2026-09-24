@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. `agentState.auth = "proxy"` covers only a launched Claude; a Claude listed in `extraAgents` shares the host credentials file. Dev Container profiles reject `extraAgents` for now.
+
 ### Changed
 
 - **Claude credentials**: `agentState.auth` now defaults to `"proxy"` for Claude. The host `~/.claude/.credentials.json` OAuth credentials stay on the host and are no longer shared with the container; the container sees a dummy credentials file, and nas's network proxy injects the host's access token into requests to `api.anthropic.com` and `mcp-proxy.anthropic.com`. Profiles that use an API key (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`) must set `agentState.auth = "shared"` to keep sharing the credentials file.

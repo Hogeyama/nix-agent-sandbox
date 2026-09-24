@@ -46,6 +46,7 @@ function makeProfile(
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     worktree,
     direnv: { enable: false },

@@ -26,6 +26,14 @@ export function resolveAgentProbes(
   throw new Error(`Unknown agent: ${agent}`);
 }
 
+/** ホストでエージェントのバイナリが見つかったか */
+export function agentBinaryFound(probes: AgentProbes): boolean {
+  if ("claudeBinPath" in probes) return probes.claudeBinPath !== null;
+  if ("copilotBinPath" in probes) return probes.copilotBinPath !== null;
+  if ("codexBinPath" in probes) return probes.codexBinPath !== null;
+  return false;
+}
+
 export function configureAgent(input: AgentConfigInput): AgentConfigResult {
   switch (input.agent) {
     case "claude":

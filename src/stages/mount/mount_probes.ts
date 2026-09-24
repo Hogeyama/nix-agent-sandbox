@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
-import { resolveAgentProbes } from "../../agents/registry.ts";
+import { agentBinaryFound, resolveAgentProbes } from "../../agents/registry.ts";
 import type {
   AgentProbes,
   AgentType,
@@ -32,6 +32,7 @@ import {
   preparationSignal,
   runProbeCommand,
 } from "../../lib/preparation_commands.ts";
+import { logWarn } from "../../log.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 // ---------------------------------------------------------------------------
 // Types — pre-resolved I/O results
@@ -66,12 +67,20 @@ export type ResolvedEnvEntry =
   | (ResolvedEnvEntryBase & { mode: "set"; separator?: undefined })
   | (ResolvedEnvEntryBase & { mode: "prefix" | "suffix"; separator: string });
 
+/** 起動はしないがコンテナに用意するエージェントの probe 結果 */
+export interface ExtraAgentProbes {
+  readonly agent: AgentType;
+  readonly probes: AgentProbes;
+}
+
 /** MountStage が必要とする全ての I/O 結果 */
 export interface MountProbes {
   /** Existing host native approval data; mounted read-only when enabled. */
   direnvDataDir: string | null;
   /** エージェント固有の probe 結果 */
   agentProbes: AgentProbes;
+  /** profile.extraAgents の probe 結果 (profile の並び順) */
+  extraAgentProbes: readonly ExtraAgentProbes[];
   /** /etc/nix/nix.conf の実体パス (readlink -f の結果, 存在しなければ null) */
   nixConfRealPath: string | null;
   /** nix バイナリの実体パス */
@@ -132,6 +141,18 @@ export async function resolveMountProbes(
   // エージェント probe
   preparationSignal()?.throwIfAborted();
   const agentProbes = resolveAgentProbes(profile.agent, home);
+  const extraAgentProbes = profile.extraAgents.map((agent) => {
+    const probes = resolveAgentProbes(agent, home);
+    // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
+    // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
+    // なので、ここで言っておく。
+    if (!agentBinaryFound(probes)) {
+      logWarn(
+        `[nas] extraAgents: "${agent}" binary not found on the host; it will be unavailable in the container`,
+      );
+    }
+    return { agent, probes };
+  });
 
   // Nix 関連
   const [nixConfRealPath, nixBinPath] = await Promise.all([
@@ -174,6 +195,7 @@ export async function resolveMountProbes(
   return {
     direnvDataDir,
     agentProbes,
+    extraAgentProbes,
     nixConfRealPath,
     nixBinPath,
     gitConfigExists,

@@ -71,17 +71,26 @@ export function planGuide(input: GuideStageInput): GuidePlan | null {
     input.sessionId,
   );
   const skillDir = path.join(sessionDir, GUIDE_SKILL_NAME);
-  const { target, extraArgs } = containerTarget(
-    input.profile.agent,
-    containerHome,
-  );
+  const launched = containerTarget(input.profile.agent, containerHome);
+  // extraAgents のうち ~/.agents/skills を読むもの (codex/copilot) にも同じ
+  // ガイドを見せる。Claude は --add-dir を起動引数でしか受け取れないので、
+  // 起動しない Claude には届かない。
+  const targets = new Set([launched.target]);
+  for (const extra of input.profile.extraAgents) {
+    if (extra === "claude") continue;
+    targets.add(containerTarget(extra, containerHome).target);
+  }
   const facts = profileToGuideFacts(input.profile, input.container.workDir);
 
   return {
     sessionDir,
     content: renderGuide(facts),
-    mounts: [{ source: skillDir, target, readOnly: true }],
-    extraArgs,
+    mounts: [...targets].map((target) => ({
+      source: skillDir,
+      target,
+      readOnly: true,
+    })),
+    extraArgs: launched.extraArgs,
   };
 }
 

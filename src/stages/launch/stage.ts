@@ -38,6 +38,9 @@ export function planLaunch(
   logInfo(`[nas] Launching container...`);
   logInfo(`[nas]   Image: ${opts.image}`);
   logInfo(`[nas]   Agent: ${input.profile.agent}`);
+  if (input.profile.extraAgents.length > 0) {
+    logInfo(`[nas]   Extra agents: ${input.profile.extraAgents.join(", ")}`);
+  }
   logInfo(`[nas]   Command: ${opts.command.join(" ")}`);
 
   return {

@@ -34,6 +34,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     direnv: { enable: false },
@@ -164,6 +165,46 @@ test("validate: ACP mode rejects terminal-only profile settings", () => {
   ).toThrow(
     /agentArgs are not supported[\s\S]*guide\.enable is not supported[\s\S]*worktree creation is not supported/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// extraAgents
+// ---------------------------------------------------------------------------
+
+test("validate: extraAgents accepts agents other than the launched one", () => {
+  const config = makeConfig({
+    profiles: {
+      test: makeProfile({ agent: "codex", extraAgents: ["claude", "copilot"] }),
+    },
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: ACP mode accepts extraAgents", () => {
+  const config = makeConfig({
+    profiles: { test: makeProfile({ mode: "acp", extraAgents: ["codex"] }) },
+  });
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: extraAgents rejects the launched agent", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: { test: makeProfile({ extraAgents: ["claude"] }) },
+      }),
+    ),
+  ).toThrow('extraAgents must not include the launched agent "claude"');
+});
+
+test("validate: extraAgents rejects duplicates", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: { test: makeProfile({ extraAgents: ["codex", "codex"] }) },
+      }),
+    ),
+  ).toThrow('extraAgents lists "codex" twice');
 });
 
 // ---------------------------------------------------------------------------

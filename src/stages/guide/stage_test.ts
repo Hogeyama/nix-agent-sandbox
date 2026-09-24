@@ -19,6 +19,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     session: { multiplex: false, detachKey: "^\\", notify: "auto" },
     direnv: { enable: false },
     nix: { enable: "auto", mountSocket: true },
@@ -125,6 +126,33 @@ describe("planGuide", () => {
     // so emitting the value as a separate argv token would let it absorb
     // whatever CLI passthrough arg follows (e.g. the user's prompt).
     expect(plan?.extraArgs).toEqual([`--add-dir=${GUIDE_CLAUDE_ADD_DIR}`]);
+  });
+
+  test("also mounts into ~/.agents/skills for extra codex/copilot", () => {
+    const plan = planGuide(
+      makeInput(
+        { guide: { enable: true }, extraAgents: ["codex", "copilot"] },
+        "claude",
+      ),
+    );
+
+    // codex and copilot share one target, so it is mounted once.
+    expect(plan?.mounts.map((m) => m.target)).toEqual([
+      `${GUIDE_CLAUDE_ADD_DIR}/.claude/skills/nas-sandbox`,
+      "/home/nas/.agents/skills/nas-sandbox",
+    ]);
+    expect(plan?.extraArgs).toEqual([`--add-dir=${GUIDE_CLAUDE_ADD_DIR}`]);
+  });
+
+  test("does not reach an extra claude: --add-dir only goes to the launched command", () => {
+    const plan = planGuide(
+      makeInput({ guide: { enable: true }, extraAgents: ["claude"] }, "codex"),
+    );
+
+    expect(plan?.mounts.map((m) => m.target)).toEqual([
+      "/home/nas/.agents/skills/nas-sandbox",
+    ]);
+    expect(plan?.extraArgs).toEqual([]);
   });
 
   test("never mounts the guide writable", () => {

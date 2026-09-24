@@ -473,6 +473,7 @@ function createTestInput(overrides: { container?: ContainerPlan } = {}): {
   const profile: Profile = {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },

@@ -29,6 +29,7 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
     profile: {
       agent: "claude",
       agentArgs: [],
+      extraAgents: [],
       session: { multiplex: false, detachKey: "^\\" },
       direnv: { enable: false },
       nix: { enable: false, mountSocket: false },

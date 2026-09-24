@@ -56,6 +56,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
+    extraAgents: [],
     agentState: DEFAULT_AGENT_STATE_CONFIG,
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
