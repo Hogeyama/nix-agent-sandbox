@@ -168,6 +168,61 @@ async function sendProxyRequest(
 }
 
 /**
+ * CONNECT でトンネルを開き、その中で TLS を張らずに平文の HTTP を送る。
+ * mitmproxy はこの request を scheme "http" として扱い、上流にも平文でつなぐ。
+ * 返すのはトンネル確立の応答に続く、トンネル内の応答を含む受信全体。
+ */
+async function sendPlaintextInConnect(
+  proxyPort: number,
+  authority: string,
+  credentials: string,
+  path: string,
+  options: ProxyRequestOptions = {},
+): Promise<string> {
+  const method = options.method ?? "GET";
+  const body = options.body;
+  return await new Promise((resolve, reject) => {
+    let response = "";
+    let tunnelled = false;
+    const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
+    socket.setTimeout(5_000, () => {
+      socket.destroy(new Error("timed out waiting for proxy response"));
+    });
+    socket.once("connect", () => {
+      socket.write(
+        [
+          `CONNECT ${authority} HTTP/1.1`,
+          `Host: ${authority}`,
+          `Proxy-Authorization: Basic ${btoa(credentials)}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+      if (tunnelled || !response.includes("\r\n\r\n")) return;
+      tunnelled = true;
+      if (!/^HTTP\/1\.[01] 200\b/.test(response)) {
+        socket.end();
+        return;
+      }
+      const lines = [`${method} ${path} HTTP/1.1`, `Host: ${authority}`];
+      for (const [name, value] of Object.entries(options.headers ?? {})) {
+        lines.push(`${name}: ${value}`);
+      }
+      if (body !== undefined) {
+        lines.push(`Content-Length: ${Buffer.byteLength(body)}`);
+      }
+      lines.push("Connection: close", "", "");
+      socket.write(lines.join("\r\n") + (body ?? ""));
+    });
+    socket.once("error", reject);
+    socket.once("close", () => resolve(response));
+  });
+}
+
+/**
  * `docker network create` に無い `--subnet` オプション付きでカスタム
  * bridge network を作る（既存 `dockerNetworkCreateWithLabels` はサブネット
  * 指定に対応していないため、このテストファイル内だけのローカルヘルパとして
@@ -1678,8 +1733,116 @@ function sendGraphql(
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+// 注入は上流への区間が TLS のときだけ行う。平文の区間に乗せた credential は
+// proxy から上流までの経路で読まれてしまう。
+const ALLOWED_GRAPHQL_READ = JSON.stringify({
+  query:
+    'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { nodes { body } } } }',
+  variables: { o: "my-org" },
+});
+
 test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
-  "graphql: a query whose variable resolves to an allowed owner is forwarded with the injected token",
+  "inject: an https request carries the injected token to a TLS upstream",
+  async () => {
+    const resources = protocolResources("nas-inject-tls");
+    let fixture: AddonFixture | undefined;
+    try {
+      const certificates = await generateUpstreamCertificates();
+      fixture = await setupGithubGraphqlFixture("nas-addon-inject-tls-");
+      const caPath = path.join(fixture.runtimeDir, "upstream-ca.pem");
+      await writeFile(caPath, certificates.trustedCa);
+      await chmod(caPath, 0o644);
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        tlsEchoServerScript(GITHUB_TARGET_PORT, certificates.trusted),
+        [
+          "--set",
+          "ssl_verify_upstream_trusted_ca=/nas-network/upstream-ca.pem",
+        ],
+      );
+
+      // Absolute-form `https://` on the forward proxy: mitmproxy opens the
+      // upstream leg with TLS, and the target accepts nothing else.
+      const response = await sendProxyRequest(
+        proxyPort,
+        `https://api.github.com:${GITHUB_TARGET_PORT}/graphql`,
+        `${fixture.sessionId}:${fixture.token}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: ALLOWED_GRAPHQL_READ,
+        },
+      );
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "POST /graphql",
+      );
+
+      expect(response).toContain("200 OK");
+      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
+      expect(
+        addonLogLines(await dockerLogs(resources.proxyName)),
+      ).not.toContain("INJECT-SKIPPED-PLAINTEXT");
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "inject: plaintext HTTP inside a CONNECT tunnel reaches upstream without the token",
+  async () => {
+    const resources = protocolResources("nas-inject-connect");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupGithubGraphqlFixture("nas-addon-inject-connect-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "api.github.com",
+        GITHUB_TARGET_PORT,
+        rawEchoServerScript(GITHUB_TARGET_PORT),
+      );
+
+      // The tunnel goes to the allowed port, so pinning the port in
+      // `targets` does not stop this: only the scheme tells it from HTTPS.
+      const response = await sendPlaintextInConnect(
+        proxyPort,
+        `api.github.com:${GITHUB_TARGET_PORT}`,
+        `${fixture.sessionId}:${fixture.token}`,
+        "/graphql",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: ALLOWED_GRAPHQL_READ,
+        },
+      );
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "POST /graphql",
+      );
+      const addonLines = addonLogLines(await dockerLogs(resources.proxyName));
+
+      expect(response).toContain("200 OK");
+      expect(upstreamLogs).toContain(ALLOWED_GRAPHQL_READ);
+      expect(upstreamLogs).not.toContain(GITHUB_TOKEN);
+      expect(addonLines).toContain("INJECT-SKIPPED-PLAINTEXT");
+      expect(addonLines).not.toContain(GITHUB_TOKEN);
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "graphql: a query whose variable resolves to an allowed owner is forwarded, without the token over plaintext",
   async () => {
     const resources = protocolResources("nas-gql-allow");
     let fixture: AddonFixture | undefined;
@@ -1709,7 +1872,9 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
 
       expect(response).toContain("200 OK");
       expect(await fixture.broker.listPending()).toEqual([]);
-      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
+      // The fake upstream speaks plaintext HTTP, so the addon must not put
+      // the injected credential on the wire.
+      expect(upstreamLogs).not.toContain(GITHUB_TOKEN);
       expect(upstreamLogs).toContain(body);
       const outcome = await expectSinglePolicyOutcome(
         fixture.auditDir,
@@ -1983,7 +2148,8 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
         "POST /graphql",
       );
       expect(upstreamLogs.split("POST /graphql").length - 1).toBe(1);
-      expect(upstreamLogs).toContain(`Authorization: Bearer ${GITHUB_TOKEN}`);
+      // Plaintext upstream: the approved request goes out without the token.
+      expect(upstreamLogs).not.toContain(GITHUB_TOKEN);
     } finally {
       await cleanupProtocolResources(resources);
       await teardownFixture(fixture);

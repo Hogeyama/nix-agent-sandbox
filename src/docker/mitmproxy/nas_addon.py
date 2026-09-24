@@ -2143,6 +2143,26 @@ def _request_transport(request) -> str:
     return "websocket" if "websocket" in tokens else "http"
 
 
+def _upstream_is_tls(request) -> bool:
+    """Whether mitmproxy will carry this request to the server over TLS.
+
+    `scheme` is the value mitmproxy itself decides the upstream leg from
+    (`make_server_connection` asks for TLS exactly when it is "https"), and
+    it is final by the time the request hook runs. It covers every way a
+    request reaches us: an absolute-form `http://` / `https://` request on
+    the forward proxy, and a request inside a CONNECT tunnel, where
+    mitmproxy sets it from whether the tunnel's server side carries a TLS
+    layer — plaintext sent into a CONNECT to :443 comes out as "http" and
+    goes upstream in plaintext.
+
+    `flow.server_conn.tls` is not a substitute: under the lazy connection
+    strategy the forward proxy's server connection is still a placeholder at
+    request time, so it reads False for an absolute-form `https://` request
+    that will go out over TLS.
+    """
+    return getattr(request, "scheme", None) == "https"
+
+
 def _classify_body(
     body: Optional[bytes], max_body_bytes: int, carries_body: bool
 ) -> tuple[str, object]:
@@ -3818,12 +3838,32 @@ class NasAddon:
         # These lines carry the request path, so they stay off for
         # rule-governed requests: those log only the closed outcome fields.
         inject_headers = decision.get("injectHeaders", [])
+        inject_skipped = bool(inject_headers) and not _upstream_is_tls(
+            flow.request
+        )
+        if inject_skipped:
+            # An injected header carries a credential. Over plaintext it
+            # would cross every network between here and the server in the
+            # clear, so the request goes out without it instead: the server
+            # answers as it would to an anonymous client, and nothing is
+            # leaked. The decision is still allow — refusing outright would
+            # break plaintext requests a scope allows without needing the
+            # credential. Header names and the target only: no path, no
+            # value.
+            print(
+                "[nas-addon] INJECT-SKIPPED-PLAINTEXT: "
+                f"headers={','.join(sorted(h['name'] for h in inject_headers))} "
+                f"target={host}:{port} "
+                f"rule={_safe_rule_label(rule_id)}",
+                file=sys.stderr,
+            )
+            inject_headers = []
         for h in inject_headers:
             flow.request.headers[h["name"]] = h["value"]
             if rule is None:
                 print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{flow.request.path} "
                       f"(cred_source={cred_source})", file=sys.stderr)
-        if not inject_headers and rule is None:
+        if not inject_headers and not inject_skipped and rule is None:
             print(f"[nas-addon] NO INJECT: no credentials matched for "
                   f"{host}:{port}{flow.request.path}", file=sys.stderr)
 
