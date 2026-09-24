@@ -9,13 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. `agentState.auth = "proxy"` covers only a launched Claude; a Claude listed in `extraAgents` shares the host credentials file. Dev Container profiles reject `extraAgents` for now.
+- **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. Dev Container profiles reject `extraAgents` for now.
 
 ### Changed
 
 - **Claude credentials**: `agentState.auth` now defaults to `"proxy"` for Claude. The host `~/.claude/.credentials.json` OAuth credentials stay on the host and are no longer shared with the container; the container sees a dummy credentials file, and nas's network proxy injects the host's access token into requests to `api.anthropic.com` and `mcp-proxy.anthropic.com`. Profiles that use an API key (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`) must set `agentState.auth = "shared"` to keep sharing the credentials file.
   - Known limitation: config validation only detects `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` in `env`. Profiles that use Bedrock (`CLAUDE_CODE_USE_BEDROCK`), Vertex (`CLAUDE_CODE_USE_VERTEX`), an `apiKeyHelper`, or a gateway via `ANTHROPIC_BASE_URL` are not detected; set `agentState.auth = "shared"` for them.
   - Known limitation: with `"proxy"`, the container's `~/.claude` is a session-private directory into which each existing host entry is mounted. Entries that exist on the host at session start are read-write and kept on the host; top-level entries that Claude creates in the container during a session (for example `plugins/` from a first `/plugin install`) are not created on the host and are discarded when the session ends.
+- **Codex credentials**: `agentState.auth` now defaults to `"proxy"` for Codex, as it does for Claude. The ChatGPT OAuth tokens in the host `~/.codex/auth.json` stay on the host; the container sees a dummy `auth.json` over the shared `~/.codex`, and nas's network proxy injects the host's access token and account id into requests to `chatgpt.com`. nas refreshes the token on the host. Profiles that use an API key (`OPENAI_API_KEY` / `CODEX_API_KEY`) or keep Codex credentials in the keyring must set `agentState.auth = "shared"`. Dev Container Codex sessions keep `"shared"`.
+  - If the host `~/.codex/auth.json` is removed or replaced while a session runs (for example by `codex logout`), nas stops that session's container.
+- **extraAgents**: `agentState.auth` now applies to agents listed in `extraAgents` too, so a Claude provisioned next to Codex also gets proxied credentials by default.
 
 ## [0.19.1] - 2026-09-24
 
