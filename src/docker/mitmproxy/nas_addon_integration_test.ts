@@ -593,6 +593,7 @@ async function startProtocolContainers(
   targetPort: number,
   targetScript: string,
   extraProxyArgs: readonly string[] = [],
+  extraProxyDockerArgs: readonly string[] = [],
 ): Promise<number> {
   await createBenchmarkNetworkWithRetry(resources.networkName);
   resources.networkCreated = true;
@@ -615,7 +616,7 @@ async function startProtocolContainers(
   await dockerRunDetached({
     name: resources.proxyName,
     image: "mitmproxy/mitmproxy:11",
-    args: [`--add-host=${targetHost}:${targetIp}`],
+    args: [`--add-host=${targetHost}:${targetIp}`, ...extraProxyDockerArgs],
     envVars: {},
     network: resources.networkName,
     mounts: [
@@ -2410,7 +2411,9 @@ for (const testCase of UPSTREAM_TLS_CASES) {
           resources.proxyName,
           "Server TLS handshake failed. Certificate verify failed",
         );
-        expect(proxyLogs).toContain("server connect api.github.com:8093");
+        // The addon pins the connection to the resolved IP, so mitmproxy logs
+        // the address it connected to rather than the host name.
+        expect(proxyLogs).toMatch(/server connect \S+:8093/);
         expect(response).toContain("502 Bad Gateway");
         expect(response).toContain(testCase.refusal);
         expect(response).not.toContain(GITHUB_TOKEN);
@@ -2425,3 +2428,216 @@ for (const testCase of UPSTREAM_TLS_CASES) {
     60_000,
   );
 }
+
+const DNS_TARGET_PORT = 8095;
+
+/**
+ * 許可したホスト名の解決先は addon が自分で確かめる (H5/H6)。broker は IP
+ * リテラルの private 宛てを拒否するが、ホスト名は名前だけで許可するので、
+ * 名前が private な IP に解決される場合は addon の `server_connect` が止める。
+ * `public.test` は 198.18.0.0/15 の fake upstream、`rebind.test` は proxy
+ * 自身の loopback に解決させる。
+ */
+const DNS_POLICY_DOCUMENT = documentWithScopes({
+  dns: {
+    targets: [
+      `public.test:${DNS_TARGET_PORT}`,
+      `rebind.test:${DNS_TARGET_PORT}`,
+    ],
+    rules: {
+      all: { match: { paths: ["/**"] }, onMatch: "allow" },
+    },
+  },
+});
+
+/**
+ * 1 本の接続で複数の要求に応える HTTP サーバ。接続ごとに最初の要求を受けた
+ * ときだけ `CONN` を印字するので、readiness probe の空接続は数えない。
+ */
+function keepAliveServerScript(port: number): string {
+  return [
+    "import socket, threading",
+    "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+    "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+    `srv.bind(("0.0.0.0", ${port}))`,
+    "srv.listen(8)",
+    "def handle(conn):",
+    '    buf = b""',
+    "    first = True",
+    "    while True:",
+    "        chunk = conn.recv(65536)",
+    "        if not chunk:",
+    "            break",
+    "        buf += chunk",
+    '        while b"\\r\\n\\r\\n" in buf:',
+    '            head, buf = buf.split(b"\\r\\n\\r\\n", 1)',
+    "            if first:",
+    '                print("CONN", flush=True)',
+    "                first = False",
+    '            print("REQUEST " + head.split(b"\\r\\n", 1)[0].decode(), flush=True)',
+    '            conn.sendall(b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok")',
+    "    conn.close()",
+    "while True:",
+    "    conn, _ = srv.accept()",
+    "    threading.Thread(target=handle, args=(conn,), daemon=True).start()",
+  ].join("\n");
+}
+
+/** 1 本のクライアント接続で forward proxy の GET を順に送り、応答を返す。 */
+async function sendKeepAliveRequests(
+  proxyPort: number,
+  targetUrls: readonly string[],
+  credentials: string,
+): Promise<string[]> {
+  const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
+  socket.setTimeout(5_000, () => {
+    socket.destroy(new Error("timed out waiting for proxy response"));
+  });
+  let buffered = "";
+  let waiter: (() => void) | undefined;
+  let failure: Error | undefined;
+  socket.on("data", (chunk) => {
+    buffered += chunk.toString();
+    waiter?.();
+  });
+  socket.once("error", (error) => {
+    failure = error;
+    waiter?.();
+  });
+  socket.once("close", () => {
+    failure ??= new Error("proxy closed the connection");
+    waiter?.();
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    const responses: string[] = [];
+    for (const targetUrl of targetUrls) {
+      socket.write(
+        [
+          `GET ${targetUrl} HTTP/1.1`,
+          `Host: ${new URL(targetUrl).host}`,
+          `Proxy-Authorization: Basic ${btoa(credentials)}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      // The fake upstream always answers with a 2-byte body.
+      while (!/\r\n\r\n[\s\S]{2}/.test(buffered)) {
+        if (failure) throw failure;
+        await new Promise<void>((resolve) => {
+          waiter = resolve;
+        });
+      }
+      const end = buffered.indexOf("\r\n\r\n") + 4 + 2;
+      responses.push(buffered.slice(0, end));
+      buffered = buffered.slice(end);
+    }
+    return responses;
+  } finally {
+    socket.destroy();
+  }
+}
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "upstream DNS: an allowed name resolving to a private address is refused before connect",
+  async () => {
+    const resources = protocolResources("nas-dns-private");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-dns-private-",
+        DNS_POLICY_DOCUMENT,
+        {},
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "public.test",
+        DNS_TARGET_PORT,
+        rawEchoServerScript(DNS_TARGET_PORT),
+        [],
+        ["--add-host=rebind.test:127.0.0.1"],
+      );
+      const credentials = `${fixture.sessionId}:${fixture.token}`;
+
+      const refused = await sendProxyRequest(
+        proxyPort,
+        `http://rebind.test:${DNS_TARGET_PORT}/`,
+        credentials,
+      );
+      // mitmproxy's own line: the connection was dropped in server_connect,
+      // before any TCP connect, not refused by an absent listener.
+      const proxyLogs = await waitForContainerLog(
+        resources.proxyName,
+        "killed before connect",
+      );
+      expect(refused).toContain("502 Bad Gateway");
+      expect(proxyLogs).toContain(
+        `DNS-BLOCKED: denied answer 127.0.0.1 for rebind.test:${DNS_TARGET_PORT} (range 127.0.0.0/8)`,
+      );
+      expect(proxyLogs).toContain("all resolved upstream IPs were denied");
+
+      // Control: the same scope and rule reach an upstream with a public
+      // address, so the refusal above is the address check and nothing else.
+      const allowed = await sendProxyRequest(
+        proxyPort,
+        `http://public.test:${DNS_TARGET_PORT}/`,
+        credentials,
+      );
+      expect(allowed).toContain("200 OK");
+      expect(await dockerLogs(resources.targetName)).toContain("GET / ");
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "upstream DNS: a pinned connection is reused for the next request to the same host",
+  async () => {
+    const resources = protocolResources("nas-dns-reuse");
+    let fixture: AddonFixture | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-dns-reuse-",
+        DNS_POLICY_DOCUMENT,
+        {},
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "public.test",
+        DNS_TARGET_PORT,
+        keepAliveServerScript(DNS_TARGET_PORT),
+      );
+
+      const responses = await sendKeepAliveRequests(
+        proxyPort,
+        [
+          `http://public.test:${DNS_TARGET_PORT}/first`,
+          `http://public.test:${DNS_TARGET_PORT}/second`,
+        ],
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+
+      expect(responses).toHaveLength(2);
+      for (const response of responses) expect(response).toContain("200 OK");
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "REQUEST GET /second",
+      );
+      // mitmproxy reuses a connection only when its address equals the
+      // request's host and port; left at the pinned IP it would open a second.
+      expect(upstreamLogs.match(/^CONN$/gm)).toHaveLength(1);
+    } finally {
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);

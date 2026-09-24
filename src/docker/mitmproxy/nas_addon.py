@@ -9,11 +9,13 @@ decisions, and inspects request bodies against the rule the broker named.
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import itertools
 import json
 import math
 import os
 import re
+import socket
 import sys
 import time
 import urllib.parse
@@ -3470,8 +3472,94 @@ def _verify_creds(session_id: str, token: str) -> Optional[dict]:
     return registry
 
 
+# --- upstream address policy -----------------------------------------------
+# The broker refuses a private IP literal as a target (src/network/ip_policy.ts)
+# but authorizes a host name by name alone, and mitmproxy would then resolve
+# the name itself when it connects. server_connect resolves the name once,
+# drops answers in these ranges and pins the connection to the first address
+# left, so an allowed name that resolves (or re-resolves) to the host, the
+# session network or a metadata service cannot be reached through the proxy.
+# The ranges must match ip_policy.ts; src/network/denied_ip_policy_cases.json
+# is checked against both.
+
+DENIED_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    )
+)
+DENIED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in ("::/128", "::1/128", "fc00::/7", "fe80::/10")
+)
+
+DNS_TIMEOUT_SECONDS = 5.0
+
+
+def _parse_ip(address: str):
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return None
+
+
+def _denied_ip_range(address: str) -> Optional[str]:
+    """The denied network `address` falls in, or None when it is allowed or
+    is not an IP address."""
+    parsed = _parse_ip(address)
+    if parsed is None:
+        return None
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
+        parsed = parsed.ipv4_mapped
+    networks = (
+        DENIED_IPV4_NETWORKS
+        if isinstance(parsed, ipaddress.IPv4Address)
+        else DENIED_IPV6_NETWORKS
+    )
+    for network in networks:
+        if parsed in network:
+            return str(network)
+    return None
+
+
+def _is_denied_ip(address: str) -> bool:
+    return _denied_ip_range(address) is not None
+
+
+def _addresses_from_addrinfo(results) -> list[str]:
+    """TCP-usable addresses from a getaddrinfo result, normalized and
+    deduplicated in the resolver's order."""
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for family, socktype, _proto, _canonname, sockaddr in results:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        if socktype not in (0, socket.SOCK_STREAM):
+            continue
+        parsed = _parse_ip(sockaddr[0])
+        if parsed is None:
+            continue
+        normalized = str(parsed)
+        if normalized not in seen:
+            seen.add(normalized)
+            addresses.append(normalized)
+    return addresses
+
+
 class NasAddon:
-    def __init__(self):
+    def __init__(self, resolver=None, dns_timeout=DNS_TIMEOUT_SECONDS):
+        # Tests replace the resolver; production uses the event loop's.
+        self._resolver = resolver
+        self._dns_timeout = dns_timeout
+        # Host name and port each pinned server connection was opened for,
+        # keyed by server connection id, until the connect attempt ends.
+        self._pinned_addresses: dict[str, tuple] = {}
         # CONNECT credentials keyed by client connection id.
         # For HTTPS, Proxy-Authorization is only on the CONNECT request,
         # not on inner requests after TLS decryption.
@@ -3542,6 +3630,99 @@ class NasAddon:
 
     def tcp_start(self, flow) -> None:
         flow.kill()
+
+    async def server_connect(self, data) -> None:
+        # With connection_strategy=lazy this runs only after the request hook
+        # has authorized the request, so a denied destination is never
+        # resolved either.
+        if not data.server.address:
+            data.server.error = "nas: missing upstream address"
+            return
+
+        host, port = data.server.address
+        if _parse_ip(host) is not None:
+            denied_range = _denied_ip_range(host)
+            if denied_range is not None:
+                print(
+                    f"[nas-addon] DNS-BLOCKED: denied direct IP {host}:{port} "
+                    f"(range {denied_range})",
+                    file=sys.stderr,
+                )
+                data.server.error = "nas: denied upstream IP"
+            return
+
+        resolver = self._resolver or asyncio.get_running_loop().getaddrinfo
+        try:
+            results = await asyncio.wait_for(
+                resolver(host, port, type=socket.SOCK_STREAM),
+                timeout=self._dns_timeout,
+            )
+            addresses = _addresses_from_addrinfo(results)
+        except asyncio.TimeoutError:
+            data.server.error = "nas: DNS resolution timed out"
+            return
+        except Exception as exc:
+            print(
+                f"[nas-addon] DNS-BLOCKED: resolution failed for "
+                f"{host}:{port}: {exc}",
+                file=sys.stderr,
+            )
+            data.server.error = "nas: DNS resolution failed"
+            return
+
+        allowed: list[str] = []
+        for address in addresses:
+            denied_range = _denied_ip_range(address)
+            if denied_range is not None:
+                print(
+                    f"[nas-addon] DNS-BLOCKED: denied answer {address} "
+                    f"for {host}:{port} (range {denied_range})",
+                    file=sys.stderr,
+                )
+            else:
+                allowed.append(address)
+
+        if not addresses:
+            data.server.error = (
+                "nas: DNS resolution returned no usable addresses"
+            )
+            return
+        if not allowed:
+            data.server.error = "nas: all resolved upstream IPs were denied"
+            return
+
+        # mitmproxy verifies the upstream certificate against `sni`, and falls
+        # back to the address when it is unset, which is about to become an
+        # IP. It already holds the host name for TLS; keep it that way.
+        if data.server.sni is None:
+            data.server.sni = host
+        self._pinned_addresses[data.server.id] = data.server.address
+        data.server.address = (allowed[0], port)
+
+    def server_connected(self, data) -> None:
+        self._unpin(data.server)
+
+    def server_connect_error(self, data) -> None:
+        self._unpin(data.server)
+
+    def _unpin(self, server) -> None:
+        """Give a pinned connection its host name back.
+
+        mitmproxy reuses an open connection for a later request only when
+        the request's (host, port) equals the connection's address, so a
+        connection left at the pinned IP would never be reused. The socket
+        stays connected to the checked address; `peername` records it, which
+        is the state mitmproxy itself leaves a connection opened by name in.
+
+        `Server.__setattr__` refuses to change `address` on an open
+        connection, because that would not reconnect it. Restoring the name
+        the connection was opened for does not ask for that, so the guard is
+        bypassed. The integration test on connection reuse catches a
+        mitmproxy that stops honoring this.
+        """
+        original = self._pinned_addresses.pop(server.id, None)
+        if original is not None:
+            object.__setattr__(server, "address", original)
 
     async def request(self, flow: http.HTTPFlow) -> None:
         # Awaited, not blocking: the broker query below can be outstanding for

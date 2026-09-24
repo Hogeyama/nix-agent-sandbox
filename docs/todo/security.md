@@ -21,7 +21,6 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 | 優先 | 項目 | 種別 | 工数 | 根拠 |
 |---|---|---|---|---|
-| **P0** | H5 / H6（addon 側）の修正が develop から消えている | Sec | 小〜中 | 下記「H5/H6」。`drop-A-backup-204357` にしか残っていない。cherry-pick して戻す |
 | **P0** | §3-A ドキュメント/スキルのドリフト | Docs | 小 | 現行実装に合わせて更新する |
 | **P1** | H2 認証情報ディレクトリ常時 RW → host persistence | Sec | 中〜大 | Claude は認証・履歴以外を RO / session-private 化。`~/.claude.json` の MCP は managed settings で制限が必要 |
 | **P1** | `/nix` RW マウント | Sec | 小〜中 | コンテナ root 奪取で store 汚染 → 他セッション RCE |
@@ -45,11 +44,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 - 平文 HTTP への inject 省略 — `security/inject-https-only`
 - 上流 TLS の証明書検証（`--ssl-insecure` 削除）— `security/verify-upstream-tls`
 
-**2026-07-21 に完了としたが develop に無いもの**:
-- H6 は TS 側（`c8b821da` harden denied IP predicate）だけが develop にある。addon 側の
-  `73681f1f`（enforce denied IPs in proxy addon）・`be5fe26e` は無い。
-- H5 DNS リバインディング SSRF の `228f9464`, `18faee86`, `2363668a`, `fedebbad` は無い。
-  develop の `nas_addon.py` には `server_connect` hook が無い。
+**完了（2026-09-25）**:
+- H5 / H6 の addon 側を develop に戻した — `security/restore-ssrf-addon`
 
 ---
 
@@ -69,9 +65,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
   2. コンテナ内 agent → host への **escape / persistence**（H2・`/nix` RW が残）
   3. ~~共有ホストの別ユーザ (TCP loopback)~~ → H3 受容
   4. ブラウザ経由の **CSRF / DNS rebinding** (Origin guard で対策済)
-  5. ⚠️ コンテナ内 agent → **network egress 封じ込めの突破** — IP literal と
-     DNS 解決後の denied range を多層で拒否し、許可 IP へピン留めする設計（H5/H6）。
-     addon 側の実装が develop から消えているので戻す必要がある
+  5. ✅ コンテナ内 agent → **network egress 封じ込めの突破** — IP literal と
+     DNS 解決後の denied range を多層で拒否し、許可 IP へピン留めする（H5/H6）
   6. 経路上の第三者による **注入した credential の盗聴** — inject は TLS の request だけ、
      上流の証明書は検証する（2026-09-24）
 
@@ -83,8 +78,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | CRITICAL-2 未信頼 repo-local config → ホストRCE | ✅ 解決 | trust gate + pkl eval サンドボックス |
 | HIGH-3 Web UI に帯域外トークン無し | 🟡 受容 | 「同一ホスト＝信頼境界」。CSRF/DNS rebinding は Origin/Host guard で防御済 |
 | HIGH DinD egress バイパス | ✅ 解決 | 実機で内側 egress 不通・pull は allowlist 下を確認 |
-| H5 DNS リバインディング SSRF | ⚠️ develop に無い **P0** | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留めする実装が `drop-A-backup-204357` にしか無い |
-| H6 IP リテラル拒否リストの穴 | ⚠️ 一部のみ **P0** | TS 側（`c8b821da`）は develop にある。addon 側の拒否（`73681f1f`）は無い |
+| H5 DNS リバインディング SSRF | ✅ 解決 | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留め（2026-09-25 に develop へ戻した） |
+| H6 IP リテラル拒否リストの穴 | ✅ 解決 | TS 側（`c8b821da`）と addon 側を同じ corpus で検証 |
 | 危険設定削除 (gcloud/aws/gpg) | ✅ 解決 | 型・mount 分岐・probe・Pkl schema から削除。旧設定は移行先を名指しして load 失敗 |
 | H2 認証情報ディレクトリ RW | 🟡 部分解決 **P1** | Claude は設定類を RO、認証・履歴・projects を RW 共有。`~/.claude.json` の MCP 制限は managed settings が必要 |
 | コンテナ権限ハードニング | ✅ 解決 | `no-new-privileges` + `cap-drop ALL`、entrypoint 用に 6 つだけ戻す |
@@ -101,8 +96,9 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 - hostexec 自己承認バイパス（exec/control 2ソケット分離）— CRITICAL-1
 - workspace-trust ゲート + pkl eval サンドボックス — CRITICAL-2
 - DinD egress バイパス封じ込め
-- H6 IP literal 拒否の TS 側 — `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・unspecified/loopback/link-local
-  （addon 側は develop に無い。下記 H5/H6）
+- H6 IP literal 拒否 — `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・unspecified/loopback/link-local を
+  TS/Python の両経路で拒否
+- H5 DNS リバインディング SSRF — DNS 応答の denied IP を除外し、最初の許可 IP へ接続先をピン留め
 - コンテナ権限ハードニング、`.git` / `.nas` の RO 保護、hostexec M8〜M11 と `fallback` 削除、
   DinD loopback、L1、平文 HTTP への inject 省略、上流 TLS 検証（2026-09-24）
 - mount: extra-mounts.src を realpath で解決（symlink escape）
@@ -115,15 +111,24 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 ## P0 セキュリティ
 
-### H5/H6. network SSRF hardening — ⚠️ 2026-07-21 に解決したが develop から消えている
+### H5/H6. network SSRF hardening — ✅ 解決（2026-09-25 に develop へ戻した）
 
-- **2026-09-24 に判明**: 以下の addon 側の実装は develop・main・codex-credentials-proxy のどれにも無い。
-  develop の `nas_addon.py` には `server_connect` hook も denied IP の判定も無い。コミットは
-  `drop-A-backup-204357`（2026-07-31 の backup branch）にだけ残っていて、履歴の書き換えで
-  一緒に落ちたように見える。TS 側の `c8b821da`（harden denied IP predicate）は develop にある。
-  **対応**: `drop-A-backup-204357` から addon 側のコミットを cherry-pick し、develop の上で直す。
-  上流 TLS 検証を入れたので、ピン留め後も証明書は SNI のホスト名で検証されること
-  （mitmproxy 11.1.3 は `server.sni` で検証し、接続先の IP は見ない）を合わせて確認する。
+- **経緯**: 2026-07-21 に入れた addon 側の実装が、履歴の書き換えで develop から落ちていた
+  （2026-09-24 に判明）。addon が大きく変わっていたので cherry-pick せず、
+  `mask-filter-backup` にあったコミットを develop の上に手で移した（`security/restore-ssrf-addon`）。
+- **7 月の実装から変えた点**: ピン留めした接続は、`server_connected` で `address` を元のホスト名へ
+  戻す。mitmproxy は次の request の (host, port) と接続の `address` が一致するときだけ接続を
+  再利用するので、IP のままだと同じホストへの request が毎回新しい接続を張っていた。
+  `Server.__setattr__` は open 中の `address` 変更を拒むので `object.__setattr__` で戻す。
+  mitmproxy を上げてこの前提が崩れると、integration test の接続再利用のケースが落ちる。
+- **確認したこと**: 証明書は SNI のホスト名で検証される（mitmproxy 11.1.3 は TLS の接続では
+  `server_connect` より前に `sni` をホスト名にしている）。既存の上流 TLS の integration test は
+  ピン留めした状態で通る。
+- **影響**: 社内 API など private address の名前は、許可していても proxy 経由で届かなくなる。
+  許可する設定は作っていない。
+- **残り**: 拒否範囲は TS と同じで、multicast・`198.18.0.0/15`・NAT64（`64:ff9b::/96`）・
+  6to4（`2002::/16`）に埋め込まれた private IPv4 は拒否しない。proxy container に IPv6 の経路が
+  無いときに最初の許可 IP が IPv6 だと、IPv4 に fallback せず接続に失敗する。
 - 以下は 2026-07-21 時点の記録。
 - **H6**: TS は文字列 prefix ではなく IPv4/IPv6 を構造的にパースする。Python は `ipaddress` と明示 CIDR を使い、
   共有境界 corpus で `0.0.0.0/8`・CGNAT `100.64.0.0/10`・IPv4-mapped IPv6・`::`・`::1` などの
@@ -133,7 +138,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 - **検証**: `src/network/ip_policy_test.ts`、`src/network/broker_integration_test.ts`、
   `src/docker/mitmproxy/nas_addon_test.ts` で境界値と mixed-answer・dedup・timeout・direct-IP・
   already-set SNI を回帰検証する。`src/docker/mitmproxy/nas_addon_integration_test.ts` では、実 mitmproxy が
-  Docker host-gateway を解決してもホスト TCP 接続が 0 であることを検証する。
+  loopback に解決される名前へ接続せず 502 を返すこと、ピン留めした接続が再利用されることを検証する
+  （2026-09-25 に移したテスト）。
 - **2026-07-21 実行結果**: unit 2455 pass / 9 skip、broker integration 24 pass。実 mitmproxy integration は
   この検証環境で Docker が利用できず 1 skip（Docker 利用可能環境では guarded test を実行）。
 
