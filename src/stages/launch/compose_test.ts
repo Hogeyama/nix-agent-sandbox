@@ -64,7 +64,14 @@ test("compileCompose: preserves launch fields in Compose-native structure", () =
         logging: { driver: "none" },
         security_opt: ["no-new-privileges"],
         cap_drop: ["ALL"],
-        cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"],
+        cap_add: [
+          "CHOWN",
+          "DAC_OVERRIDE",
+          "FOWNER",
+          "SETUID",
+          "SETGID",
+          "KILL",
+        ],
         volumes: [
           {
             type: "bind",

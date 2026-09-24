@@ -51,6 +51,7 @@ import {
   CONTAINER_RELAY_SCRIPT,
   CONTAINER_RELAY_SOCKET,
 } from "../port_bind/stage.ts";
+import { agentPrivilegeRunArgs } from "./hardening.ts";
 
 const IMAGE_NAME = `nas-test-launch-${crypto.randomUUID()}`;
 
@@ -659,7 +660,11 @@ async function runConfiguredRemoteSession(
       },
     ]);
 
+    // Launch with the production privilege settings: the entrypoint's root
+    // phase signals the relay it started as the agent user, which only
+    // works with the capabilities a real session keeps.
     const extraArgs = [
+      ...agentPrivilegeRunArgs(),
       "--mount",
       `type=bind,src=${socketPath},dst=${CONTAINER_RELAY_SOCKET},readonly`,
       "--mount",

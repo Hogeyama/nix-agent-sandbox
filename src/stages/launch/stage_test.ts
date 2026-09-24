@@ -40,6 +40,8 @@ const PRIVILEGE_ARGS = [
   "SETUID",
   "--cap-add",
   "SETGID",
+  "--cap-add",
+  "KILL",
 ];
 
 test("finalizeLaunchPlan: composes agent arguments and management labels", () => {

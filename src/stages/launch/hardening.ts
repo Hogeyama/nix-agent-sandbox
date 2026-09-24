@@ -36,6 +36,10 @@ export const AGENT_CAP_ADD: readonly string[] = [
   // `setpriv --reuid/--regid --init-groups|--groups` drops to the agent user.
   "SETUID",
   "SETGID",
+  // The root shell signals processes it started as the agent user: the
+  // initial port relay is checked with `kill -0` and killed on failure.
+  // Without this the check fails with EPERM and the session never starts.
+  "KILL",
 ];
 
 /** `docker run` arguments applying the settings above. */
