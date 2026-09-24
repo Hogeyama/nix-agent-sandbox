@@ -165,6 +165,24 @@ class RequestTransportTest(unittest.TestCase):
         self.assertEqual(nas_addon._request_transport(FakeRequest()), "http")
 
 
+class UpstreamIsTlsTest(unittest.TestCase):
+    """mitmproxy が上流へ TLS でつなぐかは request.scheme で決まる。
+
+    CONNECT の中で送った平文も、forward proxy への `http://` も "http" になる
+    (mitmproxy 11 で実測)。scheme を持たない request は TLS と見なさない。"""
+
+    def test_https_is_tls(self):
+        self.assertTrue(nas_addon._upstream_is_tls(FakeRequest(scheme="https")))
+
+    def test_http_is_not_tls(self):
+        self.assertFalse(nas_addon._upstream_is_tls(FakeRequest(scheme="http")))
+
+    def test_a_request_without_a_scheme_is_not_tls(self):
+        request = FakeRequest()
+        del request.scheme
+        self.assertFalse(nas_addon._upstream_is_tls(request))
+
+
 class WebSocketDecisionGateTest(unittest.TestCase):
     def setUp(self):
         self.document = json.loads(_FIXTURE_PATH.read_text())
@@ -227,12 +245,14 @@ class FakeRequest:
         method="GET",
         host="example.com",
         port=443,
+        scheme="https",
     ):
         self.path = path
         self.method = method
         self.host = host
         self.port = port
-        self.pretty_url = f"https://{host}:{port}{path}"
+        self.scheme = scheme
+        self.pretty_url = f"{scheme}://{host}:{port}{path}"
         if headers is None:
             self.headers = FakeHeaders()
         elif isinstance(headers, FakeHeaders):
@@ -3810,6 +3830,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         review_response=None,
         request_body_audit=None,
         remove_headers=None,
+        scheme="https",
     ):
         """rule_id は broker が返す答え。addon の選択と食い違えば止まる。"""
         request_headers = list(headers or [])
@@ -3820,6 +3841,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
             content=content,
             method=method,
             host=host,
+            scheme=scheme,
         ))
         flow.client_conn.id = client_id
         addon = addon or nas_addon.NasAddon()
@@ -5058,6 +5080,117 @@ class RequestPolicyFlowTest(unittest.TestCase):
             },
         )
         self.assertFalse(hasattr(flow, "metadata"))
+
+    # 平文で上流へ出る request には、inject の header を付けない。
+    # 付けた header は credential そのものなので、proxy から上流までの経路で
+    # 読まれてしまう。allow の判断は変えず、header だけを付けずに送る。
+
+    def test_a_plaintext_fallback_request_goes_out_without_the_credential(self):
+        flow, _messages, stderr = self._run(
+            document=_flow_document(
+                [], targets=("example.com",), fallback="allow"
+            ),
+            rule_id="api.$fallback",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b"value=SECRET123",
+            scheme="http",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertIsNone(self._injected(flow))
+        # Everything else on the forwarded path still runs.
+        self.assertEqual(flow.request.content, b"value=****")
+        self.assertIsNone(flow.request.headers.get("proxy-authorization"))
+        self.assertIn("INJECT-SKIPPED-PLAINTEXT: headers=x-api-key ", stderr)
+        self.assertIn("target=example.com:443", stderr)
+        self.assertNotIn("injected-value", stderr)
+        self.assertNotIn("/submit", stderr)
+        # The broker did match a credential; saying otherwise would send
+        # whoever reads the log after the wrong cause.
+        self.assertNotIn("NO INJECT", stderr)
+
+    def test_a_plaintext_rule_request_goes_out_without_the_credential(self):
+        ordinary = _rule(key="ordinary", paths=["/submit"], scope="api")
+        flow, messages, stderr = self._run(
+            document=_flow_document([ordinary], targets=("example.com",)),
+            rule_id="api.ordinary",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b"value=SECRET123",
+            scheme="http",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(flow.request.content, b"value=****")
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("pass", "no-inspection")],
+        )
+        self.assertIn("INJECT-SKIPPED-PLAINTEXT:", stderr)
+        self.assertIn("rule=api.ordinary", stderr)
+        self.assertNotIn("injected-value", stderr)
+
+    def test_a_plaintext_request_keeps_a_same_named_header_it_sent(self):
+        """Skipping the inject leaves the request as the agent wrote it,
+        masked. The header is not stripped: it holds nothing the sandbox
+        did not already hand the agent."""
+        flow, _messages, _stderr = self._run(
+            document=_flow_document(
+                [], targets=("example.com",), fallback="allow"
+            ),
+            rule_id="api.$fallback",
+            method="GET",
+            path="/",
+            host="example.com",
+            content=b"",
+            headers=[("x-api-key", "agent-SECRET123")],
+            scheme="http",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(self._injected(flow), "agent-****")
+
+    def test_a_plaintext_websocket_handshake_goes_out_without_the_credential(self):
+        document = _flow_document([_models_rule()])
+        document["scopes"][0]["webSocket"] = "allow"
+        addon = nas_addon.NasAddon()
+        flow, _messages, stderr = self._run(
+            document=document,
+            rule_id="api.models",
+            method="GET",
+            path="/v1/models",
+            headers=[("upgrade", "websocket")],
+            content=b"",
+            addon=addon,
+            scheme="http",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertIsNone(self._injected(flow))
+        self.assertIn(flow.id, addon._websocket_states)
+        self.assertIn("INJECT-SKIPPED-PLAINTEXT:", stderr)
+
+    def test_a_plaintext_request_without_a_credential_logs_no_skip(self):
+        flow, _messages, stderr = self._run(
+            document=_flow_document(
+                [], targets=("example.com",), fallback="allow"
+            ),
+            rule_id="api.$fallback",
+            method="GET",
+            path="/",
+            host="example.com",
+            content=b"",
+            inject=False,
+            scheme="http",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertNotIn("INJECT-SKIPPED-PLAINTEXT", stderr)
+        self.assertIn("NO INJECT", stderr)
 
 
 class WebSocketLifecycleTest(unittest.TestCase):
