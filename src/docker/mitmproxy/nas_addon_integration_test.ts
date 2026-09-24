@@ -537,6 +537,7 @@ async function startProtocolContainers(
   targetHost: string,
   targetPort: number,
   targetScript: string,
+  extraProxyArgs: readonly string[] = [],
 ): Promise<number> {
   await createBenchmarkNetworkWithRetry(resources.networkName);
   resources.networkCreated = true;
@@ -578,7 +579,7 @@ async function startProtocolContainers(
       "websocket=true",
       "--set",
       "confdir=/nas-network/mitmproxy-ca",
-      "--ssl-insecure",
+      ...extraProxyArgs,
       "-s",
       "/nas-network/nas_addon.py",
     ],
@@ -1167,7 +1168,6 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
           "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
-          "--ssl-insecure",
           "-s",
           "/nas-network/nas_addon.py",
         ],
@@ -1289,7 +1289,6 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
           "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
-          "--ssl-insecure",
           "-s",
           "/nas-network/nas_addon.py",
         ],
@@ -1380,7 +1379,6 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
           "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
-          "--ssl-insecure",
           "-s",
           "/nas-network/nas_addon.py",
         ],
@@ -1489,7 +1487,6 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
           "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
-          "--ssl-insecure",
           "-s",
           "/nas-network/nas_addon.py",
         ],
@@ -1994,3 +1991,271 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   },
   60_000,
 );
+
+interface UpstreamCertificates {
+  /** The CA a test proxy is told to trust. Never in certifi. */
+  trustedCa: string;
+  /** Signed by `trustedCa` for api.github.com. */
+  trusted: { cert: string; key: string };
+  /** Signed by a CA no proxy trusts, for api.github.com. */
+  untrusted: { cert: string; key: string };
+  /** Signed by `trustedCa`, but for a name other than api.github.com. */
+  wrongHost: { cert: string; key: string };
+}
+
+/**
+ * fake upstream の証明書一式を使い捨てコンテナの中で作る。mitmproxy の image
+ * には `cryptography` が入っているので、ホストに openssl が無くても作れる。
+ */
+function upstreamCertificateScript(): string {
+  return [
+    "import datetime, json",
+    "from cryptography import x509",
+    "from cryptography.hazmat.primitives import hashes, serialization",
+    "from cryptography.hazmat.primitives.asymmetric import ec",
+    "from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID",
+    "now = datetime.datetime.now(datetime.timezone.utc)",
+    "validity = (now - datetime.timedelta(minutes=5), now + datetime.timedelta(days=1))",
+    "def pem_key(key):",
+    "    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()",
+    "def pem_cert(cert):",
+    "    return cert.public_bytes(serialization.Encoding.PEM).decode()",
+    "def ca(name):",
+    "    key = ec.generate_private_key(ec.SECP256R1())",
+    "    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])",
+    "    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)",
+    "        .public_key(key.public_key()).serial_number(x509.random_serial_number())",
+    "        .not_valid_before(validity[0]).not_valid_after(validity[1])",
+    "        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)",
+    "        .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False, data_encipherment=False, key_agreement=False, key_cert_sign=True, crl_sign=True, encipher_only=False, decipher_only=False), critical=True)",
+    "        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)",
+    "        .sign(key, hashes.SHA256()))",
+    "    return key, cert",
+    "def leaf(issuer_key, issuer_cert, host):",
+    "    key = ec.generate_private_key(ec.SECP256R1())",
+    "    cert = (x509.CertificateBuilder()",
+    "        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]))",
+    "        .issuer_name(issuer_cert.subject).public_key(key.public_key())",
+    "        .serial_number(x509.random_serial_number())",
+    "        .not_valid_before(validity[0]).not_valid_after(validity[1])",
+    "        .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)",
+    "        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)",
+    "        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)",
+    "        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()), critical=False)",
+    "        .sign(issuer_key, hashes.SHA256()))",
+    '    return {"cert": pem_cert(cert), "key": pem_key(key)}',
+    'trusted_key, trusted_ca = ca("nas test trusted upstream CA")',
+    'untrusted_key, untrusted_ca = ca("nas test untrusted upstream CA")',
+    "print(json.dumps({",
+    '    "trustedCa": pem_cert(trusted_ca),',
+    '    "trusted": leaf(trusted_key, trusted_ca, "api.github.com"),',
+    '    "untrusted": leaf(untrusted_key, untrusted_ca, "api.github.com"),',
+    '    "wrongHost": leaf(trusted_key, trusted_ca, "wrong-host.test"),',
+    "}))",
+  ].join("\n");
+}
+
+let upstreamCertificates: Promise<UpstreamCertificates> | undefined;
+
+function generateUpstreamCertificates(): Promise<UpstreamCertificates> {
+  upstreamCertificates ??= (async () => {
+    const proc = Bun.spawn(
+      [
+        "docker",
+        "run",
+        "--rm",
+        "--entrypoint",
+        "python3",
+        "mitmproxy/mitmproxy:11",
+        "-c",
+        upstreamCertificateScript(),
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    if (code !== 0) {
+      throw new Error(`certificate generation failed: ${stderr.trim()}`);
+    }
+    return JSON.parse(stdout) as UpstreamCertificates;
+  })();
+  return upstreamCertificates;
+}
+
+/**
+ * `rawEchoServerScript` の TLS 版。ハンドシェイクを終えた接続でだけ HTTP を
+ * 読むので、印字された `POST ` はそのまま「TLS を通過して届いた要求」になる。
+ * ハンドシェイクに失敗した接続は何も印字せずに閉じ、次の接続を待つ。
+ */
+function tlsEchoServerScript(
+  port: number,
+  certificate: { cert: string; key: string },
+): string {
+  return [
+    "import json, re, socket, ssl",
+    `cert = json.loads(${JSON.stringify(JSON.stringify(certificate))})`,
+    'open("/tmp/upstream.crt", "w").write(cert["cert"])',
+    'open("/tmp/upstream.key", "w").write(cert["key"])',
+    "ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)",
+    'ctx.load_cert_chain("/tmp/upstream.crt", "/tmp/upstream.key")',
+    "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+    "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+    `srv.bind(("0.0.0.0", ${port}))`,
+    "srv.listen(8)",
+    "while True:",
+    "    raw, _ = srv.accept()",
+    "    try:",
+    "        conn = ctx.wrap_socket(raw, server_side=True)",
+    "    except OSError:",
+    "        raw.close()",
+    "        continue",
+    '    data = b""',
+    "    complete = False",
+    "    while True:",
+    "        chunk = conn.recv(65536)",
+    "        if not chunk:",
+    "            break",
+    "        data += chunk",
+    '        sep = data.find(b"\\r\\n\\r\\n")',
+    "        if sep == -1:",
+    "            continue",
+    '        headers = data[:sep].decode("latin1")',
+    '        m = re.search(r"Content-Length:\\s*(\\d+)", headers, re.IGNORECASE)',
+    "        body_len = int(m.group(1)) if m else 0",
+    "        if len(data) - sep - 4 >= body_len:",
+    "            complete = True",
+    "            break",
+    "    if complete:",
+    '        print(data.decode("utf-8", "replace"), flush=True)',
+    "        try:",
+    '            conn.sendall(b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok")',
+    "        finally:",
+    "            conn.close()",
+    "        break",
+    "    conn.close()",
+  ].join("\n");
+}
+
+/**
+ * proxy→upstream の TLS 検証 (d0ab8ad8 / 94153cdd が `--ssl-insecure` で無効化
+ * していたもの)。agent の TLS は proxy で終端するので、注入した認証情報が
+ * 通るこの区間の証明書を検証するのは proxy だけである。
+ *
+ * 拒否ケースは、同じ fixture で信頼できる証明書なら注入ヘッダー付きで届く
+ * (最初のケース) ことを対照にしている。拒否の原因が証明書以外にあれば、
+ * 対照のほうが落ちる。
+ */
+const UPSTREAM_TLS_CASES: ReadonlyArray<{
+  name: string;
+  certificate: "trusted" | "untrusted" | "wrongHost";
+  /**
+   * Replace the proxy's trust store with the test CA. When false the proxy
+   * keeps certifi, exactly as production starts it.
+   */
+  trustTestCa: boolean;
+  /** The reason mitmproxy gives the client, or null when the request passes. */
+  refusal: string | null;
+}> = [
+  {
+    name: "a certificate from a trusted CA for the requested host is accepted",
+    certificate: "trusted",
+    trustTestCa: true,
+    refusal: null,
+  },
+  {
+    name: "the production trust store refuses a certificate from a private CA",
+    certificate: "untrusted",
+    trustTestCa: false,
+    refusal: "unable to get local issuer certificate",
+  },
+  {
+    name: "a trusted CA's certificate for another host name is refused",
+    certificate: "wrongHost",
+    trustTestCa: true,
+    refusal: "hostname mismatch",
+  },
+];
+
+for (const testCase of UPSTREAM_TLS_CASES) {
+  test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+    `upstream TLS: ${testCase.name}`,
+    async () => {
+      const resources = protocolResources("nas-upstream-tls");
+      let fixture: AddonFixture | undefined;
+      try {
+        const certificates = await generateUpstreamCertificates();
+        fixture = await setupGithubGraphqlFixture("nas-addon-upstream-tls-");
+        const caPath = path.join(fixture.runtimeDir, "upstream-ca.pem");
+        await writeFile(caPath, certificates.trustedCa);
+        await chmod(caPath, 0o644);
+        const proxyPort = await startProtocolContainers(
+          resources,
+          fixture,
+          "api.github.com",
+          GITHUB_TARGET_PORT,
+          tlsEchoServerScript(
+            GITHUB_TARGET_PORT,
+            certificates[testCase.certificate],
+          ),
+          testCase.trustTestCa
+            ? [
+                "--set",
+                "ssl_verify_upstream_trusted_ca=/nas-network/upstream-ca.pem",
+              ]
+            : [],
+        );
+
+        const body = JSON.stringify({
+          query:
+            'query($o: String!) { repository(owner: $o, name: "x") { issues(first: 10) { nodes { body } } } }',
+          variables: { o: "my-org" },
+        });
+        const response = await sendProxyRequest(
+          proxyPort,
+          `https://api.github.com:${GITHUB_TARGET_PORT}/graphql`,
+          `${fixture.sessionId}:${fixture.token}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          },
+        );
+
+        if (testCase.refusal === null) {
+          const upstreamLogs = await waitForContainerLog(
+            resources.targetName,
+            "POST /graphql",
+          );
+          expect(response).toContain("200 OK");
+          expect(upstreamLogs).toContain(
+            `Authorization: Bearer ${GITHUB_TOKEN}`,
+          );
+          return;
+        }
+
+        // proxy は upstream に接続したうえで証明書を拒んでいる。これを見ないと
+        // 「そもそも接続していない」でも拒否ケースが緑になる。mitmproxy は
+        // アラートを送らずに切るので、upstream 側では readiness probe と
+        // 区別が付かず、証拠は proxy のログに取る。
+        const proxyLogs = await waitForContainerLog(
+          resources.proxyName,
+          "Server TLS handshake failed. Certificate verify failed",
+        );
+        expect(proxyLogs).toContain("server connect api.github.com:8093");
+        expect(response).toContain("502 Bad Gateway");
+        expect(response).toContain(testCase.refusal);
+        expect(response).not.toContain(GITHUB_TOKEN);
+        const upstreamLogs = await dockerLogs(resources.targetName);
+        expect(upstreamLogs).not.toContain("POST ");
+        expect(upstreamLogs).not.toContain(GITHUB_TOKEN);
+      } finally {
+        await cleanupProtocolResources(resources);
+        await teardownFixture(fixture);
+      }
+    },
+    60_000,
+  );
+}
