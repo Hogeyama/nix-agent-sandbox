@@ -631,13 +631,31 @@ test("buildDindSidecarArgs: always mounts session data and shared tmp", () => {
 
 test("buildDindDaemonArgs: points only at the session mirror", () => {
   expect(buildDindDaemonArgs("nas-registry-mirror-session-a")).toEqual([
+    "dockerd",
+    "--host=unix:///run/user/1000/docker.sock",
+    "--host=tcp://127.0.0.1:2375",
     "--registry-mirror=http://nas-registry-mirror-session-a:5000",
     "--insecure-registry=nas-registry-mirror-session-a:5000",
   ]);
 });
 
 test("buildDindDaemonArgs: direct fallback has no mirror flags", () => {
-  expect(buildDindDaemonArgs(null)).toEqual([]);
+  expect(buildDindDaemonArgs(null)).toEqual([
+    "dockerd",
+    "--host=unix:///run/user/1000/docker.sock",
+    "--host=tcp://127.0.0.1:2375",
+  ]);
+});
+
+test("buildDindDaemonArgs: never listens on a non-loopback TCP address", () => {
+  // A command that starts with `dockerd` is what keeps the image entrypoint
+  // from adding --host=tcp://0.0.0.0:2375 and its 0.0.0.0 rootlesskit publish.
+  for (const mirror of [null, "nas-registry-mirror-session-a"]) {
+    const args = buildDindDaemonArgs(mirror);
+    expect(args[0]).toBe("dockerd");
+    const tcpHosts = args.filter((a) => a.startsWith("--host=tcp://"));
+    expect(tcpHosts).toEqual(["--host=tcp://127.0.0.1:2375"]);
+  }
 });
 
 // ============================================================
@@ -667,6 +685,12 @@ test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", (
 
   // Plain-TCP 2375 listener (no TLS cert dir).
   expect(env.DOCKER_TLS_CERTDIR).toEqual("");
+
+  // rootlesskit publishes that listener on the sidecar's loopback only, so an
+  // inner container cannot reach it through the session-network address.
+  expect(env.DOCKERD_ROOTLESS_ROOTLESSKIT_FLAGS).toEqual(
+    "-p 127.0.0.1:2375:2375/tcp",
+  );
 });
 
 test("buildDindSidecarEnv: points Go's trust search at the mount directory", () => {
