@@ -84,7 +84,7 @@ test("SessionBrokerService: fails closed when the host has no Claude OAuth crede
       pendingTimeoutSeconds: 30,
       pendingNotify: "off",
       tokenHash: "hash",
-      agentCredential: { kind: "claude-oauth", hostHome },
+      agentCredentials: [{ kind: "claude-oauth", hostHome }],
     };
 
     await expect(

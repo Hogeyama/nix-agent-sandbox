@@ -40,21 +40,35 @@ export interface DevcontainerAgentState {
   readonly codexState?: CodexStatePaths;
 }
 
-/** configureAgent 系の共通出力 */
-export interface AgentConfigResult {
+/**
+ * provisionAgent 系の共通出力。エージェントを起動せずコンテナ内で使える
+ * ようにするマウントと環境変数だけを持つ。
+ */
+export interface AgentProvisionResult {
   readonly mounts?: readonly MountSpec[];
   readonly dockerArgs: string[];
   readonly envVars: Record<string, string>;
+}
+
+/** configureAgent 系の共通出力。provision に起動時の設定を足したもの。 */
+export interface AgentConfigResult extends AgentProvisionResult {
   readonly agentCommand: string[];
 }
 
 /** configureAgent 系の共通入力 */
-export interface AgentConfigInput {
+export interface AgentConfigInput extends AgentProvisionInput {
   readonly claudeState?: ClaudeStatePaths;
-  readonly protectedClaudeState?: ProtectedClaudeState;
   readonly codexState?: CodexStatePaths;
-  readonly agent: AgentType;
   readonly mode: AgentMode;
+}
+
+/**
+ * provisionAgent 系の共通入力。Dev Container の状態パスは受け取らない
+ * (Dev Container は起動するエージェント 1 つ分の状態しか持たない)。
+ */
+export interface AgentProvisionInput {
+  readonly protectedClaudeState?: ProtectedClaudeState;
+  readonly agent: AgentType;
   readonly containerHome: string;
   readonly hostHome: string;
   readonly probes: AgentProbes;
@@ -70,6 +84,11 @@ export interface AgentConfigInput {
    * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
    */
   readonly claudeCredentialsFile?: string;
+  /**
+   * container の `~/.codex/auth.json` に bind mount するダミーファイルの、
+   * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
+   */
+  readonly codexAuthFile?: string;
 }
 
 /** エージェント固有 probe 結果 */

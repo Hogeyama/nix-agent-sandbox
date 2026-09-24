@@ -1,3 +1,4 @@
+import { configuredAgentCredentials } from "../../agents/credentials.ts";
 import type { Profile } from "../../config/types.ts";
 
 /** The only Dev Container profile gate: `devcontainer init`, `up`, and the
@@ -10,6 +11,13 @@ export function validateDevcontainerProfile(
     errors.push("agent must be claude or codex for devcontainer sessions");
   if (profile.extraAgents.length > 0)
     errors.push("extraAgents is unsupported for devcontainer sessions");
+  if (
+    profile.agent === "codex" &&
+    configuredAgentCredentials(profile.agentState.auth, "codex") === "proxy"
+  )
+    errors.push(
+      'agentState.auth = "proxy" is unsupported for Codex devcontainer sessions; use "shared"',
+    );
   if (profile.worktree)
     errors.push(
       "worktree is unsupported; create the worktree first, then run init there",

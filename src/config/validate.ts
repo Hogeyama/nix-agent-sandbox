@@ -8,6 +8,7 @@
 import {
   supportsProxiedCredentials,
   usesProxiedClaudeCredentials,
+  usesProxiedCodexCredentials,
 } from "../agents/credentials.ts";
 import { DIND_INTERNAL_PORT } from "../docker/dind.ts";
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
@@ -20,7 +21,13 @@ import {
   GPG_FORWARD_AGENT_MIGRATION,
   NIX_EXTRA_PACKAGES_MIGRATION,
 } from "./retired.ts";
-import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
+import type {
+  AgentType,
+  Config,
+  HostExecRule,
+  Profile,
+  SecretConfig,
+} from "./types.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -199,26 +206,74 @@ function validateProfile(name: string, profile: Profile): string[] {
 // agentState.auth
 // ---------------------------------------------------------------------------
 
-// ホストの API key を container へ渡す設定は、proxy が x-api-key を削除し
-// Authorization を上書きするので動かない。起動前に opt-out を案内する。
-const API_KEY_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+// ホストの API key を container へ渡す設定は、proxy が Authorization を
+// 上書きするので動かない。起動前に opt-out を案内する。
+const CLAUDE_API_KEY_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+const CODEX_API_KEY_ENV_KEYS = ["OPENAI_API_KEY", "CODEX_API_KEY"];
+
+function apiKeyEnvErrors(
+  name: string,
+  profile: Profile,
+  keys: readonly string[],
+  agent: AgentType,
+  label: string,
+): string[] {
+  const errors: string[] = [];
+  for (const entry of profile.env) {
+    // keyCmd のキー名はホストでコマンドを実行するまで決まらない。
+    if (!("key" in entry) || !keys.includes(entry.key)) continue;
+    errors.push(
+      `profile "${name}": env ${entry.key} does not work while ${label} credentials are injected by the proxy; set agentState.auth = "shared" (or new Mapping { ["${agent}"] = "shared" } for ${label} only) to use an API key`,
+    );
+  }
+  return errors;
+}
 
 function validateAgentCredentials(name: string, profile: Profile): string[] {
   const errors: string[] = [];
-  const configured = profile.agentState.auth;
-  if (configured === "proxy" && !supportsProxiedCredentials(profile.agent)) {
+  const auth = profile.agentState.auth;
+  const provisioned = [profile.agent, ...profile.extraAgents];
+  if (auth === "proxy" && !provisioned.some(supportsProxiedCredentials)) {
     errors.push(
-      `profile "${name}": agentState.auth = "proxy" currently supports only agent "claude"; use "shared" for agent "${profile.agent}"`,
+      `profile "${name}": agentState.auth = "proxy" supports only agents "claude" and "codex"; use "shared" for agent "${profile.agent}"`,
     );
   }
-  if (usesProxiedClaudeCredentials(profile)) {
-    for (const entry of profile.env) {
-      // keyCmd のキー名はホストでコマンドを実行するまで決まらない。
-      if (!("key" in entry) || !API_KEY_ENV_KEYS.includes(entry.key)) continue;
-      errors.push(
-        `profile "${name}": env ${entry.key} does not work while Claude credentials are injected by the proxy; set agentState.auth = "shared" to use an API key`,
-      );
+  // 文字列の "proxy" は対応するエージェントにだけ効くと読めるが、エージェントを
+  // 名指しした "proxy" は、そのエージェントを保護するつもりで書いたものである。
+  // 黙って "shared" にすると書き手の意図と逆になる。
+  if (auth !== undefined && typeof auth !== "string") {
+    for (const [agent, mode] of Object.entries(auth)) {
+      if (mode === "proxy" && !supportsProxiedCredentials(agent as AgentType)) {
+        errors.push(
+          `profile "${name}": agentState.auth["${agent}"] = "proxy" is unsupported; only agents "claude" and "codex" support "proxy"`,
+        );
+      }
     }
+  }
+  if (usesProxiedClaudeCredentials(profile)) {
+    errors.push(
+      ...apiKeyEnvErrors(
+        name,
+        profile,
+        CLAUDE_API_KEY_ENV_KEYS,
+        "claude",
+        "Claude",
+      ),
+    );
+  }
+  // 検証の時点では Dev Container かどうか分からないので、Dev Container でない
+  // ものとして調べる。Dev Container の Codex で API key を使うなら "shared" を
+  // 明示する。
+  if (usesProxiedCodexCredentials(profile)) {
+    errors.push(
+      ...apiKeyEnvErrors(
+        name,
+        profile,
+        CODEX_API_KEY_ENV_KEYS,
+        "codex",
+        "Codex",
+      ),
+    );
   }
   return errors;
 }

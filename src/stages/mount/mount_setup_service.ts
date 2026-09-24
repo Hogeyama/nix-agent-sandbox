@@ -18,6 +18,10 @@ import {
   prepareProtectedClaudeState,
   removeProtectedClaudeState,
 } from "./claude_state_fs.ts";
+import {
+  prepareDummyCodexCredentials,
+  removeDummyCodexCredentials,
+} from "./codex_credentials_fs.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local plan interface (avoids service -> stage dependency)
@@ -40,6 +44,9 @@ export class MountSetupService extends Context.Tag("nas/MountSetupService")<
       options?: { shareCredentials?: boolean; protectSettings?: boolean },
     ) => Effect.Effect<ProtectedClaudeState, unknown, Scope.Scope>;
     readonly prepareClaudeCredentials: (
+      hostHome: string,
+    ) => Effect.Effect<string, unknown, Scope.Scope>;
+    readonly prepareCodexCredentials: (
       hostHome: string,
     ) => Effect.Effect<string, unknown, Scope.Scope>;
     readonly ensureDirectories: (
@@ -81,6 +88,16 @@ export const MountSetupServiceLive: Layer.Layer<
           }),
           (state) => Effect.promise(() => removeDummyClaudeCredentials(state)),
         ).pipe(Effect.map((state) => state.file)),
+      prepareCodexCredentials: (hostHome) =>
+        Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => prepareDummyCodexCredentials(hostHome),
+            // CodexOAuthUnavailableError のログイン案内を残すため、元のエラーを
+            // そのまま返す。
+            catch: (error) => error,
+          }),
+          (state) => Effect.promise(() => removeDummyCodexCredentials(state)),
+        ).pipe(Effect.map((state) => state.file)),
       ensureDirectories: (dirs) =>
         Effect.gen(function* () {
           for (const dir of dirs) {
@@ -103,6 +120,9 @@ export interface MountSetupServiceFakeConfig {
   readonly prepareClaudeCredentials?: (
     hostHome: string,
   ) => Effect.Effect<string, unknown, Scope.Scope>;
+  readonly prepareCodexCredentials?: (
+    hostHome: string,
+  ) => Effect.Effect<string, unknown, Scope.Scope>;
   readonly ensureDirectories?: (
     dirs: ReadonlyArray<MountDirectoryEntry>,
   ) => Effect.Effect<void>;
@@ -120,6 +140,9 @@ export function makeMountSetupServiceFake(
       prepareClaudeCredentials:
         overrides.prepareClaudeCredentials ??
         (() => Effect.die("prepareClaudeCredentials fake is required")),
+      prepareCodexCredentials:
+        overrides.prepareCodexCredentials ??
+        (() => Effect.die("prepareCodexCredentials fake is required")),
       ensureDirectories: overrides.ensureDirectories ?? (() => Effect.void),
     }),
   );

@@ -196,6 +196,13 @@ test("claudeCredentialsReadError: maps ENOENT and ENOTDIR to the login guidance"
   }
 });
 
+test("ClaudeOAuthUnavailableError: mentions both the string and per-agent Mapping opt-out", () => {
+  const message = new ClaudeOAuthUnavailableError("no credentials file")
+    .message;
+  expect(message).toContain('agentState.auth = "shared"');
+  expect(message).toContain('new Mapping { ["claude"] = "shared" }');
+});
+
 test("claudeCredentialsReadError: returns other errors unchanged", () => {
   const eacces = Object.assign(new Error("permission denied"), {
     code: "EACCES",

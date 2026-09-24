@@ -450,31 +450,58 @@ test("planProxy: Claude with default credentials asks for the host OAuth source"
 
   const result = planProxy({ ...shared, container, observability });
 
-  expect(result.agentCredential).toEqual({
-    kind: "claude-oauth",
-    hostHome: shared.host.home,
-  });
+  expect(result.agentCredentials).toEqual([
+    { kind: "claude-oauth", hostHome: shared.host.home },
+  ]);
 });
 
-test("planProxy: shared credentials do not start a host OAuth source", () => {
-  const profile = makeProfile({
-    agent: "claude",
-    agentState: { protectSettings: false, auth: "shared" },
-  });
-  const { shared, container, observability } = makeInput(profile);
-
-  const result = planProxy({ ...shared, container, observability });
-
-  expect(result.agentCredential).toBeUndefined();
-});
-
-test("planProxy: other agents do not start a host OAuth source", () => {
+test("planProxy: Codex with default credentials asks for the host OAuth source", () => {
   const profile = makeProfile({ agent: "codex" });
   const { shared, container, observability } = makeInput(profile);
 
   const result = planProxy({ ...shared, container, observability });
 
-  expect(result.agentCredential).toBeUndefined();
+  expect(result.agentCredentials).toEqual([
+    { kind: "codex-oauth", hostHome: shared.host.home },
+  ]);
+});
+
+test("planProxy: a profile with both agents asks for both sources", () => {
+  const profile = makeProfile({ agent: "codex", extraAgents: ["claude"] });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.agentCredentials).toEqual([
+    { kind: "claude-oauth", hostHome: shared.host.home },
+    { kind: "codex-oauth", hostHome: shared.host.home },
+  ]);
+});
+
+test("planProxy: Dev Container Codex does not start a host OAuth source", () => {
+  const profile = makeProfile({ agent: "codex" });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy(
+    { ...shared, container, observability },
+    { devcontainer: true },
+  );
+
+  expect(result.agentCredentials).toBeUndefined();
+});
+
+test("planProxy: shared credentials and Copilot do not start a host OAuth source", () => {
+  for (const profile of [
+    makeProfile({
+      agent: "claude",
+      agentState: { protectSettings: false, auth: "shared" },
+    }),
+    makeProfile({ agent: "copilot" }),
+  ]) {
+    const { shared, container, observability } = makeInput(profile);
+    const result = planProxy({ ...shared, container, observability });
+    expect(result.agentCredentials).toBeUndefined();
+  }
 });
 
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {
@@ -1018,10 +1045,9 @@ test("runProxy: hands agentCredential to SessionBrokerService", async () => {
     }),
   });
 
-  expect(capturedBrokerConfigs[0]!.agentCredential).toEqual({
-    kind: "claude-oauth",
-    hostHome: makeHostEnv().home,
-  });
+  expect(capturedBrokerConfigs[0]!.agentCredentials).toEqual([
+    { kind: "claude-oauth", hostHome: makeHostEnv().home },
+  ]);
 });
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 ---
 title: ホストの認証情報の利用
-description: 秘密値の注入、Claude 認証情報の保持、エージェント設定ファイルの保護、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
+description: 秘密値の注入、Claude・Codex の認証情報の保持、エージェント設定ファイルの保護、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
 ---
 
 認証が必要な作業では、エージェント自身に値を読ませる必要があるかを先に決めます。値を渡さずに済む API 呼び出しやホストコマンドは、その実行時にだけ注入できます。
@@ -12,7 +12,7 @@ description: 秘密値の注入、Claude 認証情報の保持、エージェン
 | ホストのクラウド CLI・GPG を利用 | [廃止した設定ディレクトリの共有](#廃止した設定ディレクトリの共有) |
 | キーリングに保存済みの Codex 認証を利用 | [Codex のキーリング](#codex-のキーリング) |
 | エージェントの設定ファイルをコンテナ内から書き換える | [エージェント設定ファイルの保護](#エージェント設定ファイルの保護) |
-| API key で Claude を使う | [Claude の認証情報の保持](#claude-の認証情報の保持) |
+| API key で Claude や Codex を使う | [エージェントの認証情報の保持](#エージェントの認証情報の保持) |
 
 ## 秘密値の取得元
 
@@ -39,9 +39,11 @@ lines は複数の値になるため、ヘッダー注入や単一値のホス�
 
 登録だけではファイル表示や出力はマスクされません。値を読ませないための設定は[ファイルの非公開・マスク](/nix-agent-sandbox/configuration/files/)にあります。
 
-## Claude の認証情報の保持
+## エージェントの認証情報の保持
 
-`agentState.auth` は、Claude Code のログイン情報をコンテナへどう渡すかを選びます。値は `"proxy"` と `"shared"` の2つで、指定しなければ既定値は Claude で `"proxy"`、Codex・Copilot で `"shared"` になります。
+`agentState.auth` は、エージェントのログイン情報をコンテナへどう渡すかを選びます。値は `"proxy"` と `"shared"` の2つで、指定しなければ既定値は Claude と Codex で `"proxy"`、Copilot で `"shared"` です。Dev Container の Codex は `"shared"` です。
+
+文字列で書くと、起動するエージェントにも `extraAgents` のエージェントにも同じ値を使います。Copilot の認証情報は `~/.copilot` に無いので、`"proxy"` を指定しても `"shared"` として扱います。
 
 ```pkl
 agentState {
@@ -49,13 +51,26 @@ agentState {
 }
 ```
 
+エージェントごとに変えるときは、エージェント名をキーにした Mapping で書きます。書かなかったエージェントは既定値になります。次は、Claude のプロファイルで `extraAgents { "codex" }` を使い、ホストの Codex が認証情報をキーリングに保存している例です。Claude の認証情報は `"proxy"` のままホストに残し、Codex だけを `"shared"` にします。
+
+```pkl
+extraAgents { "codex" }
+agentState {
+  auth = new Mapping { ["codex"] = "shared" }
+}
+```
+
+Mapping で Copilot に `"proxy"` を指定すると、起動前の検証でエラーになります。
+
+### Claude
+
 `"proxy"` では、ホストの `~/.claude/.credentials.json` をコンテナと共有しません。コンテナから見えるのはセッションごとに作るダミーファイルで、実際のアクセストークンは書き込まれません。Claude Code が `api.anthropic.com` と `mcp-proxy.anthropic.com` へ送る通信は nas のプロキシが中継し、`Authorization` ヘッダーをホストのトークンで上書きしたうえで `x-api-key` ヘッダーを取り除きます。トークンの期限が近づいたときの更新もホストの nas が行い、コンテナ内では起きません。
 
 ログインはホストで行ってください。コンテナ内で `/login` を実行しても、書き込まれる先はそのセッション限りのダミーファイルで、セッションの終了とともに消えます。ホストが未ログインの場合、セッションは起動せず、ホストで `claude /login` を実行するか `agentState.auth = "shared"` に切り替えるよう案内するメッセージが出ます。
 
 API key で Claude を使うプロファイルには `agentState.auth = "shared"` を指定してください。`"proxy"` のまま `env` に `ANTHROPIC_API_KEY` や `ANTHROPIC_AUTH_TOKEN` を設定すると、起動前の検証でエラーになります。
 
-### `"proxy"` の制限
+#### `"proxy"` の制限
 
 起動前の検証は、`env` の `ANTHROPIC_API_KEY` と `ANTHROPIC_AUTH_TOKEN` だけを調べます。
 Bedrock（`CLAUDE_CODE_USE_BEDROCK`）、Vertex（`CLAUDE_CODE_USE_VERTEX`）、`apiKeyHelper`、`ANTHROPIC_BASE_URL` で指定するゲートウェイを使うプロファイルは検出できず、エラーになりません。
@@ -72,6 +87,21 @@ Bedrock（`CLAUDE_CODE_USE_BEDROCK`）、Vertex（`CLAUDE_CODE_USE_VERTEX`）、
 たとえば、初めての `/plugin install` が作る `plugins/` は、ホストに残りません。
 残したい項目は、先にホストで作成するか、ホストの Claude Code で操作してください。
 `agentState.protectSettings` を有効にしたときの扱いは、[エージェント設定ファイルの保護](#エージェント設定ファイルの保護)の表のとおりです。
+
+### Codex
+
+`"proxy"` では、ホストの `~/.codex` を今までどおり共有したうえで、`~/.codex/auth.json` の位置にだけセッションごとのダミーファイルを被せます。ダミーには実際のトークンは入っていません。Codex が `chatgpt.com` の `/backend-api/` の下へ送る通信は nas のプロキシが中継し、`Authorization` と `chatgpt-account-id` をホストの値で上書きします。`/backend-api/` の下には ChatGPT 本体の API（会話履歴や設定など）もあるので、コンテナから許可された通信はそれらにもホストのトークンで届きます。`chatgpt.com` の `/backend-api/` 以外の path への通信にはホストの値を付けません。トークンの更新はホストの nas が行い、コンテナ内では起きません。
+
+ログインはホストで `codex login` を実行してください。ホストの `~/.codex/auth.json` に ChatGPT のログイン情報が無い場合、セッションは起動しません。次の場合は `agentState.auth = "shared"` を指定してください。
+
+- API key で Codex を使う（`"proxy"` のまま `env` に `OPENAI_API_KEY` や `CODEX_API_KEY` を設定すると、起動前の検証でエラーになります）
+- ホストの Codex が認証情報をキーリングに保存している（`cli_auth_credentials_store = "keyring"`。[Codex のキーリング](#codex-のキーリング)の設定を使います）
+
+#### `"proxy"` の制限
+
+- セッションの実行中にホストの `~/.codex/auth.json` が削除されるか別のファイルに置き換わると、nas はそのセッションのコンテナを猶予なしで強制終了します。コンテナの起動前（DinD の起動中など）であれば、コンテナを起動せずにセッションを終えます。ホストでの `codex logout` がこれにあたります。ファイルが別のファイルに置き換わった場合（rename）は、強制終了するまでの短い間、新しいファイルがコンテナから見えます。
+- ホストの Codex と nas が同時にトークンを更新すると、片方が失敗することがあります。nas はホストの Codex が更新したファイルを読み直して回復します。ホストの Codex が失敗した場合は、ホストで再ログインが必要になることがあります。
+- コンテナ内で `codex login` を実行しても、書き込まれる先はそのセッション限りのダミーファイルで、セッションの終了とともに消えます。
 
 ## エージェント設定ファイルの保護
 
@@ -101,6 +131,8 @@ Codex / Copilot は状態ディレクトリを読み書き可能で共有し、�
 | --- | --- |
 | codex | `~/.codex/config.toml` |
 | copilot | `~/.copilot/config.json`、`~/.copilot/mcp-config.json` |
+
+Codex の `~/.codex/auth.json` は、`agentState.auth = "proxy"`（既定）ならダミーファイルを見せ、ホストの実体とは共有しません。
 
 ### 保護しないもの
 
@@ -155,9 +187,12 @@ hostexec = new HostExecConfig {
 
 次の設定は Secret Service の OpenSession、SearchItems、GetSecret を許可します。**取得対象を Codex の認証情報だけに限定するものではありません。** ホストユーザーに認められる範囲で、検索に一致した他の秘密も取得できます。
 
-codex プロファイルへ追加します。既存の DBus 設定があれば必要な項目を残し、呼び出しの許可を追加してください。
+codex プロファイルへ追加します。既存の DBus 設定があれば必要な項目を残し、呼び出しの許可を追加してください。`agentState.auth = "shared"` も必要です。既定の `"proxy"` のままでは、ホストに `~/.codex/auth.json` が無いため、セッションが起動しません。
 
 ```pkl
+agentState {
+  auth = "shared"
+}
 dbus {
   session {
     enable = true
@@ -178,6 +213,8 @@ dbus {
   }
 }
 ```
+
+Claude のプロファイルで `extraAgents { "codex" }` として Codex を使う場合は、`auth = "shared"` の代わりに `auth = new Mapping { ["codex"] = "shared" }` を指定すると、Claude の認証情報はホストに残したまま、Codex だけを共有できます（[エージェントの認証情報の保持](#エージェントの認証情報の保持)）。
 
 設定を確認して `nas config trust` を実行し、`nas codex` で起動します。保存済みの認証を使えることを確認してください。Claude 用の通信設定は Codex には適用されません。API 通信が未許可なら、UI の Audit で接続先を確認して[Codex 用プロファイルの通信許可](/nix-agent-sandbox/configuration/network/#別のエージェント用の設定)を追加します。
 

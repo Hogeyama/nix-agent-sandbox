@@ -1830,18 +1830,138 @@ test("validateConfig: the refusal never repeats the value it refused", () => {
 // agentState.auth
 // ---------------------------------------------------------------------------
 
-test("validate: agentState.auth proxy is rejected for agents other than claude", () => {
+test("validate: agentState.auth proxy is rejected when no provisioned agent supports it", () => {
   const config = makeConfig({
     profiles: {
       p: makeProfile({
-        agent: "codex",
+        agent: "copilot",
         agentState: { protectSettings: false, auth: "proxy" },
       }),
     },
   });
   expect(() => validateConfig(config)).toThrow(
-    /agentState\.auth = "proxy" currently supports only agent "claude"/,
+    /agentState\.auth = "proxy" supports only agents "claude" and "codex"/,
   );
+});
+
+test("validate: agentState.auth proxy is accepted when an extra agent supports it", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "copilot",
+        extraAgents: ["codex"],
+        agentState: { protectSettings: false, auth: "proxy" },
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+});
+
+test("validate: a per-agent proxy for an agent that does not support it is rejected", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        extraAgents: ["copilot"],
+        agentState: { protectSettings: false, auth: { copilot: "proxy" } },
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(
+    /agentState\.auth\["copilot"\] = "proxy" is unsupported/,
+  );
+});
+
+test("validate: a per-agent shared lets an extra Codex use an API key while Claude stays proxied", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        extraAgents: ["codex"],
+        agentState: { protectSettings: false, auth: { codex: "shared" } },
+        env: [{ key: "OPENAI_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+  const withClaudeKey = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        extraAgents: ["codex"],
+        agentState: { protectSettings: false, auth: { codex: "shared" } },
+        env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(withClaudeKey)).toThrow(/ANTHROPIC_API_KEY/);
+});
+
+test("validate: the API key error names the per-agent opt-out", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        extraAgents: ["codex"],
+        env: [{ key: "OPENAI_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(
+    /new Mapping \{ \["codex"\] = "shared" \}/,
+  );
+});
+
+test("validate: proxied Codex credentials reject a static OPENAI_API_KEY env", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "codex",
+        env: [{ key: "OPENAI_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(
+    /OPENAI_API_KEY[\s\S]*Codex[\s\S]*agentState\.auth = "shared"/,
+  );
+});
+
+test("validate: proxied Codex credentials reject a static CODEX_API_KEY env", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "claude",
+        extraAgents: ["codex"],
+        env: [{ key: "CODEX_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(/CODEX_API_KEY/);
+});
+
+test("validate: shared Codex credentials accept an API key env", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "codex",
+        agentState: { protectSettings: false, auth: "shared" },
+        env: [{ key: "OPENAI_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+});
+
+test("validate: an Anthropic API key env on a profile without Claude is not checked", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agent: "codex",
+        env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
 });
 
 test("validate: proxied Claude credentials reject a static ANTHROPIC_API_KEY env", () => {
@@ -1876,18 +1996,6 @@ test("validate: shared Claude credentials accept an API key env", () => {
       p: makeProfile({
         agent: "claude",
         agentState: { protectSettings: false, auth: "shared" },
-        env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
-      }),
-    },
-  });
-  expect(() => validateConfig(config)).not.toThrow();
-});
-
-test("validate: an API key env on codex is not checked", () => {
-  const config = makeConfig({
-    profiles: {
-      p: makeProfile({
-        agent: "codex",
         env: [{ key: "ANTHROPIC_API_KEY", val: "x", mode: "set" }],
       }),
     },

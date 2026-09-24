@@ -16,6 +16,7 @@
  * 保存される時刻が一致しない。
  */
 
+import { createHash } from "node:crypto";
 import { mkdir, realpath, rmdir, stat, utimes } from "node:fs/promises";
 import * as path from "node:path";
 
@@ -188,4 +189,27 @@ export async function acquireClaudeRefreshLock(
       }
     },
   };
+}
+
+/**
+ * Codex の OAuth 更新を、nas のセッションどうしで排他するロック。
+ *
+ * Codex 自身はファイルのロックを使わない (同じプロセスの中でだけ排他する)
+ * ので、ホストの Codex とは共有できない。ロックは container から read-write
+ * で見える `~/.codex` には置かない。container がロックを握ったまま離さない
+ * ことで、ホストの更新を止められてしまうためである。
+ */
+export async function acquireCodexRefreshLock(
+  codexDir: string,
+  stateHome: string,
+  options: AcquireDirLockOptions = {},
+): Promise<HeldLock> {
+  const resolved = await realpath(codexDir).catch(() => codexDir);
+  const key = createHash("sha256").update(resolved).digest("hex").slice(0, 16);
+  const locksDir = path.join(stateHome, "nas", "locks");
+  await mkdir(locksDir, { recursive: true, mode: 0o700 });
+  return acquireDirLock(
+    path.join(locksDir, `codex-oauth-${key}.lock`),
+    options,
+  );
 }

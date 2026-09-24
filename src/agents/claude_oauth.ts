@@ -30,7 +30,7 @@ export class ClaudeOAuthUnavailableError extends Error {
   constructor(detail: string) {
     super(
       `[nas] Claude OAuth credentials are not available on the host (${detail}). ` +
-        `Run "claude /login" on the host, or set agentState.auth = "shared" to keep sharing the credentials file (required for API key use).`,
+        `Run "claude /login" on the host, or set agentState.auth = "shared" (or new Mapping { ["claude"] = "shared" } for Claude only) to keep sharing the credentials file (required for API key use).`,
     );
     this.name = "ClaudeOAuthUnavailableError";
   }

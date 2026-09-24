@@ -56,7 +56,11 @@ export function createPreparationPipelineBuilder({
         devcontainer: devcontainerMounts !== undefined,
       }),
     )
-    .add(createProxyStage(input))
+    .add(
+      createProxyStage(input, {
+        devcontainer: devcontainerMounts !== undefined,
+      }),
+    )
     .add(createDindStage(input))
     .add(createPortBindStage(input));
 }

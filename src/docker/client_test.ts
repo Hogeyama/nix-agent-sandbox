@@ -1,8 +1,19 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { EMBEDDED_ASSET_NAMES, runDockerCommand } from "./client.ts";
+import {
+  dockerKill,
+  EMBEDDED_ASSET_NAMES,
+  runDockerCommand,
+} from "./client.ts";
 
 test("bounded Docker command kills a wedged client at its deadline", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "nas-docker-timeout-"));
@@ -17,6 +28,32 @@ test("bounded Docker command kills a wedged client at its deadline", async () =>
       }),
     ).rejects.toThrow("docker command timed out after 30ms");
     expect(Date.now() - startedAt).toBeLessThan(1_000);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dockerKill sends SIGKILL without a grace period and reports a failure", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-docker-kill-"));
+  const argsFile = path.join(root, "args");
+  const docker = path.join(root, "docker");
+  await writeFile(
+    docker,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\n[ "$4" = running ]\n`,
+  );
+  await chmod(docker, 0o755);
+  try {
+    await dockerKill("running", { executable: docker });
+    expect((await readFile(argsFile, "utf8")).split("\n")).toEqual([
+      "kill",
+      "--signal",
+      "KILL",
+      "running",
+      "",
+    ]);
+    await expect(
+      dockerKill("missing", { executable: docker }),
+    ).rejects.toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

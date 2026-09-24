@@ -12,7 +12,10 @@ import { sharedDockerResources } from "../../docker/shared_resources.ts";
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
+import {
+  usesProxiedClaudeCredentials,
+  usesProxiedCodexCredentials,
+} from "../../agents/credentials.ts";
 import type {
   RequestBodyAuditConfig,
   SecretConfig,
@@ -49,6 +52,7 @@ import { CaService } from "./ca_service.ts";
 import { NetworkRuntimeService } from "./network_runtime_service.ts";
 import { ProxyService } from "./proxy_service.ts";
 import {
+  type AgentCredentialConfig,
   type SessionBrokerHandle,
   SessionBrokerService,
 } from "./session_broker_service.ts";
@@ -98,11 +102,8 @@ export interface ProxyPlan {
   readonly proxyMasking: boolean;
   /** 秘密の解決に使うホスト環境変数のスナップショット。 */
   readonly hostEnv: Record<string, string | undefined>;
-  /** ホストが保持する OAuth credential を broker に注入させるか。 */
-  readonly agentCredential?: {
-    readonly kind: "claude-oauth";
-    readonly hostHome: string;
-  };
+  /** ホストが保持する OAuth credential のうち、broker に注入させるもの。 */
+  readonly agentCredentials?: readonly AgentCredentialConfig[];
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,8 @@ export interface ProxyPlan {
 export interface ProxyStageOptions {
   proxyContainerName?: string;
   generateSessionToken?: () => string;
+  /** Dev Container のセッションか。Dev Container の Codex は proxy の対象外。 */
+  devcontainer?: boolean;
 }
 
 export function planProxy(
@@ -198,9 +201,15 @@ export function planProxy(
     caCertPath: caCertFilePath(runtimePaths),
   };
 
-  const agentCredential = usesProxiedClaudeCredentials(input.profile)
-    ? { kind: "claude-oauth" as const, hostHome: input.host.home }
-    : undefined;
+  const credentialsContext = { devcontainer: options.devcontainer ?? false };
+  const agentCredentials: AgentCredentialConfig[] = [
+    ...(usesProxiedClaudeCredentials(input.profile)
+      ? [{ kind: "claude-oauth" as const, hostHome: input.host.home }]
+      : []),
+    ...(usesProxiedCodexCredentials(input.profile, credentialsContext)
+      ? [{ kind: "codex-oauth" as const, hostHome: input.host.home }]
+      : []),
+  ];
 
   return {
     proxyContainerName,
@@ -228,7 +237,7 @@ export function planProxy(
     secretRegistry: { ...input.profile.secrets },
     proxyMasking,
     hostEnv,
-    ...(agentCredential ? { agentCredential } : {}),
+    ...(agentCredentials.length > 0 ? { agentCredentials } : {}),
     outputOverrides: {
       network,
       prompt: promptState,
@@ -244,13 +253,14 @@ export function planProxy(
 
 export function createProxyStage(
   shared: StageInput,
+  options: Pick<ProxyStageOptions, "devcontainer"> = {},
 ): Stage<
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
   CaService | NetworkRuntimeService | ProxyService | SessionBrokerService,
   unknown
 > {
-  return createProxyStageWithOptions(shared);
+  return createProxyStageWithOptions(shared, options);
 }
 
 export function createProxyStageWithOptions(
@@ -399,7 +409,7 @@ function runProxy(
         tokenHash,
         secretValues,
         proxyMasking: plan.proxyMasking,
-        agentCredential: plan.agentCredential,
+        agentCredentials: plan.agentCredentials,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );

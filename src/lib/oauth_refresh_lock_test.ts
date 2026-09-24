@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   acquireClaudeRefreshLock,
+  acquireCodexRefreshLock,
   acquireDirLock,
   LockContendedError,
 } from "./oauth_refresh_lock.ts";
@@ -213,6 +214,30 @@ test("acquireClaudeRefreshLock: a contended current lock fails without taking th
     LockContendedError,
   );
   expect(await exists(`${claudeDir}.lock`)).toBe(false);
+});
+
+test("acquireCodexRefreshLock: keeps the lock under the state home, keyed by the Codex dir", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-codex-lock-"));
+  try {
+    const codexDir = path.join(root, "home", ".codex");
+    const stateHome = path.join(root, "state");
+    await mkdir(codexDir, { recursive: true });
+    const lock = await acquireCodexRefreshLock(codexDir, stateHome);
+    try {
+      const entries = await readdir(path.join(stateHome, "nas", "locks"));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatch(/^codex-oauth-[0-9a-f]{16}\.lock$/);
+      expect(await readdir(codexDir)).toEqual([]);
+      await expect(
+        acquireCodexRefreshLock(codexDir, stateHome),
+      ).rejects.toBeInstanceOf(LockContendedError);
+    } finally {
+      await lock.release();
+    }
+    expect(await readdir(path.join(stateHome, "nas", "locks"))).toEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test.skipIf(runningAsRoot)(

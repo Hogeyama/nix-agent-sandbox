@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { configureCodex } from "./codex.ts";
+import { configureCodex, provisionCodex } from "./codex.ts";
 
 const input = {
   containerHome: "/home/nas",
@@ -71,4 +71,33 @@ test("normal Codex CLI retains host mounts and the host binary", () => {
     "-c",
     "shell_environment_policy.inherit=all",
   ]);
+});
+
+test("provisionCodex: mounts the dummy auth.json after the host ~/.codex", () => {
+  const result = provisionCodex({
+    ...input,
+    codexAuthFile: "/tmp/nas-codex-credentials-x/auth.json",
+  });
+  expect(result.dockerArgs).toContain("/host/home/.codex:/home/nas/.codex");
+  expect(result.mounts).toEqual([
+    {
+      source: "/tmp/nas-codex-credentials-x/auth.json",
+      target: "/home/nas/.codex/auth.json",
+    },
+  ]);
+});
+
+test("provisionCodex: shares the host auth.json when no dummy is given", () => {
+  const result = provisionCodex(input);
+  expect(result.mounts).toBeUndefined();
+});
+
+test("provisionCodex: rejects a dummy auth.json for Dev Container state", () => {
+  expect(() =>
+    provisionCodex({
+      ...input,
+      codexState: { codexDir: "/host/home/.codex" },
+      codexAuthFile: "/tmp/x/auth.json",
+    }),
+  ).toThrow("Dummy Codex credentials");
 });

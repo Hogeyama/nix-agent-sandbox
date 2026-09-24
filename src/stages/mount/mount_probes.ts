@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
-import { agentBinaryFound, resolveAgentProbes } from "../../agents/registry.ts";
+import { resolveAgentProbes } from "../../agents/registry.ts";
 import type {
   AgentProbes,
   AgentType,
@@ -32,7 +32,6 @@ import {
   preparationSignal,
   runProbeCommand,
 } from "../../lib/preparation_commands.ts";
-import { logWarn } from "../../log.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 // ---------------------------------------------------------------------------
 // Types — pre-resolved I/O results
@@ -141,18 +140,10 @@ export async function resolveMountProbes(
   // エージェント probe
   preparationSignal()?.throwIfAborted();
   const agentProbes = resolveAgentProbes(profile.agent, home);
-  const extraAgentProbes = profile.extraAgents.map((agent) => {
-    const probes = resolveAgentProbes(agent, home);
-    // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
-    // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
-    // なので、ここで言っておく。
-    if (!agentBinaryFound(probes)) {
-      logWarn(
-        `[nas] extraAgents: "${agent}" binary not found on the host; it will be unavailable in the container`,
-      );
-    }
-    return { agent, probes };
-  });
+  const extraAgentProbes = profile.extraAgents.map((agent) => ({
+    agent,
+    probes: resolveAgentProbes(agent, home),
+  }));
 
   // Nix 関連
   const [nixConfRealPath, nixBinPath] = await Promise.all([

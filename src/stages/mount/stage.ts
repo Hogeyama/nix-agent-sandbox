@@ -8,14 +8,21 @@
 
 import * as path from "node:path";
 import { Effect } from "effect";
-import { usesProxiedClaudeCredentials } from "../../agents/credentials.ts";
-import { configureAgent } from "../../agents/registry.ts";
+import {
+  usesClaude,
+  usesProxiedClaudeCredentials,
+  usesProxiedCodexCredentials,
+} from "../../agents/credentials.ts";
+import {
+  agentBinaryFound,
+  configureAgent,
+  provisionAgent,
+} from "../../agents/registry.ts";
 import type {
-  AgentConfigResult,
+  AgentProvisionResult,
   DevcontainerAgentState,
   ProtectedClaudeState,
 } from "../../agents/types.ts";
-import type { Profile } from "../../config/types.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
 import {
@@ -122,12 +129,18 @@ export function createMountStage(
         const claudeCredentialsFile = proxiedClaudeCredentials
           ? yield* mountSetupService.prepareClaudeCredentials(shared.host.home)
           : undefined;
+        const codexAuthFile = usesProxiedCodexCredentials(shared.profile, {
+          devcontainer: devcontainer !== undefined,
+        })
+          ? yield* mountSetupService.prepareCodexCredentials(shared.host.home)
+          : undefined;
         const plan = planMount(
           stageInput,
           mountProbes,
           devcontainer,
           protectedState,
           claudeCredentialsFile,
+          codexAuthFile,
         );
         const workspace = resolveWorkspace(input);
         const container = mergeContainerPlan(
@@ -144,11 +157,6 @@ export function createMountStage(
       });
     },
   };
-}
-
-/** 起動するか extraAgents に含むかを問わず、コンテナに Claude を用意するか */
-function usesClaude(profile: Profile): boolean {
-  return profile.agent === "claude" || profile.extraAgents.includes("claude");
 }
 
 /**
@@ -173,6 +181,7 @@ export function planMount(
   devcontainer?: DevcontainerMountInput,
   protectedClaudeState?: ProtectedClaudeState,
   claudeCredentialsFile?: string,
+  codexAuthFile?: string,
 ): MountPlan {
   const { host, profile } = input;
   if (
@@ -495,12 +504,12 @@ export function planMount(
   // (prior stages + this stage + earlier agents) and returns them extended.
   let agentCommand: readonly string[] = resolvePriorAgentCommand(input);
 
-  const applyAgent = (
+  const applyAgent = <R extends AgentProvisionResult>(
     configure: (
       priorDockerArgs: readonly string[],
       priorEnvVars: Readonly<Record<string, string>>,
-    ) => AgentConfigResult,
-  ): AgentConfigResult => {
+    ) => R,
+  ): R => {
     const priorDockerArgs = [...args];
     const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
     const agentResult = configure(priorDockerArgs, priorEnvVars);
@@ -532,24 +541,34 @@ export function planMount(
       priorDockerArgs,
       priorEnvVars,
       claudeCredentialsFile,
+      codexAuthFile,
     }),
   ).agentCommand;
 
-  // extraAgents: バイナリと状態ディレクトリだけを用意し、起動コマンドは
-  // 捨てる。起動しないので ACP でも terminal として組み立てる。Dev Container
-  // は extraAgents を拒否するので、その状態パスはここでは渡さない。
+  // extraAgents: 起動はせず、バイナリと状態ディレクトリだけを用意する。
+  // Dev Container は extraAgents を拒否するので、その状態パスは渡さない。
+  // credential のダミーは起動するエージェントと同じく渡す。
   for (const extra of probes.extraAgentProbes) {
+    // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
+    // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
+    // なので、ここで言っておく。
+    if (!agentBinaryFound(extra.agent, extra.probes)) {
+      logWarn(
+        `[nas] extraAgents: "${extra.agent}" binary not found on the host; it will be unavailable in the container`,
+      );
+    }
     applyAgent((priorDockerArgs, priorEnvVars) =>
-      configureAgent({
+      provisionAgent({
         protectedClaudeState,
         agent: extra.agent,
-        mode: "terminal",
         containerHome,
         hostHome: host.home,
         probes: extra.probes,
         protectSettings: profile.agentState.protectSettings,
         priorDockerArgs,
         priorEnvVars,
+        claudeCredentialsFile,
+        codexAuthFile,
       }),
     );
   }

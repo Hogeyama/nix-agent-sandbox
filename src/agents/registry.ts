@@ -1,13 +1,23 @@
 import type { ClaudeProbes } from "./claude.ts";
-import { configureClaude, resolveClaudeProbes } from "./claude.ts";
+import {
+  configureClaude,
+  provisionClaude,
+  resolveClaudeProbes,
+} from "./claude.ts";
 import type { CodexProbes } from "./codex.ts";
-import { configureCodex, resolveCodexProbes } from "./codex.ts";
+import { configureCodex, provisionCodex, resolveCodexProbes } from "./codex.ts";
 import type { CopilotProbes } from "./copilot.ts";
-import { configureCopilot, resolveCopilotProbes } from "./copilot.ts";
+import {
+  configureCopilot,
+  provisionCopilot,
+  resolveCopilotProbes,
+} from "./copilot.ts";
 import type {
   AgentConfigInput,
   AgentConfigResult,
   AgentProbes,
+  AgentProvisionInput,
+  AgentProvisionResult,
   AgentType,
 } from "./types.ts";
 
@@ -27,11 +37,61 @@ export function resolveAgentProbes(
 }
 
 /** ホストでエージェントのバイナリが見つかったか */
-export function agentBinaryFound(probes: AgentProbes): boolean {
-  if ("claudeBinPath" in probes) return probes.claudeBinPath !== null;
-  if ("copilotBinPath" in probes) return probes.copilotBinPath !== null;
-  if ("codexBinPath" in probes) return probes.codexBinPath !== null;
-  return false;
+export function agentBinaryFound(
+  agent: AgentType,
+  probes: AgentProbes,
+): boolean {
+  switch (agent) {
+    case "claude":
+      return expectClaudeProbes(probes).claudeBinPath !== null;
+    case "copilot":
+      return expectCopilotProbes(probes).copilotBinPath !== null;
+    case "codex":
+      return expectCodexProbes(probes).codexBinPath !== null;
+  }
+  throw new Error(`Unknown agent: ${agent}`);
+}
+
+/**
+ * エージェントを起動せずにコンテナ内で使えるようにする (extraAgents 用)。
+ * 起動コマンドも、起動するときだけ要る環境変数も返さない。
+ */
+export function provisionAgent(
+  input: AgentProvisionInput,
+): AgentProvisionResult {
+  switch (input.agent) {
+    case "claude":
+      return provisionClaude({
+        protectedClaudeState: input.protectedClaudeState,
+        containerHome: input.containerHome,
+        hostHome: input.hostHome,
+        probes: expectClaudeProbes(input.probes),
+        protectSettings: input.protectSettings,
+        priorDockerArgs: input.priorDockerArgs,
+        priorEnvVars: input.priorEnvVars,
+        claudeCredentialsFile: input.claudeCredentialsFile,
+      });
+    case "copilot":
+      return provisionCopilot({
+        containerHome: input.containerHome,
+        hostHome: input.hostHome,
+        probes: expectCopilotProbes(input.probes),
+        protectSettings: input.protectSettings,
+        priorDockerArgs: input.priorDockerArgs,
+        priorEnvVars: input.priorEnvVars,
+      });
+    case "codex":
+      return provisionCodex({
+        containerHome: input.containerHome,
+        hostHome: input.hostHome,
+        probes: expectCodexProbes(input.probes),
+        protectSettings: input.protectSettings,
+        priorDockerArgs: input.priorDockerArgs,
+        priorEnvVars: input.priorEnvVars,
+        codexAuthFile: input.codexAuthFile,
+      });
+  }
+  throw new Error(`Unknown agent: ${input.agent}`);
 }
 
 export function configureAgent(input: AgentConfigInput): AgentConfigResult {
@@ -73,6 +133,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         protectSettings: input.protectSettings,
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
+        codexAuthFile: input.codexAuthFile,
       });
   }
   throw new Error(`Unknown agent: ${input.agent}`);

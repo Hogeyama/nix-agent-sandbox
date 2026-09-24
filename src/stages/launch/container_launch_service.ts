@@ -45,7 +45,14 @@ export const ContainerLaunchServiceLive: Layer.Layer<
     const docker = yield* DockerService;
 
     return ContainerLaunchService.of({
-      launch: (opts) => docker.runInteractive(opts).pipe(Effect.orDie),
+      launch: (opts) => {
+        const run = docker.runInteractive(opts).pipe(Effect.orDie);
+        // ACP の起動は中断されると docker run を止めて container を消す。
+        // 端末に attach した docker run は promise を捨てても止まらないので、
+        // 中断されても docker run が終わるまで待ってから Scope を閉じる。
+        // セッションを中断する側は、先に container を止める。
+        return opts.mode === "acp" ? run : Effect.uninterruptible(run);
+      },
     });
   }),
 );

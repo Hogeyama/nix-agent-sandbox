@@ -304,6 +304,46 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
+  "loadConfig: agentState.auth accepts a per-agent Mapping",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["a"] {
+    agent = "claude"
+    extraAgents { "codex" }
+    agentState { auth = new Mapping { ["codex"] = "shared" } }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      expect(config.profiles.a.agentState.auth).toEqual({ codex: "shared" });
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: agentState.auth rejects an unknown agent or value in the Mapping",
+  async () => {
+    for (const entry of ['["gemini"] = "shared"', '["codex"] = "keyring"']) {
+      const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["a"] {
+    agent = "claude"
+    agentState { auth = new Mapping { ${entry} } }
+  }
+}
+`;
+      await withNasConfig(configPkl, async (dir) => {
+        await expect(loadConfig({ startDir: dir })).rejects.toThrow();
+      });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: searches upward for .nas/config.pkl",
   async () => {
     await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
