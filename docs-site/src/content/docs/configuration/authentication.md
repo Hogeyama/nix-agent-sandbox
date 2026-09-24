@@ -1,6 +1,6 @@
 ---
 title: ホストの認証情報の利用
-description: 秘密値の注入、Claude 認証情報の保持、エージェント設定ファイルの保護、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
+description: 秘密値の注入、Claude・Codex の認証情報の保持、エージェント設定ファイルの保護、廃止した設定ディレクトリ共有の移行先、Codex キーリングの選択
 ---
 
 認証が必要な作業では、エージェント自身に値を読ませる必要があるかを先に決めます。値を渡さずに済む API 呼び出しやホストコマンドは、その実行時にだけ注入できます。
@@ -90,7 +90,7 @@ Bedrock（`CLAUDE_CODE_USE_BEDROCK`）、Vertex（`CLAUDE_CODE_USE_VERTEX`）、
 
 ### Codex
 
-`"proxy"` では、ホストの `~/.codex` を今までどおり共有したうえで、`~/.codex/auth.json` の位置にだけセッションごとのダミーファイルを被せます。ダミーには実際のトークンは入っていません。Codex が `chatgpt.com` の `/backend-api/` の下へ送る通信は nas のプロキシが中継し、`Authorization` と `chatgpt-account-id` をホストの値で上書きします。`chatgpt.com` の他の path への通信にはホストの値を付けません。トークンの更新はホストの nas が行い、コンテナ内では起きません。
+`"proxy"` では、ホストの `~/.codex` を今までどおり共有したうえで、`~/.codex/auth.json` の位置にだけセッションごとのダミーファイルを被せます。ダミーには実際のトークンは入っていません。Codex が `chatgpt.com` の `/backend-api/` の下へ送る通信は nas のプロキシが中継し、`Authorization` と `chatgpt-account-id` をホストの値で上書きします。`/backend-api/` の下には ChatGPT 本体の API（会話履歴や設定など）もあるので、コンテナから許可された通信はそれらにもホストのトークンで届きます。`chatgpt.com` の `/backend-api/` 以外の path への通信にはホストの値を付けません。トークンの更新はホストの nas が行い、コンテナ内では起きません。
 
 ログインはホストで `codex login` を実行してください。ホストの `~/.codex/auth.json` に ChatGPT のログイン情報が無い場合、セッションは起動しません。次の場合は `agentState.auth = "shared"` を指定してください。
 
@@ -99,7 +99,7 @@ Bedrock（`CLAUDE_CODE_USE_BEDROCK`）、Vertex（`CLAUDE_CODE_USE_VERTEX`）、
 
 #### `"proxy"` の制限
 
-- セッションの実行中にホストの `~/.codex/auth.json` が削除されるか別のファイルに置き換わると、nas はそのセッションのコンテナを停止します。ホストでの `codex logout` がこれにあたります。ファイルが別のファイルに置き換わった場合（rename）は、停止するまでの短い間、新しいファイルがコンテナから見えます。
+- セッションの実行中にホストの `~/.codex/auth.json` が削除されるか別のファイルに置き換わると、nas はそのセッションのコンテナを猶予なしで強制終了します。コンテナの起動前（DinD の起動中など）であれば、コンテナを起動せずにセッションを終えます。ホストでの `codex logout` がこれにあたります。ファイルが別のファイルに置き換わった場合（rename）は、強制終了するまでの短い間、新しいファイルがコンテナから見えます。
 - ホストの Codex と nas が同時にトークンを更新すると、片方が失敗することがあります。nas はホストの Codex が更新したファイルを読み直して回復します。ホストの Codex が失敗した場合は、ホストで再ログインが必要になることがあります。
 - コンテナ内で `codex login` を実行しても、書き込まれる先はそのセッション限りのダミーファイルで、セッションの終了とともに消えます。
 
@@ -187,9 +187,12 @@ hostexec = new HostExecConfig {
 
 次の設定は Secret Service の OpenSession、SearchItems、GetSecret を許可します。**取得対象を Codex の認証情報だけに限定するものではありません。** ホストユーザーに認められる範囲で、検索に一致した他の秘密も取得できます。
 
-codex プロファイルへ追加します。既存の DBus 設定があれば必要な項目を残し、呼び出しの許可を追加してください。
+codex プロファイルへ追加します。既存の DBus 設定があれば必要な項目を残し、呼び出しの許可を追加してください。`agentState.auth = "shared"` も必要です。既定の `"proxy"` のままでは、ホストに `~/.codex/auth.json` が無いため、セッションが起動しません。
 
 ```pkl
+agentState {
+  auth = "shared"
+}
 dbus {
   session {
     enable = true
@@ -210,6 +213,8 @@ dbus {
   }
 }
 ```
+
+Claude のプロファイルで `extraAgents { "codex" }` として Codex を使う場合は、`auth = "shared"` の代わりに `auth = new Mapping { ["codex"] = "shared" }` を指定すると、Claude の認証情報はホストに残したまま、Codex だけを共有できます（[エージェントの認証情報の保持](#エージェントの認証情報の保持)）。
 
 設定を確認して `nas config trust` を実行し、`nas codex` で起動します。保存済みの認証を使えることを確認してください。Claude 用の通信設定は Codex には適用されません。API 通信が未許可なら、UI の Audit で接続先を確認して[Codex 用プロファイルの通信許可](/nix-agent-sandbox/configuration/network/#別のエージェント用の設定)を追加します。
 

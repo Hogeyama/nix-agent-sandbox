@@ -171,6 +171,7 @@ broker は、Codex の解決結果が `"proxy"` のセッションで、次の r
 
 `chatgpt.com` の他の path（ChatGPT の画面や、consumer 向けの API）には注入せず、通常の policy のとおりに扱う。
 Codex が ChatGPT のアカウントで使う API は `/backend-api/` の下にあり、それ以外の path にホストの token を付ける理由がない。
+`/backend-api/` の下には ChatGPT 本体の API（会話履歴や設定など）もあり、許可された request にはそれらにもホストの token が付く。Codex が使う path だけには絞らない。
 path が分からない request（CONNECT など）にも注入しない。
 
 Claude と Codex の両方が `"proxy"` のセッション（`extraAgents` で両方を用意した場合）では、broker はそれぞれの credential source を持ち、宛先のホストで使い分ける。
