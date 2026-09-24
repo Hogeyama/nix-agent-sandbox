@@ -16,6 +16,7 @@ import {
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
+  NAS_PROXY_COMMAND_HASH_LABEL,
 } from "../../docker/nas_resources.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../../services/docker.ts";
 import {
   type EnsureProxyPlan,
+  PROXY_COMMAND_HASH,
   ProxyService,
   ProxyServiceLive,
   type SessionNetworkPlan,
@@ -209,7 +211,10 @@ test("ensureSharedProxy: skips when proxy is already running with matching addon
       name,
       id: "",
       running: true,
-      labels: { [NAS_ADDON_HASH_LABEL]: "abc123" },
+      labels: {
+        [NAS_ADDON_HASH_LABEL]: "abc123",
+        [NAS_PROXY_COMMAND_HASH_LABEL]: PROXY_COMMAND_HASH,
+      },
       networks: [],
       networkMode: "",
       startedAt: "",
@@ -276,6 +281,61 @@ test("ensureSharedProxy: recreates when proxy is running but addon hash differs"
   expect(calls.runDetached.length).toEqual(1);
   expect(calls.runDetached[0].labels?.[NAS_ADDON_HASH_LABEL]).toEqual(
     "new-hash",
+  );
+});
+
+test("ensureSharedProxy: recreates a proxy started by an older nas with other flags", async () => {
+  // An older nas started mitmdump with `--ssl-insecure` and labelled only the
+  // addon hash. Reusing that container would keep upstream certificates
+  // unverified even though the addon itself is unchanged.
+  const calls = freshCalls();
+  let launched = false;
+  const layer = makeDockerServiceFake({
+    isRunning: (name) => {
+      calls.isRunning.push(name);
+      return Effect.succeed(launched || calls.isRunning.length === 1);
+    },
+    inspect: (name) => {
+      calls.inspect.push(name);
+      return Effect.succeed({
+        name,
+        id: "",
+        running: true,
+        labels: { [NAS_ADDON_HASH_LABEL]: "abc123" },
+        networks: [],
+        networkMode: "",
+        startedAt: "",
+      });
+    },
+    stop: (name) => {
+      calls.stop.push(name);
+      return Effect.void;
+    },
+    containerExists: (name) => {
+      calls.containerExists.push(name);
+      return Effect.succeed(false);
+    },
+    rm: (name) => {
+      calls.rm.push(name);
+      return Effect.void;
+    },
+    runDetached: (opts) => {
+      calls.runDetached.push(opts);
+      launched = true;
+      return Effect.succeed(opts.name);
+    },
+  });
+
+  await runWithProxy(
+    (svc) => svc.ensureSharedProxy(proxyPlan({ addonHash: "abc123" })),
+    layer,
+  );
+
+  expect(calls.stop).toEqual(["nas-proxy-shared"]);
+  expect(calls.rm).toEqual(["nas-proxy-shared"]);
+  expect(calls.runDetached.length).toEqual(1);
+  expect(calls.runDetached[0].labels?.[NAS_PROXY_COMMAND_HASH_LABEL]).toEqual(
+    PROXY_COMMAND_HASH,
   );
 });
 
@@ -389,6 +449,7 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_PROXY,
     [NAS_ADDON_HASH_LABEL]: "abc123",
+    [NAS_PROXY_COMMAND_HASH_LABEL]: PROXY_COMMAND_HASH,
   });
   // The wrapper creates the cert store's gid in /etc/group before deferring to
   // the stock entrypoint, whose `usermod -g` fails when the host gid is absent
@@ -410,10 +471,14 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
     "websocket=true",
     "--set",
     "confdir=/nas-network/mitmproxy-ca",
-    "--ssl-insecure",
     "-s",
     "/nas-network/nas_addon.py",
   ]);
+  // The proxy terminates the agent's TLS, so its own upstream check is the
+  // only certificate check on the leg that carries injected credentials.
+  expect(
+    run.command?.some((arg) => /ssl[-_]insecure|ssl_verify_upstream/.test(arg)),
+  ).toBe(false);
 });
 
 test("ensureSharedProxy: fails with logs when readiness times out", async () => {

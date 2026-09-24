@@ -43,6 +43,8 @@ nas audit --session <session-id> --since 2026-09-01 --json
 
 判定が allow でも、通信先サービスのエラーやコマンド自体の失敗は解消しません。エージェントに返された HTTP ステータス、終了コード、エラーメッセージを確認します。
 
+HTTPS の要求に 502 と `Certificate verify failed` が返る場合は、プロキシが接続先の証明書を検証できていません。自己署名証明書のサービスや、TLS を復号する社内ネットワークでは接続できません。詳しくは[通信とホストへの経路](/nix-agent-sandbox/security/isolation/#通信とホストへの経路)を参照してください。
+
 Gradle・Maven などでプロキシが使われていない場合は、[ツール側のプロキシ設定](/nix-agent-sandbox/configuration/network/#ツール側のプロキシ設定)を確認します。ホスト実行のルールに一致しないコマンドは、[コンテナ実行へのフォールバック](/nix-agent-sandbox/configuration/host-commands/#ルール不一致の要求)になる場合があります。
 
 ## ポート転送の接続
