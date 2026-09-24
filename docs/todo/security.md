@@ -21,27 +21,35 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 | 優先 | 項目 | 種別 | 工数 | 根拠 |
 |---|---|---|---|---|
+| **P0** | H5 / H6（addon 側）の修正が develop から消えている | Sec | 小〜中 | 下記「H5/H6」。`drop-A-backup-204357` にしか残っていない。cherry-pick して戻す |
 | **P0** | §3-A ドキュメント/スキルのドリフト | Docs | 小 | 現行実装に合わせて更新する |
 | **P1** | H2 認証情報ディレクトリ常時 RW → host persistence | Sec | 中〜大 | Claude は認証・履歴以外を RO / session-private 化。`~/.claude.json` の MCP は managed settings で制限が必要 |
-| **P1** | コンテナ権限ハードニング（no-new-privileges/cap-drop） | Sec | 中 | `no-new-privileges` + `cap-drop ALL` を検証して追加する |
 | **P1** | `/nix` RW マウント | Sec | 小〜中 | コンテナ root 奪取で store 汚染 → 他セッション RCE |
-| **P1** | `.git/hooks`/`.git/config` RW 無保護 | Sec | 小 | RO bind mount で保護する |
-| **P1** | hostexec: M9 表示/実行バイナリ不一致 + fallback 死蔵 | Sec | 中 | argv0 の正規化統一と fallback 削除が必要 |
-| **P1** | hostexec: M8 argRegex 非アンカーで引数境界跨ぎ over-approve | Sec | 中 | 引数単位マッチへの変更が必要 |
 | **P1** | §3-B1 zod 削除 / §3-B3 CI 重複・抜け | Chore | 小 | 未使用依存の削除とCI修正が必要 |
-| **P2** | M10 secret パスガードが HOME 全域許可 denylist | Sec | 小 | trust ゲート後なので severity 低。defense-in-depth |
-| **P2** | M11 `unsafe-inherit-all` が NAS_*/proxy トークンまで露出 | Sec | 小 | opt-in だが除外リスト追加で緩和 |
-| **P2** | DinD sidecar `--privileged` / L1 ソケット無制限蓄積 OOM | Sec | 中 | |
-| **P2** | DinD dockerd の `0.0.0.0:2375` publish（多層防御） | Sec | 小 | publish を `127.0.0.1:2375:2375` に絞れば内側コンテナからの経路が塞がる |
+| **P2** | DinD sidecar `--privileged` | Sec | 中 | |
+| **P2** | workspace RO 保護の残る穴 | Sec | 小〜中 | 下記「`.git` / `.nas` の RO 保護」の残り |
 | **P2** | §3-B2 migrate.ts ~1900行 整理 | Refactor | 中 | Pkl-only 宣言済み |
+| **P3** | 承認画面で引数の境界と平文 request の inject 省略が見えない | UX/Sec | 小 | 下記「hostexec allowlist」「平文 HTTP」の残り |
 | **P3** | L3〜L8, §3-C/D/E2-4/F 各種リファクタ・堅牢化 | 各種 | — | 下記 |
 
 **削除済み（裏取りで修正確認）**: §2-1 addon-hash 再作成 / §2-2 pathPrefix 境界 / E1 error channel /
 §5 の pricing・codex OTEL・SSE 定数・frontend history pages・seedInvocation。詳細は各節の `[検証]` 参照。
 
-**検証済み完了（2026-07-21）**:
-- H6 IP 拒否リストの穴 — `51fa4414`, `73681f1f`, `be5fe26e`
-- H5 DNS リバインディング SSRF — `228f9464`, `18faee86`, `2363668a`, `fedebbad`
+**完了（2026-09-24、develop へ merge 済み）**:
+- コンテナ権限ハードニング — `security/container-hardening`
+- `.git/hooks` / `.git/config` / `.nas` の RO 保護 — `security/githooks-ro`
+- hostexec M8 / M9 / `fallback` 削除 — `security/hostexec-allowlist`
+- hostexec M10 / M11 — `security/hostexec-secrets-env`
+- DinD dockerd の loopback 化 — `security/dind-loopback`
+- L1 ソケットの行サイズ上限 — `security/socket-line-limit`
+- 平文 HTTP への inject 省略 — `security/inject-https-only`
+- 上流 TLS の証明書検証（`--ssl-insecure` 削除）— `security/verify-upstream-tls`
+
+**2026-07-21 に完了としたが develop に無いもの**:
+- H6 は TS 側（`c8b821da` harden denied IP predicate）だけが develop にある。addon 側の
+  `73681f1f`（enforce denied IPs in proxy addon）・`be5fe26e` は無い。
+- H5 DNS リバインディング SSRF の `228f9464`, `18faee86`, `2363668a`, `fedebbad` は無い。
+  develop の `nas_addon.py` には `server_connect` hook が無い。
 
 ---
 
@@ -58,11 +66,14 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 - **防御対象**:
   1. ✅ 悪意 repo 経由の **config load 時の host code exec** — workspace-trust ゲート＋
      pkl eval サンドボックスで対策（§4 CRITICAL-2）。
-  2. コンテナ内 agent → host への **escape / persistence**（H2・権限ハードニングが残）
+  2. コンテナ内 agent → host への **escape / persistence**（H2・`/nix` RW が残）
   3. ~~共有ホストの別ユーザ (TCP loopback)~~ → H3 受容
   4. ブラウザ経由の **CSRF / DNS rebinding** (Origin guard で対策済)
-  5. ✅ コンテナ内 agent → **network egress 封じ込めの突破** — IP literal と
-     DNS 解決後の denied range を多層で拒否し、許可 IP へピン留め（H5/H6）
+  5. ⚠️ コンテナ内 agent → **network egress 封じ込めの突破** — IP literal と
+     DNS 解決後の denied range を多層で拒否し、許可 IP へピン留めする設計（H5/H6）。
+     addon 側の実装が develop から消えているので戻す必要がある
+  6. 経路上の第三者による **注入した credential の盗聴** — inject は TLS の request だけ、
+     上流の証明書は検証する（2026-09-24）
 
 ## 対応状況サマリ
 
@@ -72,23 +83,28 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | CRITICAL-2 未信頼 repo-local config → ホストRCE | ✅ 解決 | trust gate + pkl eval サンドボックス |
 | HIGH-3 Web UI に帯域外トークン無し | 🟡 受容 | 「同一ホスト＝信頼境界」。CSRF/DNS rebinding は Origin/Host guard で防御済 |
 | HIGH DinD egress バイパス | ✅ 解決 | 実機で内側 egress 不通・pull は allowlist 下を確認 |
-| H5 DNS リバインディング SSRF | ✅ 解決 | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留め。SNI は論理ホスト名を維持 |
-| H6 IP リテラル拒否リストの穴 | ✅ 解決 | TS の構造的 IP パースと Python `ipaddress` を同一境界 corpus で parity 検証 |
+| H5 DNS リバインディング SSRF | ⚠️ develop に無い **P0** | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留めする実装が `drop-A-backup-204357` にしか無い |
+| H6 IP リテラル拒否リストの穴 | ⚠️ 一部のみ **P0** | TS 側（`c8b821da`）は develop にある。addon 側の拒否（`73681f1f`）は無い |
 | 危険設定削除 (gcloud/aws/gpg) | ✅ 解決 | 型・mount 分岐・probe・Pkl schema から削除。旧設定は移行先を名指しして load 失敗 |
 | H2 認証情報ディレクトリ RW | 🟡 部分解決 **P1** | Claude は設定類を RO、認証・履歴・projects を RW 共有。`~/.claude.json` の MCP 制限は managed settings が必要 |
-| コンテナ権限ハードニング | ⬜ 残 **P1** | `no-new-privileges` + `cap-drop ALL` の追加が必要 |
-| M9 argv0 表示/実行不一致 | ⬜ 残 **P1** | 承認表示と実行を同じ `capability.argv0` に統一する |
-| fallback 死蔵フィールド | ⬜ 残 **P1** | 型+Schema+テストから削除する |
-| M8 / M10〜M11 / L1〜L8 | ⬜ 残 | 下記（大半 CONFIRMED、L2 のみ STALE 訂正） |
+| コンテナ権限ハードニング | ✅ 解決 | `no-new-privileges` + `cap-drop ALL`、entrypoint 用に 6 つだけ戻す |
+| `.git` / `.nas` の RO 保護 | ✅ 解決（残りあり） | config・hooks・`core.hooksPath`・worktree ポインタを RO、途中のディレクトリはリネーム不可に |
+| M8 / M9 / fallback | ✅ 解決 | 下記「hostexec allowlist」 |
+| M10 / M11 | ✅ 解決 | 下記 |
+| 平文 HTTP への inject | ✅ 解決 | addon で `scheme == "https"` のときだけ inject |
+| 上流 TLS 未検証（`--ssl-insecure`） | ✅ 解決 | certifi とホスト名で検証。社内 TLS 傍受環境では 502 |
+| DinD `0.0.0.0:2375` / L1 | ✅ 解決 | 下記 |
+| L2〜L8 | ⬜ 残 | 下記（大半 CONFIRMED、L2 のみ STALE 訂正） |
 
 ## 修正済
 
 - hostexec 自己承認バイパス（exec/control 2ソケット分離）— CRITICAL-1
 - workspace-trust ゲート + pkl eval サンドボックス — CRITICAL-2
 - DinD egress バイパス封じ込め
-- H6 IP literal 拒否 — `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・unspecified/loopback/link-local を
-  TS/Python の両経路で拒否
-- H5 DNS リバインディング SSRF — DNS 応答の denied IP を除外し、最初の許可 IP へ接続先をピン留め
+- H6 IP literal 拒否の TS 側 — `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・unspecified/loopback/link-local
+  （addon 側は develop に無い。下記 H5/H6）
+- コンテナ権限ハードニング、`.git` / `.nas` の RO 保護、hostexec M8〜M11 と `fallback` 削除、
+  DinD loopback、L1、平文 HTTP への inject 省略、上流 TLS 検証（2026-09-24）
 - mount: extra-mounts.src を realpath で解決（symlink escape）
 - mount: extra-mounts.dst の containerWorkDir/Home 逸脱を拒否
 - hostexec: 絶対パス argv0 を安全 prefix 配下に制限
@@ -99,8 +115,16 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 ## P0 セキュリティ
 
-### H5/H6. network SSRF hardening — ✅ 2026-07-21 解決
+### H5/H6. network SSRF hardening — ⚠️ 2026-07-21 に解決したが develop から消えている
 
+- **2026-09-24 に判明**: 以下の addon 側の実装は develop・main・codex-credentials-proxy のどれにも無い。
+  develop の `nas_addon.py` には `server_connect` hook も denied IP の判定も無い。コミットは
+  `drop-A-backup-204357`（2026-07-31 の backup branch）にだけ残っていて、履歴の書き換えで
+  一緒に落ちたように見える。TS 側の `c8b821da`（harden denied IP predicate）は develop にある。
+  **対応**: `drop-A-backup-204357` から addon 側のコミットを cherry-pick し、develop の上で直す。
+  上流 TLS 検証を入れたので、ピン留め後も証明書は SNI のホスト名で検証されること
+  （mitmproxy 11.1.3 は `server.sni` で検証し、接続先の IP は見ない）を合わせて確認する。
+- 以下は 2026-07-21 時点の記録。
 - **H6**: TS は文字列 prefix ではなく IPv4/IPv6 を構造的にパースする。Python は `ipaddress` と明示 CIDR を使い、
   共有境界 corpus で `0.0.0.0/8`・CGNAT `100.64.0.0/10`・IPv4-mapped IPv6・`::`・`::1` などの
   parity を検証した。
@@ -135,46 +159,81 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
   - **`~/.claude.json` の `mcpServers`** — 実行中の更新用に RW 共有する。
     ホスト・コンテナの両方で managed settings に `allowManagedMcpServersOnly: true` と
     `allowedMcpServers: []` を配置すれば、このファイルからの MCP 起動を拒否できる。nas は自動設定しない。
-  - **workspace 内の `.claude/settings.json`・`.git/hooks`・`.github/hooks/`** — 下の
-    「`.git/hooks`/`.git/config` が RW で無保護」と同根。user scope と違い当該リポジトリ限定なので
+  - **workspace 内の `.claude/settings.json`・`.github/hooks/`** — `.git/hooks` は下の RO 保護で
+    塞いだ（2026-09-24）が、この 2 つは RW のまま。user scope と違い当該リポジトリ限定なので
     severity は低いが未対応。
 - **未検証**: コンテナ内 claude は起動時に一度 `~/.claude/settings.json` を書く（内容は同一）。
   RO 化で EROFS/EBUSY をどう扱うかは実測していない。VS Code 拡張ではエラーになったため既定を false にした。
 
 ### コンテナ権限ハードニング
-- [ ] `compileLaunchOpts`（`src/stages/launch/stage.ts`）に `--security-opt no-new-privileges` + `--cap-drop ALL` を追加する。
+- [x] agent コンテナ（`docker run`・ACP・Dev Container の Compose）に `--security-opt no-new-privileges` と
+  `--cap-drop ALL` を付けた。entrypoint が root で `/etc/passwd` 編集・`chown`・`setpriv` による降格を
+  するので、`CHOWN`・`DAC_OVERRIDE`・`FOWNER`・`SETUID`・`SETGID` を戻す。root の entrypoint が一般ユーザーで起動した
+  初期ポート relay に `kill -0` を送るので `KILL` も要る（無いと「Initial port forwarding failed」で起動しない）
+  （`src/stages/launch/hardening.ts`）。
+  - 未確認: VS Code Dev Containers が `docker exec` で root の処理をする場合に他の capability が要るか。
+  - ホストユーザが root だと agent も root のまま 6 つの capability だけで動く。
 - `--user` / userns remap は影響範囲が大きいため今回スコープ外。
 - [ ] **`/nix` が RW マウント** — [検証] CONFIRMED `src/stages/mount/stage.ts:209`（`:ro` 無し）。
   コンテナ root 奪取で `/nix/store` 汚染 → ホスト/他セッション RCE。
   **スキップ**: 無条件 RO 化は `nix develop` 等のキャッシュ書込みを壊す可能性あり。
   daemon 経由なら RO で動くはずだが edge case 未検証のため、`nix.readOnly` オプションとして別タスク化。
 - [x] ~~**認証情報ディレクトリが RW・ディレクトリ丸ごと**~~ — settings 系のみ RO overlay で部分対応。残りは H2 参照。
-- [ ] **`.git/hooks`/`.git/config` が RW で無保護** — [検証] CONFIRMED。workspace 全体が
-  `src/stages/mount/stage.ts:172` で RW バインド、RO 再マウントは `.nas/config.pkl`（`:185-189`）のみ。
-  host が後で `git commit` した時に hook がホストで実行。
+- [x] **`.git/hooks`/`.git/config` が RW で無保護** — 解決（2026-09-24）。共有 git ディレクトリの
+  `config`・`hooks`、`core.hooksPath` の先、`config.worktree`、linked worktree の `.git` ポインタを RO に
+  した。hooks が無ければホストに空で作る。`mv .git` で保護を外せないよう、workspace root から保護対象
+  までの途中のディレクトリ（`.nas` を含む）を自分自身に bind mount してリネーム不可にした
+  （`planRenamePins`）。コンテナ内では `git config`・`git remote add`・`git push -u` が失敗する。
+  **残る穴**:
+  - workspace のパスが symlink を通ると、git が返す解決済みパスと一致せず `core.hooksPath` や
+    worktree ポインタが保護から漏れることがある。
+  - サブディレクトリに新しく作った `.git`、非 repo の workspace での `git init`、submodule の
+    `.git/modules`、起動後に作られた `config.worktree` は対象外。
+  - nas worktree の中の `.nas/config.pkl` は RO にならない（worktree 作成前に探すため）。その worktree
+    から後で nas を起動すると、既存の trust ゲートが内容の変化を検知して再確認する。
 
-### hostexec allowlist の穴
-- **`rule.fallback`**: 死蔵フィールド。型・Schema・テストから削除する。
-- **M8**: `args.join(" ")`（`match.ts:25`）への非アンカー regex で引数境界跨ぎマッチ → over-approve。
-  **対応**: 引数単位マッチ or 境界明示。⬜ 残。
-- **M9**: 承認表示は raw `argv0` だが、実行は `path.basename(argv0)` を host PATH で再解決する。
-  **対応**: 承認表示と実行を `resolved.capability.argv0` に統一する。
+### hostexec allowlist の穴 — ✅ 解決（2026-09-24）
+- **`rule.fallback`**: 削除した。読むコードが無く、挙動は常に `"container"` だった。残した config は
+  load で止まる。
+- **M8**: `approval = "allow"` の argRegex ルールは、空の引数や空白を含む引数がある request を
+  自動許可せず承認に回す（prompt 無効なら拒否）。引数単位マッチや `^…$` の強制は既存 config の意味を
+  変えるので採らなかった。**残り**: 承認画面は引数を空白で連結して表示するので、承認する人にも
+  引数の境界が見えない（CLI の `--format json` は配列で出る）。
+- **M9**: bare name のルールは host PATH のコマンド名、絶対・相対パスのルールは要求どおりのパスを
+  `hostCommandArgv0` で決め、承認表示・承認キー・audit・実行のすべてに同じ値を使う。
 
 ## P2 セキュリティ
 
-### M10. secret ソースのパスガードが HOME 全域デフォルト許可の denylist
+### M10. secret ソースのパスガードが HOME 全域デフォルト許可の denylist — ✅ 解決（2026-09-24）
+- **対応**: strict な allowlist は workspace 相対の `.env` や `/opt`・`/srv` を壊すので採らず、HOME は
+  許可したまま既知の認証情報の置き場所（`~/.ssh`・`~/.gnupg`・`~/.aws`・`~/.kube`・gcloud・gh・
+  git credentials・Claude/Codex のログイン・nas の state/runtime など）を拒否する。symlink を
+  `realpath` で解決した後にも判定する。`cmd:` はパスを検査しないので、悪意ある config への境界ではない。
+- 以下は修正前の記録。
 - **[検証] CONFIRMED**: `src/hostexec/secret_store.ts:134-178`（`assertSafeSecretPath`）は denylist 方式で、
   `:148-151` が HOME/XDG_CONFIG_HOME 配下を早期 "safe" 判定 → `~/.ssh/id_rsa` が通る。deny は
   `SENSITIVE_PREFIXES`（/etc,/proc,…）・`/root`・`/var/lib` のみ。tilde 展開は
   `expandSecretPath`（`:256-265`）でガード前に適用されるが、ガード自体は denylist のまま。
 - config は trust ゲート通過済みなので severity 低。defense-in-depth として allowlist 方式へ。
 
-### M11. `inheritEnv.mode: "unsafe-inherit-all"` が nas 自身のシークレットまで露出
+### M11. `inheritEnv.mode: "unsafe-inherit-all"` が nas 自身のシークレットまで露出 — ✅ 解決（2026-09-24）
+- **対応**: `buildInheritedEnv` が `NAS_*` と、URL に認証情報を含む `*_proxy` を外す。`inheritEnv.keys` に
+  名前を書いた変数は渡す。
+- 以下は修正前の記録。
 - **[検証] CONFIRMED**: `src/hostexec/broker.ts:654-658`（`buildEnv`）が `Object.assign(envVars, process.env)`。
   `NAS_*`/proxy トークンを除外するフィルタ無し。opt-in かつ "unsafe" 命名で半ば受容だが、
   **対応**: `NAS_*` / proxy 資格情報だけは除外。
 
-### 平文 HTTP の request にも inject の header を付ける
+### 平文 HTTP の request にも inject の header を付ける — ✅ 解決（2026-09-24）
+- **実測**（mitmproxy 11.1.3）: CONNECT の中の平文 HTTP は上流にも平文で送られ、inject の header も
+  付いていた。`server_conn.tls` は forward proxy の `https://` で False になるので判定に使えない。
+- **対応**: addon は `flow.request.scheme == "https"` のときだけ inject する。`removeHeaders` は
+  判定の前に無条件で適用する。agent の credential も同じ `injectHeaders` の経路を通る。
+- **残り**: 承認カードには平文の request でも inject のプレビューが出る（実際には付かない）。
+- **関連して解決**: proxy が `--ssl-insecure` で上流の証明書を検証していなかった（Envoy からの置き換え
+  `d0ab8ad8` / `94153cdd` で理由なく入った）。certifi とホスト名で検証するようにした。社内の TLS 傍受
+  proxy や自己署名の上流には 502 で繋がらず、回避する設定は作らない。
+- 以下は修正前の記録。
 - **脅威**: broker は許可した request に inject の header を注入するが、request が TLS かどうかを見ない。
   agent（またはプロンプトインジェクションで操られた agent）が、許可先へ平文の HTTP で request を送ると、
   secret を含む header（GitHub の token、`agentState.auth = "proxy"` で注入するホストの Claude の
@@ -191,9 +250,15 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
 
 ### その他 P2
 - [ ] **DinD サイドカーが `--privileged`** — [検証] CONFIRMED `src/docker/dind.ts:484`。rootless なら通常不要。
-- [ ] **L1: broker/hostexec ソケットに schema 検証・サイズ上限が無い** — [検証] CONFIRMED
-  `src/lib/unix_socket.ts:34-49`（`readJsonLine` が `\n` まで無制限蓄積）→ ホスト側 OOM DoS。
-- [ ] **DinD sidecar の dockerd が namespace 内で `0.0.0.0:2375` に publish される** —
+- [x] **L1: broker/hostexec ソケットに schema 検証・サイズ上限が無い** — 解決（2026-09-24）。
+  コンテナから直接届く gateway・port-bind・network broker には元から上限があった。上限が無かった
+  hostexec control ソケット（64 KiB）と CLI/UI の応答の読み込み（64 MiB）に上限をつけ、`readJsonLine` の
+  上限を必須にした。不明な type の message は捨てる。
+- [x] ~~**DinD sidecar の dockerd が namespace 内で `0.0.0.0:2375` に publish される**~~ — 解決（2026-09-24）。
+  image の `dockerd-entrypoint.sh` が `0.0.0.0` を足していたので、`dockerd --host=tcp://127.0.0.1:2375` を
+  明示し、rootlesskit の publish も `127.0.0.1` に絞った。実測では bridge gateway と slirp4netns の
+  アドレスからも届いていたが、3 つとも拒否されるようになった。以下は修正前の記録。
+- **DinD sidecar の dockerd が namespace 内で `0.0.0.0:2375` に publish される** —
   [検証] CONFIRMED。`rootlesskit ... -p 0.0.0.0:2375:2375/tcp`（実測した起動引数）。
   DinD の内側で起動したコンテナが sidecar の session network アドレス経由で
   Docker API 全体に到達できる（内側の alpine から `/v1.44/containers/json` で
@@ -228,6 +293,9 @@ Pkl schema から削除した。`gpgAgentSocket` probe も唯一の利用者だ�
   `src/stages/worktree/git_worktree_service/cherry_pick.ts:345-350`。ただし `repoRoot/.nas/worktrees` 配下
   （world-writable `/tmp` ではない）で攻撃面は限定的。予測可能性自体は運用上必要なため修正対象外。
 - **hostexec で `make`/`npm run` 等を許可するとワークスペース内ファイル書換で任意実行**（docs 記載済み残留）。
+- **proxy コンテナに network broker の approve/deny ソケットが見える**（2026-09-24 受容）。proxy は network の
+  runtime ディレクトリを RW でマウントしていて、`brokers/<session>/sock` に approve/deny を送れる。
+  mitmproxy が乗っ取られた時点で egress の封じ込めは終わっているので、受容する。
 
 ## 2026-07-12 監査で確認して問題なしとした点（記録）
 
