@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SecretConfig } from "../config/types.ts";
@@ -88,13 +88,17 @@ export async function resolveSecret(
     return env[source.slice(4)] ?? null;
   }
   if (source.startsWith("file:")) {
-    const filePath = expandSecretPath(source.slice(5), env);
-    assertSafeSecretPath(filePath, env);
+    const filePath = await resolveSafeSecretPath(
+      expandSecretPath(source.slice(5), env),
+      env,
+    );
     return (await readFile(filePath, "utf8")).trimEnd();
   }
   if (source.startsWith("lines:")) {
-    const filePath = expandSecretPath(source.slice(6), env);
-    assertSafeSecretPath(filePath, env);
+    const filePath = await resolveSafeSecretPath(
+      expandSecretPath(source.slice(6), env),
+      env,
+    );
     const text = await readFile(filePath, "utf8");
     return text.split(/\r?\n/).filter((line) => line !== "");
   }
@@ -104,9 +108,11 @@ export async function resolveSecret(
     if (hashIndex <= 0 || hashIndex === target.length - 1) {
       throw new Error(`Invalid dotenv secret source: ${source}`);
     }
-    const filePath = expandSecretPath(target.slice(0, hashIndex), env);
     const key = target.slice(hashIndex + 1);
-    assertSafeSecretPath(filePath, env);
+    const filePath = await resolveSafeSecretPath(
+      expandSecretPath(target.slice(0, hashIndex), env),
+      env,
+    );
     const parsed = parseDotEnv(await readFile(filePath, "utf8"));
     return parsed[key] ?? null;
   }
@@ -164,12 +170,172 @@ const SENSITIVE_PREFIXES = [
   "/dev",
   "/boot",
   "/var/log",
+  // macOS: /etc and /var are symlinks into /private, so a realpath lands here.
+  "/private/etc",
+  "/private/var/log",
 ];
 
+/**
+ * Well-known credential stores, relative to HOME.
+ *
+ * HOME is where users keep the files they register as secrets, so it stays
+ * allowed. These are the exceptions: files whose whole content is a key or a
+ * login for some other system. Reading one as a "secret" hands it to a header
+ * injection or a host command's env, which is a way to send the SSH key or
+ * the cloud login wherever the config says. A value that genuinely lives in
+ * one of them can still be registered with `cmd:` (for example
+ * `cmd:aws configure get aws_secret_access_key`), which names the one value
+ * being extracted instead of the whole store.
+ */
+const CREDENTIAL_HOME_ENTRIES = [
+  ".ssh",
+  ".gnupg",
+  ".password-store",
+  ".aws",
+  ".azure",
+  ".kube",
+  ".docker/config.json",
+  ".netrc",
+  ".git-credentials",
+  ".pgpass",
+  ".local/share/keyrings",
+  ".claude/.credentials.json",
+  ".codex/auth.json",
+  // nas state: audit logs, history, session and UI state.
+  ".local/share/nas",
+  ".local/state/nas",
+];
+
+/** Credential stores relative to the XDG config directory. */
+const CREDENTIAL_CONFIG_ENTRIES = [
+  "gcloud",
+  "gh",
+  "git/credentials",
+  // nas's own trust decisions.
+  "nas/trusted.json",
+];
+
+interface SecretPathPolicy {
+  /** HOME and XDG_CONFIG_HOME: paths beneath them skip the system denylist. */
+  readonly allowedRoots: readonly string[];
+  /** HOME candidates, to decide whether /root is the user's own. */
+  readonly homes: readonly string[];
+  /** Credential stores and nas state, rejected even beneath HOME. */
+  readonly deniedEntries: readonly string[];
+}
+
+function buildSecretPathPolicy(
+  env: Record<string, string | undefined>,
+): SecretPathPolicy {
+  const home = env.HOME ?? os.homedir();
+  const homes = home ? [path.resolve(home)] : [];
+  const xdgConfig = absoluteEnv(env.XDG_CONFIG_HOME);
+  const configDirs = [
+    ...homes.map((h) => path.join(h, ".config")),
+    ...xdgConfig,
+  ];
+  const denied: string[] = [];
+  for (const h of homes) {
+    for (const entry of CREDENTIAL_HOME_ENTRIES) {
+      denied.push(path.join(h, entry));
+    }
+  }
+  for (const dir of configDirs) {
+    for (const entry of CREDENTIAL_CONFIG_ENTRIES) {
+      denied.push(path.join(dir, entry));
+    }
+  }
+  // nas state and runtime (broker dirs, secret frames, network tokens).
+  for (const name of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"]) {
+    for (const dir of absoluteEnv(env[name])) {
+      denied.push(path.join(dir, "nas"));
+    }
+  }
+  denied.push(path.join("/tmp", `nas-${currentUid()}`));
+  for (const dir of absoluteEnv(env.CODEX_HOME)) {
+    denied.push(path.join(dir, "auth.json"));
+  }
+  for (const dir of absoluteEnv(env.CLAUDE_CONFIG_DIR)) {
+    denied.push(path.join(dir, ".credentials.json"));
+  }
+  return {
+    allowedRoots: [...homes, ...xdgConfig],
+    homes,
+    deniedEntries: denied,
+  };
+}
+
+function absoluteEnv(value: string | undefined): string[] {
+  return value && path.isAbsolute(value) ? [path.resolve(value)] : [];
+}
+
+function currentUid(): string {
+  try {
+    return String(os.userInfo().uid);
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * The same policy with every root also given as its realpath, so a symlinked
+ * HOME (`/home` -> `/var/home`) or a symlinked `~/.ssh` (-> `~/dotfiles/ssh`)
+ * still matches a realpath'd target.
+ */
+async function withRealRoots(
+  policy: SecretPathPolicy,
+): Promise<SecretPathPolicy> {
+  const expand = async (roots: readonly string[]) => {
+    const reals = await Promise.all(
+      roots.map((root) => realpath(root).catch(() => root)),
+    );
+    return [...new Set([...roots, ...reals])];
+  };
+  const [allowedRoots, homes, deniedEntries] = await Promise.all([
+    expand(policy.allowedRoots),
+    expand(policy.homes),
+    expand(policy.deniedEntries),
+  ]);
+  return { allowedRoots, homes, deniedEntries };
+}
+
+/**
+ * Lexical check of a secret file path: rejects `..`, well-known credential
+ * stores and nas's own state (even beneath HOME), and system paths outside
+ * HOME / XDG_CONFIG_HOME.
+ *
+ * Symlinks are not followed here; `resolveSafeSecretPath` follows them and is
+ * what the resolver calls before reading.
+ */
 export function assertSafeSecretPath(
   rawPath: string,
   env: Record<string, string | undefined>,
 ): void {
+  checkSecretPath(
+    rawPath,
+    normalizeSecretPath(rawPath),
+    buildSecretPathPolicy(env),
+  );
+}
+
+/**
+ * Check a secret file path, follow it to its real location, check that too,
+ * and return the real path. The caller reads the returned path: checking one
+ * name and opening another would let a symlink aim the read anywhere.
+ */
+export async function resolveSafeSecretPath(
+  rawPath: string,
+  env: Record<string, string | undefined>,
+): Promise<string> {
+  const normalized = normalizeSecretPath(rawPath);
+  const policy = buildSecretPathPolicy(env);
+  checkSecretPath(rawPath, normalized, policy);
+  const real = await realpath(normalized);
+  checkSecretPath(rawPath, real, await withRealRoots(policy));
+  return real;
+}
+
+function normalizeSecretPath(rawPath: string): string {
   if (rawPath === "") {
     throw new Error("secret path must not be empty");
   }
@@ -180,10 +346,24 @@ export function assertSafeSecretPath(
   if (normalized.split("/").some((segment) => segment === "..")) {
     throw new Error(`secret path "${rawPath}" must not contain ".." segments`);
   }
-  const home = env.HOME ?? os.homedir();
-  const xdgConfig = env.XDG_CONFIG_HOME;
-  if (home && isWithin(normalized, home)) return;
-  if (xdgConfig && isWithin(normalized, xdgConfig)) return;
+  return normalized;
+}
+
+function checkSecretPath(
+  rawPath: string,
+  normalized: string,
+  policy: SecretPathPolicy,
+): void {
+  // macOS volumes are case-insensitive by default, so ~/.SSH is ~/.ssh.
+  const foldCase = process.platform === "darwin";
+  for (const entry of policy.deniedEntries) {
+    if (isWithin(normalized, entry, foldCase)) {
+      throw new Error(
+        `secret path "${rawPath}" is inside sensitive credential location ${entry}`,
+      );
+    }
+  }
+  if (policy.allowedRoots.some((root) => isWithin(normalized, root))) return;
 
   for (const prefix of SENSITIVE_PREFIXES) {
     if (isWithin(normalized, prefix)) {
@@ -193,7 +373,7 @@ export function assertSafeSecretPath(
     }
   }
   // /root is only rejected when it isn't the user's HOME.
-  if (isWithin(normalized, "/root") && home !== "/root") {
+  if (isWithin(normalized, "/root") && !policy.homes.includes("/root")) {
     throw new Error(
       `secret path "${rawPath}" is inside sensitive prefix /root`,
     );
@@ -212,8 +392,10 @@ export function assertSafeSecretPath(
   }
 }
 
-function isWithin(target: string, root: string): boolean {
-  const relative = path.relative(root, target);
+function isWithin(target: string, root: string, foldCase = false): boolean {
+  const relative = foldCase
+    ? path.relative(root.toLowerCase(), target.toLowerCase())
+    : path.relative(root, target);
   return (
     relative === "" ||
     (!relative.startsWith("..") && !path.isAbsolute(relative))

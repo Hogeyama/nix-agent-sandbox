@@ -37,6 +37,16 @@ secrets {
 
 lines は複数の値になるため、ヘッダー注入や単一値のホスト実行環境変数には使えません。cmd はホストで動くので、エージェントが変更できる文字列やスクリプトを指定しないでください。
 
+file・dotenv・lines のパスは、シンボリックリンクをたどった実体の位置でも確認します。`..` を含むパス、`/etc` などのシステム領域に加え、ホーム配下でも次の場所は拒否します。
+
+- `~/.ssh`、`~/.gnupg`、`~/.password-store`、`~/.local/share/keyrings`
+- `~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`
+- `~/.netrc`、`~/.git-credentials`、`~/.config/git/credentials`、`~/.config/gh`、`~/.pgpass`
+- `~/.claude/.credentials.json`、`~/.codex/auth.json`
+- nas 自身の状態（`~/.config/nas/trusted.json`、`~/.local/share/nas`、`~/.local/state/nas`、`$XDG_RUNTIME_DIR/nas`）
+
+これらのファイル全体は、別のシステムへの鍵やログイン情報です。この中の特定の値だけが必要なら、`cmd:aws configure get aws_secret_access_key` のように cmd で取り出す値を明示してください。
+
 登録だけではファイル表示や出力はマスクされません。値を読ませないための設定は[ファイルの非公開・マスク](/nix-agent-sandbox/configuration/files/)にあります。
 
 ## エージェントの認証情報の保持
