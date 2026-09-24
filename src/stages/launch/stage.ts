@@ -16,6 +16,7 @@ import {
   ContainerLaunchService,
   type LaunchOpts,
 } from "./container_launch_service.ts";
+import { agentPrivilegeRunArgs } from "./hardening.ts";
 import { finalizeLaunchPlan } from "./plan.ts";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,9 @@ export function compileLaunchOpts(
   // `docker logs` for agent containers (the user attaches via TTY/dtach),
   // so disable the log driver entirely.
   const args: string[] = ["--log-driver=none", "-w", plan.workDir];
+
+  // Before extraRunArgs so a caller's own --cap-add still takes effect.
+  args.push(...agentPrivilegeRunArgs());
 
   for (const mount of plan.mounts) {
     const suffix = mount.readOnly ? ":ro" : "";

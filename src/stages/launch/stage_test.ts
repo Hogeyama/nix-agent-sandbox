@@ -23,6 +23,25 @@ import {
 import { finalizeLaunchPlan } from "./plan.ts";
 import { compileLaunchOpts, createLaunchStage, planLaunch } from "./stage.ts";
 
+// Spelled out rather than imported from hardening.ts so a change to the
+// privilege set has to be made deliberately in both places.
+const PRIVILEGE_ARGS = [
+  "--security-opt",
+  "no-new-privileges",
+  "--cap-drop",
+  "ALL",
+  "--cap-add",
+  "CHOWN",
+  "--cap-add",
+  "DAC_OVERRIDE",
+  "--cap-add",
+  "FOWNER",
+  "--cap-add",
+  "SETUID",
+  "--cap-add",
+  "SETGID",
+];
+
 test("finalizeLaunchPlan: composes agent arguments and management labels", () => {
   const { input, container } = createTestInput({
     container: {
@@ -69,6 +88,7 @@ test("planLaunch: produces correct plan with composed command", () => {
     "--log-driver=none",
     "-w",
     "/workspace",
+    ...PRIVILEGE_ARGS,
     "-v",
     "/tmp:/workspace",
     "--network",
@@ -114,6 +134,7 @@ test("planLaunch: composes launch opts from container slice", () => {
     "--log-driver=none",
     "-w",
     "/slice-workdir",
+    ...PRIVILEGE_ARGS,
     "-v",
     "/repo:/workspace",
     "--network",
@@ -215,6 +236,7 @@ test("LaunchStage: run() calls ContainerLaunchService.launch", async () => {
     "--log-driver=none",
     "-w",
     "/workspace",
+    ...PRIVILEGE_ARGS,
     "-v",
     "/src:/work",
   ]);
@@ -250,7 +272,12 @@ test("compileLaunchOpts: baseline plan produces correct LaunchOpts", () => {
 
   expect(opts.image).toEqual("nas-sandbox:test");
   expect(opts.name).toEqual("nas-agent-sess1");
-  expect(opts.args).toEqual(["--log-driver=none", "-w", "/workspace"]);
+  expect(opts.args).toEqual([
+    "--log-driver=none",
+    "-w",
+    "/workspace",
+    ...PRIVILEGE_ARGS,
+  ]);
   expect(opts.envVars).toEqual({ TOKEN: "abc", MODE: "test" });
   expect(opts.command).toEqual(["claude", "serve", "--fast"]);
   expect(opts.labels).toEqual({ "nas.managed": "true" });
@@ -365,6 +392,27 @@ test("compileLaunchOpts: extraRunArgs appended after network args", () => {
   const shmIdx = opts.args.indexOf("--shm-size");
   expect(shmIdx).toBeGreaterThan(networkIdx);
   expect(opts.args).toContain("--privileged");
+});
+
+test("compileLaunchOpts: drops privileges in terminal and ACP mode alike", () => {
+  for (const mode of [undefined, "terminal", "acp"] as const) {
+    const opts = compileLaunchOpts(makeBasePlan(), "nas-agent-4", mode);
+    const start = opts.args.indexOf("--security-opt");
+    expect(opts.args.slice(start, start + PRIVILEGE_ARGS.length)).toEqual(
+      PRIVILEGE_ARGS,
+    );
+  }
+});
+
+test("compileLaunchOpts: extraRunArgs follow the privilege args so --cap-add can extend them", () => {
+  const plan = makeBasePlan({ extraRunArgs: ["--cap-add", "NET_RAW"] });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-5");
+
+  expect(opts.args.lastIndexOf("--cap-add")).toBeGreaterThan(
+    opts.args.indexOf("--cap-drop"),
+  );
+  expect(opts.args.slice(-2)).toEqual(["--cap-add", "NET_RAW"]);
 });
 
 test("compileLaunchOpts: structured shmSize preserves the Docker CLI encoding", () => {
