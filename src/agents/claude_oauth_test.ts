@@ -1,0 +1,187 @@
+import { expect, test } from "bun:test";
+import {
+  applyRefreshedTokens,
+  buildDummyClaudeCredentials,
+  CLAUDE_OAUTH_DUMMY_ACCESS_TOKEN,
+  CLAUDE_OAUTH_DUMMY_EXPIRES_AT,
+  CLAUDE_OAUTH_DUMMY_REFRESH_TOKEN,
+  ClaudeOAuthUnavailableError,
+  parseClaudeOAuthTokens,
+} from "./claude_oauth.ts";
+
+const HOST = JSON.stringify({
+  claudeAiOauth: {
+    accessToken: "real-access",
+    refreshToken: "real-refresh",
+    expiresAt: 1000,
+    refreshTokenExpiresAt: 2000,
+    scopes: ["user:inference", "user:profile"],
+    subscriptionType: "max",
+    rateLimitTier: "default_claude_max_20x",
+    unknownSecret: "must-not-be-copied",
+  },
+  organizationUuid: "org-1",
+  otherTopLevel: "must-not-be-copied",
+});
+
+test("parseClaudeOAuthTokens: reads the OAuth tokens", () => {
+  expect(parseClaudeOAuthTokens(HOST)).toEqual({
+    accessToken: "real-access",
+    refreshToken: "real-refresh",
+    expiresAt: 1000,
+    scopes: ["user:inference", "user:profile"],
+  });
+});
+
+test("parseClaudeOAuthTokens: keeps clientId when present", () => {
+  const text = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: "a",
+      refreshToken: "r",
+      expiresAt: 1,
+      scopes: [],
+      clientId: "client-x",
+    },
+  });
+  expect(parseClaudeOAuthTokens(text).clientId).toBe("client-x");
+});
+
+test("parseClaudeOAuthTokens: rejects files without OAuth tokens", () => {
+  for (const text of [
+    "{}",
+    "not json",
+    "[]",
+    "42",
+    "null",
+    JSON.stringify({ claudeAiOauth: { accessToken: "a" } }),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "a",
+        refreshToken: "r",
+        expiresAt: "soon",
+        scopes: [],
+      },
+    }),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "",
+        refreshToken: "r",
+        expiresAt: 1,
+        scopes: [],
+      },
+    }),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "a",
+        refreshToken: "",
+        expiresAt: 1,
+        scopes: [],
+      },
+    }),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "a",
+        refreshToken: "r",
+        expiresAt: 1,
+        scopes: "user:inference",
+      },
+    }),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "a",
+        refreshToken: "r",
+        expiresAt: 1,
+        scopes: ["ok", 1],
+      },
+    }),
+  ]) {
+    expect(() => parseClaudeOAuthTokens(text)).toThrow(
+      ClaudeOAuthUnavailableError,
+    );
+  }
+});
+
+test("buildDummyClaudeCredentials: replaces secrets and copies only known fields", () => {
+  const dummy = JSON.parse(buildDummyClaudeCredentials(HOST));
+  expect(dummy).toEqual({
+    claudeAiOauth: {
+      accessToken: CLAUDE_OAUTH_DUMMY_ACCESS_TOKEN,
+      refreshToken: CLAUDE_OAUTH_DUMMY_REFRESH_TOKEN,
+      expiresAt: CLAUDE_OAUTH_DUMMY_EXPIRES_AT,
+      refreshTokenExpiresAt: CLAUDE_OAUTH_DUMMY_EXPIRES_AT,
+      scopes: ["user:inference", "user:profile"],
+      subscriptionType: "max",
+      rateLimitTier: "default_claude_max_20x",
+    },
+    organizationUuid: "org-1",
+  });
+  expect(JSON.stringify(dummy)).not.toContain("real-");
+});
+
+test("buildDummyClaudeCredentials: omits optional fields when the host file lacks them", () => {
+  const minimalHost = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: "real-access",
+      refreshToken: "real-refresh",
+      expiresAt: 1000,
+      scopes: ["user:inference"],
+    },
+  });
+  const dummy = JSON.parse(buildDummyClaudeCredentials(minimalHost));
+  expect(dummy).toEqual({
+    claudeAiOauth: {
+      accessToken: CLAUDE_OAUTH_DUMMY_ACCESS_TOKEN,
+      refreshToken: CLAUDE_OAUTH_DUMMY_REFRESH_TOKEN,
+      expiresAt: CLAUDE_OAUTH_DUMMY_EXPIRES_AT,
+      scopes: ["user:inference"],
+    },
+  });
+});
+
+test("buildDummyClaudeCredentials: fails when the host file has no OAuth tokens", () => {
+  expect(() => buildDummyClaudeCredentials("{}")).toThrow(
+    ClaudeOAuthUnavailableError,
+  );
+});
+
+test("applyRefreshedTokens: replaces only the token fields", () => {
+  const next = JSON.parse(
+    applyRefreshedTokens(HOST, {
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+      expiresAt: 5000,
+      refreshTokenExpiresAt: 9000,
+    }),
+  );
+  expect(next.claudeAiOauth.accessToken).toBe("new-access");
+  expect(next.claudeAiOauth.refreshToken).toBe("new-refresh");
+  expect(next.claudeAiOauth.expiresAt).toBe(5000);
+  expect(next.claudeAiOauth.refreshTokenExpiresAt).toBe(9000);
+  expect(next.claudeAiOauth.unknownSecret).toBe("must-not-be-copied");
+  expect(next.otherTopLevel).toBe("must-not-be-copied");
+});
+
+test("applyRefreshedTokens: keeps refreshTokenExpiresAt when the response omits it", () => {
+  const next = JSON.parse(
+    applyRefreshedTokens(HOST, {
+      accessToken: "a",
+      refreshToken: "r",
+      expiresAt: 1,
+    }),
+  );
+  expect(next.claudeAiOauth.refreshTokenExpiresAt).toBe(2000);
+});
+
+test("applyRefreshedTokens: rejects a host file without OAuth tokens", () => {
+  const tokens = {
+    accessToken: "a",
+    refreshToken: "r",
+    expiresAt: 1,
+  };
+  expect(() => applyRefreshedTokens("not json", tokens)).toThrow(
+    ClaudeOAuthUnavailableError,
+  );
+  expect(() => applyRefreshedTokens("{}", tokens)).toThrow(
+    ClaudeOAuthUnavailableError,
+  );
+});
