@@ -351,7 +351,9 @@ def _contains_forbidden(flow, patterns: list[bytes]) -> bool:
 
 _registry_cache: dict[str, tuple[float, dict]] = {}
 _INVALID_AUTHZ_DOCUMENT = object()
-_authz_cache: dict[str, tuple[Optional[int], object]] = {}
+_authz_cache: dict[
+    str, tuple[Optional[tuple[int, int]], float, object]
+] = {}
 CACHE_TTL = 5.0
 
 
@@ -802,16 +804,21 @@ def _is_valid_authz_document(value: object) -> bool:
 def _load_authz_document(session_id: str) -> object:
     path = os.path.join(AUTHZ_DIR, f"{session_id}.json")
     try:
-        mtime = os.stat(path).st_mtime_ns
+        st = os.stat(path)
+        key: Optional[tuple[int, int]] = (st.st_mtime_ns, st.st_size)
     except OSError:
-        mtime = None
+        key = None
 
+    # mtime の粒度が粗い FS では、同じ tick 内の書き直しが同じ st_mtime_ns を
+    # 返す。size で拾えない同じ長さの書き直しも、TTL で _load_registry と同じく
+    # CACHE_TTL 秒以内に読み直す。
+    now = time.monotonic()
     cached = _authz_cache.get(session_id)
-    if cached and cached[0] == mtime:
-        return cached[1]
+    if cached and cached[0] == key and now - cached[1] < CACHE_TTL:
+        return cached[2]
 
     state: object = _INVALID_AUTHZ_DOCUMENT
-    if mtime is not None:
+    if key is not None:
         try:
             with open(path) as f:
                 document = json.load(f)
@@ -819,7 +826,7 @@ def _load_authz_document(session_id: str) -> object:
                 state = document
         except Exception:
             pass
-    _authz_cache[session_id] = (mtime, state)
+    _authz_cache[session_id] = (key, now, state)
     return state
 
 

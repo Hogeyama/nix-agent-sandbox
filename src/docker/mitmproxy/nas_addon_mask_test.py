@@ -1501,6 +1501,51 @@ class AuthzDocumentContractTest(unittest.TestCase):
         with patch("builtins.open", side_effect=AssertionError("re-read")):
             self.assertIs(self._load(), invalid)
 
+    # 以下 2 本は、連続した書き込みに同じ st_mtime_ns を返す FS を os.utime で
+    # 再現する。キャッシュが mtime だけを見ていると、どちらも古い文書を返す。
+    def _without_websocket(self):
+        document = copy.deepcopy(self.fixture)
+        self._scope(document).pop("webSocket", None)
+        return document
+
+    def _with_websocket(self, policy):
+        document = copy.deepcopy(self.fixture)
+        self._scope(document)["webSocket"] = policy
+        return document
+
+    def test_rewrite_with_same_mtime_but_new_size_is_reread(self):
+        path = self._write(self._without_websocket())
+        mtime = path.stat().st_mtime_ns
+        self.assertNotIn("webSocket", self._scope(self._load()))
+
+        self._write(self._with_websocket("allow"))
+        os.utime(path, ns=(mtime, mtime))
+
+        self.assertEqual(self._scope(self._load())["webSocket"], "allow")
+
+    def test_rewrite_with_same_mtime_and_size_is_reread_after_ttl(self):
+        # "deny" を "allow" と同じ長さに空白で揃え、キーの (mtime, size) を
+        # 一致させる。区別できるのは経過時間だけになる。
+        allow = json.dumps(self._with_websocket("allow"))
+        deny = json.dumps(self._with_websocket("deny"))
+        deny += " " * (len(allow) - len(deny))
+        path = self._path()
+        path.write_text(allow)
+        mtime = path.stat().st_mtime_ns
+
+        with patch.object(nas_addon.time, "monotonic", return_value=1000.0):
+            self.assertEqual(self._scope(self._load())["webSocket"], "allow")
+
+        path.write_text(deny)
+        os.utime(path, ns=(mtime, mtime))
+
+        within = 1000.0 + nas_addon.CACHE_TTL / 2
+        with patch.object(nas_addon.time, "monotonic", return_value=within):
+            self.assertEqual(self._scope(self._load())["webSocket"], "allow")
+        after = 1000.0 + nas_addon.CACHE_TTL
+        with patch.object(nas_addon.time, "monotonic", return_value=after):
+            self.assertEqual(self._scope(self._load())["webSocket"], "deny")
+
 
 class ClassifyBodyTest(unittest.TestCase):
     """A body that is not there and a body that is there and empty are two
