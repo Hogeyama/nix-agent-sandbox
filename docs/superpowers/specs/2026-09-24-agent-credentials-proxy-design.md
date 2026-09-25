@@ -63,6 +63,10 @@ network proxy は常に有効なので、proxy の有無は検証しない。
 - `claudeAiOauth.accessToken` と `claudeAiOauth.refreshToken` には、固定の接頭辞を持つ sentinel 文字列を入れる。
 - `claudeAiOauth.expiresAt` と `claudeAiOauth.refreshTokenExpiresAt` は十分遠い未来にする。Claude Code が自分で更新を始めないようにするためである。
 - `scopes`、`subscriptionType`、`rateLimitTier`、`organizationUuid` はホストのファイルからコピーする。Claude Code が subscription でログインした状態として動作するために必要である。
+- MCP サーバーの OAuth token（`mcpOAuth`）と、その refresh に使う client の登録情報（`mcpOAuthClientConfig`）もホストのファイルからコピーする。Claude Code はこれらを同じファイルに置くので、コピーしないと OAuth で認証する MCP サーバーが container で使えなくなる。
+  - コピーするのはセッション開始時の値だけで、container での変更はホストへ書き戻さない。書き戻すと、container が MCP の token を攻撃者のものに差し替え、ホストの Claude がそのアカウントへデータを送る経路になる。
+  - 代わりに、container 内での MCP の認証はセッション終了とともに消え、container 内で refresh すると、refresh token を使い捨てにする MCP サーバーではホスト側の token が失効しうる。
+  - 企業 IdP の token（`mcpXaaIdp`）はコピーしない。MCP 以外にも使える credential だからである。
 - それ以外の項目はコピーしない。未知の項目が秘密を含む可能性があるためである。
 
 container の `~/.claude` は、`protectSettings` の有無にかかわらず、セッション専用のディレクトリにする。これは `protectSettings` で既に使っている構成である。

@@ -78,6 +78,12 @@ Mapping で Copilot に `"proxy"` を指定すると、起動前の検証でエ�
 
 ログインはホストで行ってください。コンテナ内で `/login` を実行しても、書き込まれる先はそのセッション限りのダミーファイルで、セッションの終了とともに消えます。ホストが未ログインの場合、セッションは起動せず、ホストで `claude /login` を実行するか `agentState.auth = "shared"` に切り替えるよう案内するメッセージが出ます。
 
+OAuth で認証する MCP サーバーの token は、セッション開始時にホストのファイルからダミーファイルへ写します。コンテナ内の Claude はそれを使って MCP サーバーに接続できますが、コンテナ内での変更はホストへ書き戻しません。
+
+- コンテナ内で新しく MCP サーバーの認証をしても、セッションの終了とともに消えます。MCP サーバーの認証もホストで行ってください。
+- コンテナ内の Claude が MCP の token を更新すると、refresh token を使い捨てにする MCP サーバーでは、ホスト側の token が使えなくなることがあります。その場合はホストで認証し直してください。
+- 企業の IdP を介した MCP の認証（cross-app access）の token は写しません。MCP 以外にも使える credential だからです。これを使う場合は `agentState.auth = "shared"` を指定してください。
+
 API key で Claude を使うプロファイルには `agentState.auth = "shared"` を指定してください。`"proxy"` のまま `env` に `ANTHROPIC_API_KEY` や `ANTHROPIC_AUTH_TOKEN` を設定すると、起動前の検証でエラーになります。
 
 #### `"proxy"` の制限
