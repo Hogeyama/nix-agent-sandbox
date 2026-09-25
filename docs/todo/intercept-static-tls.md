@@ -1,9 +1,24 @@
 # TODO: preload interceptor の static TLS 256KiB を削る
 
-優先度: **P1**（コンテナ内の全プロセスに影響する。小さいスタックでスレッドを作る
-プログラムが軒並み起動できなくなり、JVM 系のツールチェーンはほぼ全滅する）
+優先度: **Zig 0.16 へ再移行するときの必須作業**（再発すればコンテナ内の全プロセスに
+影響する。小さいスタックでスレッドを作るプログラムが軒並み起動できなくなり、JVM 系の
+ツールチェーンはほぼ全滅する）
 
-状態: 未着手。`59b9898e build: support Zig 0.16 for native helpers` で混入した。
+状態: **症状は解消済み、原因は未対処**。
+
+- `59b9898e build: support Zig 0.16 for native helpers` で混入し、
+  `88dbf80e Revert "build: support Zig 0.16 for native helpers"` で 0.15 に戻したため
+  症状は消えた。`flake.nix` は `pkgs.zig_0_15` を使い、現行の
+  `/opt/nas/hostexec/lib/hostexec_intercept.so` の PT_TLS memsz は `0x00001d` である。
+- Zig 0.16 を再導入すると再発する。再導入するときは次の 2 つを同じ変更に含める。
+  1. `src/hostexec/intercept/build.zig` で `lib_mod` だけ下記「対処の候補」の設定を変える
+     （client / gateway は ReleaseSafe のまま）。どの候補を採るかはその時点で判断する。
+     `-fsingle-threaded` は `debug_flag_cache` の検討が要るので、先回りして入れていない。
+  2. 出荷する `.so` の PT_TLS memsz が小さい（例: 4KiB 以下）ことを `readelf -lW` で
+     検査するチェックを flake のビルドかテストに足し、次の toolchain 更新で再び気付かずに
+     混入しないようにする。
+
+以下は 2026-09 に 0.16 で発生していたときの分析である。
 
 ---
 
