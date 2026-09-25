@@ -367,11 +367,6 @@
           pklBinaryPin = pklSourceBySystem.${system};
           nasAssetsBase = nasAssetsBundleBase;
         };
-        nasAssets = pkgs.runCommand "nas-assets" { } ''
-          mkdir -p $out
-          cp -r ${nasAssetsBase}/. $out/
-          cp -r ${releaseInputs}/licenses $out/licenses
-        '';
         nasAssetsBundle = pkgs.runCommand "nas-assets-bundle" { } ''
           mkdir -p $out
           cp -r ${nasAssetsBundleBase}/. $out/
@@ -382,7 +377,7 @@
           mkdir -p $out/bin $out/share/nas
 
           cp ${nasUnwrapped}/bin/nas $out/share/nas/nas
-          cp -r ${nasAssets} $out/share/nas/assets
+          cp -r ${nasAssetsBase} $out/share/nas/assets
 
           cat > $out/bin/nas <<'EOF'
           #!/bin/sh
