@@ -339,6 +339,7 @@ local commonNetwork: NetworkConfig = new {
         "esm.sh"
       }
       fallback = "allow"
+      webSocket = "allow"
     }
   }
 }
@@ -396,7 +397,7 @@ local commonHostexec: HostExecConfig = new {
 local commonMask = new MaskConfig {
   maskfs = false
   proxy = false
-  filter = false
+  filter = true
 }
 
 // common_infra + common_network + common_env + common_hostexec を含むベースプロファイル
@@ -429,7 +430,6 @@ local baseProfile: Profile = new {
     new { src = "~/.cache/.bun"; dst = "~/.cache/.bun"; mode = "ro" }
     // OTELのデバッグに
     new { src = "~/.local/share/nas"; dst = "~/.local/share/nas"; mode = "rw" }
-    new { src = "/tmp"; dst = "/tmp"; mode = "rw" }
   }
   network = unmaskedNetwork
   env = commonEnv
@@ -451,7 +451,7 @@ local anthropicPolicyProfile: Profile = (baseProfile) {
   mask = new MaskConfig {
     maskfs = false
     proxy = true
-    filter = false
+    filter = true
     apply = new Listing { "workspace-demo" }
   }
 }
@@ -473,10 +473,9 @@ observability {
 }
 
 profiles {
-  ["claude"] = (anthropicPolicyProfile) {
+  ["claude"] = (baseProfile) {
     agentArgs = new Listing { "--dangerously-skip-permissions" }
-    extraAgents = new Listing { "codex"; "copilot" }
-    env = (anthropicPolicyProfile.env) {
+    env = (baseProfile.env) {
       new {
         // https://kawasin73.hatenablog.com/entry/2026/09/05/092056
         key = "CLAUDE_CODE_THRIFTY_SONIC"
@@ -485,11 +484,11 @@ profiles {
     }
   }
 
-  ["claude-remote"] = (anthropicPolicyProfile) {
+  ["claude-remote"] = (baseProfile) {
     agentArgs = new Listing { "remote" }
   }
 
-  ["claude-acp"] = (anthropicPolicyProfile) {
+  ["claude-acp"] = (baseProfile) {
     mode = "acp"
     agentArgs = new Listing { }
     guide { enable = false }
@@ -610,5 +609,5 @@ profiles {
   // preset のターゲットが特異なので、そちらが選ばれる)。
   // /v1/messages と count_tokens のボディは JSON として解析され、未知の
   // content block 型・未知構造は fail-closed で 403。
-  ["anthropic-policy-demo"] = (anthropicPolicyProfile) {}
+  ["anthropic-policy-demo"] = (baseProfile) {}
 }
