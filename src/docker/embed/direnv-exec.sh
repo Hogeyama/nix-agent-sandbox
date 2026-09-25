@@ -12,8 +12,20 @@ path_prefix=$3
 shift 3
 real_bash=${NAS_REAL_BASH:?NAS_REAL_BASH must be set}
 
+# In the image /bin/bash is the mask wrapper, so direnv loads the environment under
+# nas-mask-filter's supervisor and records the NAS_MASK_SUPERVISED marker it
+# gives its child as part of that environment. Applied to the payload, the
+# marker makes every later bash skip the filter although no supervisor is left
+# running. Keep the value this launcher was started with instead.
+outer_supervised=${NAS_MASK_SUPERVISED-}
+
 finish='set -euo pipefail
-execution_mode=$1; ops_file=$2; path_prefix=$3; shift 3
+execution_mode=$1; ops_file=$2; path_prefix=$3; outer_supervised=$4; shift 4
+if [ -n "$outer_supervised" ]; then
+  export NAS_MASK_SUPERVISED=$outer_supervised
+else
+  unset NAS_MASK_SUPERVISED
+fi
 if [ -n "$ops_file" ]; then source "$ops_file"; fi
 export PATH="${path_prefix}${PATH}"
 if [ "$execution_mode" = acp ]; then
@@ -38,7 +50,8 @@ nas_snapshot_env() {
     # Bash re-derives its own, but anything reading $PWD from the environment
     # believes what it is given.
     case "$nas_key" in
-      "" | [0-9]* | *[!A-Za-z0-9_]* | PWD | OLDPWD) continue ;;
+      # NAS_MASK_SUPERVISED: see outer_supervised above.
+      "" | [0-9]* | *[!A-Za-z0-9_]* | PWD | OLDPWD | NAS_MASK_SUPERVISED) continue ;;
     esac
     if [ -z "${nas_values[$nas_key]+x}" ]; then nas_order+=("$nas_key"); fi
     nas_values["$nas_key"]=${nas_entry#*=}
@@ -81,7 +94,8 @@ nas_export_environment() {
 
 if [ "${NAS_DIRENV_ENABLED:-false}" != true ]; then
   if [ "$nas_export_mode" = true ]; then nas_export_environment; exit; fi
-  exec "$real_bash" -c "$finish" nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" "$@"
+  exec "$real_bash" -c "$finish" nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" \
+    "$outer_supervised" "$@"
 fi
 
 # direnv state inherited from the host describes a different environment and
@@ -123,4 +137,5 @@ fi
 if [ "$nas_export_mode" = true ]; then nas_export_environment; exit; fi
 
 exec /usr/bin/direnv exec "$workspace" "$real_bash" -c "$finish" \
-  nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" "$@"
+  nas-direnv "${NAS_EXECUTION_MODE:-terminal}" "$ops_file" "$path_prefix" \
+  "$outer_supervised" "$@"

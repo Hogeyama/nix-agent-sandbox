@@ -126,12 +126,13 @@ function launch(
     opsFile?: string;
     pathPrefix?: string;
     env?: Record<string, string>;
+    bash?: string;
   } = {},
 ) {
   const workspace = options.workspace ?? fixture.workspace;
   return runProcess(
     [
-      "bash",
+      options.bash ?? "bash",
       fixture.launcher,
       workspace,
       options.opsFile ?? fixture.opsFile,
@@ -298,6 +299,53 @@ export NAS_DIRENV_TEST_VALUE=loaded
         "before-loaded-after",
         "/wrapper/bin:/direnv-only",
       ]);
+    });
+  },
+);
+
+// In the image /bin/bash is the mask wrapper, so direnv loads the environment under
+// nas-mask-filter's supervisor and snapshots the marker it exports to its child.
+// Carried into the payload, the marker makes every later bash skip the filter
+// while no supervisor is left running.
+test.skipIf(!integrationAvailable)(
+  "does not carry the mask supervisor marker from direnv exec into the payload",
+  async () => {
+    await withFixture(async (fixture) => {
+      await writeFile(
+        path.join(fixture.workspace, ".envrc"),
+        "export NAS_DIRENV_TEST_VALUE=loaded\n",
+      );
+      await approve(fixture);
+      const supervisedBash = path.join(fixture.root, "supervised-bash");
+      await writeFile(
+        supervisedBash,
+        `#!/bin/bash\nNAS_MASK_SUPERVISED=1 exec /bin/bash "$@"\n`,
+        { mode: 0o755 },
+      );
+      // The launcher keeps a marker it was started with, so start it unmarked
+      // and, inside a filtering nas sandbox, bypass the mask wrapper whose
+      // supervisor would mark it. The payload is not bash for the same reason.
+      fixture.env.NAS_MASK_SUPERVISED = undefined;
+      const override = process.env.NAS_BASH_OVERRIDE;
+      const wrapperBypass = override && path.join(override, "bash.real");
+      const bash =
+        wrapperBypass && (await Bun.file(wrapperBypass).exists())
+          ? wrapperBypass
+          : "bash";
+      const env = { DIRENV_BASH: supervisedBash };
+
+      const launched = await launch(fixture, ["/usr/bin/env"], { env, bash });
+      expect(launched.exitCode).toBe(0);
+      const payloadEnv = launched.stdout.split("\n");
+      expect(payloadEnv).toContain("NAS_DIRENV_TEST_VALUE=loaded");
+      expect(
+        payloadEnv.filter((line) => line.startsWith("NAS_MASK_SUPERVISED=")),
+      ).toEqual([]);
+
+      const exported = await launch(fixture, ["--export"], { env, bash });
+      expect(exported.exitCode).toBe(0);
+      expect(exported.stdout).toContain("NAS_DIRENV_TEST_VALUE=loaded");
+      expect(exported.stdout).not.toContain("NAS_MASK_SUPERVISED");
     });
   },
 );
