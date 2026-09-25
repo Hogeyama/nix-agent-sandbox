@@ -28,7 +28,6 @@ import {
   hostExecExecSocketDir,
   hostExecExecSocketPath,
   hostExecInternalSocketPath,
-  hostExecSessionBrokerDir,
 } from "../../hostexec/registry.ts";
 import {
   HOSTEXEC_SCRIPT_COMMAND,
@@ -258,10 +257,6 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   const workspace = resolveWorkspace(input);
 
   const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
-  const sessionBrokerDirPath = hostExecSessionBrokerDir(
-    runtimePaths,
-    input.sessionId,
-  );
   // Two-socket split: the control socket (host CLI/UI only, approve/deny/
   // list_pending) stays in the session broker dir and is never mounted into
   // the container. The exec socket (execute/fallback only) lives in the
@@ -288,13 +283,13 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
       }
     : undefined;
 
+  // The session broker dir is absent: HostExecBrokerService creates it after
+  // reserving the session registry, so runtime GC never sees it unregistered.
   const directories: HostExecPlan["directories"] = [
     { path: runtimePaths.runtimeDir, mode: 0o755 },
     { path: runtimePaths.sessionsDir, mode: 0o700 },
     { path: runtimePaths.pendingDir, mode: 0o700 },
     { path: runtimePaths.brokersDir, mode: 0o700 },
-    { path: sessionBrokerDirPath, mode: 0o700 },
-    { path: execSocketDir, mode: 0o700 },
     { path: runtimePaths.wrappersDir, mode: 0o700 },
     { path: wrapperBinDir, mode: 0o755 },
     { path: sessionTmpDir, mode: 0o700 },

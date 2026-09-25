@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Effect, Exit, Layer } from "effect";
 import { containerNameForSession } from "../../docker/nas_resources.ts";
+import { pathExists } from "../../lib/fs_utils.ts";
 import type { AgentCredential } from "../../network/agent_credential.ts";
 import { documentWithScopes } from "../../network/authz/testing.ts";
 import {
+  gcNetworkRuntime,
   type NetworkRuntimePaths,
   readSessionRegistry,
   resolveNetworkRuntimePaths,
@@ -116,6 +118,50 @@ test("startSessionBroker: closes the credential source when broker start throws"
     startSessionBroker(makeConfig("sess_start"), deps),
   ).rejects.toThrow("start failed");
   expect(source.closed).toBe(2);
+});
+
+test("startSessionBroker: runtime GC during broker start keeps the session", async () => {
+  const sessionId = "sess_gc_race";
+  const config = makeConfig(sessionId);
+  const deps = makeDeps(
+    makeSource(),
+    (): SessionBrokerLifecycle => ({
+      start: async (socketPath) => {
+        await mkdir(path.dirname(socketPath), { recursive: true });
+        await gcNetworkRuntime(paths);
+        expect(await pathExists(path.dirname(socketPath))).toBe(true);
+        await writeFile(socketPath, "");
+      },
+      close: async () => {},
+    }),
+  );
+
+  await startSessionBroker(config, deps);
+
+  const entry = await readSessionRegistry(paths, sessionId);
+  expect(entry).not.toBeNull();
+  expect(entry?.starting).toBeUndefined();
+});
+
+test("startSessionBroker: removes the reserved registry when broker start throws", async () => {
+  const sessionId = "sess_start_registry";
+  const deps = makeDeps(
+    makeSource(),
+    (): SessionBrokerLifecycle => ({
+      start: async () => {
+        expect((await readSessionRegistry(paths, sessionId))?.starting).toBe(
+          true,
+        );
+        throw new Error("start failed");
+      },
+      close: async () => {},
+    }),
+  );
+
+  await expect(startSessionBroker(makeConfig(sessionId), deps)).rejects.toThrow(
+    "start failed",
+  );
+  expect(await readSessionRegistry(paths, sessionId)).toBeNull();
 });
 
 test("startSessionBroker: handle.close closes the source and cleans up even when broker close throws", async () => {

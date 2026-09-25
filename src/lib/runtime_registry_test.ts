@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { pathExists } from "./fs_utils.ts";
 import {
   type BaseRuntimePaths,
   brokerSocketPath,
@@ -93,6 +94,50 @@ for (const registered of [false, true]) {
     },
   );
 }
+
+test("gc keeps a starting session of a live process before its broker listens", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-registry-gc-"));
+  const runtimePaths: BaseRuntimePaths = {
+    runtimeDir: root,
+    sessionsDir: path.join(root, "sessions"),
+    pendingDir: path.join(root, "pending"),
+    brokersDir: path.join(root, "brokers"),
+  };
+  try {
+    await mkdir(execSocketDir(runtimePaths, "starting"), { recursive: true });
+    await writeSessionRegistry(runtimePaths, {
+      sessionId: "starting",
+      pid: process.pid,
+      brokerSocket: brokerSocketPath(runtimePaths, "starting"),
+      starting: true,
+    });
+    await mkdir(sessionBrokerDir(runtimePaths, "dead"), { recursive: true });
+    await writeSessionRegistry(runtimePaths, {
+      sessionId: "dead",
+      pid: 0,
+      brokerSocket: brokerSocketPath(runtimePaths, "dead"),
+      starting: true,
+    });
+    await mkdir(sessionBrokerDir(runtimePaths, "started"), { recursive: true });
+    await writeSessionRegistry(runtimePaths, {
+      sessionId: "started",
+      pid: process.pid,
+      brokerSocket: brokerSocketPath(runtimePaths, "started"),
+    });
+
+    const result = await gcRuntime(runtimePaths);
+
+    expect(result.removedSessions.sort()).toEqual(["dead", "started"]);
+    expect(await pathExists(execSocketDir(runtimePaths, "starting"))).toBe(
+      true,
+    );
+    expect(
+      await pathExists(sessionRegistryPath(runtimePaths, "starting")),
+    ).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("sessionRegistryPath accepts a plain sessionId", () => {
   expect(sessionRegistryPath(paths, "sess_abc123")).toBe(

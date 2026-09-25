@@ -332,10 +332,11 @@ test("HostExecStage plan: mounts only the exec socket dir, never the control soc
     expect(value).not.toContain(plan.broker.internalSocketPath);
   }
 
-  // The exec socket dir is provisioned with 0o700 in the directories plan.
-  const execDirEntry = plan.directories.find((d) => d.path === execSocketDir);
-  expect(execDirEntry).toBeDefined();
-  expect(execDirEntry!.mode).toEqual(0o700);
+  // The session broker dir is created by the broker service only after the
+  // session registry reserves it; creating it here would expose it to GC.
+  for (const directory of plan.directories) {
+    expect(directory.path.startsWith(controlSocketDir)).toEqual(false);
+  }
 });
 
 test("HostExecStage plan: sets LD_PRELOAD for relative argv0 intercept", async () => {

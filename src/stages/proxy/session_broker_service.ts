@@ -33,6 +33,7 @@ import {
   liveCodexOAuthSourceDeps,
   resolveNasStateHome,
 } from "../../network/codex_oauth_source.ts";
+import type { SessionRegistryEntry } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
   removePendingDir,
@@ -206,6 +207,16 @@ export interface SessionBrokerStartHooks {
   readonly onCredentialRevoked?: () => void;
 }
 
+async function removeReservedRegistry(
+  config: SessionBrokerConfig,
+): Promise<void> {
+  await removeSessionRegistry(config.paths, config.sessionId).catch((e) =>
+    logWarn(
+      `[nas] SessionBrokerService: failed to remove the session registry after startup failure: ${e}`,
+    ),
+  );
+}
+
 /**
  * broker を起動し、レジストリに登録する。
  *
@@ -284,8 +295,25 @@ export async function startSessionBroker(
     await closeCredentials();
     throw error;
   }
+  const registryEntry: SessionRegistryEntry = {
+    version: 1,
+    sessionId: config.sessionId,
+    tokenHash: config.tokenHash,
+    brokerSocket: config.socketPath,
+    profileName: config.profileName,
+    requestBodyAudit: config.requestBodyAudit,
+    createdAt: new Date().toISOString(),
+    pid: process.pid,
+    agent: config.agent,
+  };
   let broker: SessionBrokerLifecycle;
   try {
+    // Reserve the session before the broker creates its directory, so a
+    // concurrent runtime GC does not remove the directory as an orphan.
+    await writeSessionRegistry(config.paths, {
+      ...registryEntry,
+      starting: true,
+    });
     broker = deps.createBroker({
       paths: config.paths,
       sessionId: config.sessionId,
@@ -303,21 +331,12 @@ export async function startSessionBroker(
     });
     await broker.start(config.socketPath);
   } catch (error) {
+    await removeReservedRegistry(config);
     await closeCredentials();
     throw error;
   }
   try {
-    await writeSessionRegistry(config.paths, {
-      version: 1,
-      sessionId: config.sessionId,
-      tokenHash: config.tokenHash,
-      brokerSocket: config.socketPath,
-      profileName: config.profileName,
-      requestBodyAudit: config.requestBodyAudit,
-      createdAt: new Date().toISOString(),
-      pid: process.pid,
-      agent: config.agent,
-    });
+    await writeSessionRegistry(config.paths, registryEntry);
   } catch (error) {
     try {
       await broker.close();
@@ -326,6 +345,7 @@ export async function startSessionBroker(
         `[nas] SessionBrokerService: failed to close broker after registry write failure: ${closeErr}`,
       );
     }
+    await removeReservedRegistry(config);
     await closeCredentials();
     throw error;
   }

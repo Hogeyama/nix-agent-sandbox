@@ -996,6 +996,7 @@ export interface SessionRegistryEntry {
   createdAt: string;
   pid: number;
   agent?: string;
+  starting?: true;
 }
 
 export interface NormalizeTargetInput {

@@ -7,6 +7,8 @@
  * has to describe process or socket I/O itself.
  */
 
+import { mkdir } from "node:fs/promises";
+import * as path from "node:path";
 import { Cause, Context, Effect, Layer, Ref } from "effect";
 import type { HostExecConfig } from "../../config/types.ts";
 import {
@@ -98,6 +100,11 @@ export class HostExecTeardownError extends AggregateError {
  * without starting a real broker or gateway.
  */
 export interface HostExecStackOpsShape {
+  /**
+   * Registers the session as starting before its broker directory exists, so
+   * a concurrent runtime GC does not treat the directory as an orphan.
+   */
+  reserveRegistry(config: HostExecBrokerConfig): Effect.Effect<void, unknown>;
   startBroker(
     config: HostExecBrokerConfig,
   ): Effect.Effect<HostExecBroker, unknown>;
@@ -265,6 +272,12 @@ export function startBrokerLive(
         integrityTargets: config.integrityTargets,
         installedScriptPath: config.installedScriptPath,
       });
+      // The gateway binds the container-facing socket here; the broker
+      // creates only the directories of the sockets it listens on itself.
+      await mkdir(path.dirname(config.execSocketPath), {
+        recursive: true,
+        mode: 0o700,
+      });
       return await startBrokerWithCleanup(
         broker,
         config.internalSocketPath,
@@ -328,6 +341,7 @@ export function awaitGatewayReadyLive(
 
 function writeRegistryLive(
   config: HostExecBrokerConfig,
+  starting: boolean,
 ): Effect.Effect<void, unknown> {
   return Effect.tryPromise({
     try: async () => {
@@ -339,6 +353,7 @@ function writeRegistryLive(
         createdAt: new Date().toISOString(),
         pid: process.pid,
         agent: config.agent,
+        ...(starting ? { starting: true as const } : {}),
       });
     },
     catch: (error) =>
@@ -400,10 +415,11 @@ function warnTeardownLive(cause: Cause.Cause<unknown>): Effect.Effect<void> {
 const HostExecStackOpsLive: Layer.Layer<HostExecStackOps> = Layer.succeed(
   HostExecStackOps,
   HostExecStackOps.of({
+    reserveRegistry: (config) => writeRegistryLive(config, true),
     startBroker: (config) => startBrokerLive(config),
     spawnGateway: spawnGatewayLive,
     awaitGatewayReady: awaitGatewayReadyLive,
-    writeRegistry: writeRegistryLive,
+    writeRegistry: (config) => writeRegistryLive(config, false),
     stopGateway: stopGatewayLive,
     closeBroker: closeBrokerLive,
     removeRegistry: removeRegistryLive,
@@ -418,7 +434,8 @@ const HostExecStackOpsLive: Layer.Layer<HostExecStackOps> = Layer.succeed(
 
 function rollbackStart(
   ops: HostExecStackOpsShape,
-  broker: HostExecBroker,
+  config: HostExecBrokerConfig,
+  broker: HostExecBroker | undefined,
   gateway: GatewayProcess | undefined,
   error: unknown,
 ): Effect.Effect<never, unknown> {
@@ -428,8 +445,12 @@ function rollbackStart(
       const stop = yield* ops.stopGateway(gateway).pipe(Effect.either);
       if (stop._tag === "Left") cleanupErrors.push(stop.left);
     }
-    const close = yield* ops.closeBroker(broker).pipe(Effect.either);
-    if (close._tag === "Left") cleanupErrors.push(close.left);
+    if (broker) {
+      const close = yield* ops.closeBroker(broker).pipe(Effect.either);
+      if (close._tag === "Left") cleanupErrors.push(close.left);
+    }
+    const registry = yield* ops.removeRegistry(config).pipe(Effect.either);
+    if (registry._tag === "Left") cleanupErrors.push(registry.left);
     return yield* Effect.fail(
       new AggregateError(
         [error, ...cleanupErrors],
@@ -475,15 +496,29 @@ export function startHostExecStack(
 ): Effect.Effect<HostExecBrokerHandle, unknown, HostExecStackOps> {
   return Effect.gen(function* () {
     const ops = yield* HostExecStackOps;
+    yield* ops.reserveRegistry(config);
+
     const brokerResult = yield* ops.startBroker(config).pipe(Effect.either);
     if (brokerResult._tag === "Left") {
-      return yield* Effect.fail(brokerResult.left);
+      return yield* rollbackStart(
+        ops,
+        config,
+        undefined,
+        undefined,
+        brokerResult.left,
+      );
     }
     const broker = brokerResult.right;
 
     const gatewayResult = yield* ops.spawnGateway(config).pipe(Effect.either);
     if (gatewayResult._tag === "Left") {
-      return yield* rollbackStart(ops, broker, undefined, gatewayResult.left);
+      return yield* rollbackStart(
+        ops,
+        config,
+        broker,
+        undefined,
+        gatewayResult.left,
+      );
     }
     const gateway = gatewayResult.right;
 
@@ -491,12 +526,24 @@ export function startHostExecStack(
       .awaitGatewayReady(gateway)
       .pipe(Effect.either);
     if (readinessResult._tag === "Left") {
-      return yield* rollbackStart(ops, broker, gateway, readinessResult.left);
+      return yield* rollbackStart(
+        ops,
+        config,
+        broker,
+        gateway,
+        readinessResult.left,
+      );
     }
 
     const registryResult = yield* ops.writeRegistry(config).pipe(Effect.either);
     if (registryResult._tag === "Left") {
-      return yield* rollbackStart(ops, broker, gateway, registryResult.left);
+      return yield* rollbackStart(
+        ops,
+        config,
+        broker,
+        gateway,
+        registryResult.left,
+      );
     }
 
     const closeContext = yield* Effect.context<HostExecStackOps>();

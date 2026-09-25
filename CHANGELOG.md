@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **Container**: agent containers (`docker run`, ACP and Dev Container) and the DinD sidecar start with Docker's `--init`, so `docker-init` is PID 1 and reaps orphaned processes. Before, the agent (or `rootlesskit` in the sidecar) was PID 1 and did not reap them, so they stayed as zombies until the session ended: exited `git`, shells and `nas-mask-filter` in the agent container, and the `containerd-shim` of each finished inner container in the sidecar.
+- **HostExec / Network**: a session no longer fails or loses its broker when runtime cleanup runs while it starts. Cleanup, which the UI and the `nas hostexec` / `nas network` commands run when listing or answering pending requests, removed the session's broker directory before the session was registered. HostExec startup then failed with `nas-hostexec-gateway: failed (FileNotFound)`, and a network session started with its approval socket deleted, so approvals could not reach it.
 
 ### Removed
 

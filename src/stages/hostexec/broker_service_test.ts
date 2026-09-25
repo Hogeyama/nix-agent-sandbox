@@ -92,6 +92,10 @@ function fakeOps(
   overrides: Partial<HostExecStackOpsShape> = {},
 ): HostExecStackOpsShape {
   return {
+    reserveRegistry: () => {
+      calls.push("reserveRegistry");
+      return Effect.void;
+    },
     startBroker: () => {
       calls.push("startBroker");
       return Effect.succeed(broker);
@@ -129,7 +133,7 @@ function fakeOps(
   };
 }
 
-test("startHostExecStack starts broker, gateway, readiness, then registry", async () => {
+test("startHostExecStack reserves the registry, then starts broker, gateway, readiness, and publishes the registry", async () => {
   const calls: string[] = [];
   const layer = Layer.succeed(
     HostExecStackOps,
@@ -140,6 +144,7 @@ test("startHostExecStack starts broker, gateway, readiness, then registry", asyn
     startHostExecStack(config).pipe(Effect.provide(layer)),
   );
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
@@ -148,6 +153,7 @@ test("startHostExecStack starts broker, gateway, readiness, then registry", asyn
 
   const droppedClose = handle.close();
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
@@ -156,6 +162,7 @@ test("startHostExecStack starts broker, gateway, readiness, then registry", asyn
 
   await Effect.runPromise(droppedClose.pipe(Effect.provide(layer)));
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
@@ -186,11 +193,13 @@ test("startHostExecStack rolls back broker when gateway readiness fails", async 
   );
   expect(result._tag).toBe("Failure");
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
     "stopGateway",
     "closeBroker",
+    "removeRegistry",
   ]);
 });
 
@@ -213,13 +222,74 @@ test("startHostExecStack rolls back gateway and broker when registry write fails
   );
   expect(result._tag).toBe("Failure");
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
     "writeRegistry",
     "stopGateway",
     "closeBroker",
+    "removeRegistry",
   ]);
+});
+
+test("startHostExecStack starts nothing when the registry reservation fails", async () => {
+  const calls: string[] = [];
+  const layer = Layer.succeed(
+    HostExecStackOps,
+    HostExecStackOps.of(
+      fakeOps(calls, {
+        reserveRegistry: () => {
+          calls.push("reserveRegistry");
+          return Effect.fail(new Error("reservation failed"));
+        },
+      }),
+    ),
+  );
+
+  const result = await Effect.runPromiseExit(
+    startHostExecStack(config).pipe(Effect.provide(layer)),
+  );
+  expect(result._tag).toBe("Failure");
+  expect(calls).toEqual(["reserveRegistry"]);
+});
+
+test("startHostExecStack removes the reserved registry when the broker fails to start", async () => {
+  const calls: string[] = [];
+  const layer = Layer.succeed(
+    HostExecStackOps,
+    HostExecStackOps.of(
+      fakeOps(calls, {
+        startBroker: () => {
+          calls.push("startBroker");
+          return Effect.fail(new Error("broker failed"));
+        },
+      }),
+    ),
+  );
+
+  const result = await Effect.runPromiseExit(
+    startHostExecStack(config).pipe(Effect.provide(layer)),
+  );
+  expect(result._tag).toBe("Failure");
+  expect(calls).toEqual(["reserveRegistry", "startBroker", "removeRegistry"]);
+});
+
+test("startBrokerLive creates the exec socket directory for the gateway", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-hostexec-broker-"));
+  const liveConfig = makeLiveConfig(root);
+  try {
+    const broker = await Effect.runPromise(startBrokerLive(liveConfig));
+    try {
+      const execDir = await stat(path.dirname(liveConfig.execSocketPath));
+      expect(execDir.isDirectory()).toBe(true);
+      expect(execDir.mode & 0o777).toBe(0o700);
+    } finally {
+      await broker.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("closeHostExecStack is ordered gateway, broker, registry, pending", async () => {
@@ -379,11 +449,13 @@ test("startup rollback retains a stop failure and still closes the broker", asyn
   );
 
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
     "stopGateway",
     "closeBroker",
+    "removeRegistry",
   ]);
   expect(exit._tag).toBe("Failure");
   if (exit._tag === "Failure") {
@@ -425,6 +497,7 @@ test("handle close retries after failure and is idempotent after success", async
   );
   expect(firstClose._tag).toBe("Failure");
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
@@ -437,6 +510,7 @@ test("handle close retries after failure and is idempotent after success", async
 
   await Effect.runPromise(handle.close().pipe(Effect.provide(layer)));
   expect(calls).toEqual([
+    "reserveRegistry",
     "startBroker",
     "spawnGateway",
     "awaitGatewayReady",
@@ -452,7 +526,7 @@ test("handle close retries after failure and is idempotent after success", async
   ]);
 
   await Effect.runPromise(handle.close().pipe(Effect.provide(layer)));
-  expect(calls).toHaveLength(12);
+  expect(calls).toHaveLength(13);
 });
 
 test("handle close serializes concurrent effects and leaves diagnostics to its caller", async () => {

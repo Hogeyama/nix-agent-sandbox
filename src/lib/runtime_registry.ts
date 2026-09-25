@@ -29,6 +29,12 @@ export interface BaseSessionEntry {
   sessionId: string;
   pid: number;
   brokerSocket: string;
+  /**
+   * Set while the owning process is still creating the session broker
+   * directory and has not started listening on `brokerSocket`. GC keeps such
+   * an entry, and the broker directory it reserves, as long as `pid` is alive.
+   */
+  starting?: true;
 }
 
 export interface BasePendingEntry {
@@ -228,7 +234,7 @@ export async function gcRuntime<S extends BaseSessionEntry>(
   for (const entry of sessions) {
     const alive = await isPidAlive(entry.pid);
     const brokerExists = await pathExists(entry.brokerSocket);
-    if (alive && brokerExists) continue;
+    if (alive && (brokerExists || entry.starting)) continue;
     removedSessions.push(entry.sessionId);
     await removeSessionRegistry(paths, entry.sessionId);
     await removePendingDir(paths, entry.sessionId);

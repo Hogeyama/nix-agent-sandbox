@@ -12,6 +12,7 @@ export interface HostExecSessionRegistryEntry {
   createdAt: string;
   pid: number;
   agent?: string;
+  starting?: true;
 }
 
 export interface HostExecPendingEntry {
