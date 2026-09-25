@@ -119,6 +119,36 @@ test("buildDummyClaudeCredentials: replaces secrets and copies only known fields
   expect(JSON.stringify(dummy)).not.toContain("real-");
 });
 
+test("buildDummyClaudeCredentials: copies MCP server OAuth tokens but not the IdP token", () => {
+  // Claude Code は MCP サーバーの OAuth token を同じファイルに置く。写さないと
+  // container で OAuth の MCP サーバーが未認証になる。
+  const mcpOAuth = {
+    "notion|abc123": {
+      serverName: "notion",
+      serverUrl: "https://mcp.notion.com/mcp",
+      accessToken: "mcp-access",
+      refreshToken: "mcp-refresh",
+      expiresAt: 3000,
+    },
+  };
+  const mcpOAuthClientConfig = {
+    "notion|abc123": { clientSecret: "mcp-client-secret" },
+  };
+  const host = JSON.stringify({
+    ...JSON.parse(HOST),
+    mcpOAuth,
+    mcpOAuthClientConfig,
+    mcpXaaIdp: { idToken: "idp-token" },
+    trustedDeviceToken: "device-token",
+  });
+  const dummy = JSON.parse(buildDummyClaudeCredentials(host));
+  expect(dummy.mcpOAuth).toEqual(mcpOAuth);
+  expect(dummy.mcpOAuthClientConfig).toEqual(mcpOAuthClientConfig);
+  expect(dummy.mcpXaaIdp).toBeUndefined();
+  expect(dummy.trustedDeviceToken).toBeUndefined();
+  expect(JSON.stringify(dummy)).not.toContain("real-");
+});
+
 test("buildDummyClaudeCredentials: omits optional fields when the host file lacks them", () => {
   const minimalHost = JSON.stringify({
     claudeAiOauth: {

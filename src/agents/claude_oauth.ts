@@ -56,7 +56,17 @@ export function claudeCredentialsReadError(error: unknown): unknown {
 // ログイン状態の判定に使われる項目だけをダミーへ写す。未知の項目は秘密を
 // 含みうるので写さない。
 const DUMMY_OAUTH_FIELDS = ["scopes", "subscriptionType", "rateLimitTier"];
-const DUMMY_TOP_LEVEL_FIELDS = ["organizationUuid"];
+// Claude Code は MCP サーバーの OAuth token (`mcpOAuth`) と、その refresh に
+// 使う client の登録情報 (`mcpOAuthClientConfig`) も同じファイルに置く。写さ
+// ないと、OAuth で認証する MCP サーバーが container で未認証になる。
+// セッション開始時の値を写すだけで、container での変更はホストへ書き戻さない。
+// 書き戻すと container がホストの MCP の token を差し替えられる。
+// 企業 IdP の token (`mcpXaaIdp`) は MCP 以外にも使える credential なので写さない。
+const DUMMY_TOP_LEVEL_FIELDS = [
+  "organizationUuid",
+  "mcpOAuth",
+  "mcpOAuthClientConfig",
+];
 
 type JsonObject = Record<string, unknown>;
 
