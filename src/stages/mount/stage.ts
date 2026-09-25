@@ -333,8 +333,7 @@ export function planMount(
     directories.push({ path: dir, mode: 0o755, removeOnTeardown: false });
   }
   for (const file of gitProtection.createCommonDirFiles) {
-    // `.` は自分自身の gitdir を指し、commondir が無いのと同じに振る舞う。
-    files.push({ path: file, content: ".\n", mode: 0o644 });
+    files.push({ path: file, content: COMMONDIR_PLACEHOLDER, mode: 0o644 });
   }
   for (const target of gitProtection.readOnlyPaths) {
     protectedMounts.push({ source: viewSource(target), target });
@@ -742,6 +741,14 @@ export function mergeGitMetadata(
     skippedSymlinks: union(a.skippedSymlinks, b.skippedSymlinks),
   };
 }
+
+/**
+ * nas が作る commondir の内容。自分自身の gitdir を指し、git は commondir が
+ * 無いのと同じに振る舞う。`.` だと git は通るが libgit2 (Nix が flake の
+ * 取得に使う) がリポジトリを開けなくなるので `./` にする。空ファイルは git が
+ * 読み込みで失敗する。
+ */
+export const COMMONDIR_PLACEHOLDER = "./\n";
 
 interface GitProtectionPlan {
   readonly readOnlyPaths: readonly string[];

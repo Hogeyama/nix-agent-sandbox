@@ -146,7 +146,7 @@ export interface GitMetadataProbe {
    * git は linked worktree に限らずどの gitdir でもこのファイルを読み、書かれた
    * パスを common dir として config と hooks をそこから読む。無いままだと
    * エージェントが作成して RO の config / hooks を丸ごと迂回できるので、nas が
-   * 自分自身を指す `.` で作って RO mount する。
+   * 自分自身を指す `./` で作って RO mount する。
    */
   readonly missingCommonDirFiles: readonly string[];
   /** symlink のため保護対象外にしたパス (警告用) */

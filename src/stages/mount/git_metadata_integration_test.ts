@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveGitMetadata } from "./mount_probes.ts";
+import { COMMONDIR_PLACEHOLDER } from "./stage.ts";
 
 function hasGit(): boolean {
   try {
@@ -21,6 +22,16 @@ function hasGit(): boolean {
 }
 
 const gitAvailable = hasGit();
+
+function hasNix(): boolean {
+  try {
+    return Bun.spawnSync(["nix", "--version"]).exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+const nixAvailable = hasNix();
 
 // Isolate from the user's global config (hooksPath, templates, etc.).
 const GIT_ENV = {
@@ -132,13 +143,13 @@ test.skipIf(!gitAvailable)(
 
 /**
  * git は linked worktree に限らずどの gitdir でも `commondir` を読み、そこを
- * common dir として config と hooks を読む。nas が作る `.` の placeholder が
+ * common dir として config と hooks を読む。nas が作る `./` の placeholder が
  * 無害であることと、placeholder が無ければ本当に迂回できることを実物の git で
  * 確かめる。後者が通らなくなったら (git が plain repo で commondir を読まなく
  * なったら) この保護は不要になる。
  */
 test.skipIf(!gitAvailable)(
-  "git honors commondir in a plain repo; the '.' placeholder behaves as if absent",
+  "git honors commondir in a plain repo; the './' placeholder behaves as if absent",
   async () => {
     const root = await makeRepo();
     const evil = `${root}-evil`;
@@ -157,7 +168,7 @@ test.skipIf(!gitAvailable)(
       );
       expect(redirected.stdout.toString().trim()).toBe("redirected");
 
-      await writeFile(commondir, ".\n");
+      await writeFile(commondir, COMMONDIR_PLACEHOLDER);
       git(root, "config", "nas.marker", "own");
       git(root, "status", "--short");
       git(root, "commit", "-q", "--allow-empty", "-m", "second");
@@ -176,6 +187,42 @@ test.skipIf(!gitAvailable)(
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(evil, { recursive: true, force: true });
+    }
+  },
+);
+
+/**
+ * Nix は git CLI ではなく libgit2 でリポジトリを開く。libgit2 は commondir が
+ * `.` だとリポジトリと認めないので、placeholder で開けることを
+ * `nix flake metadata` で確かめる。
+ */
+test.skipIf(!gitAvailable || !nixAvailable)(
+  "the commondir placeholder keeps the repository readable by libgit2 (nix)",
+  async () => {
+    const root = await makeRepo();
+    try {
+      await writeFile(path.join(root, "flake.nix"), "{ outputs = _: { }; }\n");
+      git(root, "add", "flake.nix");
+      git(root, "commit", "-q", "-m", "flake");
+      await writeFile(path.join(root, ".git/commondir"), COMMONDIR_PLACEHOLDER);
+      const result = Bun.spawnSync(
+        [
+          "nix",
+          "--extra-experimental-features",
+          "nix-command flakes",
+          "flake",
+          "metadata",
+          "--no-write-lock-file",
+          `git+file://${root}`,
+        ],
+        { env: GIT_ENV },
+      );
+      expect(result.stderr.toString()).not.toContain(
+        "could not find repository",
+      );
+      expect(result.exitCode).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   },
 );

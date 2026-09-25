@@ -1535,9 +1535,10 @@ test("MountStage: missing commondir is created pointing at its own gitdir and RO
     }),
   });
   const plan = planMount(input, mountProbes);
-  // `.` は commondir が無いのと同じ。空ファイルだと git が読み込みで失敗する。
+  // `./` は commondir が無いのと同じ。`.` は libgit2 が開けず、空ファイルは
+  // git が読み込みで失敗する。
   expect(plan.files).toEqual([
-    { path: commondir, content: ".\n", mode: 0o644 },
+    { path: commondir, content: "./\n", mode: 0o644 },
   ]);
   expect(plan.dockerArgs).toContain(`${commondir}:${commondir}:ro`);
   expect(plan.dockerArgs).toContain(
