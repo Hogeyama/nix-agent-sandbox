@@ -1,5 +1,5 @@
 /**
- * Display (xpra sandbox) Stage (EffectStage)
+ * Display (xpra sandbox) Stage
  *
  * ホスト上に xpra の detached X server (Xvfb を spawn) を起動し、その
  * Xvfb ソケット + per-session な MIT-MAGIC-COOKIE xauthority だけを
@@ -37,7 +37,7 @@ export interface DisplayPlan {
 }
 
 // ---------------------------------------------------------------------------
-// EffectStage
+// Stage
 // ---------------------------------------------------------------------------
 
 export function createDisplayStage(

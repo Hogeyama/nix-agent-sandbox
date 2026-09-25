@@ -976,7 +976,7 @@ test("HostExecStage plan: absolute argv0 pointing at a sensitive container path 
 });
 
 // ============================================================
-// EffectStage run() tests
+// Stage run() tests
 // ============================================================
 
 test("HostExecStage plan: a missing gateway artifact fails with rebuild guidance", async () => {

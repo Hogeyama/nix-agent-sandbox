@@ -1,5 +1,5 @@
 /**
- * ホスト Nix 共有の検出 (EffectStage)
+ * ホスト Nix 共有の検出
  */
 
 import { Effect } from "effect";

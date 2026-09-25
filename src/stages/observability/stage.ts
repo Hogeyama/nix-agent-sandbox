@@ -97,7 +97,7 @@ export function shouldEnableObservability(deps: {
 }
 
 // ---------------------------------------------------------------------------
-// EffectStage
+// Stage
 // ---------------------------------------------------------------------------
 
 export function createObservabilityStage(

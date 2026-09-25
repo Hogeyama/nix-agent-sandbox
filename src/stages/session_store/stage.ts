@@ -1,5 +1,5 @@
 /**
- * SessionStoreStage (EffectStage)
+ * SessionStoreStage
  *
  * Creates a runtime session record on pipeline startup and deletes
  * it on teardown (via Effect.addFinalizer). Hook events from

@@ -1,5 +1,5 @@
 /**
- * マウント構成の組み立てステージ (EffectStage<MountSetupService>)
+ * マウント構成の組み立てステージ
  *
  * resolveMountProbes() で全ての I/O を事前解決し、
  * planMount() は純粋関数として MountPlan を返す。
@@ -101,7 +101,7 @@ type MountStageState = Pick<
 type MountStageInput = StageInput & MountStageState;
 
 // ---------------------------------------------------------------------------
-// EffectStage factory
+// Stage factory
 // ---------------------------------------------------------------------------
 
 export function createMountStage(

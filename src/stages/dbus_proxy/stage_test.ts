@@ -95,7 +95,7 @@ function makeStageInput(
 }
 
 // ============================================================
-// EffectStage orchestration tests with Fake
+// Stage orchestration tests with Fake
 // ============================================================
 
 test("DbusProxyStage: run calls startProxy with correct plan when enabled", async () => {

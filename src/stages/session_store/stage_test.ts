@@ -51,7 +51,7 @@ afterEach(async () => {
   }
 });
 
-/** Run the EffectStage, returning the result and a close handle for the scope. */
+/** Run the stage, returning the result and a close handle for the scope. */
 async function runStage(
   input: StageInput,
   workspace: WorkspaceState,

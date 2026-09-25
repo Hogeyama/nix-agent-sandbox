@@ -1,5 +1,5 @@
 /**
- * D-Bus Proxy Stage (EffectStage)
+ * D-Bus Proxy Stage
  *
  * xdg-dbus-proxy を起動して、エージェントコンテナ内から
  * ホストの D-Bus セッションバスにフィルタ付きでアクセスできるようにする。
@@ -40,7 +40,7 @@ export interface DbusProxyPlan {
 }
 
 // ---------------------------------------------------------------------------
-// EffectStage
+// Stage
 // ---------------------------------------------------------------------------
 
 export function createDbusProxyStage(

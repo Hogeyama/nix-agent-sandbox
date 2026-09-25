@@ -1,10 +1,10 @@
 /**
- * WorktreeStage — git worktree のライフサイクル管理 (EffectStage)
+ * WorktreeStage — git worktree のライフサイクル管理
  *
  * This stage is an orchestration boundary. All git I/O is delegated to
  * GitWorktreeService; all user interaction goes through PromptService.
  * The stage itself only calls pure planners, service methods, and
- * returns EffectStageResult.
+ * returns the slices it adds.
  */
 
 import * as path from "node:path";

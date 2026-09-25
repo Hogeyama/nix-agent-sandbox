@@ -215,7 +215,7 @@ test("planDisplay: falls back to /tmp/nas-<uid>/display when XDG_RUNTIME_DIR is 
 });
 
 // ===========================================================================
-// EffectStage orchestration
+// Stage orchestration
 // ===========================================================================
 
 test("DisplayStage: returns enabled=false without calling service when sandbox=none", async () => {
@@ -365,7 +365,7 @@ test("planDisplay: does not set unshareBindMount when x11UnixDirReadOnly is fals
 });
 
 // ===========================================================================
-// EffectStage orchestration (continued)
+// Stage orchestration (continued)
 // ===========================================================================
 
 test("DisplayStage: kill handler runs on scope close", async () => {

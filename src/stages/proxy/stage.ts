@@ -1,6 +1,6 @@
 import { sharedDockerResources } from "../../docker/shared_resources.ts";
 /**
- * ProxyStage (EffectStage)
+ * ProxyStage
  *
  * 共有 Proxy コンテナ + session network + session broker を
  * セットアップし、エージェントコンテナのネットワークトラフィックを
@@ -248,7 +248,7 @@ export function planProxy(
 }
 
 // ---------------------------------------------------------------------------
-// EffectStage
+// Stage
 // ---------------------------------------------------------------------------
 
 export function createProxyStage(

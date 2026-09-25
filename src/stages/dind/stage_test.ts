@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 /**
  * DindStage unit テスト（Docker 不要）
  *
- * EffectStage 化された DindStage の plan/run の検証と、引数生成の検証を行う。
+ * DindStage の plan/run の検証と、引数生成の検証を行う。
  * 実 Docker を使う integration テストは dind_stage_integration_test.ts を参照。
  */
 
@@ -436,7 +436,7 @@ test("reservedNamespacePorts: tolerates no forwarded ports", () => {
 });
 
 // ============================================================
-// EffectStage run() tests
+// Stage run() tests
 // ============================================================
 
 test("DindStage: run returns empty when disabled", async () => {

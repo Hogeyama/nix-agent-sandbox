@@ -1,5 +1,5 @@
 /**
- * Docker イメージビルドステージ (EffectStage)
+ * Docker イメージビルドステージ
  *
  * image 存在チェックは probe (resolveBuildProbes)、
  * ビルドは DockerService.build。
@@ -153,7 +153,7 @@ export function planDockerBuild(
 }
 
 // ---------------------------------------------------------------------------
-// DockerBuildStage (EffectStage<DockerBuildService>)
+// DockerBuildStage
 // ---------------------------------------------------------------------------
 
 export function createDockerBuildStage(
