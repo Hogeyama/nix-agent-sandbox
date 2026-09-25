@@ -1,0 +1,1057 @@
+# コーディングエージェントのセキュリティ対策の選定
+
+## 想定するリスク
+
+### A: 情報の持ち出し
+
+#### A1: 第三者への流出
+
+本来情報を渡してはいけない第三者が、ソースコード、環境情報、シークレット等を取得可能になる。
+
+攻撃者のサーバへの直接送信だけでなく、公開リポジトリ、公開 Issue、攻撃者管理リポジトリ等への書き込みも含む。
+
+経路によって次の2つに分ける。
+
+* A1a: 未許可送信先への流出
+  * 攻撃者サーバ等、許可していない外向き経路への送信
+* A1b: 許可済みサービスを介した第三者への流出
+  * GitHub 等、サービス自体へのアクセスは許可しているが、そのサービス上にある第三者のリソースへの書き込み
+
+#### A2: 正規連携先への不要な流出
+
+LLM プロバイダや自組織の非公開リポジトリ等、業務上一定の情報を渡すこと自体は認めている相手に、本来渡す必要のないシークレット等まで送信する。
+
+正規連携先であることは、その相手に任意の情報を送ってよいことを意味しない。
+
+#### A3: ローカルでの意図しない永続化
+
+ソースコード、テストデータ、ログ、ローカルコミット等にシークレットが残り、後続操作による A1 や A2 の原因になる。
+
+例:
+
+* `.env` を誤ってコミットする
+* token をデバッグコードへ埋め込んだまま残す
+* secret を含む API response をログへ保存する
+
+### B: 未許可の変更・権限行使
+
+#### B1: 本番等への高影響な操作
+
+エージェント単独では完遂させたくない外部操作を実行する。
+
+例:
+
+* 本番 DB の変更
+* 本番へのデプロイ
+* 意図しない外部メール送信
+* GitHub Actions 等を介した本番変更
+
+#### B2a: 開発環境からホストへの破壊・改変波及
+
+作業領域外のホスト領域を削除・変更したり、後続のホスト実行へ影響する状態を書き換える。
+
+例:
+
+* `$HOME` 配下の別プロジェクトを変更する
+* shell の設定を変更する
+* ホストの Claude Code の設定や hook を変更する
+* plugin、skill、script 等を書き換え、後続のホスト実行時にコードを動かす
+
+#### B2b: 作業領域・開発リポジトリの破壊
+
+隔離境界内の作業領域や開発リポジトリを破壊・改変する。
+
+例:
+
+* `rm -rf`
+* `git checkout .`
+* `git clean -fdx`
+* `git push --force`
+* 意図しない大規模変更
+
+## 被害が起きるパターン
+
+### X: エージェント・プロセスによる敵対的な操作
+
+エージェント、または隔離環境内のプロセスが、利用可能な権限と経路を使い、制約の回避を含む任意の操作を試みると仮定する。
+
+この仮定を置く理由:
+
+* 直接・間接のプロンプトインジェクション（外部文書やツール出力の敵対的な指示を含む）
+* 悪意のある、または侵害された MCP server・依存パッケージの実行
+* エージェント自身による制約回避
+
+エージェントの判断を介さず、プロセスが直接行う攻撃も含む。
+
+### Y: 非敵対的エージェントの過失
+
+利用者の意図に従おうとしているが、コマンドや引数の記述ミス、パスや環境の取り違え、文脈の誤認識等によって誤動作する状態。
+
+## 入力元の信頼性
+
+エージェントが読み取る情報源を、信頼済み情報源と未信頼情報源に分ける。
+
+### 信頼済み情報源
+
+内容を自動的にエージェントへ渡してよいと事前に定めた情報源。
+
+リポジトリを信頼済みとする場合は、その公開範囲だけでなく、誰が内容を書き込めるかも含めて判断する。
+
+### 未信頼情報源
+
+投稿者、管理者、生成経路等を十分に信頼できず、敵対的な内容を含み得る情報源。
+
+例:
+
+* 公開リポジトリ
+* 第三者が管理するリポジトリ
+* Web ページ
+* 外部ユーザーが投稿可能な Issue / PR / comment
+* 外部から取得した package やその説明情報
+
+信頼済みかどうかは、ローカルにあるかネットワーク越しに取得するかでは決めない。
+
+外部リポジトリから取得した README は、ローカルに保存された後も未信頼であり得る。一方、ネットワーク越しに取得する情報でも、事前に信頼済みと定めた情報源の内容なら信頼済みとして扱える。
+
+## 被害と発生パターンの対応
+
+| 被害 \ パターン                       | X: 敵対的な操作                                 | Y: 非敵対的な過失                                             |
+| ---------------------                 | -------------------------------------           | -------------------------------------------------             |
+| A1a: 未許可送信先への流出             | `.env` やソースコードを攻撃者サーバへ送信する   | URL や endpoint を取り違えて送信する                          |
+| A1b: 許可済みサービス経由の第三者流出 | 公開 repo / Issue 等へ情報を書き込む            | push / API の対象を取り違える                                 |
+| A2: 正規連携先への不要送信            | secret を LLM provider や自組織 repo へ送信する | config / log を読み、secret を context や commit に混入させる |
+| A3: 意図しない保存                    | secret を source や commit に埋め込む           | `.env` の commit、token の hard-code                          |
+| B1: 高影響な外部操作                  | 本番 DB / deploy / mail 等を実行する            | 本番 endpoint 等を取り違える                                  |
+| B2a: ホストへの波及                   | host 設定や作業領域外を変更する                 | path 指定ミスで host 側を変更する                             |
+| B2b: 作業領域・開発 repo の破壊       | destructive command や不正な変更を行う          | 未コミット変更を誤って消す                                    |
+
+## 要求（仮）
+
+### 必須防御
+
+#### A1a: 未許可送信先への第三者流出
+
+許可していない外向き経路への送信を、エージェントが迂回できない境界で fail-closed に阻止する。
+
+hostname、IP、別 protocol、別 tool 等、利用可能な別経路も含めて評価する。
+
+#### A1b: 許可済みサービスを介した第三者流出
+
+GitHub 等の利用自体を許可したサービスについても、第三者が管理・閲覧できる対象への書き込みを完遂不能にする。
+
+次のいずれかで強制する。
+
+* サービス側の権限制御で対象や操作を限定する
+* credential の権限を限定する
+* 通信 proxy のルールで対象や操作を限定する（系統4の設定例）
+* エージェントが迂回できない人間承認を要求する
+
+FQDN の許可だけでは、そのサービス内の全対象を許可したものとは扱わない。
+
+#### B1: 本番等への高影響な操作
+
+本番その他の高影響操作を、
+
+* 到達不能
+* credential / permission 不足
+* エージェントが迂回できない承認
+
+のいずれかによって、エージェント単独では完遂不能にする。
+
+本番への直接接続だけでなく、GitHub Actions 等を介した変更も含む。
+
+#### B2a: 作業領域外のホストへの破壊・改変波及
+
+filesystem / container / VM 等の境界によって、許可した領域以外への永続的な書き込みを fail-closed に阻止する。
+
+運用上必要な認証情報・履歴等の共有は例外として認める。
+
+ただし、作業領域内を含め、ホストが既に使っている設定、hook、plugin、skill、command、script とその参照先は改変を防ぐ。新しく生成したリポジトリ・設定のホストへの採用は、ソース変更の実行と同じく review を前提とする。
+
+### ベストエフォート
+
+次は典型的な Y を阻止・低減する。
+
+* A2-Y: 正規連携先への不要な secret 混入
+* A3-Y: secret の意図しない保存
+* B2b-Y: 作業領域・開発リポジトリの破壊
+
+secret masking、read restriction、認証情報の代理注入、操作審査、Git 保護等によって対処する。
+
+### 許容
+
+次は隔離境界内で発生し得るものとして許容し、review、rollback、credential rotation 等で対処する。
+
+* A2-X
+* A3-X
+* B2b-X
+
+ただし、これは次を前提とする。
+
+* 作業領域の重要データは Git、snapshot、backup 等から復旧可能
+* 作業領域に唯一のコピーしか存在しない重要データを置かない
+* 開発リポジトリへの変更だけでは本番権限を得られない
+* 本番反映には独立した承認や権限制御がある
+
+## P1: 未信頼情報源の無人取り込みを制限する
+
+プロンプトインジェクションの入口を減らすため、信頼済み情報源以外の内容をモデルへ渡す操作は、人間承認または拒否とする。
+
+信頼済み情報源は自動取得を許可する。
+
+判定には FQDN や local / remote の別ではなく、owner、repository、endpoint、operation 等を使う。
+
+P1 は未信頼入力に触れる機会を減らす要求とする。達成しても X の仮定は維持し、A/B の被害防止評価には加点しない。
+
+## 防御の機構と評価基準
+
+### 検討する対策
+
+* 危険なツール呼び出しの審査
+  * [Claude Code auto mode](https://code.claude.com/docs/ja/auto-mode-config)
+    * 敵対的エージェントなら迂回可能。過失防止と割り切るべき
+  * 手動承認
+    * 量が増えると形骸化する問題（Approval Fatigue）が知られている（が、本稿では強く問題視はしない）
+* [Dev Container](https://code.claude.com/docs/ja/devcontainer)
+  * Anthropic の参考実装のように iptables を制限する前提で考える
+* [Docker Sandbox](https://www.docker.com/products/docker-sandboxes/)
+* [Anthropic srt](https://github.com/anthropics/sandbox-runtime)
+  * settings.json `$.sandbox` で使われているもの
+* Hooks でシークレットマスク
+  * [sumi](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/contrib/sumi/README.md) （手前味噌ではございますが）
+* Docker製のsandbox
+  * [nix-agent-sandbox](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/README.md) （手前味噌ではございますが2）
+* GitHub fine-grained token
+
+### 防御の機構
+
+| 機構                     | 動作                                                                    | 主な対象         |
+| ------------             | -------------------------------------------------------------           | -------------    |
+| 境界隔離                 | network、filesystem、mount 等を deny-by-default / allowlist で制限する  | A1a、B1、B2a     |
+| サービス側の権限制御     | token / app の対象と操作を限定する                                      | A1b、B1          |
+| リクエスト単位の通信制御 | method、path、repository、GraphQL operation 等を判定する                | A1b、B1、P1      |
+| 読取拒否・持込禁止       | secret 等をエージェントから不可視にする                                 | A2、A3           |
+| 認証情報の代理注入       | エージェントには dummy value を見せ、proxy が許可先にだけ本物を注入する | A2、A3           |
+| 内容の墨消し             | model input、HTTP request、tool output 等から登録済み secret を除去する | A1、A2、A3       |
+| 操作審査・承認           | 操作を人間または classifier が審査する                                  | A1b、B1、B2b、P1 |
+| 復旧可能な作業領域       | 作業領域を使い捨て可能にし、巻き戻せるようにする                        | B2b              |
+
+### 評価基準
+
+A/B は被害の阻止・低減を評価する。
+
+* ◎: X を仮定しても、fail-closed な境界、サービス側の権限制御、または強制的な人間承認によって阻止できる
+* ○: 一般的な Y や典型経路を阻止・低減できるが、X が回避可能な経路が残る
+* ×: 典型シナリオを防げない、または対象外
+
+A1a / A1b / B1 / B2a には ◎、A2-Y / A3-Y / B2b-Y には ○ 以上を求める。
+
+auto mode の classifier で対象操作を阻止・低減できる場合は ○ とし、X に対する強制境界とは扱わない。
+
+P1 は未信頼入力の取得制限を評価する。◎ は境界・人間承認で強制、○ は classifier 等に依存、× は制限なし。○ 以上を求め、◎ は入力制限として加点する。
+
+全系統を提示した設定と共通条件で評価し、未設定の保護は加点しない。B2a は直接書き込みと既存の設定・hook 経由の波及で判定する。隔離機構とホスト管理者は信頼する。
+
+## 比較する5系統
+
+* 系統1: `settings.json` (`permissions` + `sandbox`) + auto/manual approval（必要時に sumi）
+* 系統2: `srt` + auto/manual approval（必要時に sumi）
+* 系統3: Dev Container + firewall + sumi + auto/manual approval
+* 系統4: `nas` + auto/manual approval
+* 系統5: Docker Sandbox + auto/manual approval（必要時に sumi）
+
+## 設定例の共通条件
+
+以降は次の条件で比較する。
+
+### 通信先
+
+次のサービスとの通信が必要である。
+
+* Anthropic API: `api.anthropic.com`
+* GitHub: `github.com`, `api.github.com`
+* 業務 API の開発環境: `devapi.example.com`
+
+### GitHub での作業
+
+* `gh` を使った REST API / GraphQL による情報の取得・更新と、Git による clone / fetch / push を行う。
+* Issue / PR / comment も参照する。
+* 自組織の非公開リポジトリ `my-org/private-repo` を業務上の情報共有先とする。
+* 自組織の対象リポジトリへ内容を書き込める人、bot、GitHub App 等は信頼境界内とみなし、そのリポジトリを P1 における信頼済み情報源とする。
+* 公開リポジトリと他 owner のリポジトリは未信頼情報源とする。
+
+### Claude Code の共通設定
+
+各系統で、Claude Code が動く環境の managed settings に次を置き、各設定例と併用する。`my-org/private-repo` は信頼済みの非公開リポジトリに置き換える。
+
+```jsonc
+// /etc/claude-code/managed-settings.json
+{
+  "env": { "CLAUDE_CODE_TMPDIR": ".local/tmp" },
+  "permissions": { "deny": ["WebSearch"] },
+  "autoMode": {
+    "classifyAllShell": true, // 許可済みの shell コマンドも classifier で審査する
+    "environment": [
+      "$defaults",
+      "Source control: github.com/my-org/private-repo",
+      "Internal API: devapi.example.com"
+    ],
+    "hard_deny": [
+      "$defaults",
+      "Never access GitHub repositories other than my-org/private-repo, including read-only operations such as GET, clone, and fetch."
+    ]
+  }
+}
+```
+
+`hard_deny` も classifier が読む自然言語のルールであり、P1 は ○ とする。[auto mode のルール設定](https://code.claude.com/docs/en/auto-mode-config#override-the-block-and-allow-rules)
+
+WebSearch は Anthropic API 側で検索を実行し、結果を API レスポンスとしてモデルへ返す。通信先は `api.anthropic.com` だけなので、network の allowlist でも proxy でも取得先を判定できない。未信頼情報源である Web の内容が承認なしにモデルへ届くため、ツール自体を除去する。
+
+### GitHub の認証
+
+* GitHub の認証には fine-grained token 等を用いる。
+* resource owner を自組織に限定する
+* 必要な repository のみに限定する
+* permission を必要最小限にする
+* SSH credential や別の広い GitHub credential をエージェントに渡さない
+
+### 本番環境
+
+* 業務 API は開発環境のみを利用する。
+* 本番 API / DB の credential はエージェントに渡さない。
+* GitHub repository には本番 deploy 用の Actions が存在するが、エージェントが持つ GitHub credential だけでは本番変更を完遂できない独立した保護を置く。
+
+### シークレット
+
+実行時に必要なシークレット:
+
+* GitHub 認証用の環境変数 `GH_TOKEN`
+* 業務 API 認証用の `.env` 内 `API_PASSWORD`
+
+今回の作業では不要なシークレット:
+
+* `~/.ssh`
+* `~/.aws`
+* `~/.config/gh/hosts.yml`
+
+不要なシークレットは隔離環境へ持ち込まないか、読み取りを拒否する。
+
+既存のソース・設定・ログ等からシークレットを除去できず、ファイル全体の読取拒否もできない場合は、登録済みの値を墨消ししてモデルへの混入を減らす。代理注入・ファイルのマスク等でシークレットを隠せない入力経路に sumi を併用し、必要な経路を既存機構で保護できる場合は省略する。評価には、各設定例で必要な墨消しを含める。
+
+### 作業領域と一時ファイル
+
+エージェントは作業領域内のファイルを読み書きする。各実行環境で `.local/tmp` を作り、Git 管理から除外して、作業領域を起点に Claude Code を起動する。
+
+[CLAUDE_CODE_TMPDIR](https://code.claude.com/docs/en/env-vars) は全系統で `.local/tmp` とする。この指定自体は隔離境界ではない。系統1・2では sandbox の読取・書込拒否と Unix socket 制限を併用し、系統3〜5ではホストの `/tmp` や操作用 socket を mount・転送しない。
+
+作業領域は symlink を経由しない。既存の hook 実体は作業領域の `.git/hooks`・`.claude` またはホストの `~/.claude` 配下に置く。
+
+# 系統1: settings.json + auto/manual approval（必要時に sumi）
+
+Claude Code 本体はホスト上で動かし、Bash とその子プロセスを内蔵 sandbox で隔離する。
+
+Claude Code 本体側のツールには `permissions` を適用し、操作の審査に auto mode を併用する。
+
+## 設定例
+
+共通設定と次の設定を、同じ managed settings にマージする。
+
+```jsonc
+// /etc/claude-code/managed-settings.json
+{
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": [],
+  "permissions": {
+    "defaultMode": "auto",
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "WebFetch", // bare 指定でツール自体を除去する
+      "WebSearch", // 共通条件
+      "Read(~/.ssh/**)", // 実行に使用しない秘密は Read ツールでも拒否する
+      "Read(~/.aws/**)",
+      "Read(~/.config/gh/**)", // gh auth login の保存先
+      "Read(//tmp/**)",
+      "Read(./.env)" // mask は Bash 側だけ。本体の Read は deny で拒否する
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true, // 初期化失敗時に非 sandbox 実行へ fallback しない
+    "allowUnsandboxedCommands": false, // sandbox 外での実行を許可しない
+    "network": {
+      "allowedDomains": [
+        "api.anthropic.com:443",
+        "github.com:443",
+        "api.github.com:443",
+        "devapi.example.com:443"
+      ],
+      "strictAllowlist": true,
+      "allowManagedDomainsOnly": true,
+      "tlsTerminate": {} // TLS inspection を行う（ダミー値の置換に必要）
+    },
+    "filesystem": {
+      "allowWrite": ["./.local/tmp"],
+      "denyRead": [ // Bash 側の読取拒否
+        "/tmp",
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gh"
+      ]
+    },
+    "credentials": {
+      "envVars": [
+        {
+          "name": "GH_TOKEN",
+          "mode": "mask",
+          "injectHosts": ["github.com", "api.github.com"]
+        }
+      ],
+      "files": [
+        {
+          "path": "./.env",
+          "mode": "mask",
+          "extract": "API_PASSWORD=(\\S+)",
+          "onExtractNoMatch": "deny",
+          "injectHosts": ["devapi.example.com"]
+        }
+      ]
+    }
+  }
+}
+```
+
+```sh
+sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の保護でシークレットを隠せない場合のみ
+```
+
+`GH_TOKEN` と `API_PASSWORD` は sandbox 内ではダミー値として見せ、許可した送信先への通信時に本物へ置換する。
+
+`~/.ssh`、`~/.aws`、`~/.config/gh` は Bash と Claude Code 本体の Read tool の双方から読めないようにする。
+
+`allowedDomains` 以外への通信は自動承認に回さず拒否する。
+
+Claude Code の sandbox は Bash とその子プロセスに適用され、本体の Read / Write / Edit 等には適用されない。また `excludedCommands` は managed settings だけに固定できないため、利用する設定ファイルをエージェントが変更できないことを別途保証する必要がある。
+
+## 要求の充足
+
+* A1a: ◎*
+  * sandbox 内プロセスの外向き通信を allowlist で制限する。
+  * `WebFetch` と MCP を別経路として閉じる。
+  * user / project settings から sandbox 外実行経路を追加できない運用を前提とする。
+* A1b: ◎
+  * GitHub 側の repository scope により第三者リソースへの書き込み権限を持たせない。
+* A2-Y: ○
+  * credential masking と Read deny。保護できない入力経路は sumi で補う。
+* A3-Y: ○
+  * 上記の墨消し・読取拒否と auto mode で誤保存を減らす。
+* B1: ◎
+  * 本番 credential を持たず、本番変更には独立した保護を置く。
+* B2a: ○（未達）
+  * Bash は sandbox により作業領域外への write を阻止できる。
+  * 本体の Write / Edit 等は `Edit(path)` の deny で制限できるが、この例には作業領域外の書込を一律に拒否する設定がない。
+* B2b-Y: ○
+  * auto/manual approval で典型的な破壊操作を低減する。
+* P1: ○
+  * 共通の auto mode ルールで信頼済みリポジトリ以外の取得を抑えるが、classifier の判断に依存する。
+
+## pros / cons
+
+pros:
+
+* Claude Code 単体で構成できる。
+* credential masking を利用できる。
+* hostname allowlist を利用できる。
+
+cons:
+
+* Claude Code 本体全体を OS sandbox に入れる構成ではない。
+* B2a は Claude Code 本体側の制御に依存する。
+* sandbox 外実行経路を追加する設定まで managed settings だけで固定できない。
+
+# 系統2: srt + auto mode（必要時に sumi）
+
+`srt` で Claude Code 本体ごと隔離する。
+
+Bash に加えて Read / Write / Edit 等にも OS sandbox の filesystem / network policy が適用される。
+
+## 設定例
+
+```jsonc
+// ~/.srt-settings.json
+{
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+      "github.com",
+      "api.github.com",
+      "devapi.example.com"
+    ],
+    "deniedDomains": [],
+    "tlsTerminate": {} // ダミー値の置換に必要
+  },
+  "filesystem": {
+    "allowWrite": ["."],
+    "denyWrite": [".claude"],
+    "denyRead": [ // Read ツールにも Bash にも適用される
+      "/tmp",
+      "~/.ssh",
+      "~/.aws",
+      "~/.config/gh"
+    ]
+  },
+  "credentials": {
+    "envVars": [
+      {
+        "name": "GH_TOKEN",
+        "mode": "mask",
+        "injectHosts": ["github.com", "api.github.com"]
+      }
+    ],
+    "files": [
+      {
+        "path": "./.env",
+        "mode": "mask",
+        "extract": "API_PASSWORD=(\\S+)",
+        "onExtractNoMatch": "deny",
+        "injectHosts": ["devapi.example.com"]
+      }
+    ]
+  }
+}
+```
+
+```sh
+export CLAUDE_CONFIG_DIR="$PWD/.claude-state"
+sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の保護でシークレットを隠せない場合のみ
+srt --settings ~/.srt-settings.json claude --permission-mode auto
+```
+
+Claude Code の設定・認証・履歴は作業領域内の `.claude-state` に分離し、Git 管理から除外する。
+
+## 要求の充足
+
+* A1a: ◎
+  * Claude Code 本体を含む sandbox 内 process の外向き通信を allowlist で制限する。
+* A1b: ◎
+  * GitHub 側の repository scope により第三者リソースへの書き込み権限を持たせない。
+* A2-Y: ○
+  * credential masking と denyRead。保護できない入力経路は sumi で補う。
+* A3-Y: ○
+  * 上記の墨消し・読取拒否と auto mode で誤保存を減らす。
+* B1: ◎
+  * 本番 credential を持たず、本番変更には独立した保護を置く。
+* B2a: ◎
+  * 本体を含め作業領域外への write を制限し、[標準保護](https://github.com/anthropics/sandbox-runtime#mandatory-deny-paths-auto-protected-files)で `.git/config`・`.git/hooks` 等も保護する。
+  * 作業領域の `.claude` は `denyWrite` で保護する。`.claude-state` は隔離実行専用とし、ホストでは使わない。
+* B2b-Y: ○
+  * auto mode で典型事故を低減する。
+* P1: ○
+  * 共通の auto mode ルールで信頼済みリポジトリ以外の取得を抑えるが、classifier の判断に依存する。
+
+## pros / cons
+
+pros:
+
+* Claude Code 本体ごと OS sandbox に入れられる。
+* Git の設定・hook 等に標準の書込保護がある。
+* credential masking を利用できる。
+
+cons:
+
+* この設定の network policy は hostname 単位であり、GitHub 内の情報源を判定しない。
+* ホスト側の Claude Code 状態をそのまま共有する構成ではない。
+* 既存の hook 実体を別の場所に置く場合は、その参照先も `denyWrite` に追加する必要がある。
+
+# 系統3: Dev Container + firewall + sumi + auto mode
+
+Anthropic の Dev Container 参照実装をベースにする。
+
+container で filesystem を隔離し、iptables で外向き通信を制限する。
+
+## 設定例
+
+```jsonc
+// .devcontainer/devcontainer.json（参照実装から関係する部分を抜粋）
+{
+  "build": { "dockerfile": "Dockerfile" },
+  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW"], // firewall の設定に必要
+  "remoteUser": "node", // sudo は root 所有の init-firewall.sh の実行だけを許可
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "remoteEnv": { "GH_TOKEN": "${localEnv:GH_TOKEN}" }
+}
+```
+
+firewall は次の通信だけを許可する。
+
+* GitHub の必要な IP range（`api.github.com/meta` から取得）
+* `api.anthropic.com` の解決先
+* `devapi.example.com` の解決先
+* DNS（UDP 53）
+
+外部サービスへの接続は TCP 443 に限定し、全送信先への SSH は許可しない。
+
+参照実装の `init-firewall.sh` は、起動時に `dig` で hostname を IP へ解決して許可する。DNS は送信先を限定せず UDP 53 を許可する。
+
+ホストからは作業領域だけを RW mount し、次は mount しない。
+
+* `~/.ssh`
+* `~/.aws`
+* `~/.config/gh`
+* Docker socket
+
+Claude Code の状態は container 用 volume に保存する。
+
+```sh
+# コンテナ内。sumi のインストールと secrets file の配置後に実行
+sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
+
+claude --permission-mode auto
+```
+
+`GH_TOKEN` と `API_PASSWORD` は container 内でも本物の認証情報を使う。この例では sumi の併用が必要で、ツール出力等からモデルへの混入を減らす。
+
+## 要求の充足
+
+* A1a: ○（未達）
+  * firewall は TCP の接続先を IP で制限する。
+  * DNS は許可しているため、攻撃者ドメインのサブドメインへの問い合わせにデータを載せて送る DNS トンネリングが残る。DNS resolver を限定しても、resolver が再帰解決で攻撃者の権威サーバへ問い合わせを届ける。
+  * 許可先が CDN 等の共有基盤上にある場合は、同じ IP 上の攻撃者の hostname にも接続できる。今回の許可先のうち、`api.anthropic.com` は専用の IP 範囲を公開しており、この問題は起きない。
+* A1b: ◎
+  * GitHub 側の repository scope により第三者リソースへの書き込み権限を持たせない。
+* A2-Y: ○
+  * sumi でモデルへの secret 混入を減らす。
+* A3-Y: ○
+  * sumi と auto mode で誤保存を減らす。
+  * `.env` 自体は平文で存在する。
+* B1: ◎
+  * 本番 credential を持ち込まず、本番変更には独立した保護を置く。
+* B2a: ○（未達）
+  * ホストの RW mount は作業領域だけだが、その中の Git / Claude Code の設定・hook 等は保護していない。
+* B2b-Y: ○
+  * auto mode で典型事故を低減する。
+* P1: ○
+  * 共通の auto mode ルールで信頼済みリポジトリ以外の取得を抑えるが、classifier の判断に依存する。
+
+## pros / cons
+
+pros:
+
+* 既存 Dev Container の運用に載せやすい。
+* ホストの共有領域を mount で限定できる。
+* application は既存の secret 利用方法を変更せず動かせる。
+
+cons:
+
+* IP allowlist の保守が必要。
+  * 許可先の IP が起動後に変わると通信できなくなる（流出はしない）。
+* secret は container 内 process から見える。
+* DNS 経由の持ち出しを閉じるには、DNS を拒否し、許可先の IP を `/etc/hosts` 等で固定する必要がある。
+  * そうしても、許可先が共有 IP 上にある場合は hostname 単位の強制境界にならない。
+
+# 系統4: nas + auto mode
+
+`nas` で Claude Code を container に隔離する。
+
+外部通信を proxy に集約し、method、path、repository 等に基づいて許可、拒否、承認を行う。
+
+シークレットの墨消しと認証情報の代理注入も proxy 側で行う。
+
+## 設定例
+
+ホストと container の双方に managed settings を適用し、MCP server を制限する。
+
+```json
+{
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": []
+}
+```
+
+`agentState.protectSettings = true` で、`~/.claude/settings.json` を含む設定・plugin・skill・agent・command 等を read-only で共有する。hooks の実体も `~/.claude` 配下に置く。
+
+read-write で共有するのは `~/.claude.json` と、`~/.claude/` 内の `history.jsonl`、`projects/`（auto memory を含む）、`file-history/` に限る。ログ・キャッシュとホストに存在しない項目はセッション専用にする。
+
+Claude のログイン情報（`.credentials.json`）は共有しない。`agentState.auth` の既定値 `"proxy"` では、ホスト側の nas が OAuth token を保持・更新し、container にはダミーの `.credentials.json` を見せる。proxy は Anthropic の許可した request にだけ本物の token を注入する。
+
+GitHub は既定を `review` とし、REST / GraphQL / Git とも信頼済み情報源への read だけを自動許可する。
+
+```pkl
+// .nas/config.pkl
+local githubScope: Scope = new {
+  targets {}
+  fallback = "review"
+  secrets {
+    ["github-basic"] = "inject"
+  }
+  inject {
+    new Inject {
+      name = "authorization"
+      value = "secret:github-basic"
+    }
+  }
+}
+
+profiles {
+  ["claude"] = (super["claude"]) {
+    agentArgs {
+      "--permission-mode"
+      "auto"
+    }
+    agentState {
+      protectSettings = true // 共有する Claude 設定の上書きを防ぐ
+    }
+    hostexec = null
+    extraMounts {
+      // .git/config・.git/hooks は nas が自動で read-only にする。.claude は対象外なので明示する
+      new { src = ".claude";     dst = ".claude";     mode = "ro" } // project settings の hooks
+      new { src = "/dev/null";   dst = "~/.claude/sumi/secrets.txt"; mode = "ro" } // 秘密一覧の内容を container から隠す
+    }
+    secrets { // ホスト側で読み取る
+      ["github-token"] {
+        from = "env:GH_TOKEN"
+        required = true
+      }
+      ["github-basic"] {
+        // GitHub の HTTP 通信に注入する Authorization ヘッダ
+        from = #"cmd:printf 'Basic %s' "$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)""#
+        required = true
+      }
+      ["api-password"] {
+        from = "dotenv:.env#API_PASSWORD"
+        required = true
+      }
+      ["sumi-secrets"] {
+        // 他系統で sumi に渡す秘密一覧と同じファイル。1行を1つの値としてマスクする
+        from = "lines:~/.claude/sumi/secrets.txt"
+        required = true
+      }
+    }
+    env {
+      new {
+        key = "GH_TOKEN"
+        val = "nas-injected" // gh にはダミー値を渡す
+      }
+    }
+    mask = new MaskConfig {
+      maskfs = true // ファイルシステム上の秘密値を墨消し
+      proxy  = true // HTTP リクエストの秘密値を墨消し
+      filter = true // Bash の stdout/stderr を墨消し
+    }
+    network {
+      fallback = "deny"
+      scopes {
+        ["anthropic"] = (module.presets.anthropic.v1) {
+          fallback = "deny"
+        }
+        ["github-api"] = (githubScope) {
+          targets {
+            "api.github.com:443"
+          }
+          rules {
+            ["owned.rest-read"] {
+              match {
+                methods { "GET"; "HEAD"}
+                paths {
+                  "/repos/my-org/private-repo/**"
+                }
+              }
+              onMatch = "allow"
+            }
+            ["owned.graphql-read"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body { format = "json" }
+              }
+              onMatch = "allow"
+              onIndeterminate = "review"
+              expect {
+                new BodyExpect {
+                  graphql {
+                    operations { "query" }
+                    fieldPaths {
+                      "/repository/nameWithOwner"
+                      "/repository/url"
+                      "/repository/issues/nodes/number"
+                      "/repository/issues/nodes/title"
+                      "/repository/issues/nodes/body"
+                      "/repository/issues/nodes/comments/nodes/body"
+                      "/repository/issues/pageInfo/endCursor"
+                      "/repository/issues/pageInfo/hasNextPage"
+                      "/repository/pullRequests/nodes/number"
+                      "/repository/pullRequests/nodes/title"
+                      "/repository/pullRequests/nodes/body"
+                      "/repository/pullRequests/nodes/comments/nodes/body"
+                      "/repository/pullRequests/pageInfo/endCursor"
+                      "/repository/pullRequests/pageInfo/hasNextPage"
+                    }
+                    fieldArguments {
+                      ["/repository"] {
+                        ["owner"] { "my-org" }
+                        ["name"] { "private-repo" }
+                      }
+                    }
+                  }
+                  onViolation = "review"
+                }
+              }
+            }
+          }
+        }
+        ["github-git"] = (githubScope) {
+          targets {
+            "github.com:443"
+          }
+          rules {
+            ["owned.git-fetch"] {
+              match {
+                methods { "GET"; "POST"}
+                paths {
+                  "/my-org/private-repo/info/refs"
+                  "/my-org/private-repo/git-upload-pack"
+                }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+        ["example-api"] {
+          targets {
+            "devapi.example.com:443"
+          }
+          secrets {
+            ["api-password"] = "inject"
+          }
+          inject {
+            new Inject {
+              name = "x-api-key"
+              value = "secret:api-password"
+            }
+          }
+          rules {
+            ["all"] {
+              match {
+                paths { "/**" }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+```sh
+nas config trust   # 設定を承認
+nas claude
+```
+
+`expect.graphql` で query の取得経路と owner / repo 名を制限する。例は Issue / PR / comment の取得用で、必要なフィールドを追加するときも未信頼情報源へ辿れない経路に限る。
+
+許可外の repo・取得経路、mutation、判定不能な要求、REST write、Git push は `review` にする。承認は `once` とし、後続の未信頼取得まで自動許可しない。
+
+作業領域はホストと read-write で共有するため、`.git/hooks`、`.git/config`、`.claude/settings.json` 等を書き換えられると、ホストで git や Claude Code を実行した時点でエージェントの書いたコードが動く。
+
+nas は git の状態を設定なしで常に read-only にする。
+
+* 対象は `.git/config`、`.git/hooks`、`core.hooksPath` の指す先、`config.worktree`、linked worktree の `.git` ポインタファイル、`.nas`。
+  * `.git/config` も保護しないと、`core.hooksPath` を作業領域内の別ディレクトリへ向けて hook を動かせる。`core.fsmonitor`、`filter.*`、`diff.*.textconv` 等も同様である。
+  * `.git/hooks` が無ければ、ホスト側に空で作ってから read-only にする。
+* 作業領域の root から保護対象までの途中のディレクトリ（`.git` 等）もマウントポイントにする。マウントポイントは rename できないので、`mv .git .git.bak` の後に新しい `.git` を作って保護を外すことはできない。
+* `git config`、`git remote add`、`git push -u` 等、`.git/config` を書く操作はコンテナ内で失敗する。ホストで実行する。
+* 次は保護の対象外である。
+  * 作業領域のパスが symlink を経由する場合、`core.hooksPath` や worktree のポインタが保護から漏れることがある。
+  * サブディレクトリに新しく作った `.git`、submodule の `.git/modules`、起動後に作られた `config.worktree`。
+
+`.claude` は自動保護の対象外なので、`extraMounts` で read-only にする。`.claude` は起動前に作業領域に存在している必要がある。存在しないパスはマウントされず、エージェントが新規作成できる。
+
+nas は sumi 併用時と同じ秘密一覧を `lines:~/.claude/sumi/secrets.txt` で読み、内蔵のマスクに渡す。この例に sumi は追加しない。一覧はホスト側で読み、container 内の同じパスは `/dev/null` にして内容を隠す。`lines:` はマスクに使えるが、注入には使えない。
+
+## 要求の充足
+
+* A1a: ◎
+  * container からの直接 egress を閉じ、proxy を強制点にする。
+  * agent container は `--internal` の network にだけ接続し、Docker の内蔵 DNS は外部の名前を解決しない。
+  * proxy は `connection_strategy=lazy` で動かし、request ごとの許可判定を通った後にだけ upstream の名前解決と接続を行う。拒否した送信先の名前は解決しないため、DNS 経由の持ち出しも起きない。
+* A1b: ◎
+  * GitHub 側の権限制御に加え、proxy でも書き込み操作を制限できる。
+* A2-Y: ○
+  * maskfs、proxy mask、output filter、credential injection で secret の混入を減らす。
+  * Claude のログイン情報も container に置かず、proxy が注入する。
+  * 注入は上流が TLS の request に限り、上流の証明書を検証する。平文 HTTP で送らせても、注入した値は経路上に出ない。
+* A3-Y: ○
+  * エージェントにはシークレットを見せず、auto mode も併用する。
+* B1: ◎
+  * 本番への直接経路を持たず、GitHub 経由の本番操作も独立した保護を通す。
+* B2a: ◎
+  * 共有する設定・plugin・skill・hooks 等は read-only で保護し、`~/.claude.json` の MCP 設定はホスト・container 双方の managed settings で制限する。
+  * 作業領域の既存の Git 設定・hook と `.nas` は自動保護し、`.claude` は read-only mount する。既存設定が前述の保護対象外にある配置では未達となる。
+  * agent container は `no-new-privileges` で起動し、entrypoint に必要な 6 つ以外の capability を落とす。
+  * 履歴・プロジェクト状態の read-write 共有は、共通条件で認めた例外に含める。
+  * Nix 連携を有効にすると `/nix` を read-write で mount する。agent は一般ユーザーで動き権限昇格もできないが、container 内で root を奪われると store 経由でホストに波及し得る。
+* B2b-Y: ○
+  * local の破壊操作は auto mode、remote write は proxy review でも低減する。
+* P1: ◎
+  * REST / Git の対象と GraphQL の取得経路・引数を proxy が検査し、信頼済み情報源だけを自動許可する。
+
+## pros / cons
+
+pros:
+
+* GitHub 内のリポジトリや操作まで見て通信を制御できる。
+* 信頼済み read と未信頼 read を分けられる。
+* credential をエージェントに直接渡さず利用できる。Claude のログイン情報も含む。
+* network write も同じ proxy で承認対象にできる。
+
+cons:
+
+* API ごとの rule 設計が必要。
+* 共有する設定や plugin の更新はホスト側で行う必要がある。
+* `git config`、`git push -u` 等、`.git/config` を書く操作はホストで行う必要がある。
+* 上流の TLS 証明書を検証するため、TLS を傍受する社内 proxy の下や自己署名証明書の通信先には接続できない。回避する設定はない。
+* broad rule を書くとリポジトリ単位の境界が失われる。
+* Git packfile の中身までは proxy で墨消しできない。
+  * `cp .env foo && git add foo && git commit -m 'malicious'` を防ぎたければ `.env` をROマウントする設定が必要（`srt`と同様）
+
+# 系統5: Docker Sandbox + auto mode（必要時に sumi）
+
+Docker Sandbox の microVM で Claude Code を隔離する。
+
+ホスト側 proxy が network policy（hostname・HTTP method/path）と credential injection を行う。以下の例では hostname 単位で許可する。
+
+## 設定例
+
+```sh
+sbx policy init deny-all
+
+sbx policy allow network \
+  "api.anthropic.com:443,github.com:443,api.github.com:443,devapi.example.com:443"
+
+sbx secret set anthropic
+sbx secret set github --command 'gh auth token'
+
+sbx secret set-custom \
+  --host devapi.example.com \
+  --env API_PASSWORD \
+  --value "$API_PASSWORD"
+
+sbx settings set ssh.agentForwardingEnabled false
+sbx daemon restart
+
+sbx create \
+  --name coding \
+  --clone \
+  --skills off \
+  claude .
+```
+
+default kit が追加する不要な network allow rule は削除する。
+
+Claude Code は既定の起動方法を使わず、approval を利用する設定で起動する。
+
+```sh
+sbx exec -it coding bash
+# ここから VM 内
+sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の保護でシークレットを隠せない場合のみ
+claude --permission-mode auto
+```
+
+clone mode は VM 内に private clone を作り、ホスト repository も `/run/sandbox/source` に read-only で mount する。untracked file や `.gitignore` 対象も含むため、シークレットを含む `.env` 等は VM 内から読める。
+
+シークレットを Git root 外へ移せる場合は secret store に登録し、必要な `.env` は VM 内に dummy value で作る。移せず読取拒否もできない場合は sumi を併用する。代理注入だけでは共有ファイル内のシークレットを隠せない。
+
+## 要求の充足
+
+* A1a: ◎
+  * microVM 外の network policy / proxy が未許可送信先への通信を阻止する。
+* A1b: ◎
+  * GitHub 側の repository scope により第三者リソースへの書き込み権限を持たせない。
+* A2-Y: ○
+  * credential injection。共有ファイルにシークレットが残る場合は sumi でモデルへの混入を減らす。
+* A3-Y: ○
+  * シークレットを除去できる場合は dummy credential を使い、残る場合は sumi と auto mode で誤保存を減らす。
+* B1: ◎
+  * 本番権限を持たず、本番変更には独立した保護を置く。
+* B2a: ◎
+  * microVM 境界に閉じる。
+  * clone mode ではホスト repository への write もできない。
+  * shared skills と SSH agent forwarding も無効にする。
+* B2b-Y: ○
+  * VM 内 clone は破壊可能だが、ホストの作業ツリーから分離される。
+* P1: ○
+  * 共通の auto mode ルールで信頼済みリポジトリ以外の取得を抑えるが、classifier の判断に依存する。
+
+## pros / cons
+
+pros:
+
+* ホストとエージェントの境界が明快。
+* clone mode でホストの作業ツリーを直接変更しない。
+* credential を VM 内へ持ち込まず利用できる。
+* 作業領域を使い捨てにしやすい。
+
+cons:
+
+* HTTP method/path の制限を追加しても、GraphQL の取得先は区別できない（後述）。
+* 共有ファイルに残るシークレットは VM 内 process からも読める。
+* Claude Code の起動方法を既定から変更する必要がある。
+
+# 要求充足の比較
+
+| 要求                                   | 必要水準 | 系統1 settings | 系統2 srt | 系統3 Dev Container | 系統4 nas | 系統5 Docker Sandbox |
+| --------------------------             | ---:     | -----------:   | ------:   | ----------------:   | ------:   | -----------------:   |
+| A1a: 未許可送信先への流出              | ◎        | ◎*             | ◎         | ○                   | ◎         | ◎                    |
+| A1b: 許可済みサービス経由の第三者流出  | ◎        | ◎              | ◎         | ◎                   | ◎         | ◎                    |
+| B1: 本番等への高影響な操作             | ◎        | ◎              | ◎         | ◎                   | ◎         | ◎                    |
+| B2a: ホストへの破壊・改変波及          | ◎        | ○              | ◎         | ○                   | ◎         | ◎                    |
+| A2-Y: 正規連携先への不要な secret 混入 | ○以上    | ○              | ○         | ○                   | ○         | ○                    |
+| A3-Y: secret の意図しない保存          | ○以上    | ○              | ○         | ○                   | ○         | ○                    |
+| B2b-Y: 作業領域・開発 repo の破壊      | ○以上    | ○              | ○         | ○                   | ○         | ○                    |
+| P1: 未信頼情報源の無人取り込み防止     | ○以上    | ○              | ○         | ○                   | ◎         | ○                    |
+
+`*`:
+
+* 系統1 A1a は、user / project settings から sandbox 外実行経路を追加できないようにする運用を前提とする。
+
+## GitHub の通信制御
+
+fine-grained token で書き込み先を絞る A1b の防御は全系統に共通で置ける。一方、公開リポジトリの read 権限は残るため、P1 の取得制限にはならない。
+
+`gh` が使う [GraphQL API](https://docs.github.com/en/graphql/guides/forming-calls-with-graphql) は query / mutation とも `POST /graphql` の本文で対象を指定する。[Docker Sandbox の HTTP ルール](https://docs.docker.com/ai/sandboxes/governance/concepts/#http-method-and-path)の公開仕様は method/path までで、取得先を区別できない。GraphQL 全拒否では共通の作業条件を満たせず、許可すれば取得制限は classifier に依存するため P1 は ○。
+
+## 機構・運用面の比較
+
+| 観点                        | 系統1 settings                    | 系統2 srt           | 系統3 Dev Container   | 系統4 nas          | 系統5 Docker Sandbox |
+| -----------------------     | ------------------------------    | --------------      | --------------------  | -----------------  | ------------------   |
+| エージェントの基本隔離      | Bash sandbox + 本体側 permissions | エージェント全体    | container             | container          | microVM              |
+| 外向き通信の強制点          | Bash sandbox + permissions        | エージェント外側    | container 内 firewall | container 外 proxy | VM 外 proxy          |
+| hostname 単位の通信制御     | ○                                 | ◎                   | △                     | ◎                  | ◎                    |
+| GitHub 側の repository 制限 | ◎                                 | ◎                   | ◎                     | ◎                  | ◎                    |
+| GraphQL の取得制限          | classifier の審査                 | classifier の審査   | classifier の審査     | proxy が本文を検査 | classifier の審査    |
+| 認証情報の代理注入          | ◎                                 | ◎                   | ×                     | ◎                  | ◎                    |
+| ホストへの書込境界          | Bash のみ                         | 作業領域外を制限    | 作業領域を RW 共有    | 作業領域を RW 共有 | ホスト repo は RO    |
+| 作業領域の使い捨て          | △                                 | △                   | △                     | △                  | ◎                    |
+| 導入コスト                  | 小                                | 小                  | 小〜中                | 中                 | 中                   |
+
+# 選定結果
+
+共通条件と各設定例の保護範囲では、系統2・4・5が要求を満たす。
+
+* 系統1は本体のホスト書込を OS 境界で制限できず、B2a が不足する。
+* 系統2は本体全体の隔離、Git の標準保護、`.claude` の書込拒否を組み合わせる。P1 は ○。
+* 系統3は DNS 等の持ち出し経路と共有する設定・hook の改変が残り、A1a・B2a が不足する。
+* 系統4は既存のホスト設定を保護できる配置で B2a を満たし、GraphQL を含め信頼済み情報源への取得を強制して P1 も ◎。
+* 系統5は clone mode でホストへの write を閉じ、使い捨ての作業領域を得られる。P1 は ○。
+
+今回の設定例で P1 の ◎ が必要なら系統4、○ でよければ系統2・5も候補になる。いずれも作業領域の復旧と、新たなコード・設定をホストで使う前の review は必要である。
+
+# TODO
+
+* 代理注入で管理する秘密について、A2-X / A3-X の評価を加点項目として追加する。
+  * 実値を隔離環境へ持ち込まない構成では、X を仮定しても値を送信・保存できないため ◎ になり得る。実値を置いて sumi だけで保護する構成は ○ にとどまる。
+  * ◎ の範囲は代理注入で管理する秘密の値に限られる。token 発行 API や認証情報を返す API が注入先にあれば、実値が隔離環境に入る。
+  * 系統1は本体プロセスの環境変数、系統4は maskfs が元のファイルを読む位置について、実値が隔離環境の外にあるかを確認する。
+  * 系統4では、Claude のログイン情報も `agentState.auth = "proxy"`（既定）で代理注入の対象になる。
