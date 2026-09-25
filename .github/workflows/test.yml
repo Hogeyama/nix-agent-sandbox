@@ -24,11 +24,9 @@ jobs:
           nix develop -c bun run docs:build
           nix develop -c python3 docs-site/editorial/check-pkl.py
 
-      - name: Type check
+      # check runs every lint:* script before tsc.
+      - name: Lint and type check
         run: nix develop -c bun run check
-
-      - name: Lint
-        run: nix develop -c bun run lint
 
       # docker:dind-rootless needs unprivileged user namespaces; Ubuntu 24.04
       # runners restrict them via AppArmor (rootlesskit dies with
