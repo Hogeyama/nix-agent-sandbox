@@ -56,10 +56,10 @@ test("validateDevcontainerProfile: rejects an explicit proxy for Codex", () => {
   const profile = {
     ...devcontainerProfile(),
     agent: "codex" as const,
-    agentState: { protectSettings: false, auth: "proxy" as const },
+    agentState: { protectSettings: false, auth: "injected" as const },
   };
   expect(validateDevcontainerProfile(profile)).toContain(
-    'agentState.auth = "proxy" is unsupported for Codex devcontainer sessions; use "shared"',
+    'agentState.auth = "injected" is unsupported for Codex devcontainer sessions; use "passthrough"',
   );
 });
 
@@ -69,16 +69,16 @@ test("validateDevcontainerProfile: rejects a per-agent proxy for Codex", () => {
     agent: "codex" as const,
     agentState: {
       protectSettings: false,
-      auth: { codex: "proxy" as const },
+      auth: { codex: "injected" as const },
     },
   };
   expect(validateDevcontainerProfile(profile)).toContain(
-    'agentState.auth = "proxy" is unsupported for Codex devcontainer sessions; use "shared"',
+    'agentState.auth = "injected" is unsupported for Codex devcontainer sessions; use "passthrough"',
   );
   expect(
     validateDevcontainerProfile({
       ...profile,
-      agentState: { protectSettings: false, auth: { claude: "proxy" } },
+      agentState: { protectSettings: false, auth: { claude: "injected" } },
     }),
   ).toEqual([]);
 });

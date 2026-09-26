@@ -208,7 +208,7 @@ export const DEFAULT_GUIDE_CONFIG: GuideConfig = {
 };
 
 /** エージェント自身のログイン情報の扱い */
-export type AgentCredentialsMode = "proxy" | "shared";
+export type AgentCredentialsMode = "injected" | "passthrough";
 
 /**
  * `agentState.auth` の設定値。文字列はすべてのエージェントに、Mapping は
