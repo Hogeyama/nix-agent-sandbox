@@ -223,7 +223,7 @@ function apiKeyEnvErrors(
     // keyCmd のキー名はホストでコマンドを実行するまで決まらない。
     if (!("key" in entry) || !keys.includes(entry.key)) continue;
     errors.push(
-      `profile "${name}": env ${entry.key} does not work while ${label} credentials are injected by the proxy; set agentState.auth = "shared" (or new Mapping { ["${agent}"] = "shared" } for ${label} only) to use an API key`,
+      `profile "${name}": env ${entry.key} does not work while ${label} credentials are injected by the proxy; set agentState.auth = "passthrough" (or new Mapping { ["${agent}"] = "passthrough" } for ${label} only) to use an API key`,
     );
   }
   return errors;
@@ -233,19 +233,22 @@ function validateAgentCredentials(name: string, profile: Profile): string[] {
   const errors: string[] = [];
   const auth = profile.agentState.auth;
   const provisioned = [profile.agent, ...profile.extraAgents];
-  if (auth === "proxy" && !provisioned.some(supportsProxiedCredentials)) {
+  if (auth === "injected" && !provisioned.some(supportsProxiedCredentials)) {
     errors.push(
-      `profile "${name}": agentState.auth = "proxy" supports only agents "claude" and "codex"; use "shared" for agent "${profile.agent}"`,
+      `profile "${name}": agentState.auth = "injected" supports only agents "claude" and "codex"; use "passthrough" for agent "${profile.agent}"`,
     );
   }
-  // 文字列の "proxy" は対応するエージェントにだけ効くと読めるが、エージェントを
-  // 名指しした "proxy" は、そのエージェントを保護するつもりで書いたものである。
-  // 黙って "shared" にすると書き手の意図と逆になる。
+  // 文字列の "injected" は対応するエージェントにだけ効くと読めるが、エージェントを
+  // 名指しした "injected" は、そのエージェントを保護するつもりで書いたものである。
+  // 黙って "passthrough" にすると書き手の意図と逆になる。
   if (auth !== undefined && typeof auth !== "string") {
     for (const [agent, mode] of Object.entries(auth)) {
-      if (mode === "proxy" && !supportsProxiedCredentials(agent as AgentType)) {
+      if (
+        mode === "injected" &&
+        !supportsProxiedCredentials(agent as AgentType)
+      ) {
         errors.push(
-          `profile "${name}": agentState.auth["${agent}"] = "proxy" is unsupported; only agents "claude" and "codex" support "proxy"`,
+          `profile "${name}": agentState.auth["${agent}"] = "injected" is unsupported; only agents "claude" and "codex" support "injected"`,
         );
       }
     }
@@ -262,7 +265,7 @@ function validateAgentCredentials(name: string, profile: Profile): string[] {
     );
   }
   // 検証の時点では Dev Container かどうか分からないので、Dev Container でない
-  // ものとして調べる。Dev Container の Codex で API key を使うなら "shared" を
+  // ものとして調べる。Dev Container の Codex で API key を使うなら "passthrough" を
   // 明示する。
   if (usesProxiedCodexCredentials(profile)) {
     errors.push(

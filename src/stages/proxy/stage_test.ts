@@ -494,7 +494,7 @@ test("planProxy: shared credentials and Copilot do not start a host OAuth source
   for (const profile of [
     makeProfile({
       agent: "claude",
-      agentState: { protectSettings: false, auth: "shared" },
+      agentState: { protectSettings: false, auth: "passthrough" },
     }),
     makeProfile({ agent: "copilot" }),
   ]) {

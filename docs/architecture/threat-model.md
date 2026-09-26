@@ -678,7 +678,7 @@ cons:
 
 read-write で共有するのは `~/.claude.json` と、`~/.claude/` 内の `history.jsonl`、`projects/`（auto memory を含む）、`file-history/` に限る。ログ・キャッシュとホストに存在しない項目はセッション専用にする。
 
-Claude のログイン情報（`.credentials.json`）は共有しない。`agentState.auth` の既定値 `"proxy"` では、ホスト側の nas が OAuth token を保持・更新し、container にはダミーの `.credentials.json` を見せる。proxy は Anthropic の許可した request にだけ本物の token を注入する。
+Claude のログイン情報（`.credentials.json`）は共有しない。`agentState.auth` の既定値 `"injected"` では、ホスト側の nas が OAuth token を保持・更新し、container にはダミーの `.credentials.json` を見せる。proxy は Anthropic の許可した request にだけ本物の token を注入する。
 
 GitHub は既定を `review` とし、信頼済み情報源への read だけを自動許可する。
 
@@ -1135,4 +1135,4 @@ P1 を ○ にとどめてよい場合は、srt や Docker Sandbox のように�
   * 実値を隔離環境へ持ち込まない構成では、X を仮定しても値を送信・保存できないため ◎ になり得る。実値を置いて sumi だけで保護する構成は ○ にとどまる。
   * ◎ の範囲は代理注入で管理する秘密の値に限られる。token 発行 API や認証情報を返す API が注入先にあれば、実値が隔離環境に入る。
   * 系統1は本体プロセスの環境変数、系統4は maskfs が実値を読む位置について、実値が隔離環境の外にあるかを確認する。
-  * 系統4では、Claude のログイン情報も `agentState.auth = "proxy"`（既定）で代理注入の対象になる。
+  * 系統4では、Claude のログイン情報も `agentState.auth = "injected"`（既定）で代理注入の対象になる。
