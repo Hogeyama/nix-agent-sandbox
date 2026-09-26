@@ -125,7 +125,7 @@ test("describeDevcontainerSharing: Claude credentials shared for API-key profile
     ...devcontainerProfile(),
     agentState: {
       ...devcontainerProfile().agentState,
-      auth: "shared" as const,
+      auth: "passthrough" as const,
     },
   };
   const text = detail(profile, "Claude credentials");
@@ -137,22 +137,22 @@ test("describeDevcontainerSharing: Claude credentials text is pinned for each au
   const cases: ReadonlyArray<readonly [AgentCredentialsMode, boolean, string]> =
     [
       [
-        "proxy",
+        "injected",
         false,
         "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; ~/.claude.json and the ~/.claude entries present on the host at session start, read-write and kept on the host after down; top-level ~/.claude entries created in the container, session-private and discarded on down",
       ],
       [
-        "proxy",
+        "injected",
         true,
         "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down",
       ],
       [
-        "shared",
+        "passthrough",
         false,
         "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
       ],
       [
-        "shared",
+        "passthrough",
         true,
         "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down",
       ],
