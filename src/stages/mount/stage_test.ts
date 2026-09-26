@@ -1820,7 +1820,7 @@ test("MountStage: display records shared memory size as structured state", () =>
 test("MountStage run(): creates directories via MountSetupService and returns result", async () => {
   const profile = makeProfile({
     nix: { enable: true, mountSocket: true },
-    agentState: { protectSettings: false, auth: "shared" },
+    agentState: { protectSettings: false, auth: "passthrough" },
   });
   const hostEnv: HostEnv = {
     ...defaultHostEnv,
@@ -1915,7 +1915,7 @@ test("MountStage run(): a nas worktree's gitdir, made after the probe, is re-pro
   const worktreeCommondir = `${repoRoot}/.git/worktrees/nas-1/commondir`;
   const { sharedInput, slices, mountProbes } = makeInput({
     profile: makeProfile({
-      agentState: { protectSettings: false, auth: "shared" },
+      agentState: { protectSettings: false, auth: "passthrough" },
     }),
     mountProbes: makeMountProbes({
       gitMetadata: {
@@ -1968,7 +1968,7 @@ test("MountStage run(): a nas worktree's gitdir, made after the probe, is re-pro
 test("MountStage run(): no directories when nix disabled", async () => {
   const { sharedInput, slices, mountProbes } = makeInput({
     profile: makeProfile({
-      agentState: { protectSettings: false, auth: "shared" },
+      agentState: { protectSettings: false, auth: "passthrough" },
     }),
   });
 
@@ -1997,7 +1997,7 @@ test("MountStage run(): no directories when nix disabled", async () => {
 test("MountStage run(): preserves structured base container state", async () => {
   const mountProbes = makeMountProbes({});
   const profile = makeProfile({
-    agentState: { protectSettings: false, auth: "shared" },
+    agentState: { protectSettings: false, auth: "passthrough" },
   });
   const { sharedInput, slices } = makeInput({
     profile,
@@ -2256,7 +2256,7 @@ test("MountStage run(): prepares protected Claude state before planning and reta
   const mountProbes = makeMountProbes();
   const { sharedInput, slices } = makeInput({
     profile: makeProfile({
-      agentState: { protectSettings: true, auth: "shared" },
+      agentState: { protectSettings: true, auth: "passthrough" },
     }),
     mountProbes,
   });
@@ -2409,7 +2409,7 @@ test("MountStage run(): shared Claude credentials do not prepare a dummy file", 
   const mountProbes = makeMountProbes();
   const { sharedInput, slices } = makeInput({
     profile: makeProfile({
-      agentState: { protectSettings: false, auth: "shared" },
+      agentState: { protectSettings: false, auth: "passthrough" },
     }),
     mountProbes,
   });

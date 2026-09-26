@@ -13,10 +13,10 @@ export function validateDevcontainerProfile(
     errors.push("extraAgents is unsupported for devcontainer sessions");
   if (
     profile.agent === "codex" &&
-    configuredAgentCredentials(profile.agentState.auth, "codex") === "proxy"
+    configuredAgentCredentials(profile.agentState.auth, "codex") === "injected"
   )
     errors.push(
-      'agentState.auth = "proxy" is unsupported for Codex devcontainer sessions; use "shared"',
+      'agentState.auth = "injected" is unsupported for Codex devcontainer sessions; use "passthrough"',
     );
   if (profile.worktree)
     errors.push(

@@ -45,21 +45,21 @@ export function configuredAgentCredentials(
 /**
  * エージェントの `agentState.auth` の実効値を返す。
  *
- * 未実装のエージェントは、明示されていても `"shared"` になる。Copilot の
+ * 未実装のエージェントは、明示されていても `"passthrough"` になる。Copilot の
  * token は `~/.copilot` に無いので、共有しても保護は弱まらない。未指定なら
- * 実装済みのエージェントは `"proxy"` になる。ただし Dev Container の Codex は
- * `"shared"` になる。
+ * 実装済みのエージェントは `"injected"` になる。ただし Dev Container の Codex は
+ * `"passthrough"` になる。
  */
 export function resolveAgentCredentials(
   agent: AgentType,
   auth: AgentCredentialsConfig | undefined,
   context: CredentialsContext = {},
 ): AgentCredentialsMode {
-  if (!supportsProxiedCredentials(agent)) return "shared";
+  if (!supportsProxiedCredentials(agent)) return "passthrough";
   const configured = configuredAgentCredentials(auth, agent);
   if (configured !== undefined) return configured;
-  if (agent === "codex" && context.devcontainer) return "shared";
-  return "proxy";
+  if (agent === "codex" && context.devcontainer) return "passthrough";
+  return "injected";
 }
 
 /**
@@ -76,7 +76,8 @@ export function usesProxiedCredentials(
     profile.agent === agent || (profile.extraAgents ?? []).includes(agent);
   return (
     provisioned &&
-    resolveAgentCredentials(agent, profile.agentState.auth, context) === "proxy"
+    resolveAgentCredentials(agent, profile.agentState.auth, context) ===
+      "injected"
   );
 }
 
