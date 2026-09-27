@@ -61,7 +61,6 @@ export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
 /** configureClaude の入力 */
 export interface ClaudeConfigInput extends ClaudeProvisionInput {
   readonly mode?: AgentMode;
-  readonly claudeState?: ClaudeStatePaths;
 }
 
 /** provisionClaude の入力 */
@@ -79,6 +78,14 @@ export interface ClaudeProvisionInput {
    * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
    */
   readonly claudeCredentialsFile?: string;
+  /** Dev Container の Claude IDE 状態。主・追加のどちらでも渡せる。 */
+  readonly claudeState?: ClaudeStatePaths;
+  /**
+   * ホスト Claude バイナリを mount するか。未指定なら `claudeState` が
+   * 無いときだけ true (従来どおり)。IDE 拡張は同梱バイナリを使うが、
+   * 追加 CLI 用途のホストバイナリはこのフラグで別途 mount できる。
+   */
+  readonly mountHostBinary?: boolean;
 }
 
 /**
@@ -86,7 +93,7 @@ export interface ClaudeProvisionInput {
  * (純粋関数)。起動コマンドと起動時だけの設定は configureClaude が足す。
  */
 export function provisionClaude(
-  input: ClaudeProvisionInput & { readonly claudeState?: ClaudeStatePaths },
+  input: ClaudeProvisionInput,
 ): AgentProvisionResult {
   const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
     input;
@@ -113,6 +120,9 @@ export function provisionClaude(
       "[nas] Dummy Claude credentials must be mounted onto protected Claude state",
     );
   }
+
+  const mountHostBinary =
+    input.mountHostBinary ?? input.claudeState === undefined;
 
   const stateMounts = input.protectedClaudeState
     ? [
@@ -149,21 +159,32 @@ export function provisionClaude(
       : [...(mounts ?? []), ...credentialsMount];
 
   if (input.claudeState) {
+    const ideMounts = stateMounts ?? [
+      {
+        source: input.claudeState.claudeDir,
+        target: `${containerHome}/.claude`,
+      },
+      {
+        source: input.claudeState.claudeJson,
+        target: `${containerHome}/.claude.json`,
+      },
+    ];
+    // IDE 拡張は同梱バイナリを使うので、ホストバイナリは追加 CLI 用途の
+    // ときだけ structured mount で足す (colon を含むパスも安全に渡る)。
+    const hostBinaryMounts: MountSpec[] =
+      mountHostBinary && probes.claudeBinPath
+        ? [
+            {
+              source: probes.claudeBinPath,
+              target: `${containerLocalBin}/claude`,
+              readOnly: true,
+            },
+          ]
+        : [];
     return {
       dockerArgs: args,
       envVars,
-      mounts: withCredentials(
-        stateMounts ?? [
-          {
-            source: input.claudeState.claudeDir,
-            target: `${containerHome}/.claude`,
-          },
-          {
-            source: input.claudeState.claudeJson,
-            target: `${containerHome}/.claude.json`,
-          },
-        ],
-      ),
+      mounts: withCredentials([...ideMounts, ...hostBinaryMounts]),
     };
   }
 
@@ -178,7 +199,7 @@ export function provisionClaude(
   }
 
   // claude バイナリのマウント (実体パスを解決してマウント)
-  if (probes.claudeBinPath) {
+  if (mountHostBinary && probes.claudeBinPath) {
     args.push("-v", `${probes.claudeBinPath}:${containerLocalBin}/claude:ro`);
   }
 

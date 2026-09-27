@@ -101,3 +101,72 @@ test("provisionCodex: rejects a dummy auth.json for Dev Container state", () => 
     }),
   ).toThrow("Dummy Codex credentials");
 });
+
+// Dev Container extra Codex: same IDE state as the primary, plus the host
+// CLI (and its auxiliary binary) as structured mounts (mountHostBinary is
+// caller-driven, not implied by codexState alone).
+test("provisionCodex: a Dev Container extra also mounts the host binary as a structured mount", () => {
+  const extra = provisionCodex({
+    ...input,
+    codexState: { codexDir: "/state:$x/codex" },
+    mountHostBinary: true,
+  });
+  expect(extra.mounts).toContainEqual({
+    source: "/host/codex",
+    target: "/usr/local/bin/codex",
+    readOnly: true,
+  });
+  expect(extra.mounts).toContainEqual({
+    source: "/state:$x/codex",
+    target: "/home/nas/.codex",
+  });
+  expect(extra.dockerArgs).toEqual([]);
+});
+
+test("provisionCodex: a Dev Container extra also mounts codex-code-mode-host when present", () => {
+  const extra = provisionCodex({
+    ...input,
+    probes: {
+      ...input.probes,
+      codexCodeModeHostBinPath: "/host/codex-code-mode-host",
+    },
+    codexState: { codexDir: "/state:$x/codex" },
+    mountHostBinary: true,
+  });
+  expect(extra.mounts).toContainEqual({
+    source: "/host/codex-code-mode-host",
+    target: "/usr/local/bin/codex-code-mode-host",
+    readOnly: true,
+  });
+});
+
+test("provisionCodex: a Dev Container extra without a host binary omits the mount", () => {
+  const extra = provisionCodex({
+    ...input,
+    probes: { ...input.probes, codexBinPath: null },
+    codexState: { codexDir: "/state:$x/codex" },
+    mountHostBinary: true,
+  });
+  expect(extra.mounts).toEqual([
+    { source: "/state:$x/codex", target: "/home/nas/.codex" },
+  ]);
+});
+
+test("provisionCodex: a Dev Container extra keeps the protectSettings overlay alongside the host binary", () => {
+  const extra = provisionCodex({
+    ...input,
+    probes: { ...input.probes, codexSettingsFiles: ["config.toml"] },
+    codexState: { codexDir: "/state:$x/codex" },
+    mountHostBinary: true,
+  });
+  expect(extra.mounts).toContainEqual({
+    source: "/state:$x/codex/config.toml",
+    target: "/home/nas/.codex/config.toml",
+    readOnly: true,
+  });
+  expect(extra.mounts).toContainEqual({
+    source: "/host/codex",
+    target: "/usr/local/bin/codex",
+    readOnly: true,
+  });
+});

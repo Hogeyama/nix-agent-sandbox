@@ -719,17 +719,32 @@ export async function ensureDevcontainerCodexState(
   return { codexDir };
 }
 
-/** Agent dispatch for the IDE state ensure; unsupported agents get no state. */
+/**
+ * Agent dispatch for the IDE state ensure. Prepares every requested agent's
+ * state concurrently so a session with both Claude and Codex in its IDE set
+ * gets both members at once; unsupported agents (Copilot) contribute none.
+ */
 export async function ensureDevcontainerAgentState(
-  agent: AgentType,
+  agents: readonly AgentType[],
   hostHome: string,
 ): Promise<DevcontainerAgentState> {
-  switch (agent) {
-    case "claude":
-      return { claudeState: await ensureDevcontainerClaudeState(hostHome) };
-    case "codex":
-      return { codexState: await ensureDevcontainerCodexState(hostHome) };
-    default:
-      return {};
-  }
+  const state: {
+    claudeState?: ClaudeStatePaths;
+    codexState?: CodexStatePaths;
+  } = {};
+  await Promise.all(
+    agents.map(async (agent) => {
+      switch (agent) {
+        case "claude":
+          state.claudeState = await ensureDevcontainerClaudeState(hostHome);
+          return;
+        case "codex":
+          state.codexState = await ensureDevcontainerCodexState(hostHome);
+          return;
+        default:
+          return;
+      }
+    }),
+  );
+  return state;
 }

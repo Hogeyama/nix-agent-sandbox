@@ -56,9 +56,7 @@ export function resolveCodexProbes(hostHome: string): CodexProbes {
 // ---------------------------------------------------------------------------
 
 /** configureCodex の入力 */
-export interface CodexConfigInput extends CodexProvisionInput {
-  readonly codexState?: CodexStatePaths;
-}
+export type CodexConfigInput = CodexProvisionInput;
 
 /** provisionCodex の入力 */
 export interface CodexProvisionInput {
@@ -74,6 +72,14 @@ export interface CodexProvisionInput {
    * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
    */
   readonly codexAuthFile?: string;
+  /** Dev Container の Codex IDE 状態。主・追加のどちらでも渡せる。 */
+  readonly codexState?: CodexStatePaths;
+  /**
+   * ホスト Codex バイナリ (と補助バイナリ) を mount するか。未指定なら
+   * `codexState` が無いときだけ true (従来どおり)。IDE 拡張は同梱バイナリを
+   * 使うが、追加 CLI 用途のホストバイナリはこのフラグで別途 mount できる。
+   */
+  readonly mountHostBinary?: boolean;
 }
 
 /**
@@ -81,7 +87,7 @@ export interface CodexProvisionInput {
  * (純粋関数)。起動コマンドは configureCodex が足す。
  */
 export function provisionCodex(
-  input: CodexProvisionInput & { readonly codexState?: CodexStatePaths },
+  input: CodexProvisionInput,
 ): AgentProvisionResult {
   const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
     input;
@@ -94,27 +100,43 @@ export function provisionCodex(
     );
   }
 
+  const mountHostBinary =
+    input.mountHostBinary ?? input.codexState === undefined;
+
   // Dev Container (Compose) path: ~/.codex always mounts — the runtime
   // creates it on the host first — as structured MountSpecs so colon-bearing
-  // paths survive. The host codex binary is deliberately not mounted; the
+  // paths survive. The primary Codex IDE never mounts the host binary (the
   // devcontainer-codex wrapper execs the extension-bundled binary so the
-  // app-server protocol version always matches the extension.
+  // app-server protocol version always matches the extension); an additional
+  // Codex CLI sharing the same state sets `mountHostBinary: true` to get the
+  // host binary as a structured mount alongside it.
   if (input.codexState) {
-    return {
-      dockerArgs: args,
-      envVars,
-      mounts: [
-        {
-          source: input.codexState.codexDir,
-          target: `${containerHome}/.codex`,
-        },
-        ...settingsMountSpecs(
-          input.codexState.codexDir,
-          `${containerHome}/.codex`,
-          input.protectSettings ? probes.codexSettingsFiles : [],
-        ),
-      ],
-    };
+    const mounts: MountSpec[] = [
+      {
+        source: input.codexState.codexDir,
+        target: `${containerHome}/.codex`,
+      },
+      ...settingsMountSpecs(
+        input.codexState.codexDir,
+        `${containerHome}/.codex`,
+        input.protectSettings ? probes.codexSettingsFiles : [],
+      ),
+    ];
+    if (mountHostBinary && probes.codexBinPath) {
+      mounts.push({
+        source: probes.codexBinPath,
+        target: "/usr/local/bin/codex",
+        readOnly: true,
+      });
+    }
+    if (mountHostBinary && probes.codexCodeModeHostBinPath) {
+      mounts.push({
+        source: probes.codexCodeModeHostBinPath,
+        target: "/usr/local/bin/codex-code-mode-host",
+        readOnly: true,
+      });
+    }
+    return { dockerArgs: args, envVars, mounts };
   }
 
   // ~/.codex をマウント（認証情報・設定）
@@ -130,11 +152,11 @@ export function provisionCodex(
   }
 
   // codex バイナリのマウント (実体パスを解決してマウント)
-  if (probes.codexBinPath) {
+  if (mountHostBinary && probes.codexBinPath) {
     args.push("-v", `${probes.codexBinPath}:/usr/local/bin/codex:ro`);
   }
 
-  if (probes.codexCodeModeHostBinPath) {
+  if (mountHostBinary && probes.codexCodeModeHostBinPath) {
     args.push(
       "-v",
       `${probes.codexCodeModeHostBinPath}:/usr/local/bin/codex-code-mode-host:ro`,
