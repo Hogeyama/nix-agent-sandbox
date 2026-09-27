@@ -223,3 +223,85 @@ test("protected Codex state keeps config.toml read-only over the shared director
   expect(text).toContain("config.toml");
   expect(text).toContain("read-only");
 });
+
+test("a primary Claude with an extra Codex discloses both agents' credentials and the extension hook", () => {
+  const profile: Profile = {
+    ...devcontainerProfile(),
+    agent: "claude",
+    extraAgents: ["codex"],
+  };
+  const sharing = describeDevcontainerSharing(profile);
+  expect(sharing.find((e) => e.topic === "Claude credentials")).toBeDefined();
+  expect(sharing.find((e) => e.topic === "Codex credentials")).toEqual({
+    topic: "Codex credentials",
+    detail: "host ~/.codex, read-write; kept on the host after down",
+  });
+  // The Codex extension hook warning applies whether Codex is primary or extra.
+  expect(sharing.find((e) => e.topic === "Codex extension")).toBeDefined();
+  expect(sharing.find((e) => e.topic === "extra codex")).toEqual({
+    topic: "extra codex",
+    detail:
+      "usable as a VS Code extension and as a host CLI; the host CLI requires the host binary to be present",
+  });
+});
+
+test("a primary Codex with an extra Claude discloses both agents' credentials", () => {
+  const profile: Profile = {
+    ...devcontainerProfile(),
+    agent: "codex",
+    extraAgents: ["claude"],
+  };
+  const sharing = describeDevcontainerSharing(profile);
+  expect(sharing.find((e) => e.topic === "Codex credentials")).toBeDefined();
+  expect(sharing.find((e) => e.topic === "Claude credentials")).toBeDefined();
+  expect(sharing.find((e) => e.topic === "extra claude")).toEqual({
+    topic: "extra claude",
+    detail:
+      "usable as a VS Code extension and as a host CLI; the host CLI requires the host binary to be present",
+  });
+});
+
+test("an extra Copilot is disclosed as a host CLI without claiming a token lives in ~/.copilot", () => {
+  const profile: Profile = {
+    ...devcontainerProfile(),
+    agent: "claude",
+    extraAgents: ["copilot"],
+  };
+  const sharing = describeDevcontainerSharing(profile);
+  expect(sharing.find((e) => e.topic === "extra copilot")).toEqual({
+    topic: "extra copilot",
+    detail: "usable as a host CLI; requires the host binary to be present",
+  });
+  const copilotCredentials = sharing.find(
+    (e) => e.topic === "Copilot credentials",
+  );
+  expect(copilotCredentials).toEqual({
+    topic: "Copilot credentials",
+    detail:
+      "host ~/.copilot, if present, shared read-write; it holds no login token",
+  });
+});
+
+test("protectSettings discloses existing extra Copilot config files as read-only", () => {
+  const profile: Profile = {
+    ...devcontainerProfile(),
+    agent: "claude",
+    extraAgents: ["copilot"],
+    agentState: { protectSettings: true },
+  };
+  const text = detail(profile, "Copilot credentials");
+  expect(text).toContain("~/.copilot");
+  expect(text).toContain("read-write");
+  expect(text).toContain(
+    "existing config.json and mcp-config.json files read-only",
+  );
+  expect(text).toContain("no login token");
+});
+
+test("a single-agent Dev Container discloses no extra-agent entries", () => {
+  const sharing = describeDevcontainerSharing(devcontainerProfile());
+  expect(sharing.find((e) => e.topic.startsWith("extra "))).toBeUndefined();
+  expect(
+    sharing.find((e) => e.topic === "Copilot credentials"),
+  ).toBeUndefined();
+});

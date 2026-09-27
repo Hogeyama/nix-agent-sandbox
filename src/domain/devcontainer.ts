@@ -2,7 +2,11 @@ export {
   type DevcontainerIdeAgent,
   resolveDevcontainerIdeAgents,
 } from "./devcontainer/agents.ts";
-export { renderDevcontainerConfig } from "./devcontainer/config.ts";
+export {
+  type DevcontainerMetadata,
+  renderDevcontainerConfig,
+  renderDevcontainerMetadata,
+} from "./devcontainer/config.ts";
 export {
   type DevcontainerDisclosure,
   type DevcontainerInitResult,

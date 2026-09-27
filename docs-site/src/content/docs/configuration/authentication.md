@@ -51,7 +51,7 @@ file・dotenv・lines のパスは、シンボリックリンクをたどった�
 
 ## エージェントの認証情報の保持
 
-`agentState.auth` は、エージェントのログイン情報をコンテナへどう渡すかを選びます。値は `"injected"` と `"passthrough"` の2つで、指定しなければ既定値は Claude と Codex で `"injected"`、Copilot で `"passthrough"` です。Dev Container の Codex は `"passthrough"` です。
+`agentState.auth` は、エージェントのログイン情報をコンテナへどう渡すかを選びます。値は `"injected"` と `"passthrough"` の2つで、指定しなければ既定値は Claude と Codex で `"injected"`、Copilot で `"passthrough"` です。Dev Container の Codex は `"passthrough"` です。IDE 拡張と CLI が同じ `~/.codex` を使うため、この例外は Codex が `agent`（主エージェント）でも `extraAgents`（追加分）でも同じく適用され、明示的な `"injected"` は起動前の検証で拒否されます。
 
 - `"injected"`: ログイン情報はホストに残ります。nas のプロキシは、エージェントの通信の認証ヘッダーを必ずホストの値で上書きします。エージェントが自分で用意した token を付けても、上流には届きません。
 - `"passthrough"`: ホストのログイン情報のファイルをコンテナと共有し、エージェントが付けた認証ヘッダーをそのまま上流へ通します。エージェントはホストの token を読めます。また、攻撃者の token を付けて許可された接続先へ送れば、データを攻撃者のアカウントへ持ち出せます。

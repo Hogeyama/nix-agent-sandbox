@@ -43,13 +43,31 @@ test("worktrees are rejected: init must run inside the worktree itself", () => {
   expect(errors[0]).toContain("worktree");
 });
 
-test("extraAgents is rejected: a session carries a single agent's state", () => {
-  const errors = validateDevcontainerProfile({
+test("a primary Claude accepts an extra Codex, and rejects it only when explicitly injected", () => {
+  const profile = {
     ...devcontainerProfile(),
-    extraAgents: ["codex"],
-  });
-  expect(errors).toHaveLength(1);
-  expect(errors[0]).toContain("extraAgents");
+    agent: "claude" as const,
+    extraAgents: ["codex" as const],
+  };
+  expect(validateDevcontainerProfile(profile)).toEqual([]);
+  for (const auth of ["injected", { codex: "injected" }] as const) {
+    expect(
+      validateDevcontainerProfile({
+        ...profile,
+        agentState: { protectSettings: false, auth },
+      }).join("\n"),
+    ).toContain("passthrough");
+  }
+});
+
+test("a primary Codex accepts extra Claude and Copilot", () => {
+  expect(
+    validateDevcontainerProfile({
+      ...devcontainerProfile(),
+      agent: "codex",
+      extraAgents: ["claude", "copilot"],
+    }),
+  ).toEqual([]);
 });
 
 test("validateDevcontainerProfile: rejects an explicit proxy for Codex", () => {
