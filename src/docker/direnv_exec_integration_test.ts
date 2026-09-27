@@ -19,6 +19,15 @@ import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 const direnvAvailable = Bun.which("direnv") !== null;
 const jqAvailable = Bun.which("jq") !== null;
 const integrationAvailable = direnvAvailable && jqAvailable;
+// /bin/bash is itself a mask wrapper inside NAS. Fixture interpreters must
+// use the original Bash so only the wrapper under test can start a supervisor.
+const wrapperBypass =
+  process.env.NAS_BASH_OVERRIDE &&
+  path.join(process.env.NAS_BASH_OVERRIDE, "bash.real");
+const realBash =
+  wrapperBypass && (await Bun.file(wrapperBypass).exists())
+    ? wrapperBypass
+    : "/bin/bash";
 
 interface Fixture {
   launcher: string;
@@ -52,7 +61,7 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>) {
       XDG_CONFIG_HOME: config,
       XDG_CACHE_HOME: cache,
       NAS_DIRENV_ENABLED: "true",
-      NAS_REAL_BASH: "/bin/bash",
+      NAS_REAL_BASH: realBash,
       // Exercise the ordinary CLI entrypoint even when this suite itself runs
       // inside a reusable Dev Container.
       NAS_DEVCONTAINER: undefined,
@@ -126,13 +135,12 @@ function launch(
     opsFile?: string;
     pathPrefix?: string;
     env?: Record<string, string>;
-    bash?: string;
   } = {},
 ) {
   const workspace = options.workspace ?? fixture.workspace;
   return runProcess(
     [
-      options.bash ?? "bash",
+      fixture.env.NAS_REAL_BASH!,
       fixture.launcher,
       workspace,
       options.opsFile ?? fixture.opsFile,
@@ -319,22 +327,15 @@ test.skipIf(!integrationAvailable)(
       const supervisedBash = path.join(fixture.root, "supervised-bash");
       await writeFile(
         supervisedBash,
-        `#!/bin/bash\nNAS_MASK_SUPERVISED=1 exec /bin/bash "$@"\n`,
+        `#!${realBash}\nNAS_MASK_SUPERVISED=1 exec ${shellEscape([realBash])} "$@"\n`,
         { mode: 0o755 },
       );
-      // The launcher keeps a marker it was started with, so start it unmarked
-      // and, inside a filtering nas sandbox, bypass the mask wrapper whose
-      // supervisor would mark it. The payload is not bash for the same reason.
+      // The launcher keeps a marker it was started with, so start it unmarked.
+      // Use a non-Bash payload so the ambient wrapper cannot mark it either.
       fixture.env.NAS_MASK_SUPERVISED = undefined;
-      const override = process.env.NAS_BASH_OVERRIDE;
-      const wrapperBypass = override && path.join(override, "bash.real");
-      const bash =
-        wrapperBypass && (await Bun.file(wrapperBypass).exists())
-          ? wrapperBypass
-          : "bash";
       const env = { DIRENV_BASH: supervisedBash };
 
-      const launched = await launch(fixture, ["/usr/bin/env"], { env, bash });
+      const launched = await launch(fixture, ["/usr/bin/env"], { env });
       expect(launched.exitCode).toBe(0);
       const payloadEnv = launched.stdout.split("\n");
       expect(payloadEnv).toContain("NAS_DIRENV_TEST_VALUE=loaded");
@@ -342,7 +343,7 @@ test.skipIf(!integrationAvailable)(
         payloadEnv.filter((line) => line.startsWith("NAS_MASK_SUPERVISED=")),
       ).toEqual([]);
 
-      const exported = await launch(fixture, ["--export"], { env, bash });
+      const exported = await launch(fixture, ["--export"], { env });
       expect(exported.exitCode).toBe(0);
       expect(exported.stdout).toContain("NAS_DIRENV_TEST_VALUE=loaded");
       expect(exported.stdout).not.toContain("NAS_MASK_SUPERVISED");
