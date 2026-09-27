@@ -1,5 +1,6 @@
 export {
   type DevcontainerIdeAgent,
+  isDevcontainerIdeAgent,
   resolveDevcontainerIdeAgents,
 } from "./devcontainer/agents.ts";
 export {

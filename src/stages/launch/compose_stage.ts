@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { resolveContainerUser } from "../../domain/container.ts";
 import { filterDevcontainerAgentArgs } from "../../domain/devcontainer/agent_args.ts";
 import {
   type DevcontainerRegistration,
@@ -63,7 +64,7 @@ export function finalizeDevcontainerPlan(
         "devcontainer.metadata": JSON.stringify([
           renderDevcontainerMetadata(
             shared.profile,
-            shared.host.user.trim() || "nas",
+            resolveContainerUser(shared.host.user),
           ),
         ]),
       },
