@@ -187,13 +187,25 @@ nas_devcontainer_capture "" "" "$PRIMARY" "" "two words" '$(false)' $'line\\nbre
       const profileArgs = ["", "two words", "$(false)", "line\nbreak"];
       const extensionArgs = ["--resume", "chat id", ""];
       for (const agent of ["claude", "codex"] as const) {
+        // Arrays cannot cross a process env boundary. A forged
+        // NAS_AGENT_ARGS is a scalar; the wrapper must use the captured file.
         const proc = Bun.spawn(
           [
             path.join(root, `nas-devcontainer-${agent}`),
             ...(agent === "claude" ? [payload] : []),
             ...extensionArgs,
           ],
-          { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" },
+          {
+            env: {
+              ...process.env,
+              ...env,
+              NAS_AGENT_ARGS: "(--forged)",
+              NAS_DEVCONTAINER_PRIMARY_AGENT:
+                primary === "claude" ? "codex" : "claude",
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
         );
         const [code, stdout, stderr] = await Promise.all([
           proc.exited,
@@ -214,59 +226,20 @@ nas_devcontainer_capture "" "" "$PRIMARY" "" "two words" '$(false)' $'line\\nbre
   });
 }
 
-test("wrapper ignores a forged primary and NAS_AGENT_ARGS from its own launch environment", async () => {
+test("codex wrapper selects the bundled CLI and its sibling helper ahead of host binaries", async () => {
   await fixture(async (root, library) => {
-    const setup = await shell(
-      `source "$LIBRARY"; nas_devcontainer_capture "" "" claude '--resume' 'confirmed'`,
-      {
-        LIBRARY: library,
-        NAS_REAL_BASH: "/bin/bash",
-        NAS_DIRENV_ENABLED: "false",
-        WORKSPACE: root,
-      },
-    );
-    expect(setup.code).toBe(0);
-    const payload = path.join(root, "bundled-cli");
-    await writeFile(
-      payload,
-      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(0);\n`,
-      { mode: 0o755 },
-    );
-    const proc = Bun.spawn(
-      [path.join(root, "nas-devcontainer-claude"), payload, "--extra"],
-      {
-        env: {
-          ...process.env,
-          // Arrays cannot cross the process env boundary, so a forged
-          // NAS_AGENT_ARGS arrives as a plain string; a fixed source path
-          // in the wrapper (not an env-driven lookup) is what must ignore
-          // it, same as the forged primary below.
-          NAS_AGENT_ARGS: "(--forged)",
-          NAS_DEVCONTAINER_PRIMARY_AGENT: "codex",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const [code, stdout] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-    ]);
-    expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toEqual(["--resume", "confirmed", "--extra"]);
-  });
-});
-
-test("codex wrapper resolves the bundled extension binary over a host codex earlier on PATH", async () => {
-  await fixture(async (root, library) => {
-    // Mirrors the mount target of the host Codex CLI (/usr/local/bin/codex),
-    // which is deliberately not used as an IDE fallback: a naive PATH search
-    // for "codex" would find it before the extension's own bin dir.
+    // An extra Codex CLI puts both host binaries on the captured baseline
+    // PATH. The IDE wrapper must prefer the extension CLI and its helper.
     const hostDir = path.join(root, "host-bin");
     await mkdir(hostDir, { recursive: true });
     await writeFile(
       path.join(hostDir, "codex"),
-      `#!${process.execPath}\nprocess.stdout.write("host-codex-should-not-run"); process.exit(97);\n`,
+      "#!/bin/bash\nprintf host-codex; exit 97\n",
+      { mode: 0o755 },
+    );
+    await writeFile(
+      path.join(hostDir, "codex-code-mode-host"),
+      "#!/bin/bash\nprintf host; exit 41\n",
       { mode: 0o755 },
     );
     const binDir = path.join(
@@ -276,13 +249,20 @@ test("codex wrapper resolves the bundled extension binary over a host codex earl
     await mkdir(binDir, { recursive: true });
     await writeFile(
       path.join(binDir, "codex"),
-      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(23);\n`,
+      "#!/bin/bash\nexec codex-code-mode-host\n",
       { mode: 0o755 },
     );
+    await writeFile(
+      path.join(binDir, "codex-code-mode-host"),
+      "#!/bin/bash\nprintf bundled; exit 23\n",
+      { mode: 0o755 },
+    );
+    const capturedPath = `${hostDir}:${process.env.PATH}`;
     const setup = await shell(
       `source "$LIBRARY"; nas_devcontainer_capture "" "" codex`,
       {
         LIBRARY: library,
+        PATH: capturedPath,
         NAS_REAL_BASH: "/bin/bash",
         NAS_DIRENV_ENABLED: "false",
         WORKSPACE: root,
@@ -295,7 +275,7 @@ test("codex wrapper resolves the bundled extension binary over a host codex earl
         env: {
           ...process.env,
           HOME: root,
-          PATH: `${hostDir}:${process.env.PATH}:${binDir}`,
+          PATH: `${capturedPath}:${binDir}`,
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -305,62 +285,11 @@ test("codex wrapper resolves the bundled extension binary over a host codex earl
       proc.exited,
       new Response(proc.stdout).text(),
     ]);
+    expect(stdout).toBe("bundled");
     expect(code).toBe(23);
-    expect(JSON.parse(stdout)).toEqual([
-      "-c",
-      "shell_environment_policy.inherit=all",
-      "app-server",
-    ]);
   });
 });
 
-test("Claude wrapper preserves bundled executable, literal argv, streams and exit status", async () => {
-  await fixture(async (root, library) => {
-    const payload = path.join(root, "bundled-cli");
-    await writeFile(
-      payload,
-      `#!${process.execPath}
-process.stdout.write(JSON.stringify(process.argv.slice(2))); process.stderr.write("diagnostic"); process.exit(23);
-`,
-      { mode: 0o755 },
-    );
-    const setup = await shell(
-      `source "$LIBRARY"; nas_devcontainer_capture "" "" claude "" "two words" '$(false)'`,
-      {
-        LIBRARY: library,
-        NAS_REAL_BASH: "/bin/bash",
-        NAS_DIRENV_ENABLED: "false",
-        WORKSPACE: root,
-      },
-    );
-    expect(setup.code).toBe(0);
-    const proc = Bun.spawn(
-      [
-        path.join(root, "nas-devcontainer-claude"),
-        payload,
-        "--resume",
-        "chat id",
-        "",
-      ],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const [code, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    expect(code).toBe(23);
-    expect(JSON.parse(stdout)).toEqual([
-      "",
-      "two words",
-      "$(false)",
-      "--resume",
-      "chat id",
-      "",
-    ]);
-    expect(stderr).toBe("diagnostic");
-  });
-});
 test("Claude wrapper rejects missing bundled executable", async () => {
   await fixture(async (root) => {
     const proc = Bun.spawn([path.join(root, "nas-devcontainer-claude")], {
