@@ -96,6 +96,18 @@ spec と plan の両方でユーザーが承認したこと。
 
 superpowers の subagent-driven-development を実行しつつ、以下を変更する。実行方式の選択肢をユーザーに提示せず、subagent-driven-development で直ちに開始する。
 
+### implementation worker の指定
+
+ユーザーが「implementation worker には /codex-claude-worker を使って」のように
+担当スキルを指定した場合は、それを読み、実装とレビュー修正の起動・入出力に使う。
+たとえば [codex-claude-worker](../codex-claude-worker/SKILL.md) は、Codex が進行を管理し、
+`claude -p` へ実装を委譲する。設計・独立レビュー・人間レビューまで worker に移さない。
+
+ledger に `implementation-worker: <skill name>` と解決したスキルのパスを記録する。
+指定がなければ通常の subagent-driven-development を使う。
+worker 固有のセッション再利用・上限・結果判定は担当スキルに従い、上限到達や
+途中成果をタスク完了扱いしない。外側のレビューゲートと修正回数の管理は維持する。
+
 ### 実装開始前に base ref を記録する
 
 最初のタスクに着手する前に、現在の HEAD のコミットハッシュを progress ledger に `implementation-base: <hash>` として記録する。Phase 3 の全体 diff レビューでこの値を base ref として使う。ブランチに先行コミットがある場合でも、ここで記録した地点から先だけがレビュー対象になる。
