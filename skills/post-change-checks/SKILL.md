@@ -36,35 +36,34 @@ bun run check
 
 `check` currently includes the lint aggregate as well as TypeScript checks.
 
-4. Run the test lane required by the change's scope.
+4. Before ending the work session, run the full suite in NAS and on the host.
 
 Use the repository's Nix development environment (or equivalent installed
 build tools). `test:unit` now includes Zig suites as well as Bun suites;
 addon Python wrappers also require Python and the generated vendor dependencies.
 Inspect [package.json](../../package.json) for the current aggregate membership.
 
-After a substantial change, run the complete aggregate even when working
-inside NAS:
+Inside NAS, run both commands from the repository root, once each as the final
+check for the session, including narrow changes:
 
 ```bash
 bun run test
+hostexec bun run test
 ```
 
-A change is substantial when it crosses multiple components or changes
-pipeline behavior, Docker or process lifecycle, security or resource
-isolation, test aggregation, CI, release behavior, integration tests, or E2E
-behavior. Also use the complete aggregate when the user requests thorough or
-final verification. When uncertain whether the affected surface is narrow,
-prefer the complete aggregate.
+Run them sequentially and record both exit statuses. Run the second even if
+the first fails; do not join them with `&&`. The user has requested both
+environments as the standard final verification, so do not ask again whether
+to include the host run. If host execution is denied or unavailable, report
+that check as not run with its reason.
 
-For a narrow ordinary change inside NAS, use the unit aggregate:
+While iterating, use the unit aggregate or focused tests:
 
 ```bash
 bun run test:unit
 ```
 
-Outside NAS, when Docker and the other integration dependencies are directly
-available, run the full suite:
+When already working on the host, run the full suite directly:
 
 ```bash
 bun run test
@@ -79,11 +78,9 @@ Use the aggregate scripts rather than plain `bun test` or `bun test src/`.
 Plain discovery does not include every native or black-box suite and may import
 Docker probes outside the intended lanes.
 
-Inside NAS, the complete aggregate may skip tests whose capabilities are not
-available. Report those skips as unverified, not passed. If skipped coverage is
-material to the change, it still needs a run in an environment where the
-dependency is directly available. Do not switch to host execution merely to
-fill skips unless the user asks for or authorizes that environment change.
+Keep the NAS and host results separate: their dependencies and wrapper
+environments differ, and either can catch failures the other misses. Report
+skipped tests as unverified in that environment, not passed.
 
 ## Reading aggregate output
 
@@ -108,20 +105,22 @@ to recover output. Direct component commands, such as
 
 Report these items in the final response:
 
-- Whether `fmt`, `lint`, `check`, and the selected test lane passed or failed
+- Whether `fmt`, `lint`, and `check` passed or failed
+- Separate pass/fail results and log locations for `bun run test` inside NAS
+  and `hostexec bun run test` on the host
 - Test summary counts by suite/runtime when available; distinguish skips and
   cached Zig successes from tests actually rerun
 - Which integration/e2e tests were skipped or not run and why; do not infer
   coverage merely from running inside NAS
-- If the complete aggregate was not run, why the change qualified for the
-  narrower lane
+- If either final test run could not be executed, which one and why
 - Notable failures or errors if the output highlights them
 
 ## Failure Handling
 
-If one step fails, stop the sequence there and report the failure clearly.
-Let a running test aggregate finish its selected suites before reporting its
-result; its continue-on-error behavior does not turn failures into success.
+If formatting, lint, or type checking fails, fix it before starting the tests
+or report the blocker. Once testing starts, let each aggregate finish its
+selected suites and run both environments even if one fails. Report each
+failure clearly; continue-on-error behavior does not turn failures into success.
 
 If dependencies must be downloaded or sandbox/network approval is needed, request it and then continue the workflow.
 
