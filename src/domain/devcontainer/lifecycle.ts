@@ -7,6 +7,7 @@ import {
   readTextFile,
 } from "../../lib/fs_utils.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
+import { resolveContainerUser } from "../container.ts";
 import { filterDevcontainerAgentArgs } from "./agent_args.ts";
 import { renderDevcontainerConfig } from "./config.ts";
 import {
@@ -254,7 +255,7 @@ export function makeDevcontainerLifecycle(
         command: inputs.command,
       };
       const bytes = `${JSON.stringify(
-        renderDevcontainerConfig(record, host.user.trim() || "nas"),
+        renderDevcontainerConfig(record, resolveContainerUser(host.user)),
         null,
         2,
       )}\n`;

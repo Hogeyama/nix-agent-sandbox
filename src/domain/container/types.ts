@@ -14,6 +14,10 @@ import type {
   SessionTurn,
 } from "../../sessions/store.ts";
 
+export function resolveContainerUser(hostUser: string): string {
+  return hostUser.trim() || "nas";
+}
+
 // ---------------------------------------------------------------------------
 // Typed errors (used by ContainerLifecycleService.startShellSession;
 // `ui/routes/api.ts` does `instanceof` 分岐 to map to HTTP 403/409.)

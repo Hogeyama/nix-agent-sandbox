@@ -23,6 +23,8 @@ import type {
   DevcontainerAgentState,
   ProtectedClaudeState,
 } from "../../agents/types.ts";
+import { resolveContainerUser } from "../../domain/container.ts";
+import { isDevcontainerIdeAgent } from "../../domain/devcontainer.ts";
 import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
 import {
@@ -57,8 +59,6 @@ import { selectAppliedSecrets } from "../../network/secrets.ts";
 export { resolveMountProbes } from "./mount_probes.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-const DEFAULT_CONTAINER_USER = "nas";
 
 // ---------------------------------------------------------------------------
 // MountPlan — pure data description returned by planMount()
@@ -640,8 +640,7 @@ export function planMount(
     // 使えるので、CLI が使えないだけだと明示する。
     if (!agentBinaryFound(extra.agent, extra.probes)) {
       const hasIdeFallback =
-        devcontainer !== undefined &&
-        (extra.agent === "claude" || extra.agent === "codex");
+        devcontainer !== undefined && isDevcontainerIdeAgent(extra.agent);
       logWarn(
         hasIdeFallback
           ? `[nas] extraAgents: "${extra.agent}" CLI binary not found on the host; the CLI will be unavailable, but the IDE extension will use its bundled executable`
@@ -844,12 +843,6 @@ function byPathDepth(a: string, b: string): number {
 function isPathWithin(target: string, root: string): boolean {
   const rel = path.relative(root, target);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-function resolveContainerUser(hostUser: string): string {
-  const user = hostUser.trim();
-  if (user) return user;
-  return DEFAULT_CONTAINER_USER;
 }
 
 function resolveWorkspace(input: {

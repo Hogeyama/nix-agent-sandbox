@@ -5,6 +5,16 @@ import {
 } from "./agents.ts";
 import type { DevcontainerRegistration } from "./types.ts";
 
+function sharedDevcontainerConfig(remoteUser: string) {
+  return {
+    remoteUser,
+    updateRemoteUserUID: false,
+    overrideCommand: false,
+    userEnvProbe: "loginInteractiveShell",
+    shutdownAction: "none",
+  } as const;
+}
+
 /**
  * `devcontainer.json` written to disk at init. It continues to provide the
  * Compose and initialize configuration; it does not depend on the agent, so
@@ -30,11 +40,7 @@ export function renderDevcontainerConfig(
     dockerComposeFile: [registration.composePath],
     service: "agent",
     workspaceFolder: registration.workspace,
-    remoteUser,
-    updateRemoteUserUID: false,
-    overrideCommand: false,
-    userEnvProbe: "loginInteractiveShell",
-    shutdownAction: "none",
+    ...sharedDevcontainerConfig(remoteUser),
   };
 }
 
@@ -87,11 +93,7 @@ export function renderDevcontainerMetadata(
 ): DevcontainerMetadata {
   const ideAgents = resolveDevcontainerIdeAgents(profile);
   return {
-    remoteUser,
-    updateRemoteUserUID: false,
-    overrideCommand: false,
-    userEnvProbe: "loginInteractiveShell",
-    shutdownAction: "none",
+    ...sharedDevcontainerConfig(remoteUser),
     customizations: {
       vscode: {
         extensions: ideAgents.map(

@@ -24,4 +24,5 @@ export {
   joinSessionsToContainers,
   type NasContainerInfo,
   NotNasManagedContainerError,
+  resolveContainerUser,
 } from "./container/types.ts";

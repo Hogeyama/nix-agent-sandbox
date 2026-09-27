@@ -7,6 +7,12 @@ export type DevcontainerIdeAgent = "claude" | "codex";
 /** Fixed order for the IDE agent set. */
 const IDE_AGENT_ORDER: readonly DevcontainerIdeAgent[] = ["claude", "codex"];
 
+export function isDevcontainerIdeAgent(
+  agent: AgentType,
+): agent is DevcontainerIdeAgent {
+  return IDE_AGENT_ORDER.some((candidate) => candidate === agent);
+}
+
 /**
  * The set of IDE-capable agents a Dev Container session must configure and
  * prepare state for: the primary agent plus any of `extraAgents` that ship
