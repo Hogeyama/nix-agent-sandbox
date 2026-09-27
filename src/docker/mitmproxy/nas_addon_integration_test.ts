@@ -41,6 +41,7 @@ import {
   dockerRunDetached,
   dockerStop,
 } from "../client.ts";
+import { runProxyContainer } from "./proxy_container_fixture.ts";
 
 const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
 const canBindMount = SHARED_TMP !== undefined || !process.env.DOCKER_HOST;
@@ -613,7 +614,7 @@ async function startProtocolContainers(
   );
   if (!targetIp) throw new Error("could not determine fake target IP");
 
-  await dockerRunDetached({
+  await runProxyContainer({
     name: resources.proxyName,
     image: "mitmproxy/mitmproxy:11",
     args: [`--add-host=${targetHost}:${targetIp}`, ...extraProxyDockerArgs],
@@ -622,7 +623,6 @@ async function startProtocolContainers(
     mounts: [
       { source: fixture.runtimeDir, target: "/nas-network", mode: "rw" },
     ],
-    publishedPorts: ["127.0.0.1::8080"],
     command: [
       "mitmdump",
       "--mode",
@@ -1204,14 +1204,13 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
         );
       }
 
-      await dockerRunDetached({
+      await runProxyContainer({
         name: containerName,
         image: "mitmproxy/mitmproxy:11",
         args: [`--add-host=api.anthropic.com:${targetIp}`],
         envVars: {},
         network: networkName,
         mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
-        publishedPorts: ["127.0.0.1::8080"],
         command: [
           "mitmdump",
           "--mode",
@@ -1325,14 +1324,13 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
         );
       }
 
-      await dockerRunDetached({
+      await runProxyContainer({
         name: containerName,
         image: "mitmproxy/mitmproxy:11",
         args: [`--add-host=api.anthropic.com:${targetIp}`],
         envVars: {},
         network: networkName,
         mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
-        publishedPorts: ["127.0.0.1::8080"],
         command: [
           "mitmdump",
           "--mode",
@@ -1411,7 +1409,7 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
       fixture = await setupAddonFixture("nas-addon-block-type-");
       const { runtimeDir, sessionId, token } = fixture;
 
-      await dockerRunDetached({
+      await runProxyContainer({
         name: containerName,
         image: "mitmproxy/mitmproxy:11",
         // containment backstop: 正しい実装では 403 は request() 内で
@@ -1422,7 +1420,6 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
         args: ["--add-host=api.anthropic.com:127.0.0.1"],
         envVars: {},
         mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
-        publishedPorts: ["127.0.0.1::8080"],
         command: [
           "mitmdump",
           "--mode",
@@ -1519,7 +1516,7 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
       fixture = await setupAddonFixture("nas-addon-blocked-policy-");
       const { runtimeDir, sessionId, token } = fixture;
 
-      await dockerRunDetached({
+      await runProxyContainer({
         name: containerName,
         image: "mitmproxy/mitmproxy:11",
         // containment backstop: 正しい実装では 403 は request() 内で
@@ -1530,7 +1527,6 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
         args: ["--add-host=api.anthropic.com:127.0.0.1"],
         envVars: {},
         mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
-        publishedPorts: ["127.0.0.1::8080"],
         command: [
           "mitmdump",
           "--mode",
