@@ -25,7 +25,7 @@ async function fixture(run: (root: string, library: string) => Promise<void>) {
         .replaceAll("/usr/local/bin/nas-direnv-exec", launcher),
     );
     await mkdir(path.join(root, "state"));
-    for (const name of ["exec", "claude", "idle"]) {
+    for (const name of ["exec", "claude", "codex", "idle"]) {
       const source = await readFile(
         new URL(`./embed/devcontainer-${name}.sh`, import.meta.url),
         "utf8",
@@ -74,7 +74,7 @@ test("baseline resets unset dynamic keys and applies prefix exactly once on reen
       `set -euo pipefail
 source "$LIBRARY"
 unset NAS_TEST_PREFIX
-nas_devcontainer_capture "$OPS" '' --guide 'two words'
+nas_devcontainer_capture "$OPS" '' claude --guide 'two words'
 export NAS_TEST_PREFIX=stale
 nas_devcontainer_apply
 printf '%s\\n' "$NAS_TEST_PREFIX"
@@ -100,7 +100,7 @@ test("capture quotes literal values, preserves selected runtime, and excludes up
     const result = await shell(
       `set -euo pipefail
 source "$LIBRARY"
-nas_devcontainer_capture '' '' '' 'two words' '$(false)'
+nas_devcontainer_capture '' '' claude '' 'two words' '$(false)'
 export JAVA_TOOL_OPTIONS=wrong NAS_HOSTEXEC_SOCKET=stale
 nas_devcontainer_apply
 printf '%s\\0%s' "$JAVA_TOOL_OPTIONS" "$NAS_HOSTEXEC_SOCKET"
@@ -123,9 +123,194 @@ printf '%s\\0%s' "$JAVA_TOOL_OPTIONS" "$NAS_HOSTEXEC_SOCKET"
     const args = await shell(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
       'source "$ARGS"; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"',
-      { ARGS: path.join(root, "state/agent-args.sh") },
+      { ARGS: path.join(root, "state/claude-args.sh") },
     );
     expect(args.stdout.split("\0")).toEqual(["", "two words", "$(false)", ""]);
+    const codexArgs = await shell(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
+      'source "$ARGS"; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"',
+      { ARGS: path.join(root, "state/codex-args.sh") },
+    );
+    expect(codexArgs.stdout.split("\0")).toEqual(["", ""]);
+  });
+});
+
+test.each([
+  "",
+  "copilot",
+])("capture rejects an invalid primary agent (%p)", async (primary) => {
+  await fixture(async (root, library) => {
+    const result = await shell(
+      `source "$LIBRARY"; nas_devcontainer_capture "" "" "$PRIMARY" 'two words'`,
+      {
+        LIBRARY: library,
+        PRIMARY: primary,
+        NAS_REAL_BASH: "/bin/bash",
+        NAS_DIRENV_ENABLED: "false",
+        WORKSPACE: root,
+      },
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("Invalid Dev Container primary agent");
+  });
+});
+
+for (const primary of ["claude", "codex"] as const) {
+  test(`wrappers isolate arguments when primary is ${primary}`, async () => {
+    await fixture(async (root, library) => {
+      const binDir = path.join(
+        root,
+        "extensions/openai.chatgpt-test/bin/linux-x64",
+      );
+      await mkdir(binDir, { recursive: true });
+      const payload = path.join(binDir, "codex");
+      await writeFile(
+        payload,
+        `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2))); process.stderr.write("diagnostic"); process.exit(23);\n`,
+        { mode: 0o755 },
+      );
+      const env = {
+        HOME: root,
+        PRIMARY: primary,
+        LIBRARY: library,
+        PATH: `${process.env.PATH}:${binDir}`,
+        NAS_REAL_BASH: "/bin/bash",
+        NAS_DIRENV_ENABLED: "false",
+        WORKSPACE: root,
+      };
+      const setup = await shell(
+        `source "$LIBRARY"
+nas_devcontainer_capture "" "" "$PRIMARY" "" "two words" '$(false)' $'line\\nbreak'`,
+        env,
+      );
+      expect(setup.code).toBe(0);
+      const profileArgs = ["", "two words", "$(false)", "line\nbreak"];
+      const extensionArgs = ["--resume", "chat id", ""];
+      for (const agent of ["claude", "codex"] as const) {
+        const proc = Bun.spawn(
+          [
+            path.join(root, `nas-devcontainer-${agent}`),
+            ...(agent === "claude" ? [payload] : []),
+            ...extensionArgs,
+          ],
+          { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" },
+        );
+        const [code, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(code).toBe(23);
+        expect(stderr).toBe("diagnostic");
+        expect(JSON.parse(stdout)).toEqual([
+          ...(agent === "codex"
+            ? ["-c", "shell_environment_policy.inherit=all"]
+            : []),
+          ...(primary === agent ? profileArgs : []),
+          ...extensionArgs,
+        ]);
+      }
+    });
+  });
+}
+
+test("wrapper ignores a forged primary and NAS_AGENT_ARGS from its own launch environment", async () => {
+  await fixture(async (root, library) => {
+    const setup = await shell(
+      `source "$LIBRARY"; nas_devcontainer_capture "" "" claude '--resume' 'confirmed'`,
+      {
+        LIBRARY: library,
+        NAS_REAL_BASH: "/bin/bash",
+        NAS_DIRENV_ENABLED: "false",
+        WORKSPACE: root,
+      },
+    );
+    expect(setup.code).toBe(0);
+    const payload = path.join(root, "bundled-cli");
+    await writeFile(
+      payload,
+      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(0);\n`,
+      { mode: 0o755 },
+    );
+    const proc = Bun.spawn(
+      [path.join(root, "nas-devcontainer-claude"), payload, "--extra"],
+      {
+        env: {
+          ...process.env,
+          // Arrays cannot cross the process env boundary, so a forged
+          // NAS_AGENT_ARGS arrives as a plain string; a fixed source path
+          // in the wrapper (not an env-driven lookup) is what must ignore
+          // it, same as the forged primary below.
+          NAS_AGENT_ARGS: "(--forged)",
+          NAS_DEVCONTAINER_PRIMARY_AGENT: "codex",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [code, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+    ]);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual(["--resume", "confirmed", "--extra"]);
+  });
+});
+
+test("codex wrapper resolves the bundled extension binary over a host codex earlier on PATH", async () => {
+  await fixture(async (root, library) => {
+    // Mirrors the mount target of the host Codex CLI (/usr/local/bin/codex),
+    // which is deliberately not used as an IDE fallback: a naive PATH search
+    // for "codex" would find it before the extension's own bin dir.
+    const hostDir = path.join(root, "host-bin");
+    await mkdir(hostDir, { recursive: true });
+    await writeFile(
+      path.join(hostDir, "codex"),
+      `#!${process.execPath}\nprocess.stdout.write("host-codex-should-not-run"); process.exit(97);\n`,
+      { mode: 0o755 },
+    );
+    const binDir = path.join(
+      root,
+      "extensions/openai.chatgpt-test/bin/linux-x64",
+    );
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      path.join(binDir, "codex"),
+      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(23);\n`,
+      { mode: 0o755 },
+    );
+    const setup = await shell(
+      `source "$LIBRARY"; nas_devcontainer_capture "" "" codex`,
+      {
+        LIBRARY: library,
+        NAS_REAL_BASH: "/bin/bash",
+        NAS_DIRENV_ENABLED: "false",
+        WORKSPACE: root,
+      },
+    );
+    expect(setup.code).toBe(0);
+    const proc = Bun.spawn(
+      [path.join(root, "nas-devcontainer-codex"), "app-server"],
+      {
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${hostDir}:${process.env.PATH}:${binDir}`,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [code, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+    ]);
+    expect(code).toBe(23);
+    expect(JSON.parse(stdout)).toEqual([
+      "-c",
+      "shell_environment_policy.inherit=all",
+      "app-server",
+    ]);
   });
 });
 
@@ -140,7 +325,7 @@ process.stdout.write(JSON.stringify(process.argv.slice(2))); process.stderr.writ
       { mode: 0o755 },
     );
     const setup = await shell(
-      `source "$LIBRARY"; nas_devcontainer_capture "" "" "" "two words" '$(false)'`,
+      `source "$LIBRARY"; nas_devcontainer_capture "" "" claude "" "two words" '$(false)'`,
       {
         LIBRARY: library,
         NAS_REAL_BASH: "/bin/bash",
@@ -194,7 +379,7 @@ test.skipIf(process.getuid?.() === 0)(
   async () => {
     await fixture(async (root, library) => {
       const setup = await shell(
-        'source "$LIBRARY"; nas_devcontainer_capture "" ""',
+        'source "$LIBRARY"; nas_devcontainer_capture "" "" claude',
         {
           LIBRARY: library,
           NAS_REAL_BASH: "/bin/bash",
@@ -232,7 +417,7 @@ test.skipIf(process.getuid?.() === 0)(
 test("wrapper exec preserves payload signal handling", async () => {
   await fixture(async (root, library) => {
     const setup = await shell(
-      'source "$LIBRARY"; nas_devcontainer_capture "" ""',
+      'source "$LIBRARY"; nas_devcontainer_capture "" "" claude',
       {
         LIBRARY: library,
         NAS_REAL_BASH: "/bin/bash",
@@ -268,7 +453,7 @@ test("wrapper exec preserves payload signal handling", async () => {
 test("failed environment approval cannot publish idle readiness", async () => {
   await fixture(async (root, library) => {
     const setup = await shell(
-      'source "$LIBRARY"; nas_devcontainer_capture "" ""',
+      'source "$LIBRARY"; nas_devcontainer_capture "" "" claude',
       {
         LIBRARY: library,
         NAS_REAL_BASH: "/bin/bash",

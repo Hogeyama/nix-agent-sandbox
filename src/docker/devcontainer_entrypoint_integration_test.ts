@@ -83,6 +83,8 @@ test.skipIf(!imageBuildable)(
         "-e",
         "NAS_DEVCONTAINER=true",
         "-e",
+        "NAS_DEVCONTAINER_PRIMARY_AGENT=claude",
+        "-e",
         "NAS_DIRENV_ENABLED=true",
         "-e",
         "NAS_UPSTREAM_PROXY=http://proxy.invalid:3128",
@@ -248,7 +250,7 @@ test.skipIf(!imageBuildable)(
         "/bin/bash",
         "-c",
         // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
-        'source /usr/local/lib/nas/devcontainer/agent-args.sh; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"',
+        'source /usr/local/lib/nas/devcontainer/claude-args.sh; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"; stat -c "%u:%a" /usr/local/lib/nas/devcontainer/claude-args.sh >&2',
       ]);
       expect(saved.stdout.split("\0")).toEqual([
         "",
@@ -256,6 +258,19 @@ test.skipIf(!imageBuildable)(
         "$(false)",
         "",
       ]);
+      expect(saved.stderr).toBe("0:644\n");
+      const savedCodex = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        name,
+        "/bin/bash",
+        "-c",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
+        'source /usr/local/lib/nas/devcontainer/codex-args.sh; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"',
+      ]);
+      expect(savedCodex.stdout.split("\0")).toEqual(["", ""]);
       expect((await run(["docker", "stop", "-t", "2", name])).code).toBe(0);
       expect(
         (
@@ -321,6 +336,8 @@ test.skipIf(!imageBuildable)(
         "-e",
         "NAS_DEVCONTAINER=true",
         "-e",
+        "NAS_DEVCONTAINER_PRIMARY_AGENT=codex",
+        "-e",
         "NAS_DIRENV_ENABLED=true",
         "-e",
         "NAS_UPSTREAM_PROXY=http://proxy.invalid:3128",
@@ -367,6 +384,37 @@ test.skipIf(!imageBuildable)(
         await Bun.sleep(25);
       }
       expect(ready, (await run(["docker", "logs", name])).stderr).toBe(true);
+      const claudeArgs = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        name,
+        "/bin/bash",
+        "-c",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
+        'source /usr/local/lib/nas/devcontainer/claude-args.sh; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"; stat -c "%u:%a" /usr/local/lib/nas/devcontainer/claude-args.sh >&2',
+      ]);
+      expect(claudeArgs.stdout.split("\0")).toEqual(["", ""]);
+      expect(claudeArgs.stderr).toBe("0:644\n");
+      const codexArgs = await run([
+        "docker",
+        "exec",
+        "--user",
+        "1000:1000",
+        name,
+        "/bin/bash",
+        "-c",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
+        'source /usr/local/lib/nas/devcontainer/codex-args.sh; printf "%s\\0" "${NAS_AGENT_ARGS[@]}"; stat -c "%u:%a" /usr/local/lib/nas/devcontainer/codex-args.sh >&2',
+      ]);
+      expect(codexArgs.stdout.split("\0")).toEqual([
+        "",
+        "space arg",
+        "$(false)",
+        "",
+      ]);
+      expect(codexArgs.stderr).toBe("0:644\n");
       const bundled =
         "$HOME/.vscode-server/extensions/openai.chatgpt-9.9.9/bin/linux-x86_64/codex";
       // The newer version lives under .vscode-server-insiders so the glob

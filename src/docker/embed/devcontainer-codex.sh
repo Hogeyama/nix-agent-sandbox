@@ -58,7 +58,7 @@ nas_devcontainer_apply
 # codex-code-mode-host stay reachable the way the extension intended.
 export PATH="$PATH:$codex_bin_dir"
 
-source /usr/local/lib/nas/devcontainer/agent-args.sh
+source /usr/local/lib/nas/devcontainer/codex-args.sh
 # -c is a global codex option: it is valid ahead of the extension's own
 # `-c features.code_mode_host=true app-server` argv. NAS_AGENT_ARGS carries the
 # filtered profile args plus the observability -c pairs.
