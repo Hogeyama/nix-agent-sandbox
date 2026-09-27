@@ -84,10 +84,15 @@ function writeSecretsFile(secrets: string[]): string {
  * nas コンテナ内では /bin/bash は entrypoint が差し替えたマスクラッパー自身に
  * なっている。ラッパー経由で起動すると supervise モードの検証にラッパーの挙動が
  * 混ざるため、コンテナ内では bash.real を直接指す。
+ * NAS_BASH_OVERRIDE が設定されている場合だけ、そのディレクトリの bash.real を使う。
+ * 未設定のホストでは PATH 上の Bash を使い、/tmp に同名ファイルがあっても選ばない。
  */
 function realBashPath(): string {
-  const real = "/tmp/nas-bash-override/bash.real";
-  return fs.existsSync(real) ? real : "/bin/bash";
+  const override = process.env.NAS_BASH_OVERRIDE;
+  const real = override && path.join(override, "bash.real");
+  return real && fs.existsSync(real)
+    ? real
+    : (Bun.which("bash") ?? "/bin/bash");
 }
 
 /**
@@ -1112,7 +1117,7 @@ echo "layers=$n"
           new Response(proc.stdout).text(),
           new Response(proc.stderr).text(),
         ]);
-        expect(await proc.exited).toBe(0);
+        expect(await proc.exited, stderr).toBe(0);
         expect(stdout).toBe("stdout=*******\n");
         expect(stderr).toBe("stderr=*******\n");
       } finally {
@@ -1141,8 +1146,11 @@ echo "layers=$n"
             NAS_MASK_SOCKET: "/tmp/nas-mask-filter-bogus.sock",
           },
         });
-        const stdout = await new Response(proc.stdout).text();
-        expect(await proc.exited).toBe(0);
+        const [stdout, stderr] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(await proc.exited, stderr).toBe(0);
         expect(stdout).toBe("stdout=*******\n");
       } finally {
         server.kill();
@@ -1171,7 +1179,7 @@ echo "layers=$n"
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
       ]);
-      expect(await proc.exited).toBe(121);
+      expect(await proc.exited, stderr).toBe(121);
       expect(stdout).toBe("");
       expect(stderr).toBe("");
       expect(fs.existsSync(markerPath)).toBe(false);

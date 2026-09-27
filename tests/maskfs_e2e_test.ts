@@ -67,6 +67,7 @@ async function runNas(
     stderr: "pipe",
     cwd: options.cwd,
     env: { ...cleanedParent, ...options.env, ...nasResourceEnv() },
+    timeout: 90_000,
   });
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,
@@ -116,12 +117,16 @@ test.skipIf(!dockerAvailable || !fuseUsable)(
           "profiles {",
           '  ["test"] {',
           '    agent = "codex"',
+          // The fake agent does not need a host ChatGPT login.
+          '    agentState { auth = "passthrough" }',
           "    nix { enable = false }",
           "    docker { enable = false; shared = false }",
+          "    secrets {",
+          '      ["db-password"] { from = "dotenv:secret.env#DB_PASSWORD" }',
+          "    }",
           "    mask = new MaskConfig {",
-          "      values {",
-          '        new { source = "dotenv:secret.env#DB_PASSWORD" }',
-          "      }",
+          // Output filtering could hide a failure to mask the FUSE read.
+          "      filter = false",
           '      writePolicy = "readonly"',
           "    }",
           "  }",
@@ -134,7 +139,7 @@ test.skipIf(!dockerAvailable || !fuseUsable)(
         env: { HOME: homeDir, PATH: `${binDir}:${process.env.PATH ?? ""}` },
       });
 
-      expect(result.code).toEqual(0);
+      expect(result.code, result.stderr).toEqual(0);
       expect(result.stdout).toContain(`CAT=DB_PASSWORD=${MASKED}`);
       expect(result.stdout).not.toContain(SECRET);
       expect(result.stdout).toContain("WRITE=denied");
@@ -146,4 +151,5 @@ test.skipIf(!dockerAvailable || !fuseUsable)(
       await rm(rootDir, { recursive: true, force: true }).catch(() => {});
     }
   },
+  120_000,
 );
