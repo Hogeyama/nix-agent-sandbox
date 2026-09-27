@@ -4,6 +4,7 @@ import {
   type ClaudeProbes,
   configureClaude,
   NAS_PROXY_CA_CERT_PATH,
+  provisionClaude,
 } from "./claude.ts";
 
 const installedClaude: ClaudeProbes = {
@@ -246,4 +247,66 @@ test("protected Dev Container uses the same layout without a native binary mount
     }).mounts,
   );
   expect(result.dockerArgs).toEqual([]);
+});
+
+// Dev Container extra Claude: same IDE state as the primary, plus the host
+// CLI as a structured mount (mountHostBinary is caller-driven, not implied
+// by claudeState alone).
+test("provisionClaude: a Dev Container extra also mounts the host binary as a structured mount", () => {
+  const result = provisionClaude({
+    ...input,
+    claudeState: {
+      claudeDir: "/state:$x/claude",
+      claudeJson: "/state:$x/claude.json",
+    },
+    mountHostBinary: true,
+  });
+  expect(result.mounts).toEqual([
+    { source: "/state:$x/claude", target: "/home/nas/.claude" },
+    { source: "/state:$x/claude.json", target: "/home/nas/.claude.json" },
+    {
+      source: "/host/claude",
+      target: "/home/nas/.local/bin/claude",
+      readOnly: true,
+    },
+  ]);
+  expect(result.dockerArgs).toEqual([]);
+});
+
+test("provisionClaude: a Dev Container extra without a host binary omits the mount", () => {
+  const result = provisionClaude({
+    ...input,
+    probes: { ...input.probes, claudeBinPath: null },
+    claudeState: {
+      claudeDir: "/state:$x/claude",
+      claudeJson: "/state:$x/claude.json",
+    },
+    mountHostBinary: true,
+  });
+  expect(result.mounts).toEqual([
+    { source: "/state:$x/claude", target: "/home/nas/.claude" },
+    { source: "/state:$x/claude.json", target: "/home/nas/.claude.json" },
+  ]);
+});
+
+test("provisionClaude: a Dev Container extra keeps the protected private root and still adds the host binary", () => {
+  const result = provisionClaude({
+    ...input,
+    protectSettings: true,
+    protectedClaudeState: protectedState,
+    claudeState: {
+      claudeDir: "/host/home/.claude",
+      claudeJson: "/host/home/.claude.json",
+    },
+    mountHostBinary: true,
+  });
+  expect(result.mounts).toContainEqual({
+    source: protectedState.runtimeDir,
+    target: "/home/nas/.claude",
+  });
+  expect(result.mounts).toContainEqual({
+    source: "/host/claude",
+    target: "/home/nas/.local/bin/claude",
+    readOnly: true,
+  });
 });

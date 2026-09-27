@@ -5,6 +5,7 @@ import type { Config, Profile } from "../config/types.ts";
 import { sharedDockerResources } from "../docker/shared_resources.ts";
 import type { DevcontainerRegistration } from "../domain/devcontainer.ts";
 import {
+  resolveDevcontainerIdeAgents,
   resolveDevcontainerPaths,
   serveDevcontainerRuntime,
 } from "../domain/devcontainer.ts";
@@ -108,7 +109,10 @@ export async function runDevcontainerRuntime(
         resolveMountProbes(host, options.profile, workspace),
       );
       const agentState = await guard.wait(
-        ensureDevcontainerAgentState(options.profile.agent, host.home),
+        ensureDevcontainerAgentState(
+          resolveDevcontainerIdeAgents(options.profile),
+          host.home,
+        ),
       );
       const buildProbes = await guard.wait(
         resolveBuildProbes(sharedDockerResources(process.env).sandboxImage, {

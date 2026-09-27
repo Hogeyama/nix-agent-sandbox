@@ -63,6 +63,7 @@ export function provisionAgent(
     case "claude":
       return provisionClaude({
         protectedClaudeState: input.protectedClaudeState,
+        claudeState: input.claudeState,
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectClaudeProbes(input.probes),
@@ -70,6 +71,7 @@ export function provisionAgent(
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
         claudeCredentialsFile: input.claudeCredentialsFile,
+        mountHostBinary: input.mountHostBinary,
       });
     case "copilot":
       return provisionCopilot({
@@ -82,6 +84,7 @@ export function provisionAgent(
       });
     case "codex":
       return provisionCodex({
+        codexState: input.codexState,
         containerHome: input.containerHome,
         hostHome: input.hostHome,
         probes: expectCodexProbes(input.probes),
@@ -89,6 +92,7 @@ export function provisionAgent(
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
         codexAuthFile: input.codexAuthFile,
+        mountHostBinary: input.mountHostBinary,
       });
   }
   throw new Error(`Unknown agent: ${input.agent}`);
@@ -108,6 +112,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
         claudeCredentialsFile: input.claudeCredentialsFile,
+        mountHostBinary: input.mountHostBinary,
       });
     case "copilot":
       if (input.mode !== "terminal") {
@@ -134,6 +139,7 @@ export function configureAgent(input: AgentConfigInput): AgentConfigResult {
         priorDockerArgs: input.priorDockerArgs,
         priorEnvVars: input.priorEnvVars,
         codexAuthFile: input.codexAuthFile,
+        mountHostBinary: input.mountHostBinary,
       });
   }
   throw new Error(`Unknown agent: ${input.agent}`);

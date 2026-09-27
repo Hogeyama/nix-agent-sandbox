@@ -487,10 +487,11 @@ test("configureCopilot: uses ['copilot'] when binary found", () => {
     priorEnvVars: {},
   });
   expect(result.agentCommand).toEqual(["copilot"]);
-  const hasBinaryMount = result.dockerArgs.some((a) =>
-    a.includes("/copilot:ro"),
-  );
-  expect(hasBinaryMount).toEqual(true);
+  expect(result.mounts).toContainEqual({
+    source: "/usr/bin/copilot",
+    target: "/usr/local/bin/copilot",
+    readOnly: true,
+  });
 });
 
 test("configureCopilot: uses error command when copilot binary not found", () => {
@@ -527,8 +528,8 @@ test("configureCopilot: does not mount copilot dir when absent", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  const hasCopilotDirMount = result.dockerArgs.some(
-    (a) => a.includes(".copilot") && !a.endsWith("/copilot:ro"),
+  const hasCopilotDirMount = (result.mounts ?? []).some(
+    (m) => m.target === "/home/testuser/.copilot",
   );
   expect(hasCopilotDirMount).toEqual(false);
 });
@@ -547,9 +548,10 @@ test("configureCopilot: mounts ~/.copilot when legacy dir exists", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.dockerArgs).toContain(
-    "/home/host/.copilot:/home/testuser/.copilot",
-  );
+  expect(result.mounts).toContainEqual({
+    source: "/home/host/.copilot",
+    target: "/home/testuser/.copilot",
+  });
 });
 
 // `~/.copilot` holds no hook configuration — Copilot CLI reads hooks from the
@@ -569,13 +571,19 @@ test("configureCopilot: re-mounts the ~/.copilot config files read-only", () => 
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.dockerArgs).toEqual([
-    "-v",
-    "/home/host/.copilot:/home/testuser/.copilot",
-    "-v",
-    "/home/host/.copilot/config.json:/home/testuser/.copilot/config.json:ro",
-    "-v",
-    "/home/host/.copilot/mcp-config.json:/home/testuser/.copilot/mcp-config.json:ro",
+  expect(result.dockerArgs).toEqual([]);
+  expect(result.mounts).toEqual([
+    { source: "/home/host/.copilot", target: "/home/testuser/.copilot" },
+    {
+      source: "/home/host/.copilot/config.json",
+      target: "/home/testuser/.copilot/config.json",
+      readOnly: true,
+    },
+    {
+      source: "/home/host/.copilot/mcp-config.json",
+      target: "/home/testuser/.copilot/mcp-config.json",
+      readOnly: true,
+    },
   ]);
 });
 

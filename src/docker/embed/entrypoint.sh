@@ -446,7 +446,8 @@ if [ "${NAS_DEVCONTAINER:-false}" = true ]; then
   rm -f /run/nas-devcontainer/ready
   export LOGNAME="$NAS_USER" SHELL="${SHELL:-/bin/bash}"
   source /usr/local/lib/nas/devcontainer-env.sh
-  nas_devcontainer_capture "$NAS_ENV_OPS_FILE" "$PATH_PREFIX" "${AGENT_COMMAND[@]:1}"
+  nas_devcontainer_capture "$NAS_ENV_OPS_FILE" "$PATH_PREFIX" \
+    "${NAS_DEVCONTAINER_PRIMARY_AGENT:-}" "${AGENT_COMMAND[@]:1}"
   if [ -n "$NAS_ENV_OPS_FILE" ]; then rm -f "$NAS_ENV_OPS_FILE"; fi
   cat > /etc/profile.d/nas.sh <<'NAS_IDE_PROFILE'
 if [ -n "${BASH_VERSION:-}" ]; then

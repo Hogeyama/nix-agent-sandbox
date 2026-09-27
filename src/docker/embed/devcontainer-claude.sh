@@ -6,5 +6,5 @@ if [ "$#" -lt 1 ]; then
 fi
 binary=$1
 shift
-source /usr/local/lib/nas/devcontainer/agent-args.sh
+source /usr/local/lib/nas/devcontainer/claude-args.sh
 exec /usr/local/bin/nas-devcontainer-exec "$binary" "${NAS_AGENT_ARGS[@]}" "$@"

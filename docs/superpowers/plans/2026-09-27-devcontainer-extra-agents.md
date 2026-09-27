@@ -31,7 +31,7 @@ Task 3 まで extraAgents の拒否は残すため、途中のコミットで未
 - IDE 拡張は同梱 CLI を使う。追加分のホスト CLI も RO mount するが、IDE の fallback に使わない。
 - Claude の private root と dummy credentials、protectSettings、HostExec/proxy/mask の境界を維持する。stage 内に primitive I/O を追加しない。
 - 引数ファイルは root 所有、0644、原子的更新。空文字、空白、改行、shell metacharacter を保持する。
-- 登録形式の version は既存の 1 を維持する。新フィールドが無い旧登録は主エージェントだけの IDE 集合として読む。
+- 登録形式の version 1 と既存 agent 欠如時の Claude 互換を維持する。IDE 集合は登録に保存しない。主や追加分の変更で再 init を要求せず、最新 profile から compose.json と devcontainer.metadata を再生成する。
 - 追加 CLI のホストバイナリ欠如は警告する。Claude/Codex の IDE 拡張まで利用不能とは表示しない。
 - 実装者は `claude -p` を使い、再委譲と自己起動のレビュアーを禁止する。レビューは controller が別途担当させる。必要な承認を迂回する CLI オプションを足さない。
 - コンパイル不能を作るためだけの RED は行わない。既存動作と利用者向けの契約を検証する。
@@ -42,7 +42,7 @@ Task 3 まで extraAgents の拒否は残すため、途中のコミットで未
 1. 主 Claude/主 Codex のどちらでも、空引数や `$(...)` を含む主用引数が他方の wrapper へ漏れないこと（Task 1）。
 2. 追加 CLI のホストバイナリが無い場合も、IDE の状態 mount が残ること。Codex の IDE が古いホスト版を選ばないこと（Task 1/2）。
 3. 新規 HOME と既存 HOME、protectSettings の有無で、両方の状態を壊さず mount できること（Task 2/3）。
-4. 旧登録、IDE 集合の増減、追加分の並べ替え、Copilot だけの増減を区別すること（Task 3）。
+4. 旧登録でも主・追加分の変更後に再 init なしで up でき、Compose のメタデータが最新 profile と一致すること。追加分の並べ替えと Copilot は IDE 設定を変えないこと（Task 3）。
 5. `auth` の文字列指定と Mapping の両方で、追加 Codex の injected を拒否し、Claude の注入と Codex の共有表示が実構成と一致すること（Task 3）。
 
 ---
@@ -251,119 +251,106 @@ Expected: PASS。通常 CLI の mount と起動コマンド、既存の単独 ID
 コミット主題の候補: `refactor(devcontainer): provision IDE state with optional host CLIs`。
 新 interface と実際の検証結果を report に残し、task review を受ける。
 
-### Task 3: extraAgents の受理・設定生成・利用案内
+### Task 3: extraAgents の受理・Compose メタデータ・利用案内
+
+2026-09-27 のユーザー指示「再 init はやめてほしい」「compose.json の再生成で済む」に従う。
+Task 3 の旧登録スナップショット・再 init 要求は置き換える。Task 1/2 の契約は維持する。
 
 **Files:**
 
-- Modify: `src/domain/devcontainer/{policy,config,types,store,lifecycle,disclosure,fixtures}.ts`
+- Modify: `src/domain/devcontainer/{policy,config,types,lifecycle,disclosure}.ts`
 - Test: `src/domain/devcontainer/{policy,config,lifecycle,disclosure}_test.ts`
-- Create: `src/domain/devcontainer/store_test.ts`
+- Modify/Test: `src/stages/launch/compose_stage.ts`, `compose_stage_test.ts`
 - Test: `src/stages/mount/stage_test.ts`, `src/stages/proxy/stage_test.ts`, `src/agents/credentials_test.ts`
-- Update typed fixtures: `src/cli/devcontainer_test.ts`, `src/stages/launch/compose_stage_test.ts`, `src/stages/launch/compose_session_service_test.ts`
-- Modify: `docs-site/src/content/docs/configuration/profiles.md`, `docs-site/src/content/docs/configuration/authentication.md`
+- Update affected fixtures/assertions: `src/cli/devcontainer_test.ts` and other direct render call sites as needed
+- Modify: `docs-site/src/content/docs/configuration/profiles.md`, `authentication.md`
+- Do not add registration.ideAgents or its parser/fixture migration.
 
 **Interfaces:**
 
-- Consumes: Task 2 の `DevcontainerIdeAgent` と `resolveDevcontainerIdeAgents`、複数 state、`mountHostBinary`。Task 1 の wrapper 引数分離。
-- Produces: `DevcontainerRegistration.ideAgents: readonly DevcontainerIdeAgent[]`（新規作成・parse 後の登録では必須）。
-- Produces: `renderDevcontainerConfig(registration: DevcontainerRegistration, remoteUser: string)`。IDE 集合は registration から読む。
-- Preserves: registration `version: 1`、`agent` の旧互換、`DevcontainerInitResult` と CLI 出力の形。
+- Consumes: Task 2 の `resolveDevcontainerIdeAgents`、複数 state、`mountHostBinary`、Task 1 の wrapper 引数分離。
+- Produces: `renderDevcontainerConfig(registration, remoteUser)`。エージェント非依存の起動用 config。
+- Produces: pure `renderDevcontainerMetadata(profile: Pick<Profile, "agent" | "extraAgents">, remoteUser: string)`。
+- ComposeStage writes `"devcontainer.metadata": JSON.stringify([renderDevcontainerMetadata(shared.profile, shared.host.user.trim() || "nas")])` alongside existing lookup labels.
+- Preserves: registration version 1 and agent parsing compatibility. agent is historical data, not a launch mismatch gate.
 
 - [ ] **Step 1: profile gate と認証の受け入れケースを更新する。**
 
 extraAgents 一律拒否を外し、Codex injected 拒否の対象を主だけから IDE 集合全体へ広げる。
-重複や主 Copilot、worktree の検証は既存経路を使う。
+主 Claude + 追加 Codex、主 Codex + 追加 Claude/Copilot を受理する。
+`auth: "injected"` と `{ codex: "injected" }` は追加 Codex でも拒否し passthrough を案内する。
+重複・主 Copilot・worktree の検証は既存経路を維持する。
+credentials/proxy テストへ、主 Claude + 追加 Codex の Dev Container は Claude source だけ、通常 CLI は両 source、という回帰を加える。
+
+- [ ] **Step 2: IDE 設定を最新 profile の Compose メタデータとして出力する。**
+
+`renderDevcontainerConfig` の第三引数と agent 固有の customizations を除き、起動設定を安定させる。
+`renderDevcontainerMetadata` は以下の共有契約と、選択された IDE 集合の customizations を生成する。
 
 ```ts
-const profile = {
-  ...devcontainerProfile(), agent: "claude" as const, extraAgents: ["codex" as const],
-};
-expect(validateDevcontainerProfile(profile)).toEqual([]);
-for (const auth of ["injected", { codex: "injected" }] as const) {
-  expect(validateDevcontainerProfile({
-    ...profile, agentState: { protectSettings: false, auth },
-  }).join("\n")).toContain("passthrough");
-}
-```
-
-主 Codex + 追加 Claude/Copilot も受理する。
-既存 credentials/proxy テストへ、主 Claude + 追加 Codex の Dev Container は Claude source だけ、通常 CLI は両 source、という回帰を追加する。
-
-- [ ] **Step 2: 登録に IDE 集合を保存し、設定を合成する。**
-
-```ts
-// init の record に追加。
-ideAgents: resolveDevcontainerIdeAgents(inputs.profile),
-```
-
-config は registration.ideAgents から extensions と settings を合成する。
-設定キーは `claudeCode.claudeProcessWrapper` と `chatgpt.cliExecutable`、値は既存 wrapper path。
-init の render 呼び出しは二引数に変更し、typed fixture へ ideAgents を明示する。
-
-```ts
-const config = renderDevcontainerConfig({
-  ...registrationFixture(), ideAgents: ["claude", "codex"],
-}, "nas");
-expect(config.customizations.vscode).toEqual({
-  extensions: ["anthropic.claude-code", "openai.chatgpt"],
-  settings: {
-    "claudeCode.claudeProcessWrapper": "/usr/local/bin/nas-devcontainer-claude",
-    "chatgpt.cliExecutable": "/usr/local/bin/nas-devcontainer-codex",
+{
+  remoteUser,
+  updateRemoteUserUID: false,
+  overrideCommand: false,
+  userEnvProbe: "loginInteractiveShell",
+  shutdownAction: "none",
+  customizations: {
+    vscode: {
+      extensions: ["anthropic.claude-code", "openai.chatgpt"],
+      settings: {
+        "claudeCode.claudeProcessWrapper": "/usr/local/bin/nas-devcontainer-claude",
+        "chatgpt.cliExecutable": "/usr/local/bin/nas-devcontainer-codex",
+      },
+    },
   },
-});
-```
-
-- [ ] **Step 3: parse と up の互換性・不一致を検証する。**
-
-parse は新フィールド欠如を主だけの集合に補い、存在時は配列型、claude/codex、重複無し、主の包含を検証して固定順に正規化する。
-欠如と null を区別し、空配列・未知値・重複・主の欠落は `DevcontainerError` にする。
-既存の agent 欠如時 Claude の互換を保つ。
-
-```ts
-const { ideAgents: _ideAgents, ...legacy } = registrationFixture();
-expect(parseDevcontainerRegistration(JSON.stringify(legacy)).ideAgents).toEqual(["claude"]);
-for (const ideAgents of [null, [], ["copilot"], ["claude", "claude"], ["codex"]]) {
-  expect(() => parseDevcontainerRegistration(JSON.stringify({
-    ...legacy, ideAgents,
-  }))).toThrow(DevcontainerError);
 }
 ```
 
-up は既存の主 agent 比較に加え、正規化済み ideAgents と最新 profile の IDE 集合を比較する。
-増減は `down` → `init --profile ...` → `up` を案内して拒否する。順序だけの変更と Copilot だけの増減は受理する。
-既存 lifecycle fixture の `loadInputs` と偽 `spawnServe` を用い、再 init が登録と生成 JSON の両方を更新してから up できるケースまで確認する。
+上記両エージェントの例に加え、各単独と Copilot だけの追加、順序変更を確認する。
+Compose の `devcontainer.metadata` ラベルから同じ JSON が復元でき、最新 profile が使われることを検証する。
+`compileCompose` までラベルが保持されること、既存 lookup labels・argv・静的 primary を維持することも確認する。
+StageInput の手書き fixture には必要な host/user と extraAgents を明示する。
+
+参考: Dev Containers CLI の `getImageMetadataFromContainer` は既存識別ラベルがあると metadata と更新可能な config 項目（remoteUser/userEnvProbe/remoteEnv）を採用する。
+そのため shutdownAction 等も metadata に含める必要がある。旧 config の customizations が現在の metadata を上書きしない経路を使う。
+https://github.com/devcontainers/cli/blob/main/src/spec-node/imageMetadata.ts
+https://github.com/devcontainers/cli/blob/main/src/spec-node/dockerCompose.ts
+
+- [ ] **Step 3: 再 init 不要と旧登録互換を検証する。**
+
+`verifyLive` の旧 primary 比較・再 init エラーを取り除く。IDE 集合比較も追加しない。
+設定の存在、profile の妥当性、未管理 config 上書き拒否、稼働中 init 拒否は維持する。
+登録 `agent` のコメントを更新し、スキーマと parser の互換は維持する。
+既存 lifecycle fixture の `loadInputs` と偽 spawn を使い、初回 init 後に主・追加分を変えても up できることを確認する。
+旧 agent 欠如登録も確認し、元の registration/config を再 init しなくてよいことを示す。
+起動済み up の冪等性は維持する。設定変更反映は他の profile 項目と同様に通常の down/up で行う。
 
 - [ ] **Step 4: mount → Compose のつながりと共有表示を検証する。**
 
-mount の既存 Fake Layer で両方の主従を試験する。
-同一 target の重複無し、追加 CLI と state の存在、主ホスト CLI の不在、設定 RO、Claude dummy の順序を確認する。
-得られた ContainerPlan を既存 `compileCompose(plan, containerName, projectName)` に渡し、volumes の source/target/read_only が保たれることを検証する。文字列に `:`/`$`/空白を含む state path も使う。
-
+既存 Fake Layer で両主従を試し、同じ target の重複無し、追加 CLI/state、主ホスト CLI 不在、設定 RO、Claude dummy の順序を確認する。
+`compileCompose` 後の volumes の source/target/read_only も検証し、`:`/`$`/空白を含む state path を用いる。
 disclosure は全エージェントの状態と認証を表示する。
-Claude の既存説明を共用し、追加 Codex でも共有と hook の注意を出す。
-Copilot は状態がある場合の共有として説明し、token がその中にあるとは書かない。
-追加 Claude/Codex は IDE と CLI、追加 Copilot は CLI と表示する。
-単独エージェントの既存表示を保ち、protectSettings/auth の各組み合わせを既存テストへ加える。
+追加 Claude/Codex は IDE と CLI、Copilot は CLI。Codex hook 警告は追加でも出す。
+Copilot は状態がある場合の共有とし、token がその中にあるとは書かない。
+単独表示、protectSettings/auth の各組み合わせは既存テストへ加える。
 
 ```bash
 bun test src/domain/devcontainer/ src/agents/credentials_test.ts src/stages/mount/stage_test.ts src/stages/proxy/stage_test.ts src/stages/launch/compose_stage_test.ts src/stages/launch/compose_session_service_test.ts src/cli/devcontainer_test.ts
 ```
 
-Expected: PASS。`src/domain/devcontainer/` に Docker integration を新設した場合は、ディレクトリ指定を unit ファイル列挙に切り替える。
+- [ ] **Step 5: 既存ドキュメントと検証結果を更新してコミットする。**
 
-- [ ] **Step 5: 利用条件を既存ページへ反映し、機能をコミットする。**
-
-profiles の「別のエージェントの併用」の Dev Container 未対応行を更新し、両 IDE、追加 CLI のホストバイナリ条件、agentArgs は主だけ、IDE 集合変更時の再 init を記す。
-authentication の Codex Dev Container の例外が追加分にも適用されると明記する。
-新しい設定項目や別ページは作らず、既存 Pkl 例をそのまま使う。例を変更した場合は記載位置に対応した schema 評価も行う。
+profiles の未対応記述を更新し、両 IDE、追加 CLI のホストバイナリ条件、主専用 agentArgs、通常の再起動での profile 変更反映を記す。再 init 要求は書かない。
+authentication は Codex の Dev Container 認証例外が追加分にも適用されると明記する。
+新しいページ・設定項目を作らず、既存 Pkl 例を維持する。例を変える場合は対応する schema 評価も行う。
 
 ```bash
 bun run docs:build
 git diff --check
 ```
 
-コミット主題の候補: `feat(devcontainer): support extra agents in IDE sessions`。
-report に全ケースの結果と実機未確認を記載し、task review を受ける。
+コミット候補: `feat(devcontainer): support extra agents in IDE sessions`。
+report にコマンドと結果、環境による未検証、実際の VS Code 両拡張の接続は未確認であることを記す。
 
 ## 全体の検証とレビュー
 
@@ -375,4 +362,4 @@ report に全ケースの結果と実機未確認を記載し、task review を�
 - [ ] `forgejow request-review implementation-base..HEAD` の PR で人間レビューを受ける。レビュー後に終了処理と必要な履歴整理を行う。
 - [ ] 実際の VS Code 両拡張での接続・認証・会話は自動テストの成功から推定しない。実施できない場合は未確認として完了報告に残す。
 
-この計画は人間レビュー待ち。承認後、各タスクを `claude -p` で順次実装する。
+この計画はユーザー承認済み。再 init に関する追加指示を反映し、実装を続行する。

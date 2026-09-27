@@ -466,8 +466,14 @@ test("planProxy: Codex with default credentials asks for the host OAuth source",
   ]);
 });
 
-test("planProxy: a profile with both agents asks for both sources", () => {
-  const profile = makeProfile({ agent: "codex", extraAgents: ["claude"] });
+test.each([
+  { agent: "codex" as const, extraAgents: ["claude" as const] },
+  { agent: "claude" as const, extraAgents: ["codex" as const] },
+])("planProxy: both sources for $agent with an extra agent", ({
+  agent,
+  extraAgents,
+}) => {
+  const profile = makeProfile({ agent, extraAgents: [...extraAgents] });
   const { shared, container, observability } = makeInput(profile);
 
   const result = planProxy({ ...shared, container, observability });
@@ -488,6 +494,23 @@ test("planProxy: Dev Container Codex does not start a host OAuth source", () => 
   );
 
   expect(result.agentCredentials).toBeUndefined();
+});
+
+test("planProxy: a Dev Container primary Claude with an extra Codex asks only for the Claude source", () => {
+  const profile = makeProfile({ agent: "claude", extraAgents: ["codex"] });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy(
+    { ...shared, container, observability },
+    { devcontainer: true },
+  );
+
+  // Codex's IDE and CLI share the same ~/.codex, so Dev Container Codex is
+  // always passthrough — whether launched or only made available as an extra
+  // agent — and never starts a host OAuth source.
+  expect(result.agentCredentials).toEqual([
+    { kind: "claude-oauth", hostHome: shared.host.home },
+  ]);
 });
 
 test("planProxy: shared credentials and Copilot do not start a host OAuth source", () => {
