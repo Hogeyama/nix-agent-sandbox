@@ -2,10 +2,11 @@
  * GitHub Copilot CLI エージェント対応
  */
 
+import type { MountSpec } from "../pipeline/state.ts";
 import {
   COPILOT_SETTINGS_FILES,
   existingSettingsFiles,
-  settingsMountArgs,
+  settingsMountSpecs,
 } from "./settings_protection.ts";
 import type { AgentConfigResult, AgentProvisionResult } from "./types.ts";
 
@@ -56,20 +57,30 @@ export interface CopilotConfigInput {
 /**
  * Copilot CLI をコンテナ内で使えるようにするマウントと環境変数を決定する
  * (純粋関数)。起動コマンドと起動時だけの設定は configureCopilot が足す。
+ *
+ * マウントは structured `MountSpec` として返す。`-v host:container` 文字列は
+ * Dev Container (Compose) 経路で `parseMountSpec` により最初の `:` で
+ * 再分割されるため、`:` を含むホストパス (home ディレクトリ、バイナリパスなど)
+ * を壊れて渡してしまう。terminal 起動は `compileLaunchOpts` が
+ * `ContainerPlan.mounts` から `-v` 文字列を組み立てるので、構造化した
+ * ままでも従来どおりの引数になる。
  */
 export function provisionCopilot(
   input: CopilotConfigInput,
 ): AgentProvisionResult {
   const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
     input;
-  const args = [...priorDockerArgs];
   const envVars = { ...priorEnvVars };
+  const mounts: MountSpec[] = [];
 
   // ~/.copilot (legacy state dir) のマウント
   if (probes.copilotLegacyDirExists) {
-    args.push("-v", `${hostHome}/.copilot:${containerHome}/.copilot`);
-    args.push(
-      ...settingsMountArgs(
+    mounts.push({
+      source: `${hostHome}/.copilot`,
+      target: `${containerHome}/.copilot`,
+    });
+    mounts.push(
+      ...settingsMountSpecs(
         `${hostHome}/.copilot`,
         `${containerHome}/.copilot`,
         input.protectSettings ? probes.copilotSettingsFiles : [],
@@ -79,10 +90,18 @@ export function provisionCopilot(
 
   // copilot バイナリのマウント (実体パスを解決してマウント)
   if (probes.copilotBinPath) {
-    args.push("-v", `${probes.copilotBinPath}:/usr/local/bin/copilot:ro`);
+    mounts.push({
+      source: probes.copilotBinPath,
+      target: "/usr/local/bin/copilot",
+      readOnly: true,
+    });
   }
 
-  return { dockerArgs: [...args], envVars };
+  return {
+    dockerArgs: [...priorDockerArgs],
+    envVars,
+    ...(mounts.length > 0 ? { mounts } : {}),
+  };
 }
 
 /** Copilot CLI 固有のマウントと環境変数、起動コマンドを決定する (純粋関数) */

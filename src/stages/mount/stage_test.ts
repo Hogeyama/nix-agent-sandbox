@@ -1106,10 +1106,86 @@ test("MountStage: an extra Copilot does not set its launch-only env", () => {
   const { input } = makeInput({ profile, mountProbes });
   const plan = planMount(input, mountProbes);
 
-  expect(plan.dockerArgs).toContain(
-    "/usr/bin/copilot:/usr/local/bin/copilot:ro",
-  );
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: "/usr/bin/copilot",
+    target: "/usr/local/bin/copilot",
+    readOnly: true,
+  });
   expect(plan.envVars.REMOTE_CONTAINERS).toBeUndefined();
+});
+
+// provisionCopilot switched from `-v host:container[:ro]` strings to
+// structured MountSpecs: a `-v` string re-split on
+// the first `:` by parseMountSpec would truncate a host path containing
+// `:`, corrupting the Compose volume for a Dev Container session. This
+// mount plan -> compileCompose round trip is where that reparse used to
+// happen, so it is the one that must keep such paths intact.
+test("an extra Copilot's mounts reach compileCompose intact, including a host home and binary path containing `:`, `$`, and spaces", () => {
+  const hostEnv: HostEnv = { ...defaultHostEnv, home: "/home/test:user $x" };
+  const profile = makeProfile({
+    agent: "codex",
+    extraAgents: ["copilot"],
+    agentState: { protectSettings: true },
+  });
+  const mountProbes = makeMountProbes({
+    agentProbes: {
+      codexDirExists: false,
+      codexBinPath: null,
+      codexCodeModeHostBinPath: null,
+      codexSettingsFiles: [],
+    },
+    extraAgentProbes: [
+      {
+        agent: "copilot",
+        probes: {
+          copilotBinPath: "/opt/tool:bin $x/copilot",
+          copilotLegacyDirExists: true,
+          copilotSettingsFiles: ["config.json"],
+        },
+      },
+    ],
+  });
+  const { input } = makeInput({ profile, mountProbes, hostEnv });
+  const plan = planMount(input, mountProbes, {
+    vscodeDir: "/state:$x/vscode dir",
+    codexState: { codexDir: "/state:$x/codex dir" },
+  });
+
+  const expectedMounts = [
+    {
+      source: `${hostEnv.home}/.copilot`,
+      target: `${CONTAINER_HOME}/.copilot`,
+    },
+    {
+      source: `${hostEnv.home}/.copilot/config.json`,
+      target: `${CONTAINER_HOME}/.copilot/config.json`,
+      readOnly: true,
+    },
+    {
+      source: "/opt/tool:bin $x/copilot",
+      target: "/usr/local/bin/copilot",
+      readOnly: true,
+    },
+  ];
+  for (const mount of expectedMounts) {
+    expect(plan.containerPatch.mounts).toContainEqual(mount);
+  }
+
+  const container = mergeContainerPlan(
+    { ...input.container, network: { mode: "network", name: "nas-net" } },
+    plan.containerPatch,
+  );
+  const compose = compileCompose(container, "nas-agent", "nas-project");
+  const escapeComposeDollar = (value: string) => value.split("$").join("$$");
+  for (const mount of expectedMounts) {
+    expect(compose.services.agent.volumes).toContainEqual({
+      type: "bind",
+      source: escapeComposeDollar(mount.source),
+      target: escapeComposeDollar(mount.target),
+      read_only: mount.readOnly ?? false,
+      bind: { create_host_path: false },
+    });
+  }
 });
 
 // protectSettings covers Claude's state whether Claude is launched or only
