@@ -1,6 +1,6 @@
 # Dev Container の extraAgents と複数 IDE 拡張
 
-状態: 2026-09-27 ユーザー承認済み。実装は未着手。
+状態: ユーザー承認済み。2026-09-27 の追加指示により、設定変更は compose.json の再生成で反映し、再 init を要求しない。
 
 ## 目的と利用範囲
 
@@ -38,9 +38,14 @@ Copilot は追加 CLI として提供する。
 
 プロファイルから IDE 対応エージェントの集合を求める純粋な共通処理を作る。
 Claude / Codex を固定順で返し、追加分の記載順によって結果を変えない。
-設定生成、状態準備、登録との比較はこの同じ集合を使う。
+Compose メタデータ生成と状態準備はこの同じ集合を使う。
 
-`renderDevcontainerConfig` は、その集合の拡張と設定を合成する。
+`renderDevcontainerConfig` はエージェントに依存しない起動用の設定を生成する。
+拡張と wrapper 設定は最新 profile から合成し、Compose の agent service の
+`devcontainer.metadata` ラベルへ JSON として出力する。
+ラベルには `shutdownAction: "none"`、`overrideCommand: false`、
+`updateRemoteUserUID: false`、`userEnvProbe: "loginInteractiveShell"`、remoteUser も含め、
+Dev Containers がラベルから実効設定を復元するときも既存の起動・停止契約を保つ。
 
 | エージェント | 拡張 | 設定 |
 | --- | --- | --- |
@@ -118,19 +123,18 @@ Codex の `shell_environment_policy.inherit=all` は wrapper 自身の契約と�
 
 ## 設定変更と既存登録
 
-登録に IDE エージェント集合を追加する。
-`up` は主エージェントと IDE 集合を生成時の登録と照合する。
-集合に増減があれば、生成済み JSON と実行時の状態が不一致になるため拒否し、
-`down` → `init --profile ...` → `up` を案内する。
-追加分の順序だけの変更と Copilot CLI だけの増減では、IDE 集合は変わらない。
+IDE エージェント集合を登録へ保存しない。最新 profile から通常の起動時に
+compose.json を再生成し、メタデータ・状態・CLI の構成を揃える。
+主エージェントや extraAgents の変更だけを理由に再 init を要求しない。
+既存の主 agent 不一致による up 拒否も取り除く。
+稼働中の up の冪等性は維持し、変更の適用は通常の down/up による再起動で行う。
 
-登録形式の version は既存の 1 を維持し、新フィールドが欠ける登録は
-既存の `agent` だけの IDE 集合として読む。`agent` も欠ける旧登録は
-既存どおり Claude とみなす。新フィールドが存在する場合は、配列型、対応する
-エージェント値、重複がないこと、主エージェントを含むことを検証する。
-
-これにより既存の単独エージェント登録はそのまま使え、追加 IDE を有効にする変更は
-明示的な再 init を必要とする。稼働中セッションの init 拒否も維持する。
+登録形式は version 1 のまま維持し、新しい ideAgents フィールドは追加しない。
+既存 agent フィールドの読み込み互換性（欠如時 Claude）も維持するが、
+実効 IDE 構成の決定には使わない。
+旧 devcontainer.json に agent 固有の customizations が残っていても、
+nas の識別ラベルを持つ起動済みコンテナのメタデータから最新設定を取得する経路を使う。
+既存の未管理設定の上書き防止、登録・設定ファイルの存在検証、稼働中の init 拒否は維持する。
 
 ## init の表示と利用者向け説明
 
@@ -143,17 +147,17 @@ Copilot は `~/.copilot` が存在する場合の共有を示し、その中に 
 Codex 拡張の hook に関する既存表示は、追加 Codex の場合も出す。
 
 プロファイルの併用説明にある「Dev Container は未対応」を更新し、
-両拡張の利用、追加 CLI の条件、主専用の agentArgs、IDE 集合変更時の再 init を記す。
+両拡張の利用、追加 CLI の条件、主専用の agentArgs、再起動での設定反映を記す。
 認証説明では Dev Container の Codex の例外が追加分にも適用されると明記する。
 
 ## 変更境界
 
 | 場所 | 責務 |
 | --- | --- |
-| `src/domain/devcontainer/` | IDE 集合、profile 検証、設定合成、登録・照合、共有表示 |
+| `src/domain/devcontainer/` | IDE 集合、profile 検証、設定とメタデータの合成、共有表示 |
 | `src/devcontainer/runtime.ts` / `src/stages/mount/mount_probes.ts` | 複数 IDE エージェントの状態準備 |
 | `src/agents/{types,registry,claude,codex}.ts` / `src/stages/mount/stage.ts` | 状態とバイナリ選択の分離、追加分への入力 |
-| `src/stages/launch/compose_stage.ts` | 主エージェント種別の引き渡し |
+| `src/stages/launch/compose_stage.ts` | 主エージェント種別の引き渡し、最新 IDE メタデータの出力 |
 | `src/docker/embed/devcontainer-{env,claude,codex}.sh` と必要な entrypoint 接続 | 引数の分離と wrapper ごとの取得 |
 | 対応する unit / integration テスト | 状態・認証・起動引数・登録互換の検証 |
 | `docs-site/src/content/docs/configuration/{profiles,authentication}.md` | 利用条件と認証の説明 |
@@ -163,8 +167,8 @@ Codex 拡張の hook に関する既存表示は、追加 Codex の場合も出�
 1. 主 Codex + 追加 Claude / Copilot、主 Claude + 追加 Codex / Copilot を受理する。
    主 Copilot、worktree、IDE に含まれる Codex の明示的 injected は拒否する。
    主と追加の重複・追加分同士の重複は既存の profile 検証で拒否する。
-2. 両方を含む設定では両拡張と両 wrapper 設定を生成する。
-   単独エージェント設定の生成結果は維持する。
+2. 両方を含む設定では両拡張と両 wrapper 設定を Compose メタデータに生成する。
+   各単独エージェントの実効設定と起動・停止契約を維持する。
 3. 両エージェントの状態を準備し、追加分の CLI と必要な補助バイナリを mount する。
    同一 target を重複させず、protectSettings と credential 保護を維持する。
    追加 CLI の欠如は警告し、IDE 利用まで不可能とは表示しない。
@@ -175,8 +179,8 @@ Codex 拡張の hook に関する既存表示は、追加 Codex の場合も出�
    主専用引数が追加分へ漏れないこと、拡張側引数の順序・空要素・引用が保持されること、
    env 適用・終了コードが維持されることを確認する。
    ホスト Codex が存在しても拡張同梱版が選ばれることも確認する。
-6. 旧登録、新登録の検証、IDE 集合の増減による up 拒否、順序変更の受理、
-   再 init 後の整合性を確認する。
+6. 旧登録の互換、主と追加分の変更後に再 init なしで up できること、
+   最新 profile に対応する Compose メタデータ、順序変更・Copilot だけの変更を確認する。
 7. Compose への変換まで追加分の mount と RO 属性が保持されることを確認する。
    実 Docker を使う検証は integration レーンで能力判定と cleanup を備える。
 8. `fmt`、`lint`、`check`、`docs:build`、`git diff --check` を確認する。
@@ -198,7 +202,8 @@ Codex 拡張の hook に関する既存表示は、追加 Codex の場合も出�
 状態とバイナリ選択を分けるのは、IDE と CLI が同じ状態を共有しながら、
 IDE のプロトコルとホスト CLI の実行経路を別々に成立させるためである。
 引数を拡張ごとに分けると、異なる CLI のオプション解釈が混ざらない。
-登録への IDE 集合の保存は、設定変更で古い拡張設定が残る不一致を起動前に知らせるためである。
+拡張設定を Compose のメタデータへ置くと、通常の起動時の再生成で profile 変更を反映できる。
+登録に IDE 集合を固定して再 init を要求する仕組みは不要になる。
 
 ## 他の案を採らない理由
 
@@ -211,6 +216,9 @@ IDE のプロトコルとホスト CLI の実行経路を別々に成立させ�
   追加分へは引数を渡さない既存契約にも反する。
 
 ## 確認資料
+
+- [Dev Containers のコンテナメタデータ読込](https://github.com/devcontainers/cli/blob/main/src/spec-node/imageMetadata.ts)
+- [Compose の起動済みコンテナへの接続経路](https://github.com/devcontainers/cli/blob/main/src/spec-node/dockerCompose.ts)
 
 - `AGENTS.md`
 - `skills/effect-separation/SKILL.md` と `references/domain-service.md`

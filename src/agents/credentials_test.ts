@@ -142,6 +142,18 @@ test("usesProxiedCodexCredentials: launched or extra Codex outside Dev Container
   ).toBe(false);
 });
 
+test("usesProxied*Credentials: a Dev Container primary Claude with an extra Codex is proxied for Claude only", () => {
+  const profile = {
+    agent: "claude" as const,
+    extraAgents: ["codex" as const],
+    agentState: { protectSettings: false, auth: undefined },
+  };
+  expect(usesProxiedClaudeCredentials(profile)).toBe(true);
+  expect(usesProxiedCodexCredentials(profile, { devcontainer: true })).toBe(
+    false,
+  );
+});
+
 test("usesProxied*Credentials: a per-agent entry opts out only that agent", () => {
   const profile = {
     agent: "claude" as const,

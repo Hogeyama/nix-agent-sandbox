@@ -1,6 +1,9 @@
 import { Effect } from "effect";
 import { filterDevcontainerAgentArgs } from "../../domain/devcontainer/agent_args.ts";
-import type { DevcontainerRegistration } from "../../domain/devcontainer.ts";
+import {
+  type DevcontainerRegistration,
+  renderDevcontainerMetadata,
+} from "../../domain/devcontainer.ts";
 import { logWarn } from "../../log.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
@@ -41,6 +44,7 @@ export function finalizeDevcontainerPlan(
       env: {
         static: {
           NAS_DEVCONTAINER: "true",
+          NAS_DEVCONTAINER_PRIMARY_AGENT: shared.profile.agent,
           NAS_DEVCONTAINER_ENV_KEYS: [
             ...new Set(finalized.container.env.dynamicOps.map((op) => op.key)),
           ].join(" "),
@@ -49,6 +53,19 @@ export function finalizeDevcontainerPlan(
       labels: {
         "devcontainer.local_folder": options.registration.workspace,
         "devcontainer.config_file": options.registration.configPath,
+        // Dev Containers CLI reads effective config (customizations,
+        // remoteUser, ...) from this label once the container is already
+        // running under nas's identifying labels, in place of
+        // devcontainer.json — see renderDevcontainerMetadata. Compiling it
+        // from the live profile on every launch is what lets a primary
+        // agent or extraAgents change take effect on the next down/up
+        // without a re-init.
+        "devcontainer.metadata": JSON.stringify([
+          renderDevcontainerMetadata(
+            shared.profile,
+            shared.host.user.trim() || "nas",
+          ),
+        ]),
       },
     }),
   };

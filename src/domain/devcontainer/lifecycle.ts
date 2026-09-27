@@ -201,13 +201,10 @@ export function makeDevcontainerLifecycle(
     const inputs = await loadInputs(workspace, registration.profileName);
     const errors = validateDevcontainerProfile(inputs.profile);
     if (errors.length) throw new DevcontainerError(errors.join("\n"));
-    // The generated devcontainer.json names agent-specific extensions and
-    // wrapper settings, so a profile whose agent changed since init would
-    // boot a container configured for the wrong agent.
-    if (inputs.profile.agent !== registration.agent)
-      throw new DevcontainerError(
-        `profile agent changed since init (${registration.agent} -> ${inputs.profile.agent}); run devcontainer init again`,
-      );
+    // Agent-specific extensions and wrapper settings are compiled from this
+    // same `inputs.profile` into Compose's `devcontainer.metadata` label on
+    // every launch (see compose_stage.ts), so a primary agent or extraAgents
+    // change since init needs no re-init: the next down/up picks it up.
     return registration;
   };
   const verify = options.verifyRegistration ?? verifyLive;
@@ -257,11 +254,7 @@ export function makeDevcontainerLifecycle(
         command: inputs.command,
       };
       const bytes = `${JSON.stringify(
-        renderDevcontainerConfig(
-          record,
-          host.user.trim() || "nas",
-          inputs.profile.agent,
-        ),
+        renderDevcontainerConfig(record, host.user.trim() || "nas"),
         null,
         2,
       )}\n`;

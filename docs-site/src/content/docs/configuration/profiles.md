@@ -101,7 +101,9 @@ extraMounts {
 | `agentArgs` | 渡さない。呼び出すときに引数で指定する |
 | `guide`（サンドボックスの説明文） | Codex と Copilot は読む。Claude には起動引数で渡すため届かない |
 | [記録](/nix-agent-sandbox/configuration/recording/) | 対象外。記録の対象は `agent` だけ |
-| Dev Container | 未対応。`extraAgents` を指定したプロファイルは使えない |
+| Dev Container | 対応。主・追加分に含まれる Claude と Codex の VS Code 拡張を両方使える |
+
+Dev Container では、`agent` と `extraAgents` に含まれる Claude・Codex の VS Code 拡張を両方設定し、それぞれの拡張の同梱 CLI を使います。追加分のホスト CLI バイナリも、通常の `extraAgents` と同じ配置先へ読み取り専用で共有します。ホストにバイナリが無ければ起動時に警告しますが、IDE 拡張は同梱バイナリを使えるためセッション自体は起動します。`agentArgs` は主エージェント専用のままで、追加 IDE 拡張にも追加 CLI にも渡りません。`agent` や `extraAgents` を init 後に変えた場合は、`nas devcontainer down` のあと `up` すれば新しい構成が反映され、再度 `init` する必要はありません。
 
 ## UI の設定
 

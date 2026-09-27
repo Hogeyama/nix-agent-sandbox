@@ -1,8 +1,15 @@
 # Sourced by the root entrypoint and by non-root Bash login shells.
 # The fixed directory is prepared by root before dropping privileges.
 nas_devcontainer_capture() {
-  local nas_ops=$1 nas_prefix=$2 nas_key nas_file
-  shift 2
+  local nas_ops=$1 nas_prefix=$2 nas_primary=$3 nas_key nas_file nas_agent
+  shift 3
+  case "$nas_primary" in
+    claude | codex) ;;
+    *)
+      echo '[nas] Invalid Dev Container primary agent' >&2
+      return 1
+      ;;
+  esac
   local -a nas_keys=(
     http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY
     SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE CURL_CA_BUNDLE
@@ -39,13 +46,18 @@ nas_devcontainer_capture() {
   nas_file=$(mktemp /usr/local/lib/nas/devcontainer/.ops.XXXXXX) || return
   if [ -n "$nas_ops" ]; then cat -- "$nas_ops" > "$nas_file" || return; fi
   chmod 644 "$nas_file" && mv -f "$nas_file" /usr/local/lib/nas/devcontainer/env-ops.sh || return
-  nas_file=$(mktemp /usr/local/lib/nas/devcontainer/.args.XXXXXX) || return
-  {
-    printf 'declare -a NAS_AGENT_ARGS=('
-    if [ "$#" -gt 0 ]; then printf ' %q' "$@"; fi
-    printf ' )\n'
-  } > "$nas_file"
-  chmod 644 "$nas_file" && mv -f "$nas_file" /usr/local/lib/nas/devcontainer/agent-args.sh
+  for nas_agent in claude codex; do
+    nas_file=$(mktemp /usr/local/lib/nas/devcontainer/.args.XXXXXX) || return
+    {
+      printf 'declare -a NAS_AGENT_ARGS=('
+      if [ "$nas_agent" = "$nas_primary" ] && [ "$#" -gt 0 ]; then
+        printf ' %q' "$@"
+      fi
+      printf ' )\n'
+    } > "$nas_file"
+    chmod 644 "$nas_file" &&
+      mv -f "$nas_file" "/usr/local/lib/nas/devcontainer/${nas_agent}-args.sh" || return
+  done
 }
 
 nas_devcontainer_apply() {

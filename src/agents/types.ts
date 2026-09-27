@@ -34,7 +34,11 @@ export interface CodexStatePaths {
   readonly codexDir: string;
 }
 
-/** Host agent state pre-created for a Dev Container session; at most one member is set. */
+/**
+ * Host agent state pre-created for a Dev Container session. A session whose
+ * IDE agent set includes both Claude and Codex carries both members at once;
+ * one may still be absent when the other agent is not in that set.
+ */
 export interface DevcontainerAgentState {
   readonly claudeState?: ClaudeStatePaths;
   readonly codexState?: CodexStatePaths;
@@ -57,14 +61,17 @@ export interface AgentConfigResult extends AgentProvisionResult {
 
 /** configureAgent 系の共通入力 */
 export interface AgentConfigInput extends AgentProvisionInput {
-  readonly claudeState?: ClaudeStatePaths;
-  readonly codexState?: CodexStatePaths;
   readonly mode: AgentMode;
 }
 
 /**
- * provisionAgent 系の共通入力。Dev Container の状態パスは受け取らない
- * (Dev Container は起動するエージェント 1 つ分の状態しか持たない)。
+ * provisionAgent 系の共通入力。Dev Container の IDE 状態パスは、その
+ * エージェントが主・追加どちらであっても渡せる (`claudeState` /
+ * `codexState`)。`mountHostBinary` は状態の有無と独立にホスト CLI を
+ * mount するかを決める: 未指定なら対応する state が無いときだけ true
+ * になる (通常 CLI の既定と同じ)。IDE 拡張は state の有無にかかわらず
+ * 同梱バイナリを使うため、mount の要否は呼び出し側 (registry / mount
+ * stage) が明示する。
  */
 export interface AgentProvisionInput {
   readonly protectedClaudeState?: ProtectedClaudeState;
@@ -89,6 +96,15 @@ export interface AgentProvisionInput {
    * host 上のパスである。ホストの credential を proxy で注入するときに渡す。
    */
   readonly codexAuthFile?: string;
+  /** Dev Container の Claude IDE 状態。この agent が Claude のときだけ使う。 */
+  readonly claudeState?: ClaudeStatePaths;
+  /** Dev Container の Codex IDE 状態。この agent が Codex のときだけ使う。 */
+  readonly codexState?: CodexStatePaths;
+  /**
+   * ホスト CLI バイナリを mount するか。未指定なら、対応する IDE state
+   * (`claudeState` / `codexState`) が無いときだけ true。
+   */
+  readonly mountHostBinary?: boolean;
 }
 
 /** エージェント固有 probe 結果 */
