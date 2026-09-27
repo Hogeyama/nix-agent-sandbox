@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -21,6 +22,7 @@ import {
   writeJsonLine,
 } from "../lib/unix_socket.ts";
 import { HostExecBroker, sendHostExecControlRequest } from "./broker.ts";
+import { RawLineReader } from "./gateway_execution.ts";
 import type { BrokerToGatewayMessage } from "./gateway_protocol.ts";
 import {
   captureFilterProcessIdentities,
@@ -3542,6 +3544,125 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+// B2a: approval must refer to the content presented while the request was
+// pending. Observe the gateway's start frame; never execute the fixture file.
+for (const change of ["unchanged", "in-place", "replacement"] as const) {
+  test.skipIf(process.platform === "win32")(
+    `approval boundary: pending target content stays approved (${change})`,
+    async () => {
+      const runtimeDir = await mkdtemp(
+        path.join(tmpdir(), "nas-approval-boundary-"),
+      );
+      let broker: HostExecBroker | undefined;
+      let socket: Awaited<ReturnType<typeof connectUnix>> | undefined;
+      let reader: RawLineReader | undefined;
+      let approval: ReturnType<typeof sendHostExecControlRequest> | undefined;
+      try {
+        const paths = await resolveHostExecRuntimePaths(runtimeDir);
+        const target = path.join(runtimeDir, "fixture.txt");
+        const approvedContent = "approved fixture content\n";
+        const changedContent = "changed fixture content\n";
+        await writeFile(target, approvedContent);
+        broker = new HostExecBroker({
+          paths,
+          sessionId: "sess_test",
+          profileName: "test",
+          notify: "off",
+          workspaceRoot: runtimeDir,
+          sessionTmpDir: path.join(runtimeDir, "tmp"),
+          integrityTargets: [target],
+          hostexec: makeConfig({
+            prompt: { timeoutSeconds: 5, defaultScope: "once" },
+            rules: [
+              {
+                id: "fixture",
+                match: { argv0: target },
+                cwd: { mode: "workspace-only", allow: [] },
+                env: {},
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+              },
+            ],
+          }),
+        });
+        const execPath = hostExecExecSocketPath(paths, "sess_test");
+        const controlPath = hostExecBrokerSocketPath(paths, "sess_test");
+        await broker.start(execPath, controlPath);
+        socket = await connectUnix(execPath);
+        const gatewayReader = new RawLineReader(socket);
+        reader = gatewayReader;
+        const readDecision = async (): Promise<BrokerToGatewayMessage> => {
+          const line = await gatewayReader.read();
+          if (!line) throw new Error("broker closed without a decision");
+          return JSON.parse(
+            Buffer.from(line).toString(),
+          ) as BrokerToGatewayMessage;
+        };
+        const requestId = "req_pending_content";
+        await writeJsonLine(socket, {
+          type: "execute",
+          request: request([], runtimeDir, requestId, target),
+        });
+        const pending = await waitForPendingEntries(paths, 1);
+        expect(pending[0].requestId).toBe(requestId);
+        expect(pending[0].integrityChanged ?? false).toBe(false);
+
+        if (change === "in-place") {
+          await writeFile(target, changedContent);
+        } else if (change === "replacement") {
+          const replacement = path.join(runtimeDir, "replacement.txt");
+          await writeFile(replacement, changedContent);
+          await rename(replacement, target);
+        }
+
+        approval = sendHostExecControlRequest(controlPath, {
+          type: "approve",
+          requestId,
+          scope: "once",
+        });
+        void approval.catch(() => {});
+        const decision = await readDecision();
+        const dispatchedContent =
+          decision.type === "start"
+            ? await readFile(decision.argv0, "utf8")
+            : undefined;
+
+        // Complete the fake gateway protocol without spawning any command.
+        if (decision.type === "start") {
+          await writeJsonLine(socket, {
+            type: "transport_error",
+            requestId,
+            message: "fixture does not execute commands",
+          });
+          let terminal = await readDecision();
+          if (terminal.type === "kill") terminal = await readDecision();
+          expect(terminal.type).toBe("error");
+        }
+        await approval;
+        if (change === "unchanged") {
+          expect(decision.type).toBe("start");
+        } else {
+          expect(["start", "error"]).toContain(decision.type);
+        }
+        // Refusal is safe; a start must use the approved immutable contents.
+        if (decision.type === "start") {
+          expect(dispatchedContent).toBe(approvedContent);
+        }
+      } finally {
+        reader?.close();
+        socket?.destroy();
+        try {
+          await broker?.close();
+          await approval?.catch(() => {});
+        } finally {
+          await rm(runtimeDir, { recursive: true, force: true });
+        }
+      }
+    },
+    10_000,
+  );
+}
 
 test("HostExecBroker: approved capability cache does not bypass a changed integrity target", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));

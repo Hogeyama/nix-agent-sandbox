@@ -8,7 +8,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
  * it (restoring afterwards) so the real gate behavior is exercised.
  */
 
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
@@ -141,6 +141,54 @@ test("computeConfigTrustHash: changes when a sibling .pkl module changes", async
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// B2a: trust covers the inputs of an imported setting, not only config.pkl.
+// These assertions intentionally fail until dependency coverage is fixed.
+for (const dependency of ["nested", "symlinked", "outside-nas"] as const) {
+  test(`config boundary: changing a ${dependency} imported module revokes trust`, async () => {
+    await withGateEnabled(async () => {
+      const importPath =
+        dependency === "nested"
+          ? "modules/value.pkl"
+          : dependency === "symlinked"
+            ? "value.pkl"
+            : "../shared/value.pkl";
+      const { tmpDir, nasDir } = await setupNas(`amends "Schema.pkl"
+import "${importPath}"
+profiles {
+  ["dev"] {
+    agent = "claude"
+    env { new { key = "REVIEW_VALUE"; val = value.label } }
+  }
+}
+`);
+      try {
+        const target = path.join(
+          dependency === "nested" ? nasDir : tmpDir,
+          dependency === "nested" ? "modules" : "shared",
+          "value.pkl",
+        );
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, 'label = "before"\n');
+        if (dependency === "symlinked") {
+          await symlink(target, path.join(nasDir, "value.pkl"));
+        }
+        await recordConfigTrust(nasDir);
+        expect(await isConfigTrusted(nasDir)).toBe(true);
+
+        await writeFile(target, 'label = "after"\n');
+
+        expect(await isConfigTrusted(nasDir)).toBe(false);
+      } finally {
+        try {
+          await removeConfigTrust(nasDir);
+        } finally {
+          await rm(tmpDir, { recursive: true, force: true });
+        }
+      }
+    });
+  });
+}
 
 test("record/is/remove trust roundtrip + 0600 store perms", async () => {
   await withGateEnabled(async () => {

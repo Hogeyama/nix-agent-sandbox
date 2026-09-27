@@ -8,11 +8,13 @@ import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
  */
 
 import {
+  link,
   mkdir,
   mkdtemp,
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -184,6 +186,42 @@ evaluatorSettings {
 }
 
 // --- loadConfig: ファイルシステムからの読み込み ---
+
+// B2a: generating editor assets must preserve unrelated files, even if loading
+// refuses the destination. Both paths stay inside this test's temporary root.
+for (const linkKind of ["symlink", "hardlink"] as const) {
+  test.skipIf(!hasPkl)(
+    `config boundary: Schema.pkl ${linkKind} preserves a file outside the workspace`,
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "nas-schema-boundary-"));
+      try {
+        const workspace = path.join(root, "workspace");
+        const nasDir = await setupNasDir(
+          workspace,
+          'amends "Schema.pkl"\nprofiles { ["dev"] { agent = "claude" } }\n',
+        );
+        // Establish that the same fixture loads before changing the destination.
+        const initial = await loadConfig({ startDir: workspace });
+        expect(initial.profiles.dev.agent).toBe("claude");
+
+        const markerPath = path.join(root, "outside.txt");
+        const marker = "fixture file must remain unchanged\n";
+        await writeFile(markerPath, marker);
+        const schemaPath = path.join(nasDir, "Schema.pkl");
+        await rm(schemaPath);
+        if (linkKind === "symlink") await symlink(markerPath, schemaPath);
+        else await link(markerPath, schemaPath);
+
+        // A safe refusal or an isolated replacement are both acceptable.
+        await loadConfig({ startDir: workspace }).catch(() => undefined);
+
+        expect(await readFile(markerPath, "utf8")).toBe(marker);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 test.skipIf(!hasPkl)(
   "loadConfig: loads minimal .nas/config.pkl from directory",

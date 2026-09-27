@@ -111,6 +111,48 @@ test.skipIf(!gitAvailable)(
   },
 );
 
+// B2a: Git reads included files as configuration even when .git/config itself
+// is read-only. Values are inert strings; these cases never execute a hook.
+for (const includeKind of ["include", "includeIf"] as const) {
+  test.skipIf(!gitAvailable)(
+    `git boundary: protects transitive ${includeKind} configuration`,
+    async () => {
+      const root = await makeRepo();
+      try {
+        const included = path.join(root, ".git", "included.conf");
+        const nested = path.join(root, ".git", "nested.conf");
+        await writeFile(included, "[include]\n\tpath = nested.conf\n");
+        await writeFile(nested, "[nas]\n\tmarker = fixture\n");
+        const key =
+          includeKind === "include"
+            ? "include.path"
+            : `includeIf.gitdir:${root}/.git/.path`;
+        git(root, "config", "--local", key, "included.conf");
+
+        const effective = Bun.spawnSync(
+          ["git", "-C", root, "config", "--get", "nas.marker"],
+          { env: GIT_ENV },
+        );
+        expect(effective.exitCode).toBe(0);
+        expect(effective.stdout.toString().trim()).toBe("fixture");
+
+        const probe = await resolveGitMetadata(root);
+        expect(probe).not.toBeNull();
+        for (const configPath of [included, nested]) {
+          const protectedByMount = probe?.readOnlyPaths.some(
+            (protectedPath) =>
+              configPath === protectedPath ||
+              configPath.startsWith(`${protectedPath}${path.sep}`),
+          );
+          expect(protectedByMount).toBe(true);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
+
 test.skipIf(!gitAvailable)(
   "resolveGitMetadata: linked worktree uses the common dir and protects its .git file",
   async () => {
