@@ -13,9 +13,11 @@ export interface DevcontainerRegistration {
   readonly workspace: string;
   readonly profileName: string;
   /**
-   * The profile's agent at init time. The generated devcontainer.json bakes
-   * in agent-specific VS Code settings, so `up` compares this against the
-   * current profile instead of silently booting a mismatched container.
+   * The profile's agent at init time. Historical only: IDE extensions and
+   * wrapper settings are compiled from the *current* profile into Compose's
+   * `devcontainer.metadata` label on every launch (see
+   * `renderDevcontainerMetadata` and `compose_stage.ts`), so this field no
+   * longer gates `up` when the profile's agent or extraAgents change.
    * Registrations written before Codex support have no field and are claude.
    */
   readonly agent: AgentType;

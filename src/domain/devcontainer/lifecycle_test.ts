@@ -231,44 +231,27 @@ test("down leaves alone a session claimed while it was stopping", async () => {
   expect(status?.phase).toBe("starting");
 });
 
-test("verify rejects a profile whose agent changed since init", async () => {
+test("verify resolves when the profile's primary agent and extraAgents changed since init: no re-init is required", async () => {
   const { host, workspace, registration } = await makeFixture();
   await mkdir(path.dirname(registration.configPath), { recursive: true });
   await atomicWriteFile(registration.configPath, "{}\n");
   const lifecycle = makeDevcontainerLifecycle(host, {
     docker: noDocker as never,
     loadInputs: async () => ({
-      profile: { ...devcontainerProfile(), agent: "codex" },
+      profile: {
+        ...devcontainerProfile(),
+        agent: "codex",
+        extraAgents: ["claude"],
+      },
       profileName: registration.profileName,
       command: ["nas"],
     }),
   });
 
-  await expect(lifecycle.verify(workspace)).rejects.toThrow(
-    "profile agent changed since init (claude -> codex)",
-  );
-});
-
-test("verify resolves when the profile agent matches the registration", async () => {
-  const { host, workspace, registration } = await makeFixture();
-  await mkdir(path.dirname(registration.configPath), { recursive: true });
-  await atomicWriteFile(registration.configPath, "{}\n");
-  const paths = resolveDevcontainerPaths(host, workspace);
-  const codexRegistration = { ...registration, agent: "codex" as const };
-  await atomicWriteFile(
-    paths.registrationFile,
-    `${JSON.stringify(codexRegistration)}\n`,
-  );
-  const lifecycle = makeDevcontainerLifecycle(host, {
-    docker: noDocker as never,
-    loadInputs: async () => ({
-      profile: { ...devcontainerProfile(), agent: "codex" },
-      profileName: registration.profileName,
-      command: ["nas"],
-    }),
-  });
-
-  await expect(lifecycle.verify(workspace)).resolves.toEqual(codexRegistration);
+  // The stored registration (still `agent: "claude"`) is returned unchanged:
+  // effective IDE/CLI configuration is derived from the live profile at
+  // launch time (see compose_stage.ts), not gated here.
+  await expect(lifecycle.verify(workspace)).resolves.toEqual(registration);
 });
 
 test("a registration written without an agent field verifies as claude", async () => {
@@ -291,6 +274,58 @@ test("a registration written without an agent field verifies as claude", async (
   await expect(lifecycle.verify(workspace)).resolves.toMatchObject({
     agent: "claude",
   });
+});
+
+test("up succeeds after the primary agent and extraAgents change post-init, without a re-init", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nas-dc-"));
+  roots.push(root);
+  const home = path.join(root, "home");
+  const workspaceDir = path.join(root, "work");
+  await mkdir(home, { recursive: true });
+  await mkdir(workspaceDir, { recursive: true });
+  const host: HostEnv = {
+    home,
+    user: "tester",
+    uid: 1000,
+    gid: 1000,
+    isWSL: false,
+    env: new Map([
+      ["XDG_STATE_HOME", path.join(root, "state")],
+      ["XDG_RUNTIME_DIR", path.join(root, "run")],
+    ]),
+  };
+  const workspace = await canonicalizeWorkspace(workspaceDir);
+
+  const lifecycleAtInit = makeDevcontainerLifecycle(host, {
+    docker: noDocker as never,
+    loadInputs: async () => ({
+      profile: { ...devcontainerProfile(), agent: "claude" },
+      profileName: "claude",
+      command: ["nas"],
+    }),
+  });
+  const initResult = await lifecycleAtInit.init(workspace, "claude");
+  expect(initResult.registration.agent).toBe("claude");
+
+  // The profile changes primary agent and extraAgents after init, with
+  // no re-init in between.
+  const { spawn } = makeServeSpawn(initResult.registration);
+  const lifecycleAtUp = makeDevcontainerLifecycle(host, {
+    spawn,
+    docker: fakeDocker("container-1\n") as never,
+    loadInputs: async () => ({
+      profile: {
+        ...devcontainerProfile(),
+        agent: "codex",
+        extraAgents: ["claude"],
+      },
+      profileName: "claude",
+      command: ["nas"],
+    }),
+  });
+
+  const status = await lifecycleAtUp.up(workspace);
+  expect(status.phase).toBe("ready");
 });
 
 test("status is null for an unregistered workspace", async () => {

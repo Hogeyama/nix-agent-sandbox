@@ -22,13 +22,17 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
-import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import {
+  emptyContainerPlan,
+  mergeContainerPlan,
+} from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type {
   HostEnv,
   ProbeResults,
   StageInput,
 } from "../../pipeline/types.ts";
+import { compileCompose } from "../launch/compose.ts";
 import type { MountProbes, ResolvedEnvEntry } from "./mount_probes.ts";
 import {
   type MountDirectoryEntry,
@@ -2233,6 +2237,195 @@ test("IDE mounts codex state read-write next to the IDE server dir", () => {
   });
   // The host codex binary is deliberately not mounted for IDE sessions.
   expect(plan.dockerArgs.join(" ")).not.toContain("/host/codex");
+});
+
+test("IDE with an extra Codex: dedups mount targets, mounts the extra CLI and its state, and never mounts the primary's host CLI", () => {
+  const profile = makeProfile({
+    agent: "claude",
+    extraAgents: ["codex"],
+    agentState: { protectSettings: false, auth: "passthrough" },
+  });
+  const mountProbes = makeMountProbes({
+    agentProbes: { ...defaultClaudeProbes, claudeBinPath: "/host/claude" },
+    extraAgentProbes: [
+      {
+        agent: "codex",
+        probes: {
+          codexDirExists: true,
+          codexBinPath: "/host/codex",
+          codexCodeModeHostBinPath: "/host/codex-code-mode-host",
+          codexSettingsFiles: [],
+        },
+      },
+    ],
+    gitConfigExists: true,
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  const devcontainer = {
+    vscodeDir: "/state:$x/vscode dir",
+    claudeState: {
+      claudeDir: "/state:$x/claude dir",
+      claudeJson: "/state:$x/claude dir.json",
+    },
+    codexState: { codexDir: "/state:$x/codex dir" },
+  };
+  const plan = planMount(input, mountProbes, devcontainer);
+
+  const mounts = plan.containerPatch.mounts ?? [];
+  const targets = mounts.map((m) => m.target);
+  expect(new Set(targets).size).toBe(targets.length);
+
+  // The primary Claude IDE extension uses the shared IDE state, never a
+  // mounted host binary.
+  expect(mounts).toContainEqual({
+    source: devcontainer.claudeState.claudeDir,
+    target: `${CONTAINER_HOME}/.claude`,
+  });
+  expect(targets).not.toContain(`${CONTAINER_HOME}/.local/bin/claude`);
+
+  // The extra Codex shares the same IDE state and additionally gets its host
+  // CLI and auxiliary binary as RO structured mounts.
+  expect(mounts).toContainEqual({
+    source: devcontainer.codexState.codexDir,
+    target: `${CONTAINER_HOME}/.codex`,
+  });
+  expect(mounts).toContainEqual({
+    source: "/host/codex",
+    target: "/usr/local/bin/codex",
+    readOnly: true,
+  });
+  expect(mounts).toContainEqual({
+    source: "/host/codex-code-mode-host",
+    target: "/usr/local/bin/codex-code-mode-host",
+    readOnly: true,
+  });
+
+  // The workspace's .devcontainer config stays read-only, as for any IDE session.
+  expect(mounts).toContainEqual({
+    source: `${TEST_WORK_DIR}/.devcontainer`,
+    target: `${TEST_WORK_DIR}/.devcontainer`,
+    readOnly: true,
+  });
+
+  const container = mergeContainerPlan(
+    { ...input.container, network: { mode: "network", name: "nas-net" } },
+    plan.containerPatch,
+  );
+  const compose = compileCompose(container, "nas-agent", "nas-project");
+  expect(compose.services.agent.volumes).toEqual(
+    expect.arrayContaining([
+      {
+        type: "bind",
+        source: "/state:$$x/claude dir",
+        target: `${CONTAINER_HOME}/.claude`,
+        read_only: false,
+        bind: { create_host_path: false },
+      },
+      {
+        type: "bind",
+        source: "/state:$$x/codex dir",
+        target: `${CONTAINER_HOME}/.codex`,
+        read_only: false,
+        bind: { create_host_path: false },
+      },
+      {
+        type: "bind",
+        source: "/host/codex",
+        target: "/usr/local/bin/codex",
+        read_only: true,
+        bind: { create_host_path: false },
+      },
+    ]),
+  );
+});
+
+test("IDE with an extra Claude: the dummy credentials overlay still lands after the shared protected root, deduped against the primary Codex's IDE state", () => {
+  const profile = makeProfile({
+    agent: "codex",
+    extraAgents: ["claude"],
+    agentState: { protectSettings: true },
+  });
+  const mountProbes = makeMountProbes({
+    agentProbes: {
+      codexDirExists: true,
+      codexBinPath: "/host/codex",
+      codexCodeModeHostBinPath: null,
+      codexSettingsFiles: [],
+    },
+    extraAgentProbes: [
+      {
+        agent: "claude",
+        probes: { ...defaultClaudeProbes, claudeBinPath: "/host/claude" },
+      },
+    ],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  // The runtime always prepares state for every agent in the IDE set (see
+  // ensureDevcontainerAgentState / devcontainer/runtime.ts), so a Codex
+  // primary with an extra Claude gets both codexState and claudeState — never
+  // just one. Omitting claudeState here would exercise provisionClaude's
+  // plain-CLI branch (an unstructured `-v` host-binary mount string) instead
+  // of the claudeState + protectedClaudeState + mountHostBinary=true branch
+  // this test means to cover.
+  const devcontainer = {
+    vscodeDir: "/state:$x/vscode dir",
+    claudeState: {
+      claudeDir: "/state:$x/claude dir",
+      claudeJson: "/state:$x/claude dir.json",
+    },
+    codexState: { codexDir: "/state:$x/codex dir" },
+  };
+  const protectedClaudeState = {
+    runtimeDir: "/state:$x/claude private",
+    claudeJson: "/state:$x/claude private.json",
+    entries: [],
+  };
+  const plan = planMount(
+    input,
+    mountProbes,
+    devcontainer,
+    protectedClaudeState,
+    "/tmp/nas-claude-credentials-x/.credentials.json",
+  );
+
+  const mounts = plan.containerPatch.mounts ?? [];
+  const targets = mounts.map((m) => m.target);
+  expect(new Set(targets).size).toBe(targets.length);
+
+  // The primary Codex IDE extension uses the shared IDE state, never a
+  // mounted host binary.
+  expect(mounts).toContainEqual({
+    source: devcontainer.codexState.codexDir,
+    target: `${CONTAINER_HOME}/.codex`,
+  });
+  expect(targets).not.toContain("/usr/local/bin/codex");
+
+  // The extra Claude's protected root mount comes before the dummy
+  // credentials overlay that hides its .credentials.json.
+  const runtimeIndex = targets.indexOf(`${CONTAINER_HOME}/.claude`);
+  const dummyIndex = targets.indexOf(
+    `${CONTAINER_HOME}/.claude/.credentials.json`,
+  );
+  expect(runtimeIndex).toBeGreaterThanOrEqual(0);
+  expect(dummyIndex).toBeGreaterThan(runtimeIndex);
+  expect(mounts[runtimeIndex]).toEqual({
+    source: protectedClaudeState.runtimeDir,
+    target: `${CONTAINER_HOME}/.claude`,
+  });
+  expect(mounts).toContainEqual({
+    source: protectedClaudeState.claudeJson,
+    target: `${CONTAINER_HOME}/.claude.json`,
+  });
+
+  // The extra Claude's host CLI is present (mountHostBinary=true for
+  // extras) as a structured, read-only mount — reachable only via the
+  // claudeState branch of provisionClaude, which the plain-CLI branch
+  // (no claudeState) never takes.
+  expect(mounts).toContainEqual({
+    source: "/host/claude",
+    target: `${CONTAINER_HOME}/.local/bin/claude`,
+    readOnly: true,
+  });
 });
 
 test("IDE with maskfs refuses a linked worktree outside the main repository root", () => {

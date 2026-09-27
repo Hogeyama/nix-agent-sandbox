@@ -630,11 +630,9 @@ export function planMount(
   ).agentCommand;
 
   // extraAgents: 起動はせず、バイナリと状態ディレクトリだけを用意する。
-  // Dev Container は extraAgents を拒否するので、この devcontainer 分岐は
-  // 現状到達しないが、ゲートが外れたときにそのまま使えるよう用意しておく:
-  // 追加 Claude/Codex は主エージェントと同じ IDE state を共有し、その上で
-  // ホスト CLI も structured mount で追加する。credential のダミーは
-  // 起動するエージェントと同じく渡す。
+  // Dev Container では追加 Claude/Codex が主エージェントと同じ IDE state を
+  // 共有し、その上でホスト CLI も structured mount で追加する。credential の
+  // ダミーは起動するエージェントと同じく渡す。
   for (const extra of probes.extraAgentProbes) {
     // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
     // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
