@@ -48,6 +48,7 @@ Docker が無い環境の高速テストを壊す。逆に付けると unit レ�
 
 ```bash
 bun run test                  # 全コンポーネントの unit + integration + e2e
+hostexec bun run test         # NAS からホスト側の全コンポーネントを検証
 bun run test:unit             # Bun と Zig の unit を集約（Docker 不要）
 bun run test:integration      # nas/addon integration、nas e2e、sumi black-box
 bun run test:nas-unit         # nas TS + hostexec + mask-filter
@@ -136,12 +137,15 @@ test.skipIf(!dockerAvailable)("...", async () => { ... });
 ビルド済みバイナリのパス有無など。**必要な能力ごとに述語を分ける** —
 一つにまとめると、Docker はあるが pkl が無い環境で理由の分からない失敗になる。
 
+利用可否の確認も含め、テストから VS Code / Code.exe を起動しない。
+
 ### テストの実行環境
 
-NAS 内での標準検証は `bun run test:unit`。必要な依存や権限がないために
-スキップされたテストは、実行済みとして報告しない。integration / E2E が必要なら、
-必要な依存を直接利用できる環境で実行する。スキップを埋めるために自動で
-ホスト実行へ切り替えず、環境の選択は post-change-checks の手順に合わせる。
+作業中は `bun run test:unit` や対象を絞ったテストを使う。NAS 内でのセッション終了時は、
+リポジトリルートで `bun run test` と `hostexec bun run test` をそれぞれ1回、順に実行する。
+片方が失敗しても、もう片方を実行する。成功・失敗・スキップは環境別に報告し、
+必要な依存や権限がなくスキップされたテストは、実行済みとして報告しない。
+詳細な検証順序と結果の読み方は post-change-checks に従う。
 
 ### cleanup を必ず書く
 
