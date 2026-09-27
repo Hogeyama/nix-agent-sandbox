@@ -1,3 +1,7 @@
+export {
+  type DevcontainerIdeAgent,
+  resolveDevcontainerIdeAgents,
+} from "./devcontainer/agents.ts";
 export { renderDevcontainerConfig } from "./devcontainer/config.ts";
 export {
   type DevcontainerDisclosure,

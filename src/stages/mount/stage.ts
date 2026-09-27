@@ -622,19 +622,32 @@ export function planMount(
       priorEnvVars,
       claudeCredentialsFile,
       codexAuthFile,
+      // The primary IDE agent uses only the bundled extension binary; a
+      // normal CLI session (devcontainer undefined, so no state either) still
+      // wants its usual host binary mount.
+      mountHostBinary: devcontainer === undefined,
     }),
   ).agentCommand;
 
   // extraAgents: 起動はせず、バイナリと状態ディレクトリだけを用意する。
-  // Dev Container は extraAgents を拒否するので、その状態パスは渡さない。
-  // credential のダミーは起動するエージェントと同じく渡す。
+  // Dev Container は extraAgents を拒否するので、この devcontainer 分岐は
+  // 現状到達しないが、ゲートが外れたときにそのまま使えるよう用意しておく:
+  // 追加 Claude/Codex は主エージェントと同じ IDE state を共有し、その上で
+  // ホスト CLI も structured mount で追加する。credential のダミーは
+  // 起動するエージェントと同じく渡す。
   for (const extra of probes.extraAgentProbes) {
     // 起動するエージェントと違い、無いときに代わりのコマンドで知らせる
     // 場面がない。黙って欠けるとコンテナ内で command not found になるだけ
-    // なので、ここで言っておく。
+    // なので、ここで言っておく。IDE 拡張を持つ Claude/Codex は同梱バイナリを
+    // 使えるので、CLI が使えないだけだと明示する。
     if (!agentBinaryFound(extra.agent, extra.probes)) {
+      const hasIdeFallback =
+        devcontainer !== undefined &&
+        (extra.agent === "claude" || extra.agent === "codex");
       logWarn(
-        `[nas] extraAgents: "${extra.agent}" binary not found on the host; it will be unavailable in the container`,
+        hasIdeFallback
+          ? `[nas] extraAgents: "${extra.agent}" CLI binary not found on the host; the CLI will be unavailable, but the IDE extension will use its bundled executable`
+          : `[nas] extraAgents: "${extra.agent}" binary not found on the host; it will be unavailable in the container`,
       );
     }
     applyAgent((priorDockerArgs, priorEnvVars) =>
@@ -649,6 +662,11 @@ export function planMount(
         priorEnvVars,
         claudeCredentialsFile,
         codexAuthFile,
+        claudeState:
+          extra.agent === "claude" ? devcontainer?.claudeState : undefined,
+        codexState:
+          extra.agent === "codex" ? devcontainer?.codexState : undefined,
+        mountHostBinary: true,
       }),
     );
   }
