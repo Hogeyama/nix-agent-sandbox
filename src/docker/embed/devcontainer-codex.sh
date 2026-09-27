@@ -4,7 +4,7 @@ set -euo pipefail
 # chatgpt.cliExecutable replaces the spawned executable outright — unlike
 # claudeProcessWrapper, no bundled-binary path arrives in "$@". Resolve the
 # extension's own codex so the app-server protocol version always matches the
-# extension build (the host codex is deliberately not mounted).
+# extension build, even when an extra Codex CLI mounts the host binary.
 #
 # The extension appends the running build's bundled bin dir to the end of
 # PATH when it spawns cliExecutable, so the last PATH entry matching the
@@ -54,9 +54,12 @@ codex_bin_dir=$(dirname "$codex_bin")
 source /usr/local/lib/nas/devcontainer-env.sh
 nas_devcontainer_apply
 # nas_devcontainer_apply restores the captured baseline PATH, which drops the
-# bundled bin dir the extension appended; re-add it so sibling helpers such as
-# codex-code-mode-host stay reachable the way the extension intended.
-export PATH="$PATH:$codex_bin_dir"
+# bundled bin dir the extension appended, and an extra Codex CLI's host
+# binaries (including codex-code-mode-host) may now sit on that restored
+# PATH. Put codex_bin_dir back in front so a sibling lookup by PATH name,
+# such as codex-code-mode-host, resolves the bundled copy first rather than
+# a same-named host binary.
+export PATH="$codex_bin_dir:$PATH"
 
 source /usr/local/lib/nas/devcontainer/codex-args.sh
 # -c is a global codex option: it is valid ahead of the extension's own
