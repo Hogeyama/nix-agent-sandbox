@@ -12,8 +12,15 @@ const echo = Bun.which("echo");
 const cat = Bun.which("cat");
 // The child script echoes the spawned envp verbatim, so its interpreter must
 // not rewrite PATH. NixOS wraps /bin/sh to splice the system profile dirs
-// into PATH; a resolved bash preserves the caller's environment exactly.
-const bash = Bun.which("bash");
+// into PATH. Inside NAS, use the original Bash so its mask supervisor cannot
+// insert another process between posix_spawn and the payload.
+const wrapperBypass =
+  process.env.NAS_BASH_OVERRIDE &&
+  path.join(process.env.NAS_BASH_OVERRIDE, "bash.real");
+const bash =
+  wrapperBypass && (await Bun.file(wrapperBypass).exists())
+    ? wrapperBypass
+    : Bun.which("bash");
 const available = Boolean(
   python &&
     artifacts.clientPath &&
@@ -400,7 +407,7 @@ test.skipIf(!available)(
 );
 
 for (const decision of ["fallback", "start", "error"] as const) {
-  test.skipIf(!available || (decision === "start" && !echo))(
+  test.skipIf(!available || !bash || (decision === "start" && !echo))(
     `installed hostexec: posix_spawn ${decision} preserves spawn state and denial`,
     async () => {
       const harness = await startGatewayTestHarness({
@@ -421,6 +428,9 @@ for (const decision of ["fallback", "start", "error"] as const) {
               : { type: "fallback" },
       });
       try {
+        // Keep the installed script intact, but resolve its env-based shebang
+        // to an interpreter that preserves the spawned PID and process group.
+        await symlink(bash!, path.join(harness.realDir, "bash"));
         const installed = path.join(harness.wrapperDir, "hostexec");
         await writeFile(
           installed,
