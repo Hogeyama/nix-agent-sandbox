@@ -41,6 +41,7 @@ export function finalizeDevcontainerPlan(
       env: {
         static: {
           NAS_DEVCONTAINER: "true",
+          NAS_DEVCONTAINER_PRIMARY_AGENT: shared.profile.agent,
           NAS_DEVCONTAINER_ENV_KEYS: [
             ...new Set(finalized.container.env.dynamicOps.map((op) => op.key)),
           ].join(" "),

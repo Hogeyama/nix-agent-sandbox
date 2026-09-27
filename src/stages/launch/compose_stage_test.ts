@@ -37,7 +37,7 @@ const container: ContainerPlan = {
 };
 
 const input = {
-  profile: { agentArgs: ["profile"] },
+  profile: { agent: "claude", agentArgs: ["profile"] },
   profileName: "claude",
   sessionId: "sess-1",
 } as StageInput;
@@ -59,6 +59,7 @@ test("IDE finalization adds lookup labels and applies each argv/env operation on
   ]);
   expect(result.container.env.static).toMatchObject({
     NAS_DEVCONTAINER: "true",
+    NAS_DEVCONTAINER_PRIMARY_AGENT: "claude",
     NAS_DEVCONTAINER_ENV_KEYS: "PATH X",
   });
   expect(result.container.env.dynamicOps).toEqual(container.env.dynamicOps);
@@ -80,4 +81,7 @@ test("codex devcontainer keeps only -c pairs from profile agentArgs", () => {
     "-c",
     "model=o4-mini",
   ]);
+  expect(result.container.env.static.NAS_DEVCONTAINER_PRIMARY_AGENT).toBe(
+    "codex",
+  );
 });
