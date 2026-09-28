@@ -1,0 +1,267 @@
+{
+  "recordedAt": "2026-09-28T12:09:54.821Z",
+  "environment": {
+    "platform": "linux",
+    "node": "v24.20.0",
+    "claude": "2.1.283 (Claude Code)",
+    "srt": "0.0.77",
+    "bwrap": "bubblewrap 0.11.2",
+    "socat": "socat version 1.8.1.3 on 26 Jun 2026 06:19:01"
+  },
+  "scope": "Local fixture, dummy tokens, actual Claude Code and sandbox runtimes. Not a live Files API or credential injection test.",
+  "note": "Selected observed fields only. Scratch paths and ephemeral ports normalized. Full settings and logs are written by probe.mjs to --out. These CLI exit codes do not assert sandbox success.",
+  "https": [
+    {
+      "name": "no-sandbox",
+      "policy": {
+        "outer": false,
+        "inner": false,
+        "allowAllUnixSockets": false,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "{\"id\":\"file_fixture\",\"type\":\"file\",\"filename\":\"decoy.txt\"}",
+      "uploads": [
+        {
+          "token": "attacker-decoy-token",
+          "body": "NAS_SRT_SETTINGS_DECOY"
+        }
+      ]
+    },
+    {
+      "name": "srt-only",
+      "policy": {
+        "outer": true,
+        "inner": false,
+        "allowAllUnixSockets": false,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "{\"id\":\"file_fixture\",\"type\":\"file\",\"filename\":\"decoy.txt\"}",
+      "uploads": [
+        {
+          "token": "attacker-decoy-token",
+          "body": "NAS_SRT_SETTINGS_DECOY"
+        }
+      ]
+    },
+    {
+      "name": "settings-only",
+      "policy": {
+        "outer": false,
+        "inner": true,
+        "allowAllUnixSockets": false,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) CONNECT tunnel failed, response 403\n\n<sandbox_violations>\ndeny network-outbound 127.0.0.2:<port> (host is on the deny list)\n</sandbox_violations>",
+      "uploads": []
+    },
+    {
+      "name": "settings-only-allowed",
+      "policy": {
+        "outer": false,
+        "inner": true,
+        "allowAllUnixSockets": false,
+        "innerAllowsFixture": true,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "{\"id\":\"file_fixture\",\"type\":\"file\",\"filename\":\"decoy.txt\"}",
+      "uploads": [
+        {
+          "token": "attacker-decoy-token",
+          "body": "NAS_SRT_SETTINGS_DECOY"
+        }
+      ]
+    },
+    {
+      "name": "srt-and-settings",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": false,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Sandbox is required but failed to initialize: EPERM: operation not permitted, listen '<scratch>/srt-and-settings/tmp/srt-mux-2-2.sock'. Restart to retry.",
+      "uploads": []
+    },
+    {
+      "name": "nested-unix-allowed",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": true,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) CONNECT tunnel failed, response 403\n\n<sandbox_violations>\ndeny network-outbound 127.0.0.2:<port> (host is on the deny list)\n</sandbox_violations>",
+      "uploads": []
+    },
+    {
+      "name": "nested-unix-allowed-control",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": true,
+        "innerAllowsFixture": true,
+        "direct": false,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) CONNECT tunnel failed, response 502",
+      "uploads": []
+    },
+    {
+      "name": "nested-unix-allowed-direct",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": true,
+        "innerAllowsFixture": false,
+        "direct": true,
+        "requestUnsandboxed": false,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) Failed to connect to 127.0.0.2:<port> after 0 ms: Could not connect to server",
+      "uploads": []
+    },
+    {
+      "name": "nested-unix-allowed-escape",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": true,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": true,
+        "innerEnableWeakerNestedSandbox": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) CONNECT tunnel failed, response 403\n\n<sandbox_violations>\ndeny network-outbound 127.0.0.2:<port> (host is on the deny list)\n</sandbox_violations>",
+      "uploads": []
+    },
+    {
+      "name": "nested-weaker",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": false,
+        "innerEnableWeakerNestedSandbox": true,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Sandbox is required but failed to initialize: EPERM: operation not permitted, listen '<scratch>/nested-weaker/tmp/srt-mux-2-2.sock'. Restart to retry.",
+      "uploads": []
+    },
+    {
+      "name": "nested-weaker-unix-allowed",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": true,
+        "innerEnableWeakerNestedSandbox": true,
+        "innerAllowsFixture": false,
+        "direct": false,
+        "requestUnsandboxed": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) CONNECT tunnel failed, response 403\n\n<sandbox_violations>\ndeny network-outbound 127.0.0.2:<port> (host is on the deny list)\n</sandbox_violations>",
+      "uploads": []
+    },
+    {
+      "name": "nested-weaker-unix-allowed-control",
+      "policy": {
+        "outer": true,
+        "inner": true,
+        "allowAllUnixSockets": true,
+        "innerEnableWeakerNestedSandbox": true,
+        "innerAllowsFixture": true,
+        "direct": false,
+        "requestUnsandboxed": false
+      },
+      "modelApiRequests": 2,
+      "cliExitCode": 0,
+      "timedOut": false,
+      "toolResult": "Exit code 7\ncurl: (7) CONNECT tunnel failed, response 502",
+      "uploads": []
+    }
+  ],
+  "httpAllowedControl": {
+    "name": "nested-unix-allowed-control",
+    "policy": {
+      "outer": true,
+      "inner": true,
+      "allowAllUnixSockets": true,
+      "innerAllowsFixture": true,
+      "direct": false,
+      "requestUnsandboxed": false
+    },
+    "modelApiRequests": 2,
+    "cliExitCode": 0,
+    "timedOut": false,
+    "toolResult": "Bad Gateway",
+    "uploads": []
+  },
+  "httpBeforeSettingsPrecreation": {
+    "name": "nested-unix-allowed",
+    "policy": {
+      "outer": true,
+      "inner": true,
+      "allowAllUnixSockets": true,
+      "innerAllowsFixture": false,
+      "direct": false,
+      "requestUnsandboxed": false
+    },
+    "modelApiRequests": 2,
+    "cliExitCode": 0,
+    "timedOut": false,
+    "toolResult": "Exit code 1\nbwrap: Can't create file at <scratch>/nested-unix-allowed/.claude/settings.json: Read-only file system",
+    "uploads": []
+  },
+  "weakerCasesRecordedAt": "2026-09-28T12:13:43.057Z"
+}
