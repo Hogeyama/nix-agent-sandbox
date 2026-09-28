@@ -13,8 +13,8 @@ bun run vendor             # Populate src/docker/mitmproxy/vendor/ (gitignored;
 
 # Development and testing
 bun run test:unit          # Unit only, no Docker — use this while iterating
-bun run test               # Final check inside NAS — run once per session
-hostexec bun run test      # Final check on the host — also run once per session
+bun run test               # Final check inside NAS after implementation changes
+hostexec bun run test      # Final check on the host after implementation changes
 bun run test:integration   # All component integration + nas e2e tests
 bun run test:nas-unit      # nas TS + hostexec + mask-filter unit tests
 bun run test:nas-integration # nas integration + tests/ e2e tests
@@ -35,11 +35,17 @@ bun run compile            # Build standalone binary (bun build --compile)
 
 ## End-of-session Verification
 
-Before ending each work session inside NAS, run both `bun run test` and
-`hostexec bun run test` from the repository root. Run them sequentially, and
-run the second even if the first fails. Host execution is part of the requested
+When a session changes executable code, tests, or configuration that affects
+runtime or build behavior, run both `bun run test` and `hostexec bun run test`
+once before finishing, from the repository root. Run them sequentially, and run
+the second even if the first fails. Host execution is part of the requested
 verification; do not ask again whether to include it. Report each environment's
 result and skips separately. See `skills/post-change-checks/SKILL.md` for details.
+
+Do not run tests merely to answer a question, explain a commit, inspect or review
+existing code, or edit documentation or agent instructions. For documentation-
+or instruction-only changes, inspect the diff for correctness. Run tests in these
+cases only when the user explicitly requests them.
 
 ## Project Overview
 
