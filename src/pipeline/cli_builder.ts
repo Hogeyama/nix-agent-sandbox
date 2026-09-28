@@ -1,3 +1,4 @@
+import { createAgentHooksStage } from "../stages/agent_hooks.ts";
 import { createDbusProxyStage } from "../stages/dbus_proxy.ts";
 import { createDindStage } from "../stages/dind.ts";
 import { createDisplayStage } from "../stages/display.ts";
@@ -15,7 +16,6 @@ import { createNixDetectStage } from "../stages/nix_detect.ts";
 import { createObservabilityStage } from "../stages/observability.ts";
 import { createPortBindStage } from "../stages/port_bind.ts";
 import { createProxyStage } from "../stages/proxy.ts";
-import { createSessionHooksStage } from "../stages/session_hooks.ts";
 import { createSessionStoreStage } from "../stages/session_store.ts";
 import { createWorktreeStage } from "../stages/worktree.ts";
 import { createPipelineBuilder } from "./stage_builder.ts";
@@ -47,7 +47,7 @@ export function createPreparationPipelineBuilder({
     .add(createMountStage(input, mountProbes, devcontainerMounts))
     .add(createMaskFilterStage(input))
     .add(createHostExecStage(input))
-    .add(createSessionHooksStage(input))
+    .add(createAgentHooksStage(input))
     .add(createGuideStage(input))
     .add(
       createObservabilityStage({

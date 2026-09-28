@@ -10,6 +10,7 @@ export {
   type MaskFilterServiceFakeConfig,
   MaskFilterServiceLive,
   makeMaskFilterServiceFake,
+  SUMI_CONTAINER_PATH,
 } from "./maskfs/mask_filter_service.ts";
 export {
   createMaskFilterStage,

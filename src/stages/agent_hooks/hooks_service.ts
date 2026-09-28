@@ -2,23 +2,26 @@ import * as path from "node:path";
 import { Cause, Context, Effect, Layer, type Scope } from "effect";
 import { FsService } from "../../services/fs.ts";
 import {
-  buildSessionHookSettings,
+  type AgentHookOptions,
+  buildAgentHookSettings,
+  buildCodexMaskHookScript,
+  CODEX_MASK_HOOK_COMMANDS,
   type HookAgent,
   SESSION_HOOK_REPORT_SCRIPT,
 } from "./settings.ts";
 
 type Fs = Context.Tag.Service<typeof FsService>;
 
-export interface SessionHooksPlan {
+export interface AgentHooksPlan extends AgentHookOptions {
   readonly sessionDir: string;
   readonly agents: readonly HookAgent[];
 }
 
-export class SessionHooksService extends Context.Tag("nas/SessionHooksService")<
-  SessionHooksService,
+export class AgentHooksService extends Context.Tag("nas/AgentHooksService")<
+  AgentHooksService,
   {
     readonly prepare: (
-      plan: SessionHooksPlan,
+      plan: AgentHooksPlan,
     ) => Effect.Effect<void, never, Scope.Scope>;
   }
 >() {}
@@ -36,14 +39,12 @@ function removeDirectory(fs: Fs, dir: string) {
     .rm(dir, { recursive: true, force: true })
     .pipe(
       Effect.catchAllCause((cause) =>
-        Effect.logWarning(
-          `session hooks cleanup failed: ${Cause.pretty(cause)}`,
-        ),
+        Effect.logWarning(`agent hooks cleanup failed: ${Cause.pretty(cause)}`),
       ),
     );
 }
 
-function prepareHooks(fs: Fs, plan: SessionHooksPlan) {
+function prepareHooks(fs: Fs, plan: AgentHooksPlan) {
   return Effect.gen(function* () {
     // Register cleanup before writing any assets, including partial failures.
     yield* Effect.acquireRelease(
@@ -62,29 +63,36 @@ function prepareHooks(fs: Fs, plan: SessionHooksPlan) {
       yield* writeAsset(
         fs,
         path.join(assets, `${agent}.${agent === "codex" ? "toml" : "json"}`),
-        buildSessionHookSettings(agent),
+        buildAgentHookSettings(agent, plan),
       );
+    }
+    if (plan.maskSocketPath && plan.agents.includes("codex")) {
+      for (const event of ["post-tool", "prompt"] as const) {
+        yield* writeAsset(
+          fs,
+          path.join(assets, path.basename(CODEX_MASK_HOOK_COMMANDS[event])),
+          buildCodexMaskHookScript(event, plan.maskSocketPath),
+          0o755,
+        );
+      }
     }
   });
 }
 
-export const SessionHooksServiceLive = Layer.effect(
-  SessionHooksService,
+export const AgentHooksServiceLive = Layer.effect(
+  AgentHooksService,
   Effect.gen(function* () {
     const fs = yield* FsService;
-    return SessionHooksService.of({
+    return AgentHooksService.of({
       prepare: (plan) => prepareHooks(fs, plan),
     });
   }),
 );
 
-export function makeSessionHooksServiceFake(
+export function makeAgentHooksServiceFake(
   prepare: (
-    plan: SessionHooksPlan,
+    plan: AgentHooksPlan,
   ) => Effect.Effect<void, never, Scope.Scope> = () => Effect.void,
 ) {
-  return Layer.succeed(
-    SessionHooksService,
-    SessionHooksService.of({ prepare }),
-  );
+  return Layer.succeed(AgentHooksService, AgentHooksService.of({ prepare }));
 }

@@ -6,6 +6,7 @@ import type { Config, Profile } from "../config/types.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { FsService } from "../services/fs.ts";
 import type { ProcessService } from "../services/process.ts";
+import type { AgentHooksService } from "../stages/agent_hooks.ts";
 import type { DbusProxyService } from "../stages/dbus_proxy.ts";
 import type { DindService } from "../stages/dind.ts";
 import type { DisplayService } from "../stages/display.ts";
@@ -29,7 +30,6 @@ import type {
   ProxyService,
   SessionBrokerService,
 } from "../stages/proxy.ts";
-import type { SessionHooksService } from "../stages/session_hooks.ts";
 import type { SessionStoreService } from "../stages/session_store.ts";
 import type { GitWorktreeService, PromptService } from "../stages/worktree.ts";
 import type { PipelineState } from "./state.ts";
@@ -112,5 +112,5 @@ export type StageServices =
   | PromptService
   | ProxyService
   | SessionBrokerService
-  | SessionHooksService
+  | AgentHooksService
   | SessionStoreService;

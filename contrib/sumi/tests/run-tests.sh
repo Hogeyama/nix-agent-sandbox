@@ -925,7 +925,7 @@ check_hook_usage "prompt rejects duplicate singular options" prompt --secrets-fi
 check_hook_usage "prompt rejects missing option values" prompt --secrets-file "$work/secrets.txt" --deny-path
 check_hook_usage "prompt rejects positional arguments" prompt --secrets-file "$work/secrets.txt" stray
 
-"$sumi" hook --agent copilot post-tool --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
+"$sumi" hook --agent unknown post-tool --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "unsupported --agent exits 2" "2" "$?"
 "$sumi" hook post-tool --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "missing --agent exits 2" "2" "$?"

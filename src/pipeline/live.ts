@@ -6,6 +6,7 @@ import {
   makeSecretResolverService,
   SecretResolverService,
 } from "../services/secret_resolver.ts";
+import { AgentHooksServiceLive } from "../stages/agent_hooks.ts";
 import { DbusProxyServiceLive } from "../stages/dbus_proxy.ts";
 import { DindServiceLive } from "../stages/dind.ts";
 import { DisplayServiceLive } from "../stages/display.ts";
@@ -26,7 +27,6 @@ import {
   ProxyServiceLive,
   SessionBrokerServiceLive,
 } from "../stages/proxy.ts";
-import { SessionHooksServiceLive } from "../stages/session_hooks.ts";
 import { SessionStoreServiceLive } from "../stages/session_store.ts";
 import {
   GitWorktreeServiceLive,
@@ -72,6 +72,6 @@ export function createPipelineLiveLayer() {
     PromptServiceLive,
     SessionBrokerServiceLive,
     SessionStoreServiceLive,
-    SessionHooksServiceLive.pipe(Layer.provide(FsServiceLive)),
+    AgentHooksServiceLive.pipe(Layer.provide(FsServiceLive)),
   );
 }

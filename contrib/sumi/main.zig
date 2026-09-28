@@ -1,9 +1,10 @@
-//! sumi: 列挙した値を Claude Code に見せない単一バイナリ。
+//! sumi: 列挙した値をエージェントに見せない単一バイナリ。
 //!
 //!   sumi init   --agent claude SOURCE [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
 //!   sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
-//!   sumi hook   --agent claude post-tool SOURCE
-//!   sumi hook   --agent claude prompt    SOURCE [--root DIR]... [--deny-path P]...
+//!   sumi hook   --agent claude|codex|copilot post-tool SOURCE
+//!   sumi hook   --agent claude|codex prompt SOURCE [--root DIR]... [--deny-path P]...
+//!   sumi hook   --agent copilot prompt SOURCE
 //!   sumi run    SOURCE [--shell PATH] COMMAND
 //!   sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
 //!   sumi filter --secrets-file F
@@ -28,6 +29,7 @@ const claude_post = @import("claude/hook_post.zig");
 const claude_prompt = @import("claude/hook_prompt.zig");
 const claude_init = @import("claude/init.zig");
 const claude_scan = @import("claude/scan.zig");
+const agent_hooks = @import("agent_hooks.zig");
 
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_SUPPRESSED: u8 = 121;
@@ -37,8 +39,9 @@ pub const MARKER_ENV: [:0]const u8 = "SUMI_SUPERVISED=1";
 const usage_text =
     \\usage: sumi init   --agent claude SOURCE [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
     \\       sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
-    \\       sumi hook   --agent claude post-tool SOURCE
-    \\       sumi hook   --agent claude prompt    SOURCE [--root DIR]... [--deny-path P]...
+    \\       sumi hook   --agent claude|codex|copilot post-tool SOURCE
+    \\       sumi hook   --agent claude|codex prompt SOURCE [--root DIR]... [--deny-path P]...
+    \\       sumi hook   --agent copilot prompt SOURCE
     \\       sumi run    SOURCE [--shell PATH] COMMAND
     \\       sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
     \\       sumi filter --secrets-file F
@@ -53,7 +56,7 @@ pub fn usage(msg: []const u8) u8 {
     return EXIT_USAGE;
 }
 
-pub const Agent = enum { claude };
+pub const Agent = enum { claude, codex, copilot };
 
 /// `--agent VALUE` を argv から取り出す。無ければ null、未対応の値は error。
 pub fn takeAgent(args: []const []const u8) !struct { agent: ?Agent, rest: []const []const u8 } {
@@ -211,9 +214,26 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
     if (std.mem.eql(u8, sub, "run")) return runSupervised(allocator, args);
 
     if (std.mem.eql(u8, sub, "hook") or std.mem.eql(u8, sub, "init") or std.mem.eql(u8, sub, "scan")) {
-        const taken = takeAgent(args) catch return usage("unsupported --agent value (only 'claude' is implemented)");
+        const taken = takeAgent(args) catch return usage("unsupported --agent value (expected claude, codex or copilot)");
         const agent = taken.agent orelse return usage("--agent is required");
         switch (agent) {
+            .codex, .copilot => {
+                if (!std.mem.eql(u8, sub, "hook")) return usage("init and scan only support --agent claude");
+                if (taken.rest.len == 0) return usage("hook needs a subcommand: post-tool | prompt");
+                const hook = taken.rest[0];
+                const hook_args = taken.rest[1..];
+                if (std.mem.eql(u8, hook, "post-tool")) return switch (agent) {
+                    .codex => agent_hooks.main(allocator, .codex, .post_tool, hook_args),
+                    .copilot => agent_hooks.main(allocator, .copilot, .post_tool, hook_args),
+                    else => unreachable,
+                };
+                if (std.mem.eql(u8, hook, "prompt")) return switch (agent) {
+                    .codex => claude_prompt.mainForAgent(.codex, allocator, hook_args),
+                    .copilot => agent_hooks.main(allocator, .copilot, .prompt, hook_args),
+                    else => unreachable,
+                };
+                return usage("unknown hook subcommand");
+            },
             .claude => {
                 if (std.mem.eql(u8, sub, "init")) {
                     const self = resolve_self_path(allocator) catch {
@@ -244,6 +264,7 @@ pub fn main() !u8 {
 }
 
 test {
+    _ = @import("agent_hooks.zig");
     _ = @import("secrets.zig");
     _ = @import("shell.zig");
     _ = @import("jsonio.zig");
@@ -306,7 +327,7 @@ test "takeAgent: missing --agent yields null" {
 }
 
 test "takeAgent: unsupported agent is an error" {
-    try testing.expectError(error.UnsupportedAgent, takeAgent(&.{ "--agent", "copilot" }));
+    try testing.expectError(error.UnsupportedAgent, takeAgent(&.{ "--agent", "unknown" }));
 }
 
 test "filter arguments have one fixed form" {

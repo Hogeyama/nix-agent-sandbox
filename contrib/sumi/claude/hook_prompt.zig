@@ -19,7 +19,6 @@ const Output = struct {
         return self.writeFn(self.context, bytes);
     }
 };
-const DEADLINE_BLOCK = FALLBACK_BLOCK ++ "\n";
 const TAIL = " An @-attachment does not reach output masking, so its content cannot be masked. Ask for the lines you need instead.";
 
 pub fn extractTokens(a: std.mem.Allocator, prompt: []const u8) ![]const []const u8 {
@@ -241,20 +240,51 @@ fn freeTokens(a: std.mem.Allocator, tokens: []const []const u8) void {
     a.free(tokens);
 }
 
-fn onDeadline(_: i32) callconv(.c) void {
-    _ = std.c.write(std.posix.STDOUT_FILENO, DEADLINE_BLOCK.ptr, DEADLINE_BLOCK.len);
-    std.c._exit(0);
+fn AgentOutput(comptime agent: cli.Agent) type {
+    return struct {
+        const fallback = if (agent == .claude) FALLBACK_BLOCK else "{\"decision\":\"block\",\"reason\":\"sumi: the prompt could not be checked, so it was withheld.\"}";
+
+        fn stop(a: std.mem.Allocator, reason: []const u8) u8 {
+            if (agent == .claude) return block(a, reason);
+            const rendered = codexBlockJson(a, reason) catch {
+                jsonio.writeStdout(fallback) catch {};
+                return 0;
+            };
+            defer a.free(rendered);
+            jsonio.writeStdout(rendered) catch {};
+            return 0;
+        }
+
+        fn deadline(_: i32) callconv(.c) void {
+            const bytes = fallback ++ "\n";
+            _ = std.c.write(std.posix.STDOUT_FILENO, bytes.ptr, bytes.len);
+            std.c._exit(0);
+        }
+    };
+}
+
+pub fn codexBlockJson(a: std.mem.Allocator, reason: []const u8) ![]u8 {
+    // Codex rejects Claude's suppressOriginalPrompt extension. Return only
+    // its supported decision fields, never echoing the rejected prompt.
+    const quoted = try jsonio.quoteString(a, reason);
+    defer a.free(quoted);
+    return std.fmt.allocPrint(a, "{{\"decision\":\"block\",\"reason\":{s}}}", .{quoted});
 }
 
 pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
+    return mainForAgent(.claude, a, args);
+}
+
+pub fn mainForAgent(comptime agent: cli.Agent, a: std.mem.Allocator, args: []const []const u8) !u8 {
+    const output = AgentOutput(agent);
     var parsed_args = parseArgs(a, args) catch |err| switch (err) {
-        error.OutOfMemory => return block(a, "the prompt hook ran out of memory"),
+        error.OutOfMemory => return output.stop(a, "the prompt hook ran out of memory"),
         else => return cli.usage("invalid prompt arguments"),
     };
     defer parsed_args.deinit(a);
     const started = std.time.milliTimestamp();
     const deadline_action: std.posix.Sigaction = .{
-        .handler = .{ .handler = onDeadline },
+        .handler = .{ .handler = output.deadline },
         .mask = std.posix.sigemptyset(),
         .flags = 0,
     };
@@ -266,28 +296,28 @@ pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
         std.posix.sigaction(std.posix.SIG.ALRM, &previous_action, null);
     }
     const deadline = started + DEADLINE_MS;
-    const text = jsonio.readStdin(a) catch return block(a, "the hook payload could not be read");
+    const text = jsonio.readStdin(a) catch return output.stop(a, "the hook payload could not be read");
     defer a.free(text);
-    if (text.len == 0) return block(a, "the hook payload is not valid JSON");
-    var parsed = jsonio.parse(a, text) catch return block(a, "the hook payload is not valid JSON");
+    if (text.len == 0) return output.stop(a, "the hook payload is not valid JSON");
+    var parsed = jsonio.parse(a, text) catch return output.stop(a, "the hook payload is not valid JSON");
     defer parsed.deinit();
-    const prompt = jsonio.getString(parsed.value, "prompt") orelse return block(a, "the hook payload has no prompt");
+    const prompt = jsonio.getString(parsed.value, "prompt") orelse return output.stop(a, "the hook payload has no prompt");
     const values = switch (masker.resolve(a, parsed_args.source)) {
         .ok => |m| m,
-        .err => |reason| return block(a, reason),
+        .err => |reason| return output.stop(a, reason),
     };
     if (prompt.len == 0) return 0;
-    if (std.time.milliTimestamp() >= deadline) return block(a, "the prompt could not be checked before the deadline");
+    if (std.time.milliTimestamp() >= deadline) return output.stop(a, "the prompt could not be checked before the deadline");
     var roots: std.ArrayList([]const u8) = .empty;
     defer roots.deinit(a);
     const cwd = jsonio.getString(parsed.value, "cwd") orelse ".";
-    roots.append(a, if (cwd.len == 0) "." else cwd) catch return block(a, "the prompt hook ran out of memory");
-    for (parsed_args.roots) |root| roots.append(a, root) catch return block(a, "the prompt hook ran out of memory");
+    roots.append(a, if (cwd.len == 0) "." else cwd) catch return output.stop(a, "the prompt hook ran out of memory");
+    for (parsed_args.roots) |root| roots.append(a, root) catch return output.stop(a, "the prompt hook ran out of memory");
     const checker = Checker{ .allocator = a, .roots = roots.items, .deny_paths = parsed_args.deny_paths, .masker = values, .deadline_ms = deadline };
-    const attachments = extractTokens(a, prompt) catch return block(a, "the prompt attachments could not be parsed");
+    const attachments = extractTokens(a, prompt) catch return output.stop(a, "the prompt attachments could not be parsed");
     defer freeTokens(a, attachments);
     for (attachments) |token| {
-        const verdict = checker.check(token) catch return block(a, "an attachment could not be checked");
+        const verdict = checker.check(token) catch return output.stop(a, "an attachment could not be checked");
         const reason = switch (verdict) {
             .clean => continue,
             .holds_value => "an attachment was rejected because it holds a protected value." ++ TAIL,
@@ -295,15 +325,15 @@ pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
             .mcp_resource => "an MCP resource attachment was rejected because it cannot be checked here. Read it with the ReadMcpResource tool instead, whose output is masked.",
             .unverifiable => "an attachment was rejected because its content could not be verified." ++ TAIL,
         };
-        return block(a, reason);
+        return output.stop(a, reason);
     }
-    if (checker.expired()) return block(a, "the prompt could not be checked before the deadline");
+    if (checker.expired()) return output.stop(a, "the prompt could not be checked before the deadline");
     const carries = values.contains(a, prompt) catch |err| switch (err) {
-        error.OutOfMemory => return block(a, "the prompt hook ran out of memory"),
-        error.MaskUnavailable => return block(a, masker.UNAVAILABLE_REASON ++ ", so this prompt was not submitted."),
+        error.OutOfMemory => return output.stop(a, "the prompt hook ran out of memory"),
+        error.MaskUnavailable => return output.stop(a, masker.UNAVAILABLE_REASON ++ ", so this prompt was not submitted."),
     };
-    if (carries) return block(a, "this prompt carries a protected value. A prompt cannot be masked in place, so it was not submitted.");
-    if (checker.expired()) return block(a, "the prompt could not be checked before the deadline");
+    if (carries) return output.stop(a, "this prompt carries a protected value. A prompt cannot be masked in place, so it was not submitted.");
+    if (checker.expired()) return output.stop(a, "the prompt could not be checked before the deadline");
     return 0;
 }
 

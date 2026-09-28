@@ -1,6 +1,6 @@
 # sumi
 
-sumi は、Claude Code にシークレットを読ませないためのツールです。墨消しの墨から取っています。
+sumi は、エージェントへ渡すツール出力からシークレットを伏せるツールです。墨消しの墨から取っています。
 
 例えば `config/app.properties` というファイルに `db.password=Tr0ub4dor` というシークレットが入っているとします。
 sumi を設定すると、Claude Code には `db.password=*********` と見えるようになります:

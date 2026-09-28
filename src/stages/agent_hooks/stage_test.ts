@@ -3,10 +3,10 @@ import { Effect } from "effect";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { StageInput } from "../../pipeline/types.ts";
 import {
-  makeSessionHooksServiceFake,
-  type SessionHooksPlan,
+  type AgentHooksPlan,
+  makeAgentHooksServiceFake,
 } from "./hooks_service.ts";
-import { createSessionHooksStage } from "./stage.ts";
+import { createAgentHooksStage } from "./stage.ts";
 
 function input(enable: boolean): StageInput {
   return {
@@ -21,15 +21,15 @@ function input(enable: boolean): StageInput {
 }
 
 test("hooks are provisioned for primary and extra agents even with notifications off and no masking", async () => {
-  const plans: SessionHooksPlan[] = [];
+  const plans: AgentHooksPlan[] = [];
   const container = emptyContainerPlan("image", "/work");
   const result = await Effect.runPromise(
     Effect.scoped(
-      createSessionHooksStage(input(true))
+      createAgentHooksStage(input(true))
         .run({ container })
         .pipe(
           Effect.provide(
-            makeSessionHooksServiceFake((plan) =>
+            makeAgentHooksServiceFake((plan) =>
               Effect.sync(() => {
                 plans.push(plan);
               }),
@@ -40,16 +40,18 @@ test("hooks are provisioned for primary and extra agents even with notifications
   );
   expect(plans).toEqual([
     {
-      sessionDir: "/run/user/1000/nas/session-hooks/sess_test",
+      sessionDir: "/run/user/1000/nas/agent-hooks/sess_test",
       agents: ["claude", "copilot", "codex"],
+      lifecycle: true,
+      maskSocketPath: undefined,
     },
   ]);
   expect(result.container?.mounts).toContainEqual({
     source: `${plans[0].sessionDir}/assets`,
-    target: "/opt/nas/session-hooks",
+    target: "/opt/nas/agent-hooks",
     readOnly: true,
   });
-  expect(result.container?.env.static.NAS_SESSION_HOOKS).toBe("1");
+  expect(result.container?.env.static.NAS_AGENT_HOOKS).toBe("1");
   expect(result.container?.command).toEqual(container.command);
 });
 
@@ -57,14 +59,47 @@ test("hook.enable=false skips registration without needing a service", async () 
   expect(
     await Effect.runPromise(
       Effect.scoped(
-        createSessionHooksStage(input(false))
+        createAgentHooksStage(input(false))
           .run({ container: emptyContainerPlan("image", "/work") })
           .pipe(
             Effect.provide(
-              makeSessionHooksServiceFake(() => Effect.die("must not prepare")),
+              makeAgentHooksServiceFake(() => Effect.die("must not prepare")),
             ),
           ),
       ),
     ),
   ).toEqual({});
+});
+
+test("masking survives lifecycle opt-out and includes extra Codex and Copilot agents", async () => {
+  const plans: AgentHooksPlan[] = [];
+  const base = emptyContainerPlan("image", "/work");
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      createAgentHooksStage(input(false))
+        .run({
+          container: {
+            ...base,
+            env: { ...base.env, static: { NAS_MASK_SOCKET: "/run/mask.sock" } },
+          },
+        })
+        .pipe(
+          Effect.provide(
+            makeAgentHooksServiceFake((plan) =>
+              Effect.sync(() => {
+                plans.push(plan);
+              }),
+            ),
+          ),
+        ),
+    ),
+  );
+  expect(plans).toHaveLength(1);
+  expect(plans[0]).toMatchObject({
+    lifecycle: false,
+    maskSocketPath: "/run/mask.sock",
+    agents: ["copilot", "codex"],
+  });
+  expect(result.container?.env.static.NAS_AGENT_HOOKS).toBe("1");
+  expect(result.container?.env.static.NAS_MASK_SOCKET).toBe("/run/mask.sock");
 });

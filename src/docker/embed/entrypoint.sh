@@ -94,13 +94,13 @@ if [ "$nas_debug_enabled" = "true" ] && [ -n "${NAS_DOCKER_RUN_STARTED_AT_US:-}"
 fi
 unset NAS_DOCKER_RUN_STARTED_AT_US
 
-# --- NAS session hooks ---
+# --- NAS agent hooks ---
 # Install before dropping root. Copilot policy files must be root-owned;
 # bind-mounting a host-user-owned file at the policy path would be ignored.
-if [ "$NAS_SHELL_MODE" = false ] && [ "${NAS_SESSION_HOOKS:-}" = 1 ]; then
-  nas_install_session_hook() {
+if [ "$NAS_SHELL_MODE" = false ] && [ "${NAS_AGENT_HOOKS:-}" = 1 ]; then
+  nas_install_agent_hook() {
     local source="$1" target="$2" name="$3"
-    local receipt="/run/nas-session-hooks/$name"
+    local receipt="/run/nas-agent-hooks/$name"
     if [ -e "$target" ] || [ -L "$target" ]; then
       # A container restart may encounter our previous installation. Only that
       # exact installation is reusable; an existing image/mount policy is an
@@ -109,24 +109,37 @@ if [ "$NAS_SHELL_MODE" = false ] && [ "${NAS_SESSION_HOOKS:-}" = 1 ]; then
          cmp -s "$source" "$receipt" && cmp -s "$source" "$target"; then
         return 0
       fi
-      echo "[nas] session hooks: $target already exists; automatic hooks cannot merge existing policy. Remove the conflicting container policy or set hook.enable = false." >&2
+      echo "[nas] agent hooks: $target already exists; automatic hooks cannot merge existing policy. Remove the conflicting container policy, or set hook.enable = false and disable mask.filter if masking hooks are enabled." >&2
       return 1
     fi
     install -d -m 755 -o 0 -g 0 "$(dirname "$target")"
     install -m 644 -o 0 -g 0 "$source" "$target"
-    install -d -m 700 -o 0 -g 0 /run/nas-session-hooks
+    install -d -m 700 -o 0 -g 0 /run/nas-agent-hooks
     install -m 600 -o 0 -g 0 "$source" "$receipt"
   }
-  if [ -f /opt/nas/session-hooks/codex.toml ]; then
-    nas_install_session_hook /opt/nas/session-hooks/codex.toml /etc/codex/requirements.toml codex
+  if [ -f /opt/nas/agent-hooks/codex.toml ]; then
+    nas_install_agent_hook /opt/nas/agent-hooks/codex.toml /etc/codex/requirements.toml codex
   fi
-  if [ -f /opt/nas/session-hooks/claude.json ]; then
-    nas_install_session_hook /opt/nas/session-hooks/claude.json /etc/claude-code/managed-settings.d/60-nas-session.json claude
+  if [ -f /opt/nas/agent-hooks/claude.json ]; then
+    nas_install_agent_hook /opt/nas/agent-hooks/claude.json /etc/claude-code/managed-settings.d/60-nas-hooks.json claude
   fi
-  if [ -f /opt/nas/session-hooks/copilot.json ]; then
-    nas_install_session_hook /opt/nas/session-hooks/copilot.json /etc/github-copilot/policy.d/60-nas-session.json copilot
+  if [ -f /opt/nas/agent-hooks/copilot.json ]; then
+    # Older CLIs silently ignore policy hooks, transformed-prompt events, or
+    # result replacements. Require the baseline verified with a model round
+    # trip; installing syntactically valid JSON alone does not provide masking.
+    if [ -n "${NAS_MASK_SOCKET:-}" ]; then
+      nas_copilot_version=$(timeout 5 /usr/local/bin/copilot --version 2>/dev/null |
+        sed -n '1s/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*$/\1/p') || nas_copilot_version=
+      if [ -z "$nas_copilot_version" ] ||
+         [ "$(printf '%s\n' 1.0.88 "$nas_copilot_version" | sort -V | head -n 1)" != 1.0.88 ]; then
+        echo "[nas] sumi hooks require Copilot CLI >= 1.0.88 (found: ${nas_copilot_version:-unknown}). Update Copilot before using mask.filter." >&2
+        exit 1
+      fi
+      unset nas_copilot_version
+    fi
+    nas_install_agent_hook /opt/nas/agent-hooks/copilot.json /etc/github-copilot/policy.d/60-nas-hooks.json copilot
   fi
-  unset -f nas_install_session_hook
+  unset -f nas_install_agent_hook
 fi
 
 # --- CA 証明書のインストール ---
@@ -416,6 +429,17 @@ MASK_WRAPPER_HEADER
     cat << 'MASK_WRAPPER_BODY'
 if [ "${1:-}" = "/entrypoint.sh" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+fi
+# Codex starts command hooks through its configured shell. These two fixed,
+# read-only NAS scripts must reach sumi even if the broker is down, and their
+# protocol JSON must not pass through another output filter. Match the whole
+# command and argument list: no extra words, shell operators, or prefix matches.
+if [ "$#" -eq 2 ] && { [ "$1" = -c ] || [ "$1" = -lc ]; }; then
+  case "$2" in
+    /opt/nas/agent-hooks/mask-codex-post-tool|/opt/nas/agent-hooks/mask-codex-prompt)
+      exec "$2"
+      ;;
+  esac
 fi
 if [ -n "${SUMI_SUPERVISED:-}" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"

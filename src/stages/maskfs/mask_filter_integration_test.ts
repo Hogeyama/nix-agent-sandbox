@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  AGENT_HOOKS_DIR,
+  buildAgentHookSettings,
+  buildCodexMaskHookScript,
+  CODEX_MASK_HOOK_COMMANDS,
+} from "../agent_hooks/settings.ts";
 import { resolveMaskFilterBinPath } from "./mask_filter_path.ts";
+import { SUMI_CONTAINER_PATH } from "./mask_filter_service.ts";
 import { encodeMaskSecrets } from "./secrets_frame.ts";
 import { resolveSumiBinPath } from "./sumi_path.ts";
 
@@ -122,7 +129,11 @@ function quoteForBash(value: string): string {
   return new TextDecoder().decode(proc.stdout);
 }
 
-function writeWrapperScript(filterPath: string, socketPath: string): string {
+function writeWrapperScript(
+  filterPath: string,
+  socketPath: string,
+  hooksDir = AGENT_HOOKS_DIR,
+): string {
   const entry = fs.readFileSync(
     path.join(import.meta.dir, "../../docker/embed/entrypoint.sh"),
     "utf8",
@@ -141,7 +152,8 @@ function writeWrapperScript(filterPath: string, socketPath: string): string {
     body[1],
   ]
     .join("\n")
-    .replaceAll("/tmp/nas-bash-override/bash.real", realBashPath());
+    .replaceAll("/tmp/nas-bash-override/bash.real", realBashPath())
+    .replaceAll(AGENT_HOOKS_DIR, hooksDir);
   const p = path.join(tmpDir, `wrapper-${secretsFileSeq++}.sh`);
   fs.writeFileSync(p, `${script}\n`, { mode: 0o755 });
   return p;
@@ -1453,13 +1465,82 @@ describe("nas-mask-filter --serve", () => {
 describe("sumi hooks over the mask broker", () => {
   const SECRET = "hook-secret-Tr0ub4dor";
 
+  // Launch the generated command just as its agent does. Substitute only the
+  // container installation paths; use the shipped Bash wrapper and real sumi.
+  // Calling sumi directly misses failures in the shell that starts the hook.
+  async function runConfiguredHook(
+    sockPath: string,
+    hook: "post-tool" | "prompt",
+    payload: unknown,
+    agent: "codex" | "copilot",
+    shellFlag = "-lc",
+  ): Promise<{ stdout: string; exitCode: number }> {
+    const hooksDir = path.join(tmpDir, `hooks-${secretsFileSeq++}`);
+    fs.mkdirSync(hooksDir);
+    const remap = (text: string) =>
+      text
+        .replaceAll(AGENT_HOOKS_DIR, hooksDir)
+        .replaceAll(SUMI_CONTAINER_PATH, sumiPath!)
+        .replaceAll("/tmp/nas-bash-override/bash.real", realBashPath());
+    for (const action of ["post-tool", "prompt"] as const) {
+      fs.writeFileSync(
+        remap(CODEX_MASK_HOOK_COMMANDS[action]),
+        remap(buildCodexMaskHookScript(action, sockPath)),
+        { mode: 0o755 },
+      );
+    }
+    const wrapper = writeWrapperScript(sumiPath!, sockPath, hooksDir);
+    const text = buildAgentHookSettings(agent, {
+      lifecycle: false,
+      maskSocketPath: sockPath,
+    });
+    let argv: string[];
+    if (agent === "codex") {
+      const settings = Bun.TOML.parse(text) as any;
+      const event = hook === "post-tool" ? "PostToolUse" : "UserPromptSubmit";
+      argv = [
+        wrapper,
+        shellFlag,
+        remap(settings.hooks[event][0].hooks[0].command),
+      ];
+    } else {
+      const settings = JSON.parse(text);
+      const event =
+        hook === "post-tool" ? "postToolUse" : "userPromptTransformed";
+      const handler = settings.hooks[event][0];
+      argv = handler.exec
+        ? [remap(handler.exec), ...handler.args]
+        : [wrapper, shellFlag, remap(handler.bash)];
+    }
+    const proc = Bun.spawn(argv, {
+      stdin: new TextEncoder().encode(JSON.stringify(payload)),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...envWithoutSupervisionMarker(), SHELL: wrapper },
+    });
+    try {
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(stderr).toBe("");
+      return { stdout, exitCode };
+    } finally {
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(hooksDir, { recursive: true, force: true });
+    }
+  }
+
   async function runHook(
     sockPath: string,
     hook: "post-tool" | "prompt",
     payload: unknown,
+    agent: "claude" | "codex" | "copilot" = "claude",
   ): Promise<{ stdout: string; exitCode: number }> {
     const proc = Bun.spawn(
-      [sumiPath!, "hook", "--agent", "claude", hook, "--socket", sockPath],
+      [sumiPath!, "hook", "--agent", agent, hook, "--socket", sockPath],
       {
         stdin: new TextEncoder().encode(JSON.stringify(payload)),
         stdout: "pipe",
@@ -1486,6 +1567,206 @@ describe("sumi hooks over the mask broker", () => {
       fs.rmSync(sockPath, { force: true });
     }
   }
+
+  for (const agent of ["codex", "copilot"] as const) {
+    test.skipIf(!hasBrokerAndSumi)(
+      `${agent} configured hook masks successful output and withholds it when the broker is gone`,
+      async () => {
+        const content = `pw=${SECRET}\n`;
+        const payload =
+          agent === "codex"
+            ? {
+                hook_event_name: "PostToolUse",
+                tool_name: "Bash",
+                tool_response: content,
+              }
+            : {
+                toolName: "view",
+                toolResult: {
+                  resultType: "success",
+                  textResultForLlm: content,
+                },
+              };
+        await withBroker(`hook-${agent}`, async (sockPath) => {
+          const result = await runConfiguredHook(
+            sockPath,
+            "post-tool",
+            payload,
+            agent,
+          );
+          expect(result.exitCode).toBe(0);
+          expect(result.stdout.includes(SECRET)).toBe(false);
+          const output = JSON.parse(result.stdout);
+          expect(
+            agent === "codex"
+              ? output.reason
+              : output.modifiedResult.textResultForLlm,
+          ).toBe(content.replaceAll(SECRET, "*".repeat(SECRET.length)));
+          if (agent === "codex") expect(output.decision).toBe("block");
+        });
+        for (const shellFlag of ["-c", "-lc"]) {
+          const unavailable = await runConfiguredHook(
+            shortSockPath("gone"),
+            "post-tool",
+            payload,
+            agent,
+            shellFlag,
+          );
+          expect(unavailable.exitCode).toBe(0);
+          expect(unavailable.stdout.includes(SECRET)).toBe(false);
+          const output = JSON.parse(unavailable.stdout);
+          if (agent === "codex") {
+            expect(output.decision).toBe("block");
+            expect(output.reason).toContain("withheld");
+          } else {
+            expect(output.modifiedResult.textResultForLlm).toContain(
+              "withheld",
+            );
+          }
+        }
+      },
+      15000,
+    );
+  }
+
+  test.skipIf(!hasBrokerAndSumi)(
+    "configured prompt hooks deliver a block or replacement even without the broker",
+    async () => {
+      for (const agent of ["codex", "copilot"] as const) {
+        for (const shellFlag of ["-c", "-lc"]) {
+          const result = await runConfiguredHook(
+            shortSockPath("prompt-gone"),
+            "prompt",
+            { prompt: SECRET, transformedPrompt: SECRET },
+            agent,
+            shellFlag,
+          );
+          expect(result.exitCode).toBe(0);
+          expect(result.stdout.includes(SECRET)).toBe(false);
+          const output = JSON.parse(result.stdout);
+          if (agent === "codex") {
+            expect(output.decision).toBe("block");
+            expect(output.reason).toContain("not submitted");
+          } else {
+            expect(output.modifiedTransformedPrompt).toContain("withheld");
+          }
+        }
+      }
+    },
+    15000,
+  );
+
+  test.skipIf(!sumiPath)(
+    "the Codex hook exception never bypasses masking for additional shell commands or arguments",
+    async () => {
+      const wrapper = writeWrapperScript(
+        sumiPath!,
+        shortSockPath("hook-exact"),
+      );
+      for (const command of Object.values(CODEX_MASK_HOOK_COMMANDS)) {
+        for (const args of [
+          ["-c", `${command}; printf unmasked`],
+          ["-lc", `${command} && printf unmasked`],
+          ["-c", `${command} --extra`],
+          ["-c", `${command}-other`],
+          ["-c", command, "extra"],
+          ["-c", "printf unmasked"],
+        ]) {
+          const proc = Bun.spawn([wrapper, ...args], {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: envWithoutSupervisionMarker(),
+          });
+          try {
+            expect(await new Response(proc.stdout).text()).toBe("");
+            expect(await proc.exited).toBe(121);
+          } finally {
+            proc.kill();
+            await proc.exited;
+          }
+        }
+      }
+    },
+    15000,
+  );
+
+  test.skipIf(!hasBrokerAndSumi)(
+    "Codex blocks protected prompts and attachments using only supported output fields",
+    async () => {
+      await withBroker("codex-prompt", async (sockPath) => {
+        const attachment = path.join(
+          tmpDir,
+          `codex-attach-${secretsFileSeq++}.txt`,
+        );
+        fs.writeFileSync(attachment, SECRET);
+        for (const prompt of [`use ${SECRET}`, `read @${attachment}`]) {
+          const result = await runHook(
+            sockPath,
+            "prompt",
+            { prompt, cwd: tmpDir },
+            "codex",
+          );
+          expect(result.exitCode).toBe(0);
+          expect(result.stdout.includes(SECRET)).toBe(false);
+          expect(JSON.parse(result.stdout)).toMatchObject({
+            decision: "block",
+          });
+          expect(JSON.parse(result.stdout).hookSpecificOutput).toBeUndefined();
+        }
+        const clean = await runHook(
+          sockPath,
+          "prompt",
+          { prompt: "hello", cwd: tmpDir },
+          "codex",
+        );
+        expect(clean.stdout).toBe("");
+      });
+      const dead = await runHook(
+        shortSockPath("gone"),
+        "prompt",
+        { prompt: "hello" },
+        "codex",
+      );
+      expect(JSON.parse(dead.stdout).decision).toBe("block");
+    },
+    15000,
+  );
+
+  test.skipIf(!hasBrokerAndSumi)(
+    "Copilot masks transformed prompt content and withholds it on broker failure",
+    async () => {
+      const payload = {
+        prompt: "@file",
+        transformedPrompt: `file content: ${SECRET}`,
+      };
+      await withBroker("copilot-prompt", async (sockPath) => {
+        const result = await runHook(sockPath, "prompt", payload, "copilot");
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.stdout).modifiedTransformedPrompt).toBe(
+          `file content: ${"*".repeat(SECRET.length)}`,
+        );
+        const clean = await runHook(
+          sockPath,
+          "prompt",
+          { transformedPrompt: "hello" },
+          "copilot",
+        );
+        expect(clean.stdout).toBe("");
+      });
+      const dead = await runHook(
+        shortSockPath("gone"),
+        "prompt",
+        payload,
+        "copilot",
+      );
+      expect(dead.stdout.includes(SECRET)).toBe(false);
+      expect(JSON.parse(dead.stdout).modifiedTransformedPrompt).toContain(
+        "withheld",
+      );
+    },
+    15000,
+  );
 
   test.skipIf(!hasBrokerAndSumi)(
     "a Read tool result is masked before it reaches the transcript",
