@@ -3,90 +3,42 @@ title: 入力待ちの通知
 description: エージェントの入力待ちを UI の状態とデスクトップ通知で確認するための設定
 ---
 
-別の作業をしている間にエージェントが入力待ちになったことを知るには、使用するエージェントの hook に `nas hook` を登録します。これにより作業状態を記録し、入力待ちを通知できます。通信・ホスト実行の承認は別の要求として [Pending](/nix-agent-sandbox/work/approvals/) に届きます。
+nas は Claude Code、Codex、Copilot CLI に状態通知用の hooks を自動登録します。応答が終わると入力待ちになり、デスクトップ通知が届きます。エージェントの設定ファイルへの手動登録は不要です。通信・ホスト実行の承認は別の要求として [Pending](/nix-agent-sandbox/work/approvals/) に届きます。
 
 ## 通知方法
 
-[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に設定します。
+[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)に設定します。変更は次に起動する nas セッションから反映されます。
 
 ```pkl
 hook = new HookConfig {
-  notify = "auto"
+  notify = "off"
 }
 ```
 
-`auto` は既定の通知方法、`desktop` はデスクトップ通知、`off` は通知なしです。`off` でも hook の作業状態は記録します。通知本文には入力データの `message` または既定文を使うため、秘密値を `message` に含めないでください。
+`auto` は既定の通知方法、`desktop` はデスクトップ通知、`off` は通知なしです。`off` でも UI の作業状態は記録します。通知本文には hook 入力データの `message` または既定文を使うため、秘密値を `message` に含めないでください。
 
-## エージェントごとの登録
+## 状態の確認
 
-使用するエージェントの例を選んで設定します。`nas hook` は作業開始・入力待ち・終了を記録し、入力待ちの `attention` だけを通知します。既存の hook がある場合は、その設定を残して追加してください。
+プロンプトを送ると作業中、応答が終わると入力待ち、会話を終了すると終了状態になります。Claude Code の `AskUserQuestion` と Copilot CLI の `ask_user` による質問も、回答するまで入力待ちとして扱います。Claude Code がツール実行の許可待ち通知を出した場合も入力待ちになり、ツールの完了・失敗で作業中に戻ります。
 
-### Claude Code
+`extraAgents` に指定したエージェントにも自動登録します。複数のエージェントから届くイベントは送信元を区別せず、同じ NAS セッションの状態に反映します。最後に受けたイベントが状態を決めます。
 
-`~/.claude/settings.json` または `.claude/settings.json` に設定します。
+同じ入力待ちが続く間は通知を繰り返しません。UI で確認済みにした後に重複した hook が届いても、確認済み状態を保ちます。次に作業が始まった後の入力待ちは、再び通知します。
 
-```jsonc
-{
-  "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "nas hook --kind start" }] }],
-    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "nas hook --kind start" }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "nas hook --kind attention" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "nas hook --kind attention" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "nas hook --kind stop" }] }]
-  }
+## 自動登録の無効化
+
+```pkl
+hook = new HookConfig {
+  enable = false
 }
 ```
 
-### GitHub Copilot CLI
+この設定は NAS の状態通知用 hooks の自動登録を止めます。`mask.filter` が導入する sumi の保護用 hooks は引き続き有効です。手動で登録済みの `nas hook` も残るため、状態通知自体を止める場合はその登録も削除してください。
 
-リポジトリの `.github/hooks/*.json` に設定します。この例では、`ask_user` の前後だけを `--when toolName=ask_user` で選びます。`notification` を無条件に attention にすると `permission_prompt` も拾うため設定しません。`--when path=value` は入力 JSON の値が完全一致した場合だけ記録します。複数指定時はすべての一致が必要です。条件の不一致や入力・保存の失敗は hook を失敗させません。
+## 既存設定との併用
 
-```json
-{
-  "version": 1,
-  "hooks": {
-    "sessionStart": [{ "type": "command", "bash": "nas hook --kind start", "timeoutSec": 10 }],
-    "userPromptSubmitted": [{ "type": "command", "bash": "nas hook --kind start", "timeoutSec": 10 }],
-    "preToolUse": [{ "type": "command", "bash": "nas hook --kind attention --when toolName=ask_user", "timeoutSec": 10 }],
-    "postToolUse": [{ "type": "command", "bash": "nas hook --kind start --when toolName=ask_user", "timeoutSec": 10 }],
-    "sessionEnd": [{ "type": "command", "bash": "nas hook --kind stop", "timeoutSec": 10 }]
-  }
-}
-```
+自動登録する設定はコンテナ内だけに配置します。ホストのユーザー設定やリポジトリの設定ファイルは編集しません。以前の手順で登録した `nas hook` は削除できます。整形など、ほかの目的の hooks は残してください。
 
-### OpenAI Codex CLI
+Codex では、コンテナ内に既存の `/etc/codex/requirements.toml` があると起動を停止します。既存ファイルとの自動合成は行いません。エラーが出たら、イメージや追加マウント側の管理設定を確認し、必要な設定なら `hook.enable = false` にして手動登録を使ってください。通常の `~/.codex/config.toml` は併用できます。
 
-`~/.codex/config.toml` または `.codex/config.toml` に設定します。
-
-```toml
-[[hooks.SessionStart]]
-matcher = "startup|resume"
-[[hooks.SessionStart.hooks]]
-type = "command"
-command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind start || true'"
-
-[[hooks.UserPromptSubmit]]
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind start || true'"
-
-[[hooks.PreToolUse]]
-matcher = "*"
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind start || true'"
-
-[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = "command"
-command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind attention || true'"
-
-[[hooks.SessionEnd]]
-[[hooks.SessionEnd.hooks]]
-type = "command"
-command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind stop || true'"
-```
-
-## Hook の実行環境
-
-エージェント hook は `NAS_SESSION_ID` があるコンテナ内から実行されます。通知本文には hook 入力データの `message`、または既定文が表示されるため、秘密を `message` に含めないでください。`hook.notify = "off"` なら attention を記録してもデスクトップ通知は送りません。
+自動登録には、各エージェントの管理用 hooks と上記イベントに対応したバージョンが必要です。通知が届かない場合は、まず UI の状態が変わるか確認してください。状態も変わらない場合は、エージェント側の hooks 読み込み・実行エラーを確認します。

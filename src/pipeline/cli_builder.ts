@@ -15,6 +15,7 @@ import { createNixDetectStage } from "../stages/nix_detect.ts";
 import { createObservabilityStage } from "../stages/observability.ts";
 import { createPortBindStage } from "../stages/port_bind.ts";
 import { createProxyStage } from "../stages/proxy.ts";
+import { createSessionHooksStage } from "../stages/session_hooks.ts";
 import { createSessionStoreStage } from "../stages/session_store.ts";
 import { createWorktreeStage } from "../stages/worktree.ts";
 import { createPipelineBuilder } from "./stage_builder.ts";
@@ -46,6 +47,7 @@ export function createPreparationPipelineBuilder({
     .add(createMountStage(input, mountProbes, devcontainerMounts))
     .add(createMaskFilterStage(input))
     .add(createHostExecStage(input))
+    .add(createSessionHooksStage(input))
     .add(createGuideStage(input))
     .add(
       createObservabilityStage({

@@ -165,6 +165,10 @@ class SessionConfig {
 }
 
 class HookConfig {
+  /// セッションの状態を記録する hooks を各エージェントへ自動登録する。
+  /// mask.filter による保護用 hooks には影響しない。
+  enable: Boolean = true
+
   /// `nas hook` による状態通知の backend。
   /// `"auto"`: `ui.enable` に応じて UI daemon 経由 or デスクトップ通知。
   notify: "auto"|"desktop"|"off" = "auto"

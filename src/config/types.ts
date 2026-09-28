@@ -67,6 +67,7 @@ export interface SessionConfig {
 export type HookNotify = "auto" | "desktop" | "off";
 
 export interface HookConfig {
+  enable: boolean;
   notify: HookNotify;
 }
 
@@ -362,6 +363,7 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
 };
 
 export const DEFAULT_HOOK_CONFIG: HookConfig = {
+  enable: true,
   notify: "auto",
 };
 

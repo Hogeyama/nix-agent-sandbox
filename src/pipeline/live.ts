@@ -26,6 +26,7 @@ import {
   ProxyServiceLive,
   SessionBrokerServiceLive,
 } from "../stages/proxy.ts";
+import { SessionHooksServiceLive } from "../stages/session_hooks.ts";
 import { SessionStoreServiceLive } from "../stages/session_store.ts";
 import {
   GitWorktreeServiceLive,
@@ -71,5 +72,6 @@ export function createPipelineLiveLayer() {
     PromptServiceLive,
     SessionBrokerServiceLive,
     SessionStoreServiceLive,
+    SessionHooksServiceLive.pipe(Layer.provide(FsServiceLive)),
   );
 }

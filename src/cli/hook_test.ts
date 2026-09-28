@@ -130,6 +130,41 @@ function makeStdin(raw: string): () => Promise<string> {
 
 const noopNotify = () => {};
 
+test("duplicate attention from manual and automatic hooks notifies once and preserves acknowledgement", async () => {
+  const { createSession, updateSessionTurn, acknowledgeSessionTurn } =
+    await import("../sessions/store.ts");
+  const sessionId = "sess-hook-duplicates";
+  process.env.NAS_SESSION_ID = sessionId;
+  await createSession(paths, {
+    sessionId,
+    agent: "claude",
+    profile: "default",
+    startedAt: new Date().toISOString(),
+  });
+  await updateSessionTurn(paths, sessionId, "start");
+  const notifications: string[] = [];
+  const deps = {
+    stdinReader: emptyStdin,
+    notifySender: (_title: string, body: string) => {
+      notifications.push(body);
+    },
+  };
+  await Promise.all(
+    Array.from({ length: 8 }, () =>
+      runHookCommand(["--kind", "attention"], deps),
+    ),
+  );
+  await Bun.sleep(50);
+  expect(notifications).toHaveLength(1);
+  await acknowledgeSessionTurn(paths, sessionId);
+  await runHookCommand(["--kind", "attention"], deps);
+  expect((await readSession(paths, sessionId))?.turn).toBe("ack-turn");
+  await runHookCommand(["--kind", "start"], deps);
+  await runHookCommand(["--kind", "attention"], deps);
+  await Bun.sleep(50);
+  expect(notifications).toHaveLength(2);
+});
+
 test("runHookCommand --kind start transitions pre-created record to agent-turn", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-1";
   // Seed the store with a user-turn record via the store module directly.

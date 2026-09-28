@@ -29,6 +29,7 @@ import type {
   ProxyService,
   SessionBrokerService,
 } from "../stages/proxy.ts";
+import type { SessionHooksService } from "../stages/session_hooks.ts";
 import type { SessionStoreService } from "../stages/session_store.ts";
 import type { GitWorktreeService, PromptService } from "../stages/worktree.ts";
 import type { PipelineState } from "./state.ts";
@@ -111,4 +112,5 @@ export type StageServices =
   | PromptService
   | ProxyService
   | SessionBrokerService
+  | SessionHooksService
   | SessionStoreService;

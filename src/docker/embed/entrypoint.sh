@@ -94,6 +94,41 @@ if [ "$nas_debug_enabled" = "true" ] && [ -n "${NAS_DOCKER_RUN_STARTED_AT_US:-}"
 fi
 unset NAS_DOCKER_RUN_STARTED_AT_US
 
+# --- NAS session hooks ---
+# Install before dropping root. Copilot policy files must be root-owned;
+# bind-mounting a host-user-owned file at the policy path would be ignored.
+if [ "$NAS_SHELL_MODE" = false ] && [ "${NAS_SESSION_HOOKS:-}" = 1 ]; then
+  nas_install_session_hook() {
+    local source="$1" target="$2" name="$3"
+    local receipt="/run/nas-session-hooks/$name"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      # A container restart may encounter our previous installation. Only that
+      # exact installation is reusable; an existing image/mount policy is an
+      # error, even if it happens to have the same contents.
+      if [ ! -L "$target" ] && [ -f "$receipt" ] &&
+         cmp -s "$source" "$receipt" && cmp -s "$source" "$target"; then
+        return 0
+      fi
+      echo "[nas] session hooks: $target already exists; automatic hooks cannot merge existing policy. Remove the conflicting container policy or set hook.enable = false." >&2
+      return 1
+    fi
+    install -d -m 755 -o 0 -g 0 "$(dirname "$target")"
+    install -m 644 -o 0 -g 0 "$source" "$target"
+    install -d -m 700 -o 0 -g 0 /run/nas-session-hooks
+    install -m 600 -o 0 -g 0 "$source" "$receipt"
+  }
+  if [ -f /opt/nas/session-hooks/codex.toml ]; then
+    nas_install_session_hook /opt/nas/session-hooks/codex.toml /etc/codex/requirements.toml codex
+  fi
+  if [ -f /opt/nas/session-hooks/claude.json ]; then
+    nas_install_session_hook /opt/nas/session-hooks/claude.json /etc/claude-code/managed-settings.d/60-nas-session.json claude
+  fi
+  if [ -f /opt/nas/session-hooks/copilot.json ]; then
+    nas_install_session_hook /opt/nas/session-hooks/copilot.json /etc/github-copilot/policy.d/60-nas-session.json copilot
+  fi
+  unset -f nas_install_session_hook
+fi
+
 # --- CA 証明書のインストール ---
 # update-ca-certificates は全証明書を走査するため ~1s かかる。
 # 追加するのは mitmproxy CA 1 枚だけなので、CA bundle への追記と

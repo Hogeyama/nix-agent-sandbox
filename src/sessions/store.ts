@@ -21,6 +21,7 @@ import {
   readJsonFile,
   safeRemove,
 } from "../lib/fs_utils.ts";
+import { withSessionStoreLock } from "./store_lock.ts";
 
 export type SessionTurn = "user-turn" | "ack-turn" | "agent-turn" | "done";
 export type SessionEventKind = "start" | "attention" | "ack" | "stop";
@@ -134,7 +135,9 @@ export async function createSession(
     lastEventMessage: record.lastEventMessage,
     hookNotify: record.hookNotify,
   };
-  await atomicWriteJson(sessionRecordPath(paths, full.sessionId), full);
+  await withSessionStoreLock(paths.sessionsDir, () =>
+    atomicWriteJson(sessionRecordPath(paths, full.sessionId), full),
+  );
   return full;
 }
 
@@ -207,31 +210,53 @@ export async function updateSessionTurn(
   kind: SessionHookEventKind,
   message?: string,
 ): Promise<SessionRecord> {
-  const now = new Date().toISOString();
-  const nextTurn = applyTransition(kind);
-  const existing = await readSession(paths, sessionId);
+  return (await applySessionHook(paths, sessionId, kind, message)).record;
+}
 
-  const updated: SessionRecord = existing
-    ? {
-        ...existing,
-        turn: nextTurn,
-        lastEventAt: now,
-        lastEventKind: kind,
-        lastEventMessage: message,
-      }
-    : {
-        sessionId,
-        agent: "unknown",
-        profile: "unknown",
-        turn: nextTurn,
-        startedAt: now,
-        lastEventAt: now,
-        lastEventKind: kind,
-        lastEventMessage: message,
-      };
+/** The notification decision and state transition share one cross-process lock.
+ * Repeated attention neither notifies again nor undoes a user's acknowledgement.
+ * A subsequent start/stop opens a new notification interval.
+ */
+export async function applySessionHook(
+  paths: SessionRuntimePaths,
+  sessionId: string,
+  kind: SessionHookEventKind,
+  message?: string,
+): Promise<{ record: SessionRecord; notify: boolean }> {
+  return withSessionStoreLock(paths.sessionsDir, async () => {
+    const now = new Date().toISOString();
+    const nextTurn = applyTransition(kind);
+    const existing = await readSession(paths, sessionId);
+    if (
+      kind === "attention" &&
+      existing &&
+      (existing.lastEventKind === "attention" || existing.turn === "ack-turn")
+    ) {
+      return { record: existing, notify: false };
+    }
 
-  await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
-  return updated;
+    const updated: SessionRecord = existing
+      ? {
+          ...existing,
+          turn: nextTurn,
+          lastEventAt: now,
+          lastEventKind: kind,
+          lastEventMessage: message,
+        }
+      : {
+          sessionId,
+          agent: "unknown",
+          profile: "unknown",
+          turn: nextTurn,
+          startedAt: now,
+          lastEventAt: now,
+          lastEventKind: kind,
+          lastEventMessage: message,
+        };
+
+    await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
+    return { record: updated, notify: kind === "attention" };
+  });
 }
 
 /**
@@ -245,21 +270,23 @@ export async function acknowledgeSessionTurn(
   paths: SessionRuntimePaths,
   sessionId: string,
 ): Promise<SessionRecord> {
-  const existing = await readSession(paths, sessionId);
-  if (!existing) throw new Error(`Session not found: ${sessionId}`);
-  if (existing.turn !== "user-turn" && existing.turn !== "ack-turn") {
-    throw new Error(`Cannot acknowledge turn in state: ${existing.turn}`);
-  }
+  return withSessionStoreLock(paths.sessionsDir, async () => {
+    const existing = await readSession(paths, sessionId);
+    if (!existing) throw new Error(`Session not found: ${sessionId}`);
+    if (existing.turn !== "user-turn" && existing.turn !== "ack-turn") {
+      throw new Error(`Cannot acknowledge turn in state: ${existing.turn}`);
+    }
 
-  const now = new Date().toISOString();
-  const updated: SessionRecord = {
-    ...existing,
-    turn: "ack-turn",
-    lastEventAt: now,
-    lastEventKind: "ack",
-  };
-  await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
-  return updated;
+    const now = new Date().toISOString();
+    const updated: SessionRecord = {
+      ...existing,
+      turn: "ack-turn",
+      lastEventAt: now,
+      lastEventKind: "ack",
+    };
+    await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
+    return updated;
+  });
 }
 
 /**
@@ -270,11 +297,13 @@ export async function updateSessionName(
   sessionId: string,
   name: string,
 ): Promise<SessionRecord> {
-  const existing = await readSession(paths, sessionId);
-  if (!existing) throw new Error(`Session not found: ${sessionId}`);
-  const updated: SessionRecord = { ...existing, name };
-  await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
-  return updated;
+  return withSessionStoreLock(paths.sessionsDir, async () => {
+    const existing = await readSession(paths, sessionId);
+    if (!existing) throw new Error(`Session not found: ${sessionId}`);
+    const updated: SessionRecord = { ...existing, name };
+    await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
+    return updated;
+  });
 }
 
 /**
@@ -285,5 +314,7 @@ export async function deleteSession(
   paths: SessionRuntimePaths,
   sessionId: string,
 ): Promise<void> {
-  await safeRemove(sessionRecordPath(paths, sessionId));
+  await withSessionStoreLock(paths.sessionsDir, () =>
+    safeRemove(sessionRecordPath(paths, sessionId)),
+  );
 }

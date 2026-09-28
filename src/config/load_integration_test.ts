@@ -286,6 +286,27 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
+  "loadConfig: lifecycle hooks default on and can be disabled independently of notifications",
+  async () => {
+    await withNasConfig(
+      `amends "Schema.pkl"
+profiles {
+  ["default"] { agent = "claude" }
+  ["quiet"] { agent = "copilot"; hook { notify = "off" } }
+  ["manual"] { agent = "codex"; hook { enable = false } }
+}
+`,
+      async (dir) => {
+        const { profiles } = await loadConfig({ startDir: dir });
+        expect(profiles.default.hook).toEqual({ enable: true, notify: "auto" });
+        expect(profiles.quiet.hook).toEqual({ enable: true, notify: "off" });
+        expect(profiles.manual.hook).toEqual({ enable: false, notify: "auto" });
+      },
+    );
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: agentState.auth is undefined when unset and kept when set",
   async () => {
     const configPkl = `amends "Schema.pkl"

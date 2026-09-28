@@ -17,11 +17,11 @@ import {
   resolveNotifyBackend,
 } from "../lib/notify_utils.ts";
 import {
+  applySessionHook,
   readSession,
   resolveSessionRuntimePaths,
   type SessionHookEventKind,
   type SessionRuntimePaths,
-  updateSessionTurn,
 } from "../sessions/store.ts";
 import { getFlagValue } from "./helpers.ts";
 
@@ -103,16 +103,14 @@ export async function runHookCommand(
   // Update the session store. Any failure is non-fatal.
   const paths = resolveSessionRuntimePaths();
   try {
-    await updateSessionTurn(paths, sessionId, kind, message);
+    const result = await applySessionHook(paths, sessionId, kind, message);
+    if (result.notify) {
+      fireAttentionNotification(paths, sessionId, message, deps.notifySender);
+    }
   } catch (err) {
     console.error(
       `[nas] hook: session store update failed: ${(err as Error).message}`,
     );
-  }
-
-  // Fire-and-forget desktop notification on attention (user-turn).
-  if (kind === "attention") {
-    fireAttentionNotification(paths, sessionId, message, deps.notifySender);
   }
 }
 
