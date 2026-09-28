@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- `--socket SOCKET` as an alternative to `--secrets-file F` for `hook`, `run` and `init`. sumi then keeps no list of values and sends each value to a `nas-mask-filter --serve` broker, which returns it masked. Giving both options is rejected.
+- `sumi run SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]` runs a program with its arguments unchanged, for wrappers that replace a whole shell.
+
 ## [0.2.0] - 2026-09-18
 
 ### Changed

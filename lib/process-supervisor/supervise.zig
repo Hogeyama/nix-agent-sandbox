@@ -65,6 +65,10 @@ const relay_mod = @import("relay.zig");
 
 const MaskStream = mask_stream.MaskStream;
 const Relay = relay_mod.Relay;
+
+/// ブローカーで 1 回分のバイト列をマスクする。hook のようにストリームではなく
+/// 手元の値を問い合わせる呼び出し元向け。
+pub const maskOnce = relay_mod.maskOnce;
 const CHUNK_SIZE = relay_mod.CHUNK_SIZE;
 
 /// 子プロセスの終了を検知した後、パイプに追加データを待つアイドル時間 (ms)。
@@ -106,7 +110,7 @@ pub const EXIT_EXEC_FAILED: u8 = 127;
 /// 抑止してもカバレッジは減らない。子孫はすべて最外周 supervisor のパイプを
 /// 継承するので出力は既にマスクされており、最外周から逃げる出力 (ファイルへの
 /// リダイレクト、/dev/tty への書き込み) は内側の層からも同様に逃げる。
-/// nas のコンテナ内ラッパーが使うマーカー。sumi は自前の名前を渡す。
+/// nas-mask-filter が子に渡すマーカー。sumi は自前の名前を渡す。
 pub const NAS_SUPERVISED_ENTRY: [:0]const u8 = "NAS_MASK_SUPERVISED=1";
 
 /// 子へ渡す環境を組み立てる。**fork の前に**呼ぶこと (子ではアロケートしない)。
@@ -374,6 +378,7 @@ pub fn run(
     argv0: []const u8,
     program: []const u8,
     args: []const []const u8,
+    opts: Options,
 ) !u8 {
     var out_relay = try Relay.connect(sock_path);
     var err_relay = Relay.connect(sock_path) catch |err| {
@@ -389,8 +394,8 @@ pub fn run(
         program,
         args,
         &.{ out_relay.fd, err_relay.fd },
-        "nas-mask-filter",
-        NAS_SUPERVISED_ENTRY,
+        opts.prog_name,
+        opts.marker_env,
     );
     const pid = child.pid;
     // 出力を捨てて抜けるときに、マスクされない出力を持ったまま走り続ける
@@ -602,9 +607,9 @@ fn drainLocalOnce(s: *LocalStream) !void {
     try s.mask.push(n, FdWriter{ .fd = s.dst_fd });
 }
 
-/// runLocal の呼び出し元ごとに変わるもの。診断のプログラム名と、子に付ける
+/// run / runLocal の呼び出し元ごとに変わるもの。診断のプログラム名と、子に付ける
 /// 「監督下にある」印の環境変数。
-pub const LocalOptions = struct {
+pub const Options = struct {
     prog_name: []const u8,
     marker_env: [:0]const u8,
 };
@@ -621,7 +626,7 @@ pub fn runLocal(
     argv0: []const u8,
     program: []const u8,
     args: []const []const u8,
-    opts: LocalOptions,
+    opts: Options,
 ) !u8 {
     var out_mask = try MaskStream.init(allocator, secrets);
     defer out_mask.deinit(allocator);

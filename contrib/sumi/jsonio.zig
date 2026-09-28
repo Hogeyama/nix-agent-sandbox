@@ -3,10 +3,10 @@
 //! JSON テキストではなく parse 後の値をマスクする。値が引用符やバックスラッシュ、
 //! `\uXXXX` を含んでいてもデコード後のバイト列で一致し、JSON の構造トークンや数値と
 //! 同じ綴りの値を secrets に置いても構造が壊れない。数値・真偽値・null のリーフは
-//! 対象にしない。
+//! 対象にしない。値の判定と置換は Masker に任せる (手元の一覧か、ブローカーの socket)。
 
 const std = @import("std");
-const mask = @import("masking").mask;
+const Masker = @import("masker.zig").Masker;
 
 pub const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 /// Input is kept well below std.json.Stringify's fixed 256-container stack so
@@ -101,54 +101,53 @@ fn ensureValueDepth(value: *const std.json.Value, max_depth: usize) !void {
     }
 }
 
-/// s の中の secrets を '*' に置き換えた新しいバッファを返す。変化が無ければ null。
-fn maskCopy(allocator: std.mem.Allocator, s: []const u8, secrets: []const []const u8) !?[]u8 {
-    if (!mask.containsAny(s, secrets)) return null;
-    const copy = try allocator.dupe(u8, s);
-    mask.maskAll(copy, secrets, null);
-    return copy;
-}
+/// マスクの対象になる 1 つの文字列の置き場所。キーなら持ち主のオブジェクトも持つ。
+const StringSlot = struct {
+    slot: *[]const u8,
+    owner: ?*std.json.ObjectMap,
+};
 
-fn maskValueUnchecked(allocator: std.mem.Allocator, v: *std.json.Value, secrets: []const []const u8) !bool {
-    var changed = false;
+fn collectStrings(allocator: std.mem.Allocator, v: *std.json.Value, out: *std.ArrayList(StringSlot)) !void {
     switch (v.*) {
-        .string => |s| {
-            if (try maskCopy(allocator, s, secrets)) |m| {
-                v.* = .{ .string = m };
-                changed = true;
-            }
-        },
-        .array => |*arr| {
-            for (arr.items) |*item| {
-                if (try maskValueUnchecked(allocator, item, secrets)) changed = true;
-            }
-        },
-        .object => |*obj| {
-            const keys = obj.keys();
-            const values = obj.values();
-            var key_changed = false;
-            for (keys, values) |*k, *val| {
-                if (try maskCopy(allocator, k.*, secrets)) |m| {
-                    k.* = m;
-                    changed = true;
-                    key_changed = true;
-                }
-                if (try maskValueUnchecked(allocator, val, secrets)) changed = true;
-            }
-            // キーを直接書き換えた後は、ハッシュ索引が古いキーを指したまま残る
-            // (std.json.ObjectMap = StringArrayHashMap は要素数が linear_scan_max
-            // を超えると索引を持つ)。索引を作り直さない限り、この後の
-            // get/getPtr/put がこのオブジェクトに対して不正な結果を返す。
-            if (key_changed) try obj.reIndex();
+        .string => |*s| try out.append(allocator, .{ .slot = s, .owner = null }),
+        .array => |*arr| for (arr.items) |*item| try collectStrings(allocator, item, out),
+        .object => |*obj| for (obj.keys(), obj.values()) |*k, *val| {
+            try out.append(allocator, .{ .slot = k, .owner = obj });
+            try collectStrings(allocator, val, out);
         },
         else => {},
     }
-    return changed;
 }
 
-pub fn maskValue(allocator: std.mem.Allocator, v: *std.json.Value, secrets: []const []const u8) !bool {
+/// 文字列リーフとキーをまとめて masker に渡し、変わったものを置き換える。
+/// 置き換えたバッファは allocator の所有になる (hook は parse の arena を渡す)。
+pub fn maskValue(allocator: std.mem.Allocator, v: *std.json.Value, masker: Masker) !bool {
     try ensureValueDepth(v, MAX_INPUT_DEPTH);
-    return maskValueUnchecked(allocator, v, secrets);
+    var slots: std.ArrayList(StringSlot) = .empty;
+    defer slots.deinit(allocator);
+    try collectStrings(allocator, v, &slots);
+
+    const inputs = try allocator.alloc([]const u8, slots.items.len);
+    defer allocator.free(inputs);
+    for (slots.items, inputs) |s, *input| input.* = s.slot.*;
+    const masked = try masker.maskMany(allocator, inputs);
+    defer allocator.free(masked);
+
+    var changed = false;
+    for (slots.items, masked) |s, m| {
+        const bytes = m orelse continue;
+        s.slot.* = bytes;
+        changed = true;
+    }
+    // キーを直接書き換えた後は、ハッシュ索引が古いキーを指したまま残る
+    // (std.json.ObjectMap = StringArrayHashMap は要素数が linear_scan_max
+    // を超えると索引を持つ)。索引を作り直さない限り、この後の
+    // get/getPtr/put がこのオブジェクトに対して不正な結果を返す。
+    for (slots.items, masked) |s, m| {
+        if (m == null) continue;
+        if (s.owner) |obj| try obj.reIndex();
+    }
+    return changed;
 }
 
 pub fn stringify(allocator: std.mem.Allocator, v: std.json.Value) ![]u8 {
@@ -182,7 +181,7 @@ const testing = std.testing;
 test "maskValue: string leaves are masked in place and report a change" {
     var parsed = try parse(testing.allocator, "{\"a\":\"x Tr0ub4dor y\",\"n\":1234,\"b\":true}");
     defer parsed.deinit();
-    const changed = try maskValue(parsed.arena.allocator(), &parsed.value, &.{"Tr0ub4dor"});
+    const changed = try maskValue(parsed.arena.allocator(), &parsed.value, .{ .values = &.{"Tr0ub4dor"} });
     try testing.expect(changed);
     const out = try stringify(testing.allocator, parsed.value);
     defer testing.allocator.free(out);
@@ -192,7 +191,7 @@ test "maskValue: string leaves are masked in place and report a change" {
 test "maskValue: escaped characters inside a value are matched after decoding" {
     var parsed = try parse(testing.allocator, "{\"s\":\"pass=ab\\\"cd-decoy\"}");
     defer parsed.deinit();
-    const changed = try maskValue(parsed.arena.allocator(), &parsed.value, &.{"ab\"cd-decoy"});
+    const changed = try maskValue(parsed.arena.allocator(), &parsed.value, .{ .values = &.{"ab\"cd-decoy"} });
     try testing.expect(changed);
     const out = try stringify(testing.allocator, parsed.value);
     defer testing.allocator.free(out);
@@ -202,7 +201,7 @@ test "maskValue: escaped characters inside a value are matched after decoding" {
 test "maskValue: object keys are masked too" {
     var parsed = try parse(testing.allocator, "{\"Tr0ub4dor\":\"v\"}");
     defer parsed.deinit();
-    _ = try maskValue(parsed.arena.allocator(), &parsed.value, &.{"Tr0ub4dor"});
+    _ = try maskValue(parsed.arena.allocator(), &parsed.value, .{ .values = &.{"Tr0ub4dor"} });
     const out = try stringify(testing.allocator, parsed.value);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("{\"*********\":\"v\"}", out);
@@ -211,7 +210,7 @@ test "maskValue: object keys are masked too" {
 test "maskValue: a secret equal to a JSON token does not break structure" {
     var parsed = try parse(testing.allocator, "{\"ok\":true,\"s\":\"true\"}");
     defer parsed.deinit();
-    _ = try maskValue(parsed.arena.allocator(), &parsed.value, &.{"true"});
+    _ = try maskValue(parsed.arena.allocator(), &parsed.value, .{ .values = &.{"true"} });
     const out = try stringify(testing.allocator, parsed.value);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("{\"ok\":true,\"s\":\"****\"}", out);
@@ -220,13 +219,13 @@ test "maskValue: a secret equal to a JSON token does not break structure" {
 test "maskValue: nested arrays and objects are visited" {
     var parsed = try parse(testing.allocator, "[{\"x\":[\"Tr0ub4dor\"]}]");
     defer parsed.deinit();
-    try testing.expect(try maskValue(parsed.arena.allocator(), &parsed.value, &.{"Tr0ub4dor"}));
+    try testing.expect(try maskValue(parsed.arena.allocator(), &parsed.value, .{ .values = &.{"Tr0ub4dor"} }));
 }
 
 test "maskValue: nothing to mask reports no change" {
     var parsed = try parse(testing.allocator, "{\"a\":\"clean\"}");
     defer parsed.deinit();
-    try testing.expect(!(try maskValue(testing.allocator, &parsed.value, &.{"Tr0ub4dor"})));
+    try testing.expect(!(try maskValue(testing.allocator, &parsed.value, .{ .values = &.{"Tr0ub4dor"} })));
 }
 
 test "parse: duplicate keys keep the last value like JSON.parse" {
@@ -247,7 +246,7 @@ test "maskValue: masking a key in a large object leaves lookups on it correct" {
         "{\"k0\":0,\"k1\":1,\"Tr0ub4dor\":2,\"k3\":3,\"k4\":4,\"k5\":5,\"k6\":6,\"k7\":7}",
     );
     defer parsed.deinit();
-    try testing.expect(try maskValue(parsed.arena.allocator(), &parsed.value, &.{"Tr0ub4dor"}));
+    try testing.expect(try maskValue(parsed.arena.allocator(), &parsed.value, .{ .values = &.{"Tr0ub4dor"} }));
 
     const obj = &parsed.value.object;
     try testing.expectEqual(@as(?std.json.Value, null), obj.get("Tr0ub4dor"));
