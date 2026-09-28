@@ -2,11 +2,10 @@
 
 const std = @import("std");
 const jsonio = @import("../jsonio.zig");
-const secrets = @import("../secrets.zig");
+const masker = @import("../masker.zig");
 const cli = @import("../main.zig");
-const mask = @import("masking").mask;
 
-pub const SecretsResult = union(enum) { ok: []const []const u8, err: secrets.LoadError };
+pub const SecretsResult = masker.Resolved;
 pub const Decision = union(enum) {
     pass,
     withhold: struct { event: []const u8, reason: []const u8 },
@@ -41,19 +40,18 @@ const Output = struct {
     }
 };
 
-const HookArgs = struct { secrets_file: []const u8 };
+const HookArgs = struct { source: masker.Source };
 
 fn parseArgs(args: []const []const u8) !HookArgs {
-    var secrets_file: ?[]const u8 = null;
+    var source = masker.SourceOption{};
     var i: usize = 0;
     while (i < args.len) : (i += 2) {
         const name = args[i];
-        if (!std.mem.eql(u8, name, "--secrets-file")) return error.UnknownOption;
+        if (!masker.SourceOption.isName(name)) return error.UnknownOption;
         if (i + 1 == args.len or std.mem.startsWith(u8, args[i + 1], "--")) return error.MissingOptionValue;
-        if (secrets_file != null) return error.DuplicateOption;
-        secrets_file = args[i + 1];
+        try source.take(name, args[i + 1]);
     }
-    return .{ .secrets_file = secrets_file orelse return error.MissingSecretsFile };
+    return .{ .source = try source.finish() };
 }
 
 fn hexDigit(byte: u8) ?u8 {
@@ -180,7 +178,7 @@ pub fn decide(allocator: std.mem.Allocator, text: []const u8, list: SecretsResul
         if (err == error.OutOfMemory or err == error.JsonTooDeep) return err;
         return switch (list) {
             .ok => .{ .withhold = .{ .event = DEFAULT_EVENT, .reason = "the hook payload is not valid JSON" } },
-            .err => |e| .{ .withhold = .{ .event = DEFAULT_EVENT, .reason = secrets.describe(e) } },
+            .err => |reason| .{ .withhold = .{ .event = DEFAULT_EVENT, .reason = reason } },
         };
     };
     defer parsed.deinit();
@@ -190,30 +188,26 @@ pub fn decide(allocator: std.mem.Allocator, text: []const u8, list: SecretsResul
     errdefer if (event_owned) allocator.free(event);
     const is_failure = std.mem.eql(u8, event, FAILURE_EVENT);
     const values = switch (list) {
-        .ok => |v| v,
-        .err => |e| {
+        .ok => |m| m,
+        .err => |reason| {
             if (is_failure) {
                 if (event_owned) allocator.free(event);
                 event_owned = false;
                 return .{ .report = REPORT_TEXT };
             }
-            return .{ .withhold = .{ .event = event, .reason = secrets.describe(e) } };
+            return .{ .withhold = .{ .event = event, .reason = reason } };
         },
     };
     if (is_failure) {
-        const failure = jsonio.getString(parsed.value, "error") orelse {
-            if (event_owned) allocator.free(event);
-            event_owned = false;
-            return .pass;
-        };
-        if (mask.containsAny(failure, values)) {
-            if (event_owned) allocator.free(event);
-            event_owned = false;
-            return .{ .report = REPORT_TEXT };
-        }
         if (event_owned) allocator.free(event);
         event_owned = false;
-        return .pass;
+        const failure = jsonio.getString(parsed.value, "error") orelse return .pass;
+        // 判定できないときも、失敗イベントは出力を差し替えられないので報告だけにする。
+        const carries = values.contains(allocator, failure) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.MaskUnavailable => true,
+        };
+        return if (carries) .{ .report = REPORT_TEXT } else .pass;
     }
     const response = blk: {
         if (parsed.value != .object) {
@@ -227,7 +221,13 @@ pub fn decide(allocator: std.mem.Allocator, text: []const u8, list: SecretsResul
             return .pass;
         };
     };
-    const changed = try jsonio.maskValue(parsed.arena.allocator(), response, values);
+    const changed = jsonio.maskValue(parsed.arena.allocator(), response, values) catch |err| switch (err) {
+        error.MaskUnavailable => {
+            event_owned = false;
+            return .{ .withhold = .{ .event = event, .reason = masker.UNAVAILABLE_REASON } };
+        },
+        else => return err,
+    };
     if (!changed) {
         if (event_owned) allocator.free(event);
         event_owned = false;
@@ -283,7 +283,6 @@ fn writeStdout(_: *anyopaque, bytes: []const u8) !void {
 
 pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     const parsed_args = parseArgs(args) catch return cli.usage("invalid post-tool arguments");
-    const secrets_file = parsed_args.secrets_file;
     var output_context: u8 = 0;
     const output: Output = .{ .context = &output_context, .writeFn = writeStdout };
     const text = jsonio.readStdin(allocator) catch |read_err| {
@@ -292,7 +291,7 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
         };
         return 0;
     };
-    const list: SecretsResult = if (secrets.load(allocator, secrets_file)) |v| .{ .ok = v } else |e| .{ .err = e };
+    const list = masker.resolve(allocator, parsed_args.source);
     runHook(allocator, text, list, output) catch |write_err| {
         std.debug.print("sumi: post-tool could not write its decision: {}\n", .{write_err});
     };
@@ -302,12 +301,15 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
 const testing = std.testing;
 const decoy = "Tr0ub4dor";
 fn decideText(text: []const u8, list: []const []const u8) !Decision {
-    return decide(testing.allocator, text, .{ .ok = list });
+    return decide(testing.allocator, text, .{ .ok = .{ .values = list } });
 }
 
 test "parseArgs: post-tool consumes exactly one secrets option" {
     const got = try parseArgs(&.{ "--secrets-file", "/s" });
-    try testing.expectEqualStrings("/s", got.secrets_file);
+    try testing.expectEqualStrings("/s", got.source.secrets_file);
+    try testing.expectEqualStrings("/sock", (try parseArgs(&.{ "--socket", "/sock" })).source.socket);
+    try testing.expectError(error.ConflictingSources, parseArgs(&.{ "--secrets-file", "/s", "--socket", "/sock" }));
+    try testing.expectError(error.MissingSource, parseArgs(&.{}));
     try testing.expectError(error.DuplicateOption, parseArgs(&.{ "--secrets-file", "/s", "--secrets-file", "/other" }));
     try testing.expectError(error.UnknownOption, parseArgs(&.{ "--secrets-file", "/s", "--wat", "x" }));
     try testing.expectError(error.MissingOptionValue, parseArgs(&.{"--secrets-file"}));
@@ -336,12 +338,12 @@ test "decide: a value that JSON-escapes is still masked" {
     try testing.expectEqualStrings("{\"stdout\":\"pass=***********\"}", d.replace.tool_response_json);
 }
 test "decide: unreadable secrets withholds a PostToolUse payload" {
-    var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"x\"}}", .{ .err = error.Unreadable });
+    var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"x\"}}", .{ .err = "the secrets file is missing or unreadable" });
     defer d.deinit(testing.allocator);
     try testing.expectEqualStrings("PostToolUse", d.withhold.event);
 }
 test "decide: unreadable secrets on a failure payload can only report" {
-    var d = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", .{ .err = error.Unreadable });
+    var d = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", .{ .err = "the secrets file is missing or unreadable" });
     defer d.deinit(testing.allocator);
     try testing.expect(d == .report);
 }
@@ -364,6 +366,34 @@ test "decide: the failure event name is echoed on a replacement-capable payload"
     var d = try decideText("{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Read\",\"tool_response\":{\"file\":{\"content\":\"db.password=Tr0ub4dor\"}}}", &.{decoy});
     defer d.deinit(testing.allocator);
     try testing.expectEqualStrings("{\"file\":{\"content\":\"db.password=*********\"}}", d.replace.tool_response_json);
+}
+test "decide over a socket: a value that JSON-escapes is still masked" {
+    var broker = masker.TestBroker{ .values = &.{"ab\"cd-decoy"} };
+    try broker.start("post-escape", 1);
+    defer broker.stop();
+    var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"pass=ab\\\"cd-decoy\"}}", .{ .ok = .{ .socket = broker.path } });
+    defer d.deinit(testing.allocator);
+    try testing.expectEqualStrings("{\"stdout\":\"pass=***********\"}", d.replace.tool_response_json);
+}
+test "decide over a socket: a failure carrying the value is reported" {
+    var broker = masker.TestBroker{ .values = &.{decoy} };
+    try broker.start("post-failure", 2);
+    defer broker.stop();
+    var carrying = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"pw=Tr0ub4dor\"}", .{ .ok = .{ .socket = broker.path } });
+    defer carrying.deinit(testing.allocator);
+    try testing.expect(carrying == .report);
+    var clean = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"no such file\"}", .{ .ok = .{ .socket = broker.path } });
+    defer clean.deinit(testing.allocator);
+    try testing.expectEqual(Decision.pass, clean);
+}
+test "decide over a socket: an unreachable broker withholds or reports" {
+    const gone: SecretsResult = .{ .ok = .{ .socket = "/nonexistent/sumi-post.sock" } };
+    var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"x\"}}", gone);
+    defer d.deinit(testing.allocator);
+    try testing.expectEqualStrings(masker.UNAVAILABLE_REASON, d.withhold.reason);
+    var f = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", gone);
+    defer f.deinit(testing.allocator);
+    try testing.expect(f == .report);
 }
 test "render: replace carries updatedToolOutput and a systemMessage" {
     const json = try testing.allocator.dupe(u8, "{\"stdout\":\"***\"}");
@@ -390,7 +420,7 @@ const TestSink = struct {
 
 test "orchestration: allocator failure emits a static withhold decision" {
     var sink = TestSink{};
-    try runHook(testing.failing_allocator, "{}", .{ .ok = &.{decoy} }, .{ .context = &sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{}", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, sink.bytes, "updatedToolOutput") != null);
     try testing.expect(std.mem.indexOf(u8, sink.bytes, "PostToolUse") != null);
 }
@@ -398,7 +428,7 @@ test "orchestration: allocator failure emits a static withhold decision" {
 test "orchestration: allocator failure on recognized failure event only reports" {
     try testing.expect(isFailurePayload("{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}"));
     var sink = TestSink{};
-    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", .{ .ok = &.{decoy} }, .{ .context = &sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, sink.bytes, "systemMessage") != null);
     try testing.expect(std.mem.indexOf(u8, sink.bytes, "updatedToolOutput") == null);
 }
@@ -422,29 +452,29 @@ test "orchestration: excessive depth on a failure event only reports" {
 
 test "orchestration: allocator failure follows the last duplicate event name" {
     var withhold_sink = TestSink{};
-    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"hook_event_name\":\"PostToolUse\",\"error\":\"x\"}", .{ .ok = &.{decoy} }, .{ .context = &withhold_sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"hook_event_name\":\"PostToolUse\",\"error\":\"x\"}", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &withhold_sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, withhold_sink.bytes, "updatedToolOutput") != null);
 
     var report_sink = TestSink{};
-    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUse\",\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", .{ .ok = &.{decoy} }, .{ .context = &report_sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUse\",\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"}", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &report_sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, report_sink.bytes, "updatedToolOutput") == null);
     try testing.expect(std.mem.indexOf(u8, report_sink.bytes, "systemMessage") != null);
 }
 
 test "orchestration: allocator failure decodes escaped duplicate event keys" {
     var sink = TestSink{};
-    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"\\u0068ook_event_name\":\"PostToolUse\",\"error\":\"x\"}", .{ .ok = &.{decoy} }, .{ .context = &sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"\\u0068ook_event_name\":\"PostToolUse\",\"error\":\"x\"}", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, sink.bytes, "updatedToolOutput") != null);
     try testing.expect(std.mem.indexOf(u8, sink.bytes, "PostToolUseFailure") == null);
 }
 
 test "orchestration: malformed failure events withhold on allocator failure" {
     var malformed_sink = TestSink{};
-    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"", .{ .ok = &.{decoy} }, .{ .context = &malformed_sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &malformed_sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, malformed_sink.bytes, "updatedToolOutput") != null);
 
     var trailing_sink = TestSink{};
-    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"} trailing", .{ .ok = &.{decoy} }, .{ .context = &trailing_sink, .writeFn = TestSink.write });
+    try runHook(testing.failing_allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"x\"} trailing", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &trailing_sink, .writeFn = TestSink.write });
     try testing.expect(std.mem.indexOf(u8, trailing_sink.bytes, "updatedToolOutput") != null);
 }
 
@@ -461,5 +491,5 @@ test "orchestration: render allocation failure uses a decision-specific static f
 
 test "orchestration: stdout failure is returned to the caller" {
     var sink = TestSink{ .fail = true };
-    try testing.expectError(error.BrokenPipe, runHook(testing.failing_allocator, "{}", .{ .ok = &.{decoy} }, .{ .context = &sink, .writeFn = TestSink.write }));
+    try testing.expectError(error.BrokenPipe, runHook(testing.failing_allocator, "{}", .{ .ok = .{ .values = &.{decoy} } }, .{ .context = &sink, .writeFn = TestSink.write }));
 }

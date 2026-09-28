@@ -58,6 +58,19 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 変更前の設定は同ディレクトリ内にバックアップされるようになっています。
 設定が完了したら、Claude Code を起動すると、マスクが有効になります。
 
+### 秘密一覧を手元に置かない（`--socket`）
+
+`--secrets-file F` の代わりに `--socket SOCKET` を渡すと、sumi は秘密一覧を読みません。値の判定と置き換えは、`SOCKET` で待ち受ける `nas-mask-filter --serve` に問い合わせます。エージェントと同じ環境に一覧を置けない場合（コンテナ内の hook など）に使います。nas は `mask.filter` が有効なとき、この形で sumi を設定します。
+
+```
+sumi init --agent claude --socket /run/user/1000/nas/mask-filter/<session>-sock/mask.sock
+```
+
+* 2 つのオプションを同時には指定できません。
+* socket に接続できない場合、hook は出力を差し替えて伏せ、プロンプトを止めます。`run` は出力を捨てて終了コード 121 で終わります。
+* socket へ届く値を推測して送れば、伏せられるかどうかで答え合わせができます。socket はエージェントから到達できる前提で、接続数などの上限はサーバー側で持ちます。
+* 伏せた結果が元と同じになる値（`*` だけから成る値）は「含まない」と判定します。
+
 ### 秘密を置き換えたファイルを Bash から読む（オプショナル）
 
 Linux / WSL2 の Claude Code sandbox では、`sumi scan` を使うと、設定ファイルの秘密を身代わりの文字列に置き換えた状態で Bash から読めます。例えば秘密一覧に `Tr0ub4dor` があり、`config/app.properties` が次の内容なら、

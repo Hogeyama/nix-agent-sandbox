@@ -1,9 +1,8 @@
 //! UserPromptSubmit: reject protected values in prompts and `@` attachments.
 const std = @import("std");
 const jsonio = @import("../jsonio.zig");
-const secret_file = @import("../secrets.zig");
+const masker = @import("../masker.zig");
 const cli = @import("../main.zig");
-const mask = @import("masking").mask;
 
 pub const SCAN_LIMIT: usize = 32 * 1024 * 1024;
 pub const DIR_FILE_LIMIT: usize = 100;
@@ -62,7 +61,7 @@ pub const Checker = struct {
     allocator: std.mem.Allocator,
     roots: []const []const u8,
     deny_paths: []const []const u8,
-    secrets: []const []const u8,
+    masker: masker.Masker,
     deadline_ms: i64,
 
     fn expired(self: *const Checker) bool {
@@ -80,7 +79,8 @@ pub const Checker = struct {
         defer self.allocator.free(data);
         const n = file.readAll(data) catch return .unverifiable;
         if (self.expired()) return .unverifiable;
-        return if (mask.containsAny(data[0..n], self.secrets)) .holds_value else .clean;
+        const holds = self.masker.contains(self.allocator, data[0..n]) catch return .unverifiable;
+        return if (holds) .holds_value else .clean;
     }
 
     fn checkPath(self: *const Checker, path: []const u8) ?Verdict {
@@ -196,7 +196,7 @@ fn block(a: std.mem.Allocator, reason: []const u8) u8 {
 }
 
 const HookArgs = struct {
-    secrets_file: []const u8,
+    source: masker.Source,
     roots: []const []const u8,
     deny_paths: []const []const u8,
 
@@ -208,7 +208,7 @@ const HookArgs = struct {
 };
 
 fn parseArgs(a: std.mem.Allocator, args: []const []const u8) !HookArgs {
-    var secrets_file: ?[]const u8 = null;
+    var source = masker.SourceOption{};
     var roots: std.ArrayList([]const u8) = .empty;
     errdefer roots.deinit(a);
     var deny_paths: std.ArrayList([]const u8) = .empty;
@@ -217,24 +217,23 @@ fn parseArgs(a: std.mem.Allocator, args: []const []const u8) !HookArgs {
     var i: usize = 0;
     while (i < args.len) : (i += 2) {
         const name = args[i];
-        const known = std.mem.eql(u8, name, "--secrets-file") or std.mem.eql(u8, name, "--root") or std.mem.eql(u8, name, "--deny-path");
+        const known = masker.SourceOption.isName(name) or std.mem.eql(u8, name, "--root") or std.mem.eql(u8, name, "--deny-path");
         if (!known) return error.UnknownOption;
         if (i + 1 == args.len or std.mem.startsWith(u8, args[i + 1], "--")) return error.MissingOptionValue;
         const value = args[i + 1];
-        if (std.mem.eql(u8, name, "--secrets-file")) {
-            if (secrets_file != null) return error.DuplicateOption;
-            secrets_file = value;
+        if (masker.SourceOption.isName(name)) {
+            try source.take(name, value);
         } else if (std.mem.eql(u8, name, "--root")) {
             try roots.append(a, value);
         } else {
             try deny_paths.append(a, value);
         }
     }
-    const path = secrets_file orelse return error.MissingSecretsFile;
+    const resolved_source = try source.finish();
     const root_slice = try roots.toOwnedSlice(a);
     errdefer a.free(root_slice);
     const deny_slice = try deny_paths.toOwnedSlice(a);
-    return .{ .secrets_file = path, .roots = root_slice, .deny_paths = deny_slice };
+    return .{ .source = resolved_source, .roots = root_slice, .deny_paths = deny_slice };
 }
 
 fn freeTokens(a: std.mem.Allocator, tokens: []const []const u8) void {
@@ -254,7 +253,6 @@ pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
     };
     defer parsed_args.deinit(a);
     const started = std.time.milliTimestamp();
-    const secrets_path = parsed_args.secrets_file;
     const deadline_action: std.posix.Sigaction = .{
         .handler = .{ .handler = onDeadline },
         .mask = std.posix.sigemptyset(),
@@ -274,8 +272,10 @@ pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
     var parsed = jsonio.parse(a, text) catch return block(a, "the hook payload is not valid JSON");
     defer parsed.deinit();
     const prompt = jsonio.getString(parsed.value, "prompt") orelse return block(a, "the hook payload has no prompt");
-    const values = secret_file.load(a, secrets_path) catch |err| return block(a, secret_file.describe(err));
-    defer a.free(values);
+    const values = switch (masker.resolve(a, parsed_args.source)) {
+        .ok => |m| m,
+        .err => |reason| return block(a, reason),
+    };
     if (prompt.len == 0) return 0;
     if (std.time.milliTimestamp() >= deadline) return block(a, "the prompt could not be checked before the deadline");
     var roots: std.ArrayList([]const u8) = .empty;
@@ -283,7 +283,7 @@ pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
     const cwd = jsonio.getString(parsed.value, "cwd") orelse ".";
     roots.append(a, if (cwd.len == 0) "." else cwd) catch return block(a, "the prompt hook ran out of memory");
     for (parsed_args.roots) |root| roots.append(a, root) catch return block(a, "the prompt hook ran out of memory");
-    const checker = Checker{ .allocator = a, .roots = roots.items, .deny_paths = parsed_args.deny_paths, .secrets = values, .deadline_ms = deadline };
+    const checker = Checker{ .allocator = a, .roots = roots.items, .deny_paths = parsed_args.deny_paths, .masker = values, .deadline_ms = deadline };
     const attachments = extractTokens(a, prompt) catch return block(a, "the prompt attachments could not be parsed");
     defer freeTokens(a, attachments);
     for (attachments) |token| {
@@ -298,7 +298,11 @@ pub fn main(a: std.mem.Allocator, args: []const []const u8) !u8 {
         return block(a, reason);
     }
     if (checker.expired()) return block(a, "the prompt could not be checked before the deadline");
-    if (mask.containsAny(prompt, values)) return block(a, "this prompt carries a protected value. A prompt cannot be masked in place, so it was not submitted.");
+    const carries = values.contains(a, prompt) catch |err| switch (err) {
+        error.OutOfMemory => return block(a, "the prompt hook ran out of memory"),
+        error.MaskUnavailable => return block(a, masker.UNAVAILABLE_REASON ++ ", so this prompt was not submitted."),
+    };
+    if (carries) return block(a, "this prompt carries a protected value. A prompt cannot be masked in place, so it was not submitted.");
     if (checker.expired()) return block(a, "the prompt could not be checked before the deadline");
     return 0;
 }
@@ -308,7 +312,11 @@ const testing = std.testing;
 test "parseArgs: prompt consumes all options and keeps repeated policy values" {
     var got = try parseArgs(testing.allocator, &.{ "--root", "/a", "--secrets-file", "/s", "--deny-path", "x", "--root", "/b" });
     defer got.deinit(testing.allocator);
-    try testing.expectEqualStrings("/s", got.secrets_file);
+    try testing.expectEqualStrings("/s", got.source.secrets_file);
+    var by_socket = try parseArgs(testing.allocator, &.{ "--socket", "/sock", "--root", "/a" });
+    defer by_socket.deinit(testing.allocator);
+    try testing.expectEqualStrings("/sock", by_socket.source.socket);
+    try testing.expectError(error.ConflictingSources, parseArgs(testing.allocator, &.{ "--socket", "/sock", "--secrets-file", "/s" }));
     try testing.expectEqualSlices([]const u8, &.{ "/a", "/b" }, got.roots);
     try testing.expectEqualSlices([]const u8, &.{"x"}, got.deny_paths);
 
@@ -354,7 +362,7 @@ test "Checker: real files pass and every missing token is unverifiable" {
     try tmp.dir.writeFile(.{ .sub_path = "clean", .data = "nothing\n" });
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .values = &.{"Tr0ub4dor"} }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.holds_value, try c.check("holds.java"));
     try testing.expectEqual(Verdict.clean, try c.check("clean.java"));
     try testing.expectEqual(Verdict.clean, try c.check("clean"));
@@ -370,7 +378,7 @@ test "Checker: directory and basename search use real files" {
     try tmp.dir.writeFile(.{ .sub_path = "sub/nested.java", .data = "x=Tr0ub4dor\n" });
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .values = &.{"Tr0ub4dor"} }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.holds_value, try c.check("sub"));
     try testing.expectEqual(Verdict.holds_value, try c.check("elsewhere/nested.java"));
 }
@@ -384,18 +392,18 @@ test "Checker: basename search does not descend past depth six" {
     try tmp.dir.writeFile(.{ .sub_path = "a/b/c/d/e/f/target.java", .data = "Tr0ub4dor\n" });
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .values = &.{"Tr0ub4dor"} }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.clean, try c.check("elsewhere/target.java"));
 }
 
 test "Checker: deny list and MCP reject before lookup" {
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{"/nonexistent"}, .deny_paths = &.{"app.properties"}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{"/nonexistent"}, .deny_paths = &.{"app.properties"}, .masker = .{ .values = &.{"Tr0ub4dor"} }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.denied_name, try c.check("config/app.properties"));
     try testing.expectEqual(Verdict.mcp_resource, try c.check("github:repo://o/n"));
 }
 
 test "Checker: expired deadlines reject every token" {
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{"/"}, .deny_paths = &.{}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() - 1 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{"/"}, .deny_paths = &.{}, .masker = .{ .values = &.{"Tr0ub4dor"} }, .deadline_ms = std.time.milliTimestamp() - 1 };
     try testing.expectEqual(Verdict.unverifiable, try c.check("Override"));
 }
 
@@ -405,8 +413,33 @@ test "Checker: unreadable file-like target is unverifiable" {
     try tmp.dir.symLink("missing-target", "broken.java", .{});
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .secrets = &.{"Tr0ub4dor"}, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .values = &.{"Tr0ub4dor"} }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.unverifiable, try c.check("broken.java"));
+}
+
+test "Checker over a socket: file content is checked by the broker" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "holds.java", .data = "db.password=Tr0ub4dor\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "clean.java", .data = "nothing\n" });
+    const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root);
+    var broker = masker.TestBroker{ .values = &.{"Tr0ub4dor"} };
+    try broker.start("prompt-file", 2);
+    defer broker.stop();
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .socket = broker.path }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    try testing.expectEqual(Verdict.holds_value, try c.check("holds.java"));
+    try testing.expectEqual(Verdict.clean, try c.check("clean.java"));
+}
+
+test "Checker over a socket: an unreachable broker makes files unverifiable" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "clean.java", .data = "nothing\n" });
+    const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root);
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .socket = "/nonexistent/sumi-prompt.sock" }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    try testing.expectEqual(Verdict.unverifiable, try c.check("clean.java"));
 }
 
 test "blockJson: Claude prompt suppression decision" {

@@ -216,6 +216,79 @@ pub const Relay = struct {
     }
 };
 
+/// maskOnce が無進捗のまま待つ上限 (ms)。進捗のたびに引き直す。
+const ROUND_TRIP_IDLE_MS: i64 = 5000;
+
+/// 1 回分のバイト列をブローカーでマスクして返す。1 接続 = 1 ストリームの
+/// プロトコルをそのまま使い、全体を書いて half-close し、サーバが close するまで読む。
+///
+/// 書き込みと読み出しは poll で並行させる。サーバは接続ごとの未送信バイト数に
+/// 上限を持ち、それを超えると read を止めるので、書き終えてから読む実装は
+/// 大きな入力で双方が止まる。
+///
+/// マスクは長さを保存するので、応答が入力と同じ長さでなければ失敗とする。
+/// 途中で切れた応答を「マスク済み」として返さないため。
+pub fn maskOnce(gpa: std.mem.Allocator, sock_path: []const u8, input: []const u8) (RelayError || error{OutOfMemory})![]u8 {
+    var relay = try Relay.connect(sock_path);
+    defer relay.deinit(gpa);
+
+    const out = try gpa.alloc(u8, input.len);
+    errdefer gpa.free(out);
+    var written: usize = 0;
+    var received: usize = 0;
+    var deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
+
+    while (!relay.read_eof) {
+        if (written == input.len and !relay.write_closed) try relay.halfClose();
+
+        var pfd = [_]posix.pollfd{.{ .fd = relay.fd, .events = posix.POLL.IN, .revents = 0 }};
+        if (written < input.len) pfd[0].events |= posix.POLL.OUT;
+        const now = std.time.milliTimestamp();
+        if (now >= deadline) return error.RelayFailed;
+        const ready = posix.poll(&pfd, @intCast(deadline - now)) catch return error.RelayFailed;
+        if (ready == 0) continue;
+        const revents = pfd[0].revents;
+        if (revents & (posix.POLL.ERR | posix.POLL.NVAL) != 0) return error.RelayFailed;
+
+        if (revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
+            // 入力より長い応答は受け取らない。末尾 1 バイトぶんの余地を残して
+            // 読み、超過したら失敗にする。
+            var spill: [1]u8 = undefined;
+            const buf = if (received < out.len) out[received..] else spill[0..];
+            const got: ?usize = posix.read(relay.fd, buf) catch |err| switch (err) {
+                error.WouldBlock => null,
+                else => return error.RelayFailed,
+            };
+            if (got) |n| {
+                if (n == 0) {
+                    relay.read_eof = true;
+                } else {
+                    if (received >= out.len) return error.RelayFailed;
+                    received += n;
+                    deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
+                }
+            }
+        }
+        if (relay.read_eof) break;
+
+        if (written < input.len and revents & posix.POLL.OUT != 0) {
+            // 呼び出し元は SIGPIPE を無視しているとは限らない (hook は普通の
+            // プロセス)。サーバが先に閉じたときに死なず失敗を返すため NOSIGNAL で送る。
+            const n = posix.send(relay.fd, input[written..], posix.MSG.NOSIGNAL) catch |err| switch (err) {
+                error.WouldBlock => 0,
+                else => return error.RelayFailed,
+            };
+            if (n > 0) {
+                written += n;
+                deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
+            }
+        }
+    }
+    // half-close より前にサーバが閉じたのは切り捨て (接続数上限など)。
+    if (!relay.write_closed or received != input.len) return error.RelayFailed;
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
@@ -361,6 +434,67 @@ test "Relay.pumpReadable: a closed destination is reported apart from mask failu
         error.DestinationClosed,
         relay.pumpReadable(out_pipe[1], &buf),
     );
+}
+
+/// テスト用のブローカー。1 接続を受け、読んだバイトの小文字 'x' を '*' にして返す。
+/// 読み終える前に書き始めるので、背圧のかかる大きな入力でも止まらないことを確かめられる。
+const StarServer = struct {
+    fn run(listener: posix.socket_t, truncate: bool) void {
+        const peer = posix.accept(listener, null, null, posix.SOCK.CLOEXEC) catch return;
+        defer posix.close(peer);
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const n = posix.read(peer, &buf) catch return;
+            if (n == 0) break;
+            if (truncate) return;
+            for (buf[0..n]) |*b| {
+                if (b.* == 'x') b.* = '*';
+            }
+            var off: usize = 0;
+            while (off < n) off += posix.write(peer, buf[off..n]) catch return;
+        }
+    }
+};
+
+test "maskOnce: a large input round-trips through the broker" {
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-once-{d}.sock", .{std.c.getpid()});
+    const listener = try listenAt(path);
+    defer {
+        posix.close(listener);
+        posix.unlink(path) catch {};
+    }
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, false });
+    defer server.join();
+
+    const input = try testing.allocator.alloc(u8, 2 * 1024 * 1024);
+    defer testing.allocator.free(input);
+    for (input, 0..) |*b, i| b.* = if (i % 3 == 0) 'x' else 'a';
+    const got = try maskOnce(testing.allocator, path, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqual(input.len, got.len);
+    for (got, 0..) |b, i| try testing.expectEqual(@as(u8, if (i % 3 == 0) '*' else 'a'), b);
+}
+
+test "maskOnce: a response cut short by the broker is a failure" {
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-cut-{d}.sock", .{std.c.getpid()});
+    const listener = try listenAt(path);
+    defer {
+        posix.close(listener);
+        posix.unlink(path) catch {};
+    }
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, true });
+    defer server.join();
+
+    try testing.expectError(error.RelayFailed, maskOnce(testing.allocator, path, "xxxx"));
+}
+
+test "maskOnce: a missing broker fails" {
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-once-absent-{d}.sock", .{std.c.getpid()});
+    std.fs.cwd().deleteFile(path) catch {};
+    try testing.expectError(error.RelayConnectFailed, maskOnce(testing.allocator, path, "x"));
 }
 
 test "Relay.pumpWritable: a short write leaves the remainder queued" {

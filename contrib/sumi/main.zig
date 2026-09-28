@@ -1,12 +1,17 @@
 //! sumi: 列挙した値を Claude Code に見せない単一バイナリ。
 //!
-//!   sumi init   --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
+//!   sumi init   --agent claude SOURCE [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
 //!   sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
-//!   sumi hook   --agent claude post-tool --secrets-file F
-//!   sumi hook   --agent claude prompt    --secrets-file F [--root DIR]... [--deny-path P]...
-//!   sumi run    --secrets-file F [--shell PATH] COMMAND
+//!   sumi hook   --agent claude post-tool SOURCE
+//!   sumi hook   --agent claude prompt    SOURCE [--root DIR]... [--deny-path P]...
+//!   sumi run    SOURCE [--shell PATH] COMMAND
+//!   sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
 //!   sumi filter --secrets-file F
 //!   sumi --version
+//!
+//! SOURCE は `--secrets-file F` か `--socket SOCKET` のどちらか 1 つ。後者は値の一覧を
+//! 読まず、`nas-mask-filter --serve` のブローカーへバイト列を送ってマスクさせる
+//! (masker.zig)。
 //!
 //! 終了コード: 引数の解釈に失敗したときだけ 2。hook サブコマンドはそれ以降どの失敗でも
 //! 0 で決定 (withhold / block / deny) を返す。run は子の終了ステータスで終わり、マスク
@@ -17,6 +22,7 @@ const build_options = @import("build_options");
 const supervise = @import("supervise");
 const mask_stream = @import("masking").stream;
 const secrets = @import("secrets.zig");
+const masker = @import("masker.zig");
 const shell = @import("shell.zig");
 const claude_post = @import("claude/hook_post.zig");
 const claude_prompt = @import("claude/hook_prompt.zig");
@@ -29,13 +35,16 @@ pub const PROG: []const u8 = "sumi";
 pub const MARKER_ENV: [:0]const u8 = "SUMI_SUPERVISED=1";
 
 const usage_text =
-    \\usage: sumi init   --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
+    \\usage: sumi init   --agent claude SOURCE [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
     \\       sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
-    \\       sumi hook   --agent claude post-tool --secrets-file F
-    \\       sumi hook   --agent claude prompt    --secrets-file F [--root DIR]... [--deny-path P]...
-    \\       sumi run    --secrets-file F [--shell PATH] COMMAND
+    \\       sumi hook   --agent claude post-tool SOURCE
+    \\       sumi hook   --agent claude prompt    SOURCE [--root DIR]... [--deny-path P]...
+    \\       sumi run    SOURCE [--shell PATH] COMMAND
+    \\       sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
     \\       sumi filter --secrets-file F
     \\       sumi --version
+    \\
+    \\SOURCE is exactly one of --secrets-file F or --socket SOCKET.
     \\
 ;
 
@@ -75,46 +84,103 @@ fn runFilter(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     return 0;
 }
 
-const RunArgs = struct { secrets_file: []const u8, shell_path: ?[]const u8, command: []const u8 };
+const ExecTarget = struct { argv0: []const u8, program: []const u8, args: []const []const u8 };
+const RunTarget = union(enum) {
+    /// `[--shell PATH] COMMAND`: シェルに 1 つのコマンド文字列を渡す。CLAUDE_CODE_SHELL_PREFIX 向け。
+    command: struct { shell_path: ?[]const u8, command: []const u8 },
+    /// `[--argv0 NAME] -- PROGRAM [ARGS...]`: 引数をそのまま渡して execve する (PATH 探索はしない)。
+    /// bash を丸ごと包むラッパー向け。
+    exec: ExecTarget,
+};
+const RunArgs = struct { source: masker.Source, target: RunTarget };
+
+fn isOptionValue(value: []const u8) bool {
+    return value.len != 0 and !std.mem.startsWith(u8, value, "--");
+}
 
 fn parseRunArgs(args: []const []const u8) !RunArgs {
-    if (args.len < 3 or !std.mem.eql(u8, args[0], "--secrets-file")) return error.InvalidArguments;
-    if (args[1].len == 0 or std.mem.startsWith(u8, args[1], "--")) return error.InvalidArguments;
-    if (std.mem.eql(u8, args[2], "--shell")) {
-        if (args.len != 5 or args[3].len == 0 or std.mem.startsWith(u8, args[3], "--")) return error.InvalidArguments;
-        return .{ .secrets_file = args[1], .shell_path = args[3], .command = args[4] };
+    if (args.len < 2 or !masker.SourceOption.isName(args[0]) or !isOptionValue(args[1])) return error.InvalidArguments;
+    var source = masker.SourceOption{};
+    try source.take(args[0], args[1]);
+    const rest = args[2..];
+    const src = try source.finish();
+
+    var i: usize = 0;
+    var argv0: ?[]const u8 = null;
+    if (rest.len >= 2 and std.mem.eql(u8, rest[0], "--argv0")) {
+        if (rest[1].len == 0) return error.InvalidArguments;
+        argv0 = rest[1];
+        i = 2;
     }
-    if (args.len != 3) return error.InvalidArguments;
-    return .{ .secrets_file = args[1], .shell_path = null, .command = args[2] };
+    if (i < rest.len and std.mem.eql(u8, rest[i], "--")) {
+        if (i + 1 >= rest.len or rest[i + 1].len == 0) return error.InvalidArguments;
+        const program = rest[i + 1];
+        return .{ .source = src, .target = .{ .exec = .{ .argv0 = argv0 orelse program, .program = program, .args = rest[i + 2 ..] } } };
+    }
+    if (argv0 != null) return error.InvalidArguments;
+
+    if (rest.len >= 1 and std.mem.eql(u8, rest[0], "--shell")) {
+        if (rest.len != 3 or !isOptionValue(rest[1])) return error.InvalidArguments;
+        return .{ .source = src, .target = .{ .command = .{ .shell_path = rest[1], .command = rest[2] } } };
+    }
+    if (rest.len != 1) return error.InvalidArguments;
+    return .{ .source = src, .target = .{ .command = .{ .shell_path = null, .command = rest[0] } } };
+}
+
+/// run の失敗を伝える診断。この経路はマスクを通らない本物の stderr へ出るので、
+/// 子の出力に由来する値を混ぜない。
+fn superviseDiagnostic(err: anyerror) []const u8 {
+    return switch (err) {
+        error.SocketPathInvalid, error.RelayConnectFailed => "sumi: cannot reach the mask broker; output suppressed\n",
+        error.RelayClosedEarly => "sumi: mask broker closed early; output suppressed\n",
+        error.RelayDrainTimeout => "sumi: mask broker stopped responding; output suppressed\n",
+        else => "sumi: supervise failed; output suppressed\n",
+    };
 }
 
 fn runSupervised(allocator: std.mem.Allocator, args: []const []const u8) u8 {
-    const parsed = parseRunArgs(args) catch return usage("run takes --secrets-file F [--shell PATH] COMMAND");
-    const shell_path = if (parsed.shell_path) |path|
-        std.fs.cwd().realpathAlloc(allocator, path) catch {
-            std.debug.print("sumi: the shell path could not be resolved; output suppressed\n", .{});
+    const parsed = parseRunArgs(args) catch return usage("run takes (--secrets-file F | --socket SOCKET) [--shell PATH] COMMAND, or [--argv0 NAME] -- PROGRAM [ARGS...]");
+    const target: ExecTarget = switch (parsed.target) {
+        .exec => |e| e,
+        .command => |c| blk: {
+            const shell_path = if (c.shell_path) |path|
+                std.fs.cwd().realpathAlloc(allocator, path) catch {
+                    std.debug.print("sumi: the shell path could not be resolved; output suppressed\n", .{});
+                    return EXIT_SUPPRESSED;
+                }
+            else
+                (shell.resolveBash(allocator) catch null) orelse {
+                    std.debug.print("sumi: bash was not found on PATH; output suppressed\n", .{});
+                    return EXIT_SUPPRESSED;
+                };
+            if (!shell.isExecutableFile(shell_path)) {
+                std.debug.print("sumi: the shell is not a regular executable file; output suppressed\n", .{});
+                return EXIT_SUPPRESSED;
+            }
+            const shell_args = allocator.dupe([]const u8, &.{ "-c", c.command }) catch {
+                std.debug.print("sumi: out of memory; output suppressed\n", .{});
+                return EXIT_SUPPRESSED;
+            };
+            break :blk .{ .argv0 = shell_path, .program = shell_path, .args = shell_args };
+        },
+    };
+    const opts: supervise.Options = .{ .prog_name = PROG, .marker_env = MARKER_ENV };
+    switch (parsed.source) {
+        .secrets_file => |path| {
+            const list = secrets.load(allocator, path) catch |err| {
+                std.debug.print("sumi: {s}; output suppressed\n", .{secrets.describe(err)});
+                return EXIT_SUPPRESSED;
+            };
+            return supervise.runLocal(allocator, list, target.argv0, target.program, target.args, opts) catch |err| {
+                std.debug.print("{s}", .{superviseDiagnostic(err)});
+                return EXIT_SUPPRESSED;
+            };
+        },
+        .socket => |path| return supervise.run(allocator, path, target.argv0, target.program, target.args, opts) catch |err| {
+            std.debug.print("{s}", .{superviseDiagnostic(err)});
             return EXIT_SUPPRESSED;
-        }
-    else
-        (shell.resolveBash(allocator) catch null) orelse {
-            std.debug.print("sumi: bash was not found on PATH; output suppressed\n", .{});
-            return EXIT_SUPPRESSED;
-        };
-    if (!shell.isExecutableFile(shell_path)) {
-        std.debug.print("sumi: the shell is not a regular executable file; output suppressed\n", .{});
-        return EXIT_SUPPRESSED;
+        },
     }
-    const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
-        std.debug.print("sumi: {s}; output suppressed\n", .{secrets.describe(err)});
-        return EXIT_SUPPRESSED;
-    };
-    return supervise.runLocal(allocator, list, shell_path, shell_path, &.{ "-c", parsed.command }, .{
-        .prog_name = PROG,
-        .marker_env = MARKER_ENV,
-    }) catch |err| {
-        std.debug.print("sumi: supervise failed: {}; output suppressed\n", .{err});
-        return EXIT_SUPPRESSED;
-    };
 }
 
 fn selfPath(allocator: std.mem.Allocator) ![]u8 {
@@ -181,6 +247,7 @@ test {
     _ = @import("secrets.zig");
     _ = @import("shell.zig");
     _ = @import("jsonio.zig");
+    _ = @import("masker.zig");
     _ = @import("claude/hook_post.zig");
     _ = @import("claude/hook_prompt.zig");
     _ = @import("claude/init.zig");
@@ -204,13 +271,27 @@ test "post-tool and prompt dispatch do not resolve the executable path" {
 
 test "run arguments carry one complete command and optional shell" {
     const defaulted = try parseRunArgs(&.{ "--secrets-file", "/s", "echo 'a b'; exit 3" });
-    try testing.expectEqualStrings("/s", defaulted.secrets_file);
-    try testing.expectEqual(@as(?[]const u8, null), defaulted.shell_path);
-    try testing.expectEqualStrings("echo 'a b'; exit 3", defaulted.command);
-    const selected = try parseRunArgs(&.{ "--secrets-file", "/s", "--shell", "/bin/zsh", "echo ok" });
-    try testing.expectEqualStrings("/bin/zsh", selected.shell_path.?);
+    try testing.expectEqualStrings("/s", defaulted.source.secrets_file);
+    try testing.expectEqual(@as(?[]const u8, null), defaulted.target.command.shell_path);
+    try testing.expectEqualStrings("echo 'a b'; exit 3", defaulted.target.command.command);
+    const selected = try parseRunArgs(&.{ "--socket", "/sock", "--shell", "/bin/zsh", "echo ok" });
+    try testing.expectEqualStrings("/sock", selected.source.socket);
+    try testing.expectEqualStrings("/bin/zsh", selected.target.command.shell_path.?);
     try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s" }));
     try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s", "true", "extra" }));
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s", "--socket", "/sock", "true" }));
+}
+
+test "run arguments in exec form pass every argument through" {
+    const got = try parseRunArgs(&.{ "--socket", "/sock", "--argv0", "-bash", "--", "/bin/bash.real", "-c", "echo hi", "--socket" });
+    try testing.expectEqualStrings("-bash", got.target.exec.argv0);
+    try testing.expectEqualStrings("/bin/bash.real", got.target.exec.program);
+    try testing.expectEqualSlices([]const u8, &.{ "-c", "echo hi", "--socket" }, got.target.exec.args);
+    const bare = try parseRunArgs(&.{ "--socket", "/sock", "--", "/bin/bash" });
+    try testing.expectEqualStrings("/bin/bash", bare.target.exec.argv0);
+    try testing.expectEqual(@as(usize, 0), bare.target.exec.args.len);
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--socket", "/sock", "--" }));
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--socket", "/sock", "--argv0", "x", "echo" }));
 }
 
 test "takeAgent: claude is accepted and consumed" {

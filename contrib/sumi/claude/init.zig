@@ -3,6 +3,7 @@ const std = @import("std");
 const jsonio = @import("../jsonio.zig");
 const shell = @import("../shell.zig");
 const secrets = @import("../secrets.zig");
+const masker = @import("../masker.zig");
 const cli = @import("../main.zig");
 
 pub const HOOK_TIMEOUT: i64 = 20;
@@ -102,12 +103,21 @@ pub fn mergeHooks(allocator: std.mem.Allocator, settings: *std.json.Value, self_
     return removed;
 }
 
-pub fn buildCommands(allocator: std.mem.Allocator, self_path: []const u8, secret_path: []const u8, roots: []const []const u8, deny_paths: []const []const u8) !HookEntries {
-    const post_args = try allocator.dupe([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--secrets-file", secret_path });
+/// SOURCE をコマンドラインへ戻したときの 2 語。
+pub fn sourceArgs(source: masker.Source) [2][]const u8 {
+    return switch (source) {
+        .secrets_file => |path| .{ "--secrets-file", path },
+        .socket => |path| .{ "--socket", path },
+    };
+}
+
+pub fn buildCommands(allocator: std.mem.Allocator, self_path: []const u8, source: masker.Source, roots: []const []const u8, deny_paths: []const []const u8) !HookEntries {
+    const src = sourceArgs(source);
+    const post_args = try allocator.dupe([]const u8, &.{ "hook", "--agent", "claude", "post-tool", src[0], src[1] });
     errdefer allocator.free(post_args);
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-    try argv.appendSlice(allocator, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", secret_path });
+    try argv.appendSlice(allocator, &.{ "hook", "--agent", "claude", "prompt", src[0], src[1] });
     for (roots) |root| try argv.appendSlice(allocator, &.{ "--root", root });
     for (deny_paths) |path| try argv.appendSlice(allocator, &.{ "--deny-path", path });
     return .{
@@ -157,11 +167,12 @@ fn quotePrefixArg(allocator: std.mem.Allocator, arg: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn formatShellPrefix(allocator: std.mem.Allocator, self_path: []const u8, secret_path: []const u8, shell_path: []const u8) ![]u8 {
+fn formatShellPrefix(allocator: std.mem.Allocator, self_path: []const u8, source: masker.Source, shell_path: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(allocator, shell_path);
     try out.appendSlice(allocator, " -c");
-    const args = [_][]const u8{ "exec \"$@\"", "sumi-prefix", self_path, "run", "--secrets-file", secret_path, "--shell", shell_path };
+    const src = sourceArgs(source);
+    const args = [_][]const u8{ "exec \"$@\"", "sumi-prefix", self_path, "run", src[0], src[1], "--shell", shell_path };
     for (&args) |arg| {
         try out.append(allocator, ' ');
         const quoted = try quotePrefixArg(allocator, arg);
@@ -192,7 +203,7 @@ fn fail(message: []const u8) u8 {
 
 fn usage(message: []const u8) u8 {
     std.debug.print(
-        "sumi: {s}\nusage: sumi init --agent claude --secrets-file F [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]\n",
+        "sumi: {s}\nusage: sumi init --agent claude (--secrets-file F | --socket SOCKET) [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]\n",
         .{message},
     );
     return cli.EXIT_USAGE;
@@ -265,7 +276,31 @@ fn selectProbe(values: []const []const u8) []const u8 {
     return values[0];
 }
 
-fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, secret_path: []const u8, shell_path: []const u8, prefix: []const u8, probe: []const u8) !void {
+/// 値の一覧を持たない socket 版の自己検査。どの値が伏せられるかを知らないので、
+/// 無関係な文字列が素通しになること (= hook と run がブローカーへ届いていること) を確かめる。
+/// ブローカーへ届かなければ post-tool は withhold を、run は 121 を返すのでここで失敗する。
+const SOCKET_PROBE = "sumi-self-check";
+
+fn selfCheckSocket(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8) !void {
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+    try env.put("CLAUDE_CODE_SHELL", shell_path);
+    try env.put("CLAUDE_CODE_SHELL_PREFIX", prefix);
+
+    const post = try runCommand(allocator, commands.post_tool, "{\"hook_event_name\":\"PostToolUse\",\"tool_response\":\"" ++ SOCKET_PROBE ++ "\"}", &env);
+    if (post.code != 0 or post.stdout.len != 0) return error.PostToolCheckFailed;
+
+    const expected_prefix = try formatShellPrefix(allocator, self_path, source, shell_path);
+    if (!std.mem.eql(u8, prefix, expected_prefix)) return error.PrefixCheckFailed;
+    const invocation = try formatClaudeInvocation(allocator, prefix, "printf '%s' '" ++ SOCKET_PROBE ++ "'; exit 3");
+    const run_args = [_][]const u8{ "-c", invocation };
+    const ran = try runCommand(allocator, .{ .command = shell_path, .args = &run_args }, "", &env);
+    if (ran.code != 3 or !std.mem.eql(u8, ran.stdout, SOCKET_PROBE)) return error.WrappedCommandCheckFailed;
+    const prompt = try runCommand(allocator, commands.prompt, "{\"prompt\":\"" ++ SOCKET_PROBE ++ "\",\"cwd\":\"/\"}", &env);
+    if (prompt.code != 0 or prompt.stdout.len != 0) return error.PromptCheckFailed;
+}
+
+fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8, probe: []const u8) !void {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("CLAUDE_CODE_SHELL", shell_path);
@@ -283,7 +318,7 @@ fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []c
     }
 
     const synthetic = "IFS= read -r sumi_probe; printf '%b' \"$sumi_probe\"; exit 3";
-    const expected_prefix = try formatShellPrefix(allocator, self_path, secret_path, shell_path);
+    const expected_prefix = try formatShellPrefix(allocator, self_path, source, shell_path);
     if (!std.mem.eql(u8, prefix, expected_prefix)) return error.PrefixCheckFailed;
     const invocation = try formatClaudeInvocation(allocator, prefix, synthetic);
     const run_args = [_][]const u8{ "-c", invocation };
@@ -295,7 +330,7 @@ fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []c
 }
 
 const InitArgs = struct {
-    secrets_file: []const u8,
+    source: masker.Source,
     roots: []const []const u8,
     deny_paths: []const []const u8,
     settings: ?[]const u8,
@@ -303,7 +338,7 @@ const InitArgs = struct {
 };
 
 fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !InitArgs {
-    var secrets_file: ?[]const u8 = null;
+    var source = masker.SourceOption{};
     var settings: ?[]const u8 = null;
     var shell_path: ?[]const u8 = null;
     var roots: std.ArrayList([]const u8) = .empty;
@@ -313,9 +348,8 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !InitArgs {
         const name = args[i];
         if (i + 1 == args.len or std.mem.startsWith(u8, args[i + 1], "--")) return error.MissingOptionValue;
         const value = args[i + 1];
-        if (std.mem.eql(u8, name, "--secrets-file")) {
-            if (secrets_file != null) return error.DuplicateOption;
-            secrets_file = value;
+        if (masker.SourceOption.isName(name)) {
+            try source.take(name, value);
         } else if (std.mem.eql(u8, name, "--root")) {
             try roots.append(allocator, value);
         } else if (std.mem.eql(u8, name, "--deny-path")) {
@@ -329,7 +363,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !InitArgs {
         } else return error.UnknownOption;
     }
     return .{
-        .secrets_file = secrets_file orelse return error.MissingSecretsFile,
+        .source = try source.finish(),
         .roots = try roots.toOwnedSlice(allocator),
         .deny_paths = try deny_paths.toOwnedSlice(allocator),
         .settings = settings,
@@ -357,13 +391,20 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
         error.OutOfMemory => return err,
         else => return usage("invalid arguments"),
     };
-    const secret_arg = parsed_args.secrets_file;
-    const values = secrets.load(allocator, secret_arg) catch |err| return fail(secrets.describe(err));
-    const secret_path = std.fs.cwd().realpathAlloc(allocator, secret_arg) catch return fail("the secrets file path could not be resolved");
-    const secret_file = std.fs.cwd().openFile(secret_path, .{}) catch return fail("the secrets file could not be opened");
-    defer secret_file.close();
-    const mode = (secret_file.stat() catch return fail("the secrets file could not be inspected")).mode & 0o777;
-    if (mode != 0o600 and mode != 0o640 and mode != 0o400) warn("the secrets file is not mode 0600/0640/0400; other users may read it");
+    var values: []const []const u8 = &.{};
+    const source: masker.Source = switch (parsed_args.source) {
+        .secrets_file => |secret_arg| blk: {
+            values = secrets.load(allocator, secret_arg) catch |err| return fail(secrets.describe(err));
+            const secret_path = std.fs.cwd().realpathAlloc(allocator, secret_arg) catch return fail("the secrets file path could not be resolved");
+            const secret_file = std.fs.cwd().openFile(secret_path, .{}) catch return fail("the secrets file could not be opened");
+            defer secret_file.close();
+            const mode = (secret_file.stat() catch return fail("the secrets file could not be inspected")).mode & 0o777;
+            if (mode != 0o600 and mode != 0o640 and mode != 0o400) warn("the secrets file is not mode 0600/0640/0400; other users may read it");
+            break :blk .{ .secrets_file = secret_path };
+        },
+        // socket はパスをそのまま hook に書く。存在は自己検査で確かめる。
+        .socket => |path| .{ .socket = path },
+    };
     const home = std.posix.getenv("HOME") orelse return fail("HOME is not set");
     const downloads = try std.fs.path.join(allocator, &.{ home, "Downloads" });
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
@@ -379,9 +420,9 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     var parsed = jsonio.parse(allocator, existing orelse "{}") catch return fail("the settings file is not valid JSON");
     defer parsed.deinit();
     validateSettings(parsed.value) catch return fail("the settings file has an incompatible hooks structure");
-    const prefix = try formatShellPrefix(allocator, self_path, secret_path, shell_path);
+    const prefix = try formatShellPrefix(allocator, self_path, source, shell_path);
     validateEnvironment(parsed.value, prefix) catch return fail("CLAUDE_CODE_SHELL_PREFIX is already set by another tool; remove it or choose which prefix to keep");
-    const commands = try buildCommands(allocator, self_path, secret_path, parsed_args.roots, parsed_args.deny_paths);
+    const commands = try buildCommands(allocator, self_path, source, parsed_args.roots, parsed_args.deny_paths);
     const removed = try mergeHooks(parsed.arena.allocator(), &parsed.value, self_path, commands);
     try installEnvironment(parsed.arena.allocator(), &parsed.value, shell_path, prefix);
     var backup_path: ?[]u8 = null;
@@ -395,7 +436,11 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     std.debug.print("sumi: hooks written to {s}\n", .{settings_path});
     if (removed != 0) std.debug.print("sumi: replaced {d} existing sumi hook(s)\n", .{removed});
     if (backup_path) |path| std.debug.print("sumi: backup at {s}\n", .{path});
-    selfCheck(allocator, commands, self_path, secret_path, shell_path, prefix, selectProbe(values)) catch |err| {
+    const checked = switch (source) {
+        .secrets_file => selfCheck(allocator, commands, self_path, source, shell_path, prefix, selectProbe(values)),
+        .socket => selfCheckSocket(allocator, commands, self_path, source, shell_path, prefix),
+    };
+    checked catch |err| {
         std.debug.print("sumi: self-check failed ({s}); settings were written", .{@errorName(err)});
         if (backup_path) |path| std.debug.print("; restore {s}", .{path});
         std.debug.print("\n", .{});
@@ -462,12 +507,22 @@ test "mergeHooks: incompatible input is unchanged" {
     try testing.expectEqualStrings("dark", parsed.value.object.get("theme").?.string);
 }
 test "buildCommands: creates exec-form argv with the absolute secrets path" {
-    const got = try buildCommands(testing.allocator, "/opt/s/sumi", "/secret path/list", &.{"/extra dir"}, &.{"app.properties"});
+    const got = try buildCommands(testing.allocator, "/opt/s/sumi", .{ .secrets_file = "/secret path/list" }, &.{"/extra dir"}, &.{"app.properties"});
     defer testing.allocator.free(got.post_tool.args);
     defer testing.allocator.free(got.prompt.args);
     try testing.expectEqualStrings("/opt/s/sumi", got.post_tool.command);
     try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--secrets-file", "/secret path/list" }, got.post_tool.args);
     try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", "/secret path/list", "--root", "/extra dir", "--deny-path", "app.properties" }, got.prompt.args);
+}
+test "buildCommands: a socket source is written into both hooks" {
+    const got = try buildCommands(testing.allocator, "/opt/s/sumi", .{ .socket = "/run/mask.sock" }, &.{}, &.{});
+    defer testing.allocator.free(got.post_tool.args);
+    defer testing.allocator.free(got.prompt.args);
+    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--socket", "/run/mask.sock" }, got.post_tool.args);
+    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--socket", "/run/mask.sock" }, got.prompt.args);
+    const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", .{ .socket = "/run/mask.sock" }, "/bin/bash");
+    defer testing.allocator.free(prefix);
+    try testing.expect(std.mem.indexOf(u8, prefix, "'run' '--socket' '/run/mask.sock'") != null);
 }
 test "environment install preserves unrelated keys and sets one supported shell" {
     var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"KEEP\":\"yes\",\"CLAUDE_CODE_SHELL_PREFIX\":\"/old/sumi run --secrets-file /s --shell /bin/zsh\"},\"permissions\":{\"deny\":[\"Bash(git:*)\"]}}");
@@ -499,7 +554,7 @@ test "supported Claude shells are limited to bash and zsh" {
     try testing.expect(!isSupportedClaudeShell("/bin/sh"));
 }
 test "shell prefix uses one Claude executable delimiter" {
-    const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", "/secret list", "/bin/bash");
+    const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", .{ .secrets_file = "/secret list" }, "/bin/bash");
     defer testing.allocator.free(prefix);
     try testing.expectEqualStrings(
         "/bin/bash -c 'exec \"$@\"' 'sumi-prefix' '/opt/sumi' 'run' '--secrets-file' '/secret list' '--shell' '/bin/bash'",
@@ -509,7 +564,7 @@ test "shell prefix uses one Claude executable delimiter" {
 }
 test "shell prefix hides delimiter-like bytes in every argument" {
     const selected_shell = "/shell - choice/bash";
-    const prefix = try formatShellPrefix(testing.allocator, "/tool - dir/it's/sumi", "/secret - list", selected_shell);
+    const prefix = try formatShellPrefix(testing.allocator, "/tool - dir/it's/sumi", .{ .secrets_file = "/secret - list" }, selected_shell);
     defer testing.allocator.free(prefix);
     try testing.expectEqual(@as(?usize, selected_shell.len), std.mem.lastIndexOf(u8, prefix, " -"));
     try testing.expect(std.mem.indexOf(u8, prefix, "'/tool ''- dir/it'\\''s/sumi'") != null);
@@ -530,12 +585,13 @@ test "parseArgs: accepts and collects every init option" {
     const got = try parseArgs(testing.allocator, &.{ "--root", "/a", "--secrets-file", "/s", "--deny-path", "x", "--root", "/b", "--settings", "/cfg", "--shell", "/bin/sh" });
     defer testing.allocator.free(got.roots);
     defer testing.allocator.free(got.deny_paths);
-    try testing.expectEqualStrings("/s", got.secrets_file);
+    try testing.expectEqualStrings("/s", got.source.secrets_file);
     try testing.expectEqualSlices([]const u8, &.{ "/a", "/b" }, got.roots);
     try testing.expectEqualSlices([]const u8, &.{"x"}, got.deny_paths);
 }
 test "parseArgs: rejects missing values and unknown options" {
-    try testing.expectError(error.MissingSecretsFile, parseArgs(testing.allocator, &.{}));
+    try testing.expectError(error.MissingSource, parseArgs(testing.allocator, &.{}));
+    try testing.expectError(error.ConflictingSources, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "--socket", "/sock" }));
     inline for (&.{ "--secrets-file", "--root", "--deny-path", "--settings", "--shell" }) |option| {
         try testing.expectError(error.MissingOptionValue, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", option }));
     }

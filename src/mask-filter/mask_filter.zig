@@ -195,7 +195,10 @@ pub fn main() !u8 {
                 );
                 return EXIT_OUTPUT_SUPPRESSED;
             };
-            return supervise.run(arena_alloc, sock_path, sa.argv0, sa.program, sa.args) catch |err| {
+            return supervise.run(arena_alloc, sock_path, sa.argv0, sa.program, sa.args, .{
+                .prog_name = "nas-mask-filter",
+                .marker_env = supervise.NAS_SUPERVISED_ENTRY,
+            }) catch |err| {
                 std.debug.print("{s}", .{superviseDiagnostic(err)});
                 return EXIT_OUTPUT_SUPPRESSED;
             };
