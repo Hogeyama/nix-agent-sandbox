@@ -3,8 +3,16 @@
  * コンテナには socket だけを見せるための準備を行う。
  *
  * 解決済みシークレットのフレームはホスト専用ディレクトリに書き、コンテナへは
- * マウントしない (C1 / S1)。コンテナ内の `--supervise` はフレームを読まず、
- * この socket 越しにバイト列を中継してマスクを受け取る。
+ * マウントしない (C1 / S1)。コンテナ内では sumi が 2 つの経路でこの socket を使う:
+ * bash ラッパーが起動する `sumi run --socket` はシェルの出力を中継し、
+ * Claude Code の hook (`sumi hook --socket`) は Read などのツール結果とプロンプトを
+ * 問い合わせる。どちらもフレームを読まない。
+ *
+ * hook の設定は managed settings のドロップイン
+ * (`/etc/claude-code/managed-settings.d/`) として読み取り専用でマウントする。
+ * エージェントはこのファイルを書き換えられず、ユーザー設定の `disableAllHooks` でも
+ * managed settings の hook は止められない。ユーザーの `~/.claude/settings.json` には
+ * 触れないので、`agentState.protectSettings` の有無で扱いが変わらない。
  *
  * socket はセッションディレクトリとは別のディレクトリに置く。マウントするのは
  * socket の「あるディレクトリ」なので、フレームと同居させるとフレームごと
@@ -36,13 +44,26 @@ import { encodeMaskSecrets } from "./secrets_frame.ts";
 type Fs = Context.Tag.Service<typeof FsService>;
 type Proc = Context.Tag.Service<typeof ProcessService>;
 
-export const MASK_FILTER_CONTAINER_PATH =
-  "/opt/nas/mask-filter/nas-mask-filter";
+export const SUMI_CONTAINER_PATH = "/opt/nas/sumi/sumi";
+
+export const CLAUDE_MANAGED_SETTINGS_CONTAINER_PATH =
+  "/etc/claude-code/managed-settings.d/50-nas-sumi.json";
+
+/** sumi init が書く hook と同じ値。 */
+const CLAUDE_HOOK_TIMEOUT_SECONDS = 20;
 
 export interface MaskFilterPreparePlan {
   /** ホスト専用。このディレクトリは決してマウントしない。 */
   readonly secretsFramePath: string;
+  /** ホスト側で `--serve` を起動する nas-mask-filter。 */
   readonly filterBinaryHostPath: string;
+  /** コンテナへマウントする sumi。 */
+  readonly sumiBinaryHostPath: string;
+  /**
+   * Claude Code の hook を入れる managed settings の書き出し先 (ホスト)。
+   * 未指定なら hook を入れない。socketDir の下に置いてはならない。
+   */
+  readonly claudeManagedSettingsPath?: string;
   /** マウントされる。socket 以外を置いてはならない。 */
   readonly socketDir: string;
   /** `${socketDir}/mask.sock` */
@@ -77,26 +98,66 @@ export class MaskFilterService extends Context.Tag("nas/MaskFilterService")<
 // ---------------------------------------------------------------------------
 
 /**
- * コンテナから見えるのは socket のディレクトリ (ro) とフィルタバイナリ (ro)
- * だけ。socket ディレクトリはホストと同じ絶対パスにマウントするので、
- * コンテナ側パスの定数は不要 (hostexec と同じ方式)。
+ * コンテナから見えるのは socket のディレクトリ (ro)、sumi (ro)、Claude Code を
+ * 使うときの managed settings (ro) だけ。socket ディレクトリはホストと同じ絶対パスに
+ * マウントするので、コンテナ側パスの定数は不要 (hostexec と同じ方式)。
  */
 function planMounts(plan: MaskFilterPreparePlan): MountSpec[] {
-  return [
+  const mounts: MountSpec[] = [
     { source: plan.socketDir, target: plan.socketDir, readOnly: true },
     {
-      source: plan.filterBinaryHostPath,
-      target: MASK_FILTER_CONTAINER_PATH,
+      source: plan.sumiBinaryHostPath,
+      target: SUMI_CONTAINER_PATH,
       readOnly: true,
     },
   ];
+  if (plan.claudeManagedSettingsPath) {
+    mounts.push({
+      source: plan.claudeManagedSettingsPath,
+      target: CLAUDE_MANAGED_SETTINGS_CONTAINER_PATH,
+      readOnly: true,
+    });
+  }
+  return mounts;
 }
 
+/**
+ * NAS_MASK_FILTER は bash ラッパーが起動するプログラム (sumi)、NAS_MASK_SOCKET は
+ * ブローカーの socket。ラッパーは設置時にこの 2 つを readonly 変数へ埋め込む。
+ */
 function planEnvVars(plan: MaskFilterPreparePlan): Record<string, string> {
   return {
     NAS_MASK_SOCKET: plan.socketPath,
-    NAS_MASK_FILTER: MASK_FILTER_CONTAINER_PATH,
+    NAS_MASK_FILTER: SUMI_CONTAINER_PATH,
   };
+}
+
+/**
+ * コンテナ内の Claude Code が読む managed settings。ツール結果とプロンプトを
+ * sumi の hook に通し、sumi は socket 越しにブローカーへ問い合わせる。
+ * 値の一覧は含まない (socket のパスだけ)。
+ */
+export function buildClaudeHookSettings(socketPath: string): string {
+  const hook = (args: string[]) => [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: SUMI_CONTAINER_PATH,
+          args: ["hook", "--agent", "claude", ...args, "--socket", socketPath],
+          timeout: CLAUDE_HOOK_TIMEOUT_SECONDS,
+        },
+      ],
+    },
+  ];
+  const settings = {
+    hooks: {
+      PostToolUse: hook(["post-tool"]),
+      PostToolUseFailure: hook(["post-tool"]),
+      UserPromptSubmit: hook(["prompt"]),
+    },
+  };
+  return `${JSON.stringify(settings, null, 2)}\n`;
 }
 
 /** How much of the serve log's tail is quoted back to the operator. */
@@ -170,6 +231,15 @@ function formatServeStartupError(
 
 function makePrivateDir(fs: Fs, dir: string): Effect.Effect<void> {
   return fs.mkdir(dir, { recursive: true, mode: 0o700 });
+}
+
+/** hook の設定は値を含まないが、エージェントの UID から読める必要がある。 */
+function writeClaudeSettings(
+  fs: Fs,
+  settingsPath: string,
+  content: string,
+): Effect.Effect<void> {
+  return fs.writeFile(settingsPath, content, { mode: 0o644 });
 }
 
 function writeSecretsFrame(
@@ -423,6 +493,22 @@ function prepareMaskFilter(
     logDebug(
       `[nas]   ↳ MaskFilterStage:write-frame done (${formatElapsed(phaseStart)})`,
     );
+    const settingsPath = plan.claudeManagedSettingsPath;
+    if (settingsPath) {
+      yield* Effect.acquireRelease(
+        writeClaudeSettings(
+          fs,
+          settingsPath,
+          buildClaudeHookSettings(plan.socketPath),
+        ),
+        () =>
+          removeFile(fs, settingsPath).pipe(
+            Effect.catchAllCause(() =>
+              Effect.logWarning("mask-filter: Claude settings cleanup failed"),
+            ),
+          ),
+      );
+    }
     phaseStart = performance.now();
     yield* startServe(fs, proc, plan);
     logDebug(

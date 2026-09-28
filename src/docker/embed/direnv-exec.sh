@@ -13,18 +13,18 @@ shift 3
 real_bash=${NAS_REAL_BASH:?NAS_REAL_BASH must be set}
 
 # In the image /bin/bash is the mask wrapper, so direnv loads the environment under
-# nas-mask-filter's supervisor and records the NAS_MASK_SUPERVISED marker it
+# sumi's supervisor and records the SUMI_SUPERVISED marker it
 # gives its child as part of that environment. Applied to the payload, the
 # marker makes every later bash skip the filter although no supervisor is left
 # running. Keep the value this launcher was started with instead.
-outer_supervised=${NAS_MASK_SUPERVISED-}
+outer_supervised=${SUMI_SUPERVISED-}
 
 finish='set -euo pipefail
 execution_mode=$1; ops_file=$2; path_prefix=$3; outer_supervised=$4; shift 4
 if [ -n "$outer_supervised" ]; then
-  export NAS_MASK_SUPERVISED=$outer_supervised
+  export SUMI_SUPERVISED=$outer_supervised
 else
-  unset NAS_MASK_SUPERVISED
+  unset SUMI_SUPERVISED
 fi
 if [ -n "$ops_file" ]; then source "$ops_file"; fi
 export PATH="${path_prefix}${PATH}"
@@ -50,8 +50,8 @@ nas_snapshot_env() {
     # Bash re-derives its own, but anything reading $PWD from the environment
     # believes what it is given.
     case "$nas_key" in
-      # NAS_MASK_SUPERVISED: see outer_supervised above.
-      "" | [0-9]* | *[!A-Za-z0-9_]* | PWD | OLDPWD | NAS_MASK_SUPERVISED) continue ;;
+      # SUMI_SUPERVISED: see outer_supervised above.
+      "" | [0-9]* | *[!A-Za-z0-9_]* | PWD | OLDPWD | SUMI_SUPERVISED) continue ;;
     esac
     if [ -z "${nas_values[$nas_key]+x}" ]; then nas_order+=("$nas_key"); fi
     nas_values["$nas_key"]=${nas_entry#*=}

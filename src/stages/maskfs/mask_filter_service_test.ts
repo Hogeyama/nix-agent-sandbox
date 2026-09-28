@@ -4,10 +4,12 @@ import { FsService } from "../../services/fs.ts";
 import { ProcessService, type SpawnHandle } from "../../services/process.ts";
 import { SecretResolverServiceLive } from "../../services/secret_resolver.ts";
 import {
-  MASK_FILTER_CONTAINER_PATH,
+  buildClaudeHookSettings,
+  CLAUDE_MANAGED_SETTINGS_CONTAINER_PATH,
   type MaskFilterResult,
   MaskFilterService,
   MaskFilterServiceLive,
+  SUMI_CONTAINER_PATH,
 } from "./mask_filter_service.ts";
 
 const SESSION_DIR = "/run/user/1000/nas/mask-filter/sess_x";
@@ -16,6 +18,8 @@ const FRAME = `${SESSION_DIR}/mask-secrets`;
 const SOCKET = `${SOCKET_DIR}/mask.sock`;
 const LOG = `${SESSION_DIR}/serve.log`;
 const BINARY = "/usr/local/bin/nas-mask-filter";
+const SUMI = "/usr/local/bin/sumi";
+const CLAUDE_SETTINGS = `${SESSION_DIR}/claude-managed-settings.json`;
 
 /**
  * Would a bind mount of `mountSource` expose `target` to the container?
@@ -192,6 +196,8 @@ async function runCapturing(
             {
               secretsFramePath: FRAME,
               filterBinaryHostPath: BINARY,
+              sumiBinaryHostPath: SUMI,
+              claudeManagedSettingsPath: CLAUDE_SETTINGS,
               socketDir: SOCKET_DIR,
               socketPath: SOCKET,
               logFile: LOG,
@@ -258,6 +264,37 @@ async function runCapturingOk(): Promise<Recorded> {
   return recorded;
 }
 
+describe("buildClaudeHookSettings", () => {
+  test("routes tool results and prompts through sumi over the socket", () => {
+    const settings = JSON.parse(buildClaudeHookSettings("/run/s/mask.sock"));
+    const command = (event: string) => settings.hooks[event][0].hooks[0];
+    for (const event of ["PostToolUse", "PostToolUseFailure"]) {
+      expect(command(event)).toEqual({
+        type: "command",
+        command: SUMI_CONTAINER_PATH,
+        args: [
+          "hook",
+          "--agent",
+          "claude",
+          "post-tool",
+          "--socket",
+          "/run/s/mask.sock",
+        ],
+        timeout: 20,
+      });
+      expect(settings.hooks[event][0].matcher).toBeUndefined();
+    }
+    expect(command("UserPromptSubmit").args).toEqual([
+      "hook",
+      "--agent",
+      "claude",
+      "prompt",
+      "--socket",
+      "/run/s/mask.sock",
+    ]);
+  });
+});
+
 describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   test("no mount can reach the secrets frame (C1)", async () => {
     const result = await run();
@@ -299,14 +336,32 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
     expect(spawns).toEqual([{ command: BINARY, args: ["--serve", SOCKET] }]);
   });
 
-  test("mounts the filter binary read-only", async () => {
+  test("mounts sumi read-only and points the bash wrapper at it", async () => {
     const result = await run();
     expect(result.mounts).toContainEqual({
-      source: BINARY,
-      target: MASK_FILTER_CONTAINER_PATH,
+      source: SUMI,
+      target: SUMI_CONTAINER_PATH,
       readOnly: true,
     });
-    expect(result.envVars.NAS_MASK_FILTER).toBe(MASK_FILTER_CONTAINER_PATH);
+    expect(result.envVars.NAS_MASK_FILTER).toBe(SUMI_CONTAINER_PATH);
+    expect(result.mounts.some((m) => m.source === BINARY)).toBe(false);
+  });
+
+  test("mounts the Claude hook settings read-only as a managed drop-in", async () => {
+    const { exit, written } = await runCapturing();
+    const result = successResult(exit);
+    expect(result.mounts).toContainEqual({
+      source: CLAUDE_SETTINGS,
+      target: CLAUDE_MANAGED_SETTINGS_CONTAINER_PATH,
+      readOnly: true,
+    });
+    const file = written.find((w) => w.path === CLAUDE_SETTINGS);
+    expect(file?.mode).toBe(0o644);
+    const text = new TextDecoder().decode(file?.data);
+    expect(text).toBe(buildClaudeHookSettings(SOCKET));
+    // 値の一覧は hook の設定にも載らない。
+    expect(text).not.toContain("hunter2secret");
+    expect(text).not.toContain("mask-secrets");
   });
 
   test("passes the frame path in the daemon's own env, not the container's", async () => {
@@ -346,7 +401,14 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
     // Registering the directories with acquireRelease (rather than removing
     // them from releaseServe) also means they are reclaimed even when the
     // daemon never successfully starts.
-    expect(removed).toEqual([SOCKET, LOG, FRAME, SOCKET_DIR, SESSION_DIR]);
+    expect(removed).toEqual([
+      SOCKET,
+      LOG,
+      CLAUDE_SETTINGS,
+      FRAME,
+      SOCKET_DIR,
+      SESSION_DIR,
+    ]);
   });
 
   test("removes the frame and directories if spawn throws before the daemon starts", async () => {
@@ -413,6 +475,7 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
               {
                 secretsFramePath: FRAME,
                 filterBinaryHostPath: BINARY,
+                sumiBinaryHostPath: SUMI,
                 socketDir: SOCKET_DIR,
                 socketPath: SOCKET,
                 logFile: LOG,
@@ -490,6 +553,7 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
               {
                 secretsFramePath: FRAME,
                 filterBinaryHostPath: BINARY,
+                sumiBinaryHostPath: SUMI,
                 socketDir: SOCKET_DIR,
                 socketPath: SOCKET,
                 logFile: LOG,
@@ -557,7 +621,14 @@ describe("MaskFilterServiceLive.prepareMaskFilter readiness failure", () => {
     // Cleanup is unchanged by the diagnostic: a failed start still leaves
     // nothing behind.
     expect(killed).toBe(1);
-    expect(removed).toEqual([SOCKET, LOG, FRAME, SOCKET_DIR, SESSION_DIR]);
+    expect(removed).toEqual([
+      SOCKET,
+      LOG,
+      CLAUDE_SETTINGS,
+      FRAME,
+      SOCKET_DIR,
+      SESSION_DIR,
+    ]);
   });
 
   test("an empty serve log is reported as empty", async () => {

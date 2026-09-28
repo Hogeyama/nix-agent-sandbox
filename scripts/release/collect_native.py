@@ -490,7 +490,7 @@ def main() -> None:
     # The Nix recipes rebuild the bundle, so they belong to nas itself.
     components.append(component("nas", config["nasVersion"], "repository license", "nas repository",
                                 [], [own_notice], [own_source] + recipe_paths))
-    for id_ in ("nas-hostexec", "nas-maskfs", "nas-mask-filter"):
+    for id_ in ("nas-hostexec", "nas-maskfs", "nas-mask-filter", "sumi"):
         components.append(component(id_, config["nasVersion"], "repository license", "nas repository",
                                     [], [own_notice], [own_source]))
     # libgcc_s is resolvable for the bundle but not always copied into it.

@@ -346,7 +346,8 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
     cp --preserve=mode "$BASH_SYSTEM_PATH" "$NAS_REAL_BASH"
   fi
 
-  # マスクは nas-mask-filter の supervise モードに任せる。
+  # マスクは sumi の run (socket 版) に任せる。NAS_MASK_FILTER はコンテナ内の
+  # sumi を、NAS_MASK_SOCKET はホスト側ブローカー (nas-mask-filter --serve) を指す。
   #
   # 以前はここで `exec > >("$NAS_MASK_FILTER")` とプロセス置換を使っていたが、
   # bash はプロセス置換の子を wait せず、直後の exec で自分自身を置き換えて
@@ -357,7 +358,7 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   # supervise モードではフィルタ自身が親になり、パイプを drain し切ってから
   # 子の終了ステータスで exit するため、この競合が起きない。
   #
-  # NAS_MASK_SUPERVISED は supervisor が子へ渡す入れ子抑止のマーカー。
+  # SUMI_SUPERVISED は supervisor が子へ渡す入れ子抑止のマーカー。
   # コンテナ内の bash はすべてこのラッパーなので、抑止しないと ./configure や
   # make の各レシピ行、再帰 make、npm/cargo のビルドスクリプトのたびに層が
   # 積み上がり、接続数は生存 bash プロセス数に比例して増える。抑止しても
@@ -381,14 +382,14 @@ MASK_WRAPPER_HEADER
 if [ "${1:-}" = "/entrypoint.sh" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
-if [ -n "${NAS_MASK_SUPERVISED:-}" ]; then
+if [ -n "${SUMI_SUPERVISED:-}" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
 if [ ! -S "$nas_mask_socket_path" ]; then
   exit 121
 fi
-exec "$nas_mask_filter_path" --supervise --argv0 "$0" \
-  --socket "$nas_mask_socket_path" -- \
+exec "$nas_mask_filter_path" run --socket "$nas_mask_socket_path" \
+  --argv0 "$0" -- \
   /tmp/nas-bash-override/bash.real "$@"
 MASK_WRAPPER_BODY
   } > "$BASH_WRAPPER_TMP"
