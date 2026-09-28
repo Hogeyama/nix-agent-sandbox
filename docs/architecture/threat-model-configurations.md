@@ -1,6 +1,6 @@
 # セキュリティ対策の比較に用いる設定例
 
-[対策の選定](threat-model.md)で比較に用いる設定と起動コマンドを示す。各製品の導入後に、本体ページの[共通条件](threat-model.md#比較の共通条件)と併用する設定例である。A1b について系統1〜3は未達、系統4・5は保留であり、要求充足済みの推奨設定ではない。
+[対策の選定](threat-model.md)で比較に用いる設定と起動コマンドを示す。各製品の導入後に、本体ページの[共通条件](threat-model.md#比較の共通条件)と併用する設定例である。各例の保護範囲、成立条件、必要水準に届かない点は本体ページに示す。
 
 ## 共通設定
 
@@ -196,7 +196,7 @@ claude --permission-mode auto
 
 ## 系統4
 
-[nas 構成の評価と成立条件](threat-model.md#系統4-nas)を確認する。とくに、既存設定の保護対象、RW 共有する状態、Nix 連携の留保を前提とする。
+[nas 構成の評価と成立条件](threat-model.md#系統4-nas)を確認する。Nix 連携は無効にする。既存設定の保護対象と RW 共有する状態を確認する。
 
 ホストと container の双方に managed settings を適用し、MCP server を制限する。
 
@@ -209,7 +209,7 @@ claude --permission-mode auto
 
 起動前に作業領域の `.claude` を作っておく。存在しなければ以下の read-only mount は適用されず、エージェントが新規作成できる。既存 hook の実体は保護対象の `.git/hooks`・`.claude`・`~/.claude` 配下に置く。
 
-次の設定は、GitHub への要求の既定を `review` とし、信頼済み情報源への read だけを自動許可する。Anthropic の未許可 endpoint は `deny` にする。業務 API の別認証経路は制限を確認できておらず、A1b は保留とする。
+次の設定は、GitHub への要求の既定を `review` とし、信頼済み情報源への read だけを自動許可する。Anthropic の未許可 endpoint は `deny` にする。業務 API は共通条件で `x-api-key` だけで認証する API と定め、その header を上書きする。この条件で A1b は ◎ とする。
 
 ```pkl
 // .nas/config.pkl
@@ -236,6 +236,7 @@ profiles {
     agentState {
       protectSettings = true // 共有する Claude 設定の上書きを防ぐ
     }
+    nix { enable = false }
     hostexec = null
     extraMounts {
       // .git/config・.git/hooks は nas が自動で read-only にする。.claude は対象外なので明示する
@@ -394,7 +395,9 @@ Git と nas の自動保護の内訳・対象外は[本体の保護対象表](th
 
 [Docker Sandbox 構成の評価と成立条件](threat-model.md#系統5-docker-sandbox)に対応する。hostname 単位の network policy と credential injection を設定する。
 
-Anthropic / GitHub の `secret set` は指定の認証 header を上書きする。一方、業務 API の `set-custom` は placeholder の置換であり、持込み token の拒否とは異なる。全認証経路の固定は未確認で、A1b は保留とする。
+以下は組込み Claude（v2 kit）の設定例である。v3 kit の HTTP method/path 制限はこの構成に追加できないため含めない。今後の対応、または自前の v3 workload による改善の見通しは[本体ページ](threat-model.md#系統5-docker-sandbox)に示す。
+
+`secret set` による認証 header の上書きと、hostname の許可を組み合わせる。ただし、`sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では `curl --noproxy '*'` で認証注入を通らず GitHub に接続できたため、この提示構成の A1b は ○ で、必須の ◎ に届かない。業務 API の `set-custom` は placeholder の置換であり、認証主体を固定する機能としては評価しない。
 
 ```sh
 sbx policy init deny-all

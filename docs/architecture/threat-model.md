@@ -2,7 +2,7 @@
 
 この文書では、Claude Code を使う開発作業を例に、5つの隔離構成を比較する。判断するのは、どの被害を強制的に防ぐか、どこまでを過失の低減にとどめるか、各構成がその要求を満たす条件は何かである。
 
-比較対象は製品単体ではなく、[設定例](threat-model-configurations.md)と本稿の共通条件を組み合わせた構成である。示していない設定や保護機能には加点しない。**現時点では、全必須要求を満たすと確定できる構成はない**。許可済みサービスを攻撃者の credential で利用する経路について、系統1〜3は防御が不足し、系統4・5は評価が残る。
+比較対象は製品単体ではなく、[設定例](threat-model-configurations.md)と本稿の共通条件を組み合わせた構成である。各評価は、この構成で保護する範囲と成立条件を表す。製品全体の安全性や優劣を順位付けするものではない。nas は本リポジトリの実装も参照し、他製品は主に公開資料と設定例を参照しているため、確認の深さは揃っていない。資料から判断できない点は、機能の不足と区別する。
 
 ## 防ぐ被害と許容する被害
 
@@ -37,7 +37,7 @@ A2-Y・A3-Y・B2b-Y には、secret masking、読取拒否、認証情報の代�
 
 B2a では隔離機構とホスト管理者を信頼する。ホストが既に使っている設定、hook、plugin、skill、command、script とその参照先は、作業領域内にあっても改変を防ぐ。新しく生成した repo・設定をホストで使うときは、ソース変更を実行するときと同じく review を前提とする。
 
-運用上必要な認証情報・履歴等の共有は例外として認める。この例外は、共有内容の改変や後続実行への影響を無害と評価するものではない。とくに nas は履歴や auto memory を含む状態を read-write で共有するため、B2a の ◎ を「ホストが後で読むあらゆる状態の完全性を保証する」という意味には使わない。保護する設定と共有する状態の内訳、および Nix 連携の留保は[系統4](#系統4-nas)に示す。
+運用上必要な認証情報・履歴等の共有は例外として認める。この例外は、共有内容の改変や後続実行への影響を無害と評価するものではない。とくに nas は履歴や auto memory を含む状態を read-write で共有するため、この共有状態の完全性は B2a の保証対象から除く。設定・hook 等の保護までこの例外で免除するものではない。保護する設定と共有する状態の内訳は[系統4](#系統4-nas)に示す。
 
 ### P1: 未信頼情報源の無人取り込みを減らす
 
@@ -47,23 +47,22 @@ P1 は、プロンプトインジェクションの入口を減らすための�
 
 local / remote の別は信頼性を決めない。外部 repo の README はローカルに保存した後も未信頼であり得る。反対に、ネットワーク越しでも信頼済みと定めた情報源なら自動取得を認める。
 
-P1 の達成後も **X の仮定は維持し、A/B の被害防止評価には加点しない**。nas の P1 ◎ の根拠は、提示した GitHub REST / Git / GraphQL の取得制限である。設定例で自動許可する業務 API の応答の信頼性は未定義であり、ローカルに保存済みの内容も含めた全入力の制御は示していない。この範囲まで網羅した P1 の達成は未評価とする。
+P1 の達成後も **X の仮定は維持し、A/B の被害防止評価には加点しない**。全系統で classifier による低減を最低水準の ○ として評価する。nas の ◎ は、これに加えて提示した GitHub REST / Git / GraphQL の取得制限を強制することへの加点である。業務 API の応答やローカルに保存済みの内容を含む、全入力の強制的な制御を示すものではない。
 
-## 比較結果と選定
+## 比較結果と構成ごとの条件
 
 A/B の評価記号は次の意味で使う。
 
 - **◎**: X を仮定しても、fail-closed な境界、サービス側権限、または強制的な人間承認で阻止できる。
 - **○**: 一般的な Y や典型経路を阻止・低減できるが、X が回避可能な経路は残る。
 - **×**: 典型シナリオを防げない、または対象外。
-- **保留**: 追加の強制境界はあるが、必要な経路の確認が済まず、◎と判定できない。
 
 P1 では、◎ は設定例で示す取得制限を境界・人間承認で強制する評価、○ は classifier 等に依存する評価、× は制限なしを表す。auto mode の classifier は X に対する強制境界には数えない。
 
 | 要求 | 必要水準 | 系統1 settings | 系統2 srt | 系統3 Dev Container | 系統4 nas | 系統5 Docker Sandbox |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | A1a: 未許可送信先への流出 | ◎ | ◎* | ◎ | ○ | ◎ | ◎ |
-| A1b: 許可済みサービス経由の第三者流出 | ◎ | ○ | ○ | ○ | 保留 | 保留 |
+| A1b: 許可済みサービス経由の第三者流出 | ◎ | ○ | ○ | ○ | ◎ | ○ |
 | B1: 本番等への高影響な操作 | ◎ | ◎† | ◎† | ◎† | ◎† | ◎† |
 | B2a: ホストへの破壊・改変波及 | ◎ | ○ | ◎ | ○ | ◎ | ◎ |
 | A2-Y: 正規連携先への不要な secret 混入 | ○以上 | ○ | ○ | ○ | ○ | ○ |
@@ -75,15 +74,17 @@ P1 では、◎ は設定例で示す取得制限を境界・人間承認で強�
 
 `†` B1 は、共通条件で定める本番への到達制限と独立した承認・権限制御についての評価。利用者が本番 credential を渡さないだけでは、持込み credential に対する強制にならない。許可サービス上で別の本番 credential を使う場合の評価は残る。
 
-**系統2・4・5を、そのまま要求充足済みとは選定できない。** 隔離範囲や P1 の違いに加え、A1b の次の不足・未確認点を解消する必要がある。
+A1b について、系統1〜3の提示構成では、攻撃者の credential による許可サービスへの送信を防げず、必要水準に届かない。系統5も、認証注入を通らず GitHub に接続できる経路を実測したため、A1b は ○ とする。[実測の範囲と結果](experiments/sbx-a1b/README.md)に正常系との対照を示す。
 
-| 構成 | 検討する理由 | 選定前に必要な確認 |
-| --- | --- | --- |
-| **系統2: srt** | Claude Code 全体を OS sandbox に入れる。導入コストは小さく、P1 は ○ | hostname allowlist と credential masking だけでは、攻撃者の token による許可サービスへの送信を防げない |
-| **系統4: nas** | GitHub の REST・Git・GraphQL の取得先を proxy が判定し、P1 は ◎。Anthropic の endpoint と認証 header も制限する | 業務 API を含め、別の認証 header・body 等で第三者の主体を選べないか確認する |
-| **系統5: Docker Sandbox** | microVM 内の private clone を使い、ホストの作業ツリーを直接変更しない。service-based 注入では認証 header を上書きする | 上書き対象以外の認証経路と、custom secret を使う業務 API の認証主体を確認する |
+各構成を検討する際には、表の評価とあわせて次の条件・負担を確認する。
 
-系統1は A1b に加え、本体のホスト書込を OS 境界で制限できず B2a も不足する。系統3は A1b、DNS 等の持ち出し経路、共有する設定・hook の改変が残り、A1a・B2a も不足する。
+| 構成 | 保護範囲と成立条件・負担 |
+| --- | --- |
+| **系統1: settings.json** | 内蔵 sandbox で Bash を隔離する。本体のホスト書込と sandbox 外実行経路には別途制限が必要 |
+| **系統2: srt** | 本体を含めて OS sandbox で隔離する。許可サービス内の送信先・認証主体を固定するには、提示例にない追加制御が必要 |
+| **系統3: Dev Container** | 既存の container 運用に載せやすい。DNS 等の持出し経路と共有作業領域の設定・hook 保護には追加対策が必要 |
+| **系統4: nas** | API ごとの rule で対象・操作を制限する。rule の設計・保守と許可外操作の人間承認が必要。Nix は off とし、共有設定の保護・共有状態の例外を前提とする |
+| **系統5: Docker Sandbox** | private clone によりホスト作業ツリーへの書込を分離する。現行の提示構成は A1b 未達だが、v3 kit の HTTP 制限に改善を期待する。組込み Claude は v2 のため、v3 対応が今後の期待点 |
 
 系統1+2の[併用実験](experiments/srt-settings/README.md)では、既定の組合せは内蔵 sandbox の初期化に失敗した。Unix socket を許可した診断では拒否側を遮断できたが、許可側の対照も通信に失敗し、`enableWeakerNestedSandbox` を有効にしても改善しなかった。正常通信を維持した選別は確認できず、系統1+2を要求充足済みにはしない。いずれの構成でも、作業領域の復旧と新しいコード・設定の採用前 review は必要である。
 
@@ -99,6 +100,9 @@ P1 では、◎ は設定例で示す取得制限を境界・人間承認で強�
 
 - GitHub は fine-grained token 等を使い、resource owner を自組織、repository を必要な対象、permission を必要最小限に限定する。SSH credential や別の広い GitHub credential は渡さない。
 - 業務 API は開発環境だけを使い、本番 API / DB の credential は渡さない。
+
+  `devapi.example.com` は比較用の架空の API で、次の仕様を前提とする。認証は `x-api-key` のみで行い、header の重複は拒否する。他の header・query・body による認証や認証主体の切替は提供しない。有効な key は自組織の開発環境にだけアクセスでき、第三者のアカウント・保存先や外部への転送機能は持たない。これは比較条件であり、実在 API の検証結果ではない。
+
 - 対象 repo に本番 deploy 用 Actions があっても、エージェントの GitHub credential だけでは本番変更を完遂できない独立した保護を置く。
 
 fine-grained token の scope はその token を使った操作だけを制限する。攻撃者の token を持ち込める構成では、第三者 repo への書込みをそれだけで防げない。また、公開 repo の read 権限は残るため P1 の取得制限にもならない。
@@ -169,9 +173,9 @@ Claude Code 単体で構成でき、導入コストは小さい。ただし、�
 
 A1a は ◎。agent container は `--internal` network だけに接続し、Docker 内蔵 DNS は外部名を解決しない。proxy は `connection_strategy=lazy` で動き、request の許可判定後にだけ上流の名前解決・接続を行う。拒否した送信先の名前は解決せず、DNS 経由の持ち出しも閉じる。
 
-GitHub は既定を `review` とし、信頼済み repo の REST read、Git fetch、許可した GraphQL query だけを自動許可する。GraphQL では取得経路と owner / repo 引数まで検査する。許可外の取得や書込み、判定不能な要求は、その都度人間承認を求める。この取得制限で P1 を ◎ とし、B2b-Y も proxy で補う。
+GitHub は既定を `review` とし、信頼済み repo の REST read、Git fetch、許可した GraphQL query だけを自動許可する。GraphQL では取得経路と owner / repo 引数まで検査する。許可外の取得や書込み、判定不能な要求は、その都度人間承認を求める。この取得制限により GitHub 取得に限った P1 は ◎ とする。この強制範囲に対して、共通の classifier による低減に加点する。B2b-Y も proxy で補う。
 
-**A1b は保留**。GitHub には上記の操作制限に加え、`Authorization` の上書きがある。Anthropic では提示例の preset と `fallback = "deny"` が Files API を許可せず、許可 request でも `x-api-key` を削除して `Authorization` をホストの値に上書きする。一方、業務 API は全 path を許可し、`x-api-key` だけを上書きするため、別の認証 header や body 等による第三者の主体選択は未確認である。[Anthropic preset](../../src/config/Schema.pkl)、[agent credential](../../src/network/agent_credential.ts)、[header 注入](../../src/docker/mitmproxy/nas_addon.py)
+**A1b は ◎**。GitHub には上記の操作制限に加え、`Authorization` の上書きがある。Anthropic では提示例の preset と `fallback = "deny"` が Files API を許可せず、許可 request でも `x-api-key` を削除して `Authorization` をホストの値に上書きする。業務 API は共通条件で認証を `x-api-key` に限定し、その値を proxy が上書きするため、持込み credential に差し替えられない。[Anthropic preset](../../src/config/Schema.pkl)、[agent credential](../../src/network/agent_credential.ts)、[header 注入](../../src/docker/mitmproxy/nas_addon.py)
 
 **シークレットの扱い**
 
@@ -183,7 +187,7 @@ Claude のログイン情報は container へ共有せず、既定の `agentStat
 
 **ホスト保護と共有の例外**
 
-B2a は ◎だが、既存設定が下記の保護範囲に収まる配置を条件とする。作業領域はホストと RW 共有するため、設定・hook を保護しなければ、ホストで Git や Claude Code を実行したときにエージェントの書いたコードが動く。
+B2a は ◎。比較構成では Nix 連携を無効にし、既存設定が下記の保護範囲に収まる配置を条件とする。作業領域はホストと RW 共有するため、設定・hook を保護しなければ、ホストで Git や Claude Code を実行したときにエージェントの書いたコードが動く。
 
 | 対象 | 保護と条件 |
 | --- | --- |
@@ -198,7 +202,7 @@ B2a は ◎だが、既存設定が下記の保護範囲に収まる配置を条
 
 自動保護の対象外は、サブディレクトリに新しく作った `.git`、submodule の `.git/modules`、起動後の `config.worktree`。作業領域のパスが symlink を経由すると `core.hooksPath` や worktree のポインタが保護から漏れる場合もある。ホストが既に使う設定がこれらの範囲にあれば B2a は未達となる。
 
-agent container は一般ユーザーで動き、`no-new-privileges` と、entrypoint に必要な6つ以外の capability の削除で権限昇格を制限する。ただし **Nix 連携を有効にすると `/nix` を RW mount し、container 内で root を奪われれば store 経由でホストに波及し得る**。B2a の ◎ は、この root 奪取後の波及や共有状態の改変まで防ぐという保証ではない。root 奪取を X の範囲に含めるか、信頼する隔離機構の破綻と扱うかは未整理である。
+agent container は一般ユーザーで動き、`no-new-privileges` と、entrypoint に必要な6つ以外の capability の削除で権限昇格を制限する。比較構成では `nix.enable = false` とし、Nix 連携は評価対象に含めない。
 
 導入コストは中程度で、API ごとの rule 設計が必要になる。広い rule にすると repo 単位の境界が失われる。
 
@@ -207,13 +211,28 @@ agent container は一般ユーザーで動き、`no-new-privileges` と、entry
 [Docker Sandbox](https://www.docker.com/products/docker-sandboxes/) の microVM に Claude Code を隔離し、ホスト側 proxy で network policy と credential injection を適用する。提示例は hostname 単位で許可する。[設定例](threat-model-configurations.md#系統5)
 
 - **A1a: ◎** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。
-- **A1b: 保留** — `sbx secret set` による Anthropic / GitHub の service-based 注入は、環境変数の値によらず指定の認証 header を上書きする。srt のダミー値置換とは異なる。ただし、他の認証 header・body・API 経路までの固定は未確認である。業務 API に使う `set-custom` は placeholder を含む要求だけを置換するため、別の credential の使用をそれだけで防ぐことはできない。[Docker の credential 注入](https://docs.docker.com/ai/sandboxes/configuration/credentials/)
+- **A1b: ○** — `sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では、GitHub への通常の proxy 通信は偽の Authorization header もホストの認証値へ上書きした。一方、`curl --noproxy '*'` は GitHub の公開証明書で TLS 接続し、指定した偽 token に対して `Bad credentials` が返った。ログは認証注入のない `transparent` 経路を示す。hostname の許可はこの経路にも適用されるが、認証主体を固定する強制境界にはならない。攻撃者の有効な token による書込み自体は試していない。
 - **B2a: ◎** — clone mode で VM 内に private clone を作り、ホスト repo は `/run/sandbox/source` に read-only mount する。shared skills と SSH agent forwarding も無効にする。ホスト作業ツリーからの分離は B2b-Y の低減にもなる。
 - **A2-Y・A3-Y: ○** — secret store と代理注入を使う。ただし、ホスト repo の mount には untracked / `.gitignore` 対象も含まれ、`.env` 等の secret は VM 内から読める。代理注入だけでは隠せないため、[設定例](threat-model-configurations.md#系統5)の secret の移動・読取拒否・sumi 併用と auto mode を組み合わせる。
 
 `gh` の [GraphQL API](https://docs.github.com/en/graphql/guides/forming-calls-with-graphql) は query / mutation とも `POST /graphql` の本文で対象を指定する。[Docker Sandbox の HTTP ルール](https://docs.docker.com/ai/sandboxes/governance/concepts/#http-method-and-path)の公開仕様は method/path までで、取得先を区別できない。GraphQL 全拒否では共通の作業条件を満たせず、許可すれば classifier に依存するため P1 は ○。
 
 ホストとの境界が明快で、作業領域を使い捨てにしやすい。導入コストは中程度。Claude Code は既定の起動方法を使わず、approval が有効になるよう VM 内で `claude --permission-mode auto` を起動する必要がある。
+
+**今後の見通し**
+
+Docker Sandbox は、今後の対応次第で A1b を満たす構成を作れると期待している。v3 kit の [`network-policy@2`](https://github.com/docker/sandbox-kit-spec/blob/main/docs/spec/capabilities/com.docker.sandbox/network-policy%402.md) には HTTP method/path の制限があり、検査できない接続は拒否する仕様である。これが実装どおり働けば、今回の直接接続による迂回を閉じ、REST・Git の操作先を必要な非公開 repo に限定する道がある。ただし、他の kit や policy に hostname 全体の allow が残ると、狭い allow を追加しても制限にはならない。
+
+現時点の組込み `claude` は v2 kit で、v3 mixin を追加できない。[公式の互換性説明](https://docs.docker.com/ai/sandboxes/customize/#version-compatibility)では、v3 を使う場合は workload と mixin をすべて v3 に揃える必要がある。したがって、組込み Claude の対応を待つか、Claude を動かす v3 workload を自分で用意することになる。公式対応の時期は不明で、v3 構成の HTTP 制限も本稿では未実測である。比較表は現在の提示構成の評価とし、この見込みでは加点しない。GraphQL 本文による対象・操作の判別は、method/path 制限だけでは解決しない。
+
+## nas の別 backend 構想
+
+nas のセキュリティ基盤を実装・維持するリスクを減らすため、srt をライブラリとして組み込む backend と、Docker Sandbox を kit で拡張する backend を構想している。
+
+| 候補 | 隔離基盤に任せる部分 | 構成の狙い |
+| --- | --- | --- |
+| **srt backend** | Claude Code 本体を含むプロセス群の OS sandbox と filesystem・network 制限 | srt をライブラリとして利用し、`filterRequest` 等の拡張点に nas の通信認可を接続する |
+| **Docker Sandbox backend** | microVM、内部の Docker 環境、workspace の分離 | kit で通信 policy や認証注入を構成し、nas の認可・承認機能を組み合わせる |
 
 ## 未評価・確認が必要な点
 
