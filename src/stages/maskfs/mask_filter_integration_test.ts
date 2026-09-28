@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveMaskFilterBinPath } from "./mask_filter_path.ts";
 import { encodeMaskSecrets } from "./secrets_frame.ts";
+import { resolveSumiBinPath } from "./sumi_path.ts";
 
 /**
  * dev のバイナリをソースに追従させてから測る。
@@ -22,10 +23,10 @@ import { encodeMaskSecrets } from "./secrets_frame.ts";
  * できないが、ビルド手段が無い以上ここで落としても直しようがない。
  * NAS_ASSET_DIR が立つ bundled モードでは nix が同じソースからビルドする。
  */
-async function buildMaskFilterForDev(): Promise<void> {
+async function buildForDev(relativeSrcDir: string): Promise<void> {
   if (process.env.NAS_ASSET_DIR) return;
   if (Bun.which("zig") === null) return;
-  const srcDir = fileURLToPath(new URL("../../mask-filter/", import.meta.url));
+  const srcDir = fileURLToPath(new URL(relativeSrcDir, import.meta.url));
   const proc = Bun.spawn(["zig", "build"], {
     cwd: srcDir,
     stdout: "pipe",
@@ -47,15 +48,20 @@ async function buildMaskFilterForDev(): Promise<void> {
  * python3 や /proc が無ければ資源上限の唯一の証明が、そうやって静かに失われる。
  * 前提は describe の外 (トップレベル await) で解決し、各テストの `skipIf` に渡す。
  *
- * 前提は 3 つ:
+ * 前提は 4 つ:
  * - `binaryPath`: `src/mask-filter` の生成物。dev では直前にビルドしてから解決する。
+ * - `sumiPath`: `contrib/sumi` の生成物。コンテナ内の bash ラッパーが起動する
+ *   `sumi run --socket` と Claude Code の hook を、本物のブローカーに対して検証する。
  * - `hasPython3`: 「読まずに書き続ける」クライアント (STALLING_CLIENT_PY) は
  *   TypeScript では書けないので python3 で用意する。flake.nix の devShell で
  *   宣言してあるが、devShell の外で走らせる場合もあるので存在を確かめる。
  * - `hasProcStatus`: サーバの VmRSS を /proc から読むので Linux でしか動かない。
  */
-await buildMaskFilterForDev();
+await buildForDev("../../mask-filter/");
+await buildForDev("../../../contrib/sumi/");
 const binaryPath = await resolveMaskFilterBinPath();
+const sumiPath = await resolveSumiBinPath();
+const hasBrokerAndSumi = binaryPath !== null && sumiPath !== null;
 const hasPython3 = Bun.which("python3") !== null;
 const hasProcStatus = fs.existsSync("/proc/self/status");
 
@@ -142,10 +148,10 @@ function writeWrapperScript(filterPath: string, socketPath: string): string {
 }
 
 /**
- * process.env のコピーから NAS_MASK_SUPERVISED を取り除いたもの。
+ * process.env のコピーから入れ子抑止のマーカーを取り除いたもの。
  *
- * このテストスイート自体が既に mask-filter 下のシェル (nas セッション) で
- * 走っていることがある。その場合 process.env に NAS_MASK_SUPERVISED=1 が
+ * このテストスイート自体が既に supervisor 下のシェル (nas セッション) で
+ * 走っていることがある。その場合 process.env にマーカーが
  * 乗っており、ラッパーの入れ子抑止テストがそれをそのまま継承すると、外側の
  * 呼び出しが「既に supervise 済み」と誤認して素通りし、マスクも supervisor
  * の層数も検証できなくなる。
@@ -153,6 +159,7 @@ function writeWrapperScript(filterPath: string, socketPath: string): string {
 function envWithoutSupervisionMarker(): Record<string, string | undefined> {
   const env = { ...process.env };
   delete env.NAS_MASK_SUPERVISED;
+  delete env.SUMI_SUPERVISED;
   return env;
 }
 
@@ -922,19 +929,19 @@ describe("nas-mask-filter --supervise", () => {
   // 検証はマスク結果ではなくマーカーを見る。マスクは冪等 (* はシークレット
   // ではない) なので、層が 1 つでも 2 つでも stdout は同一になり、出力を見ても
   // 回帰を検出できない。
-  test.skipIf(!binaryPath)(
+  test.skipIf(!hasBrokerAndSumi)(
     "supervises exactly one layer when wrappers nest",
     async () => {
       const sockPath = shortSockPath("nest");
       const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
       try {
         expect(await waitForSocket(sockPath)).toBe(true);
-        const wrapper = writeWrapperScript(binaryPath!, sockPath);
+        const wrapper = writeWrapperScript(sumiPath!, sockPath);
         const proc = Bun.spawn(
           [
             wrapper,
             "-c",
-            `${wrapper} -c 'echo inner=[\${NAS_MASK_SUPERVISED:-unset}] pw=hunter2'`,
+            `${wrapper} -c 'echo inner=[\${SUMI_SUPERVISED:-unset}] pw=hunter2'`,
           ],
           {
             stdin: "ignore",
@@ -942,7 +949,7 @@ describe("nas-mask-filter --supervise", () => {
             stderr: "pipe",
             env: {
               ...envWithoutSupervisionMarker(),
-              NAS_MASK_FILTER: binaryPath!,
+              NAS_MASK_FILTER: sumiPath!,
               NAS_MASK_SOCKET: sockPath,
             },
           },
@@ -966,7 +973,7 @@ describe("nas-mask-filter --supervise", () => {
   // 完全に同じになる (実測でも素通りした)。契約のうちシェル側の半分を守るには、
   // 層の数そのものを数えるしかない。
   //
-  // 数え方は「この socket パスを引数に持つ supervisor プロセス」。socket パスは
+  // 数え方は「この socket パスを引数に持つ sumi run プロセス」。socket パスは
   // テストごとに一意なので、開発機やコンテナで別に走っている supervisor が
   // 混ざらない。数える主体は内側のシェル自身で、対象は自分の祖先だから
   // 生存が保証されており、ハンドシェイクも待ち合わせも要らない。
@@ -977,23 +984,25 @@ describe("nas-mask-filter --supervise", () => {
 for f in /proc/[0-9]*/cmdline; do
   sup=0
   sock=0
+  i=0
   while IFS= read -r -d '' a; do
-    [ "$a" = "--supervise" ] && sup=1
+    [ "$i" = 1 ] && [ "$a" = "run" ] && sup=1
     [ "$a" = "$NAS_MASK_SOCKET" ] && sock=1
+    i=$((i + 1))
   done < "$f" 2>/dev/null || true
   [ "$sup" = 1 ] && [ "$sock" = 1 ] && n=$((n + 1))
 done
 echo "layers=$n"
 `;
 
-  test.skipIf(!binaryPath)(
+  test.skipIf(!hasBrokerAndSumi)(
     "does not stack a second supervisor on the nested wrapper",
     async () => {
       const sockPath = shortSockPath("layers");
       const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
       try {
         expect(await waitForSocket(sockPath)).toBe(true);
-        const wrapper = writeWrapperScript(binaryPath!, sockPath);
+        const wrapper = writeWrapperScript(sumiPath!, sockPath);
         // 数えるスクリプトは**ラッパー経由で**起動する。bash.real を直接叩くと
         // ガードごと素通りして何も検証しないことになる。
         const script = path.join(tmpDir, `layers-${secretsFileSeq++}.sh`);
@@ -1004,7 +1013,7 @@ echo "layers=$n"
           stderr: "pipe",
           env: {
             ...envWithoutSupervisionMarker(),
-            NAS_MASK_FILTER: binaryPath!,
+            NAS_MASK_FILTER: sumiPath!,
             NAS_MASK_SOCKET: sockPath,
           },
         });
@@ -1097,14 +1106,14 @@ echo "layers=$n"
     30000,
   );
 
-  test.skipIf(!binaryPath)(
+  test.skipIf(!hasBrokerAndSumi)(
     "uses captured broker paths when the public environment is stripped",
     async () => {
       const sockPath = shortSockPath("stripped");
       const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
       try {
         expect(await waitForSocket(sockPath)).toBe(true);
-        const wrapper = writeWrapperScript(binaryPath!, sockPath);
+        const wrapper = writeWrapperScript(sumiPath!, sockPath);
         const proc = Bun.spawn(
           [
             wrapper,
@@ -1129,14 +1138,14 @@ echo "layers=$n"
     15000,
   );
 
-  test.skipIf(!binaryPath)(
+  test.skipIf(!hasBrokerAndSumi)(
     "ignores hostile public broker path overrides",
     async () => {
       const sockPath = shortSockPath("overridden");
       const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
       try {
         expect(await waitForSocket(sockPath)).toBe(true);
-        const wrapper = writeWrapperScript(binaryPath!, sockPath);
+        const wrapper = writeWrapperScript(sumiPath!, sockPath);
         const proc = Bun.spawn([wrapper, "-c", "printf 'stdout=hunter2\\n'"], {
           stdin: "ignore",
           stdout: "pipe",
@@ -1161,12 +1170,12 @@ echo "layers=$n"
     15000,
   );
 
-  test.skipIf(!binaryPath)(
+  test.skipIf(!hasBrokerAndSumi)(
     "fails closed when the captured broker is unavailable under a stripped environment",
     async () => {
       const sockPath = shortSockPath("stripped-dead");
       const markerPath = path.join(tmpDir, `ran-${secretsFileSeq++}`);
-      const wrapper = writeWrapperScript(binaryPath!, sockPath);
+      const wrapper = writeWrapperScript(sumiPath!, sockPath);
       const proc = Bun.spawn(
         [
           wrapper,
@@ -1431,6 +1440,137 @@ describe("nas-mask-filter --serve", () => {
       await expectServeSilent(proc);
     },
     60000,
+  );
+});
+
+/**
+ * コンテナ内の Claude Code が呼ぶ `sumi hook --socket` を本物のブローカーに向けて
+ * 走らせる。秘密一覧のファイルは sumi に渡さない (env にも引数にも無い)。
+ *
+ * 出力に値が残っていないかは、値をテスト出力へ出さずにバイト列として照合する。
+ * 失敗時の差分に平文が載らないよう、`toContain(secret)` ではなく真偽値で比べる。
+ */
+describe("sumi hooks over the mask broker", () => {
+  const SECRET = "hook-secret-Tr0ub4dor";
+
+  async function runHook(
+    sockPath: string,
+    hook: "post-tool" | "prompt",
+    payload: unknown,
+  ): Promise<{ stdout: string; exitCode: number }> {
+    const proc = Bun.spawn(
+      [sumiPath!, "hook", "--agent", "claude", hook, "--socket", sockPath],
+      {
+        stdin: new TextEncoder().encode(JSON.stringify(payload)),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: envWithoutSupervisionMarker(),
+      },
+    );
+    const stdout = await new Response(proc.stdout).text();
+    return { stdout, exitCode: await proc.exited };
+  }
+
+  async function withBroker(
+    tag: string,
+    fn: (sockPath: string) => Promise<void>,
+  ): Promise<void> {
+    const sockPath = shortSockPath(tag);
+    const server = startServe(writeSecretsFile([SECRET]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      await fn(sockPath);
+    } finally {
+      server.kill();
+      await server.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+  }
+
+  test.skipIf(!hasBrokerAndSumi)(
+    "a Read tool result is masked before it reaches the transcript",
+    async () => {
+      await withBroker("hook-read", async (sockPath) => {
+        const content = `db.password=${SECRET}\nquote="${SECRET}"\n`;
+        const r = await runHook(sockPath, "post-tool", {
+          hook_event_name: "PostToolUse",
+          tool_name: "Read",
+          tool_response: {
+            type: "text",
+            file: { filePath: "/w/app.properties", content },
+          },
+        });
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout.includes(SECRET)).toBe(false);
+        const decision = JSON.parse(r.stdout);
+        expect(decision.hookSpecificOutput.updatedToolOutput.file.content).toBe(
+          content.replaceAll(SECRET, "*".repeat(SECRET.length)),
+        );
+      });
+    },
+    15000,
+  );
+
+  test.skipIf(!hasBrokerAndSumi)(
+    "a failed tool call carrying the value is reported",
+    async () => {
+      await withBroker("hook-fail", async (sockPath) => {
+        const r = await runHook(sockPath, "post-tool", {
+          hook_event_name: "PostToolUseFailure",
+          error: `Exit code 1\n${SECRET}`,
+        });
+        expect(r.exitCode).toBe(0);
+        expect(JSON.parse(r.stdout).systemMessage).toContain(
+          "a failed tool call carried a protected value",
+        );
+      });
+    },
+    15000,
+  );
+
+  test.skipIf(!hasBrokerAndSumi)(
+    "a prompt or attachment holding the value is blocked, a clean one passes",
+    async () => {
+      await withBroker("hook-prompt", async (sockPath) => {
+        const blocked = await runHook(sockPath, "prompt", {
+          prompt: `use ${SECRET}`,
+          cwd: tmpDir,
+        });
+        expect(JSON.parse(blocked.stdout).decision).toBe("block");
+
+        const attachment = path.join(tmpDir, `attach-${secretsFileSeq++}.txt`);
+        fs.writeFileSync(attachment, `x=${SECRET}\n`);
+        const attached = await runHook(sockPath, "prompt", {
+          prompt: `see @${attachment}`,
+          cwd: tmpDir,
+        });
+        expect(JSON.parse(attached.stdout).reason).toContain(
+          "holds a protected value",
+        );
+
+        const clean = await runHook(sockPath, "prompt", {
+          prompt: "hello",
+          cwd: tmpDir,
+        });
+        expect(clean.exitCode).toBe(0);
+        expect(clean.stdout).toBe("");
+      });
+    },
+    15000,
+  );
+
+  test.skipIf(!sumiPath)(
+    "an unreachable broker withholds the tool output",
+    async () => {
+      const r = await runHook(shortSockPath("hook-dead"), "post-tool", {
+        hook_event_name: "PostToolUse",
+        tool_response: { stdout: SECRET },
+      });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.includes(SECRET)).toBe(false);
+      expect(r.stdout).toContain("the mask broker could not be reached");
+    },
+    15000,
   );
 });
 

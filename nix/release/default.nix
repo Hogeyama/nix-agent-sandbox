@@ -13,6 +13,7 @@
 , hostexecIntercept
 , maskfs
 , maskFilter
+, sumi
 , mitmproxyVendor
 , nasAssetsBase
 }:
@@ -213,6 +214,7 @@ let
       { id = "nas-hostexec"; name = "nas-hostexec-gateway"; path = "${hostexecIntercept}/bin/nas-hostexec-gateway"; }
       { id = "nas-maskfs"; name = "nas-maskfs"; path = "${maskfs}/bin/nas-maskfs"; }
       { id = "nas-mask-filter"; name = "nas-mask-filter"; path = "${maskFilter}/bin/nas-mask-filter"; }
+      { id = "sumi"; name = "sumi"; path = "${sumi}/bin/sumi"; }
     ];
     javascript = {
       cli = "${nasUnwrapped}/share/nas/cli-compliance";

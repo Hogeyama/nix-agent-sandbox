@@ -69,6 +69,14 @@ root="$work/extracted"
   printf 'before ****** after\n' > "$work/filter.expected"
   cmp "$work/filter.expected" "$work/filter.out"
   echo 'Standalone mask-filter masked the probe input'
+  sumi="$root/share/nas/assets/sumi/sumi"
+  readelf -l "$sumi" > "$work/sumi.headers"
+  if grep -q INTERP "$work/sumi.headers"; then
+    echo 'sumi must remain a standalone static executable' >&2
+    exit 1
+  fi
+  "$sumi" --version | grep -q '^sumi '
+  echo 'Standalone sumi runs'
   for component in pkl dtach; do
     readelf -p .nas.changes "$root/orig/$component" > "$work/$component.changes"
     grep -F 'MODIFIED FOR NAS DISTRIBUTION' "$work/$component.changes"

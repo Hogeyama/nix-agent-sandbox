@@ -80,6 +80,7 @@ describe("createMaskFilterStage", () => {
     const input = makeStageInput();
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     const result = await Effect.runPromise(
@@ -103,6 +104,7 @@ describe("createMaskFilterStage", () => {
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     const result = await Effect.runPromise(
@@ -126,6 +128,7 @@ describe("createMaskFilterStage", () => {
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     const fakeLayer = makeMaskFilterServiceFake({
@@ -172,6 +175,7 @@ describe("createMaskFilterStage", () => {
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     const result = await Effect.runPromise(
@@ -195,6 +199,7 @@ describe("createMaskFilterStage", () => {
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     const plans: MaskFilterPreparePlan[] = [];
@@ -218,6 +223,65 @@ describe("createMaskFilterStage", () => {
     expect(path.dirname(plan.socketDir)).toEqual(path.dirname(frameDir));
     expect(plan.socketPath).toEqual(`${plan.socketDir}/mask.sock`);
     expect(plan.logFile).toEqual(`${frameDir}/serve.log`);
+    expect(plan.sumiBinaryHostPath).toEqual("/fake/sumi");
+  });
+
+  async function planFor(
+    agent: StageInput["profile"]["agent"],
+    extraAgents: StageInput["profile"]["extraAgents"] = [],
+  ): Promise<MaskFilterPreparePlan | undefined> {
+    const input = makeStageInput();
+    input.profile.agent = agent;
+    input.profile.extraAgents = extraAgents;
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
+    input.profile.mask = {
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
+      filter: true,
+    };
+    const stage = createMaskFilterStage(input, {
+      resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
+    });
+    const plans: MaskFilterPreparePlan[] = [];
+    const fakeLayer = makeMaskFilterServiceFake({
+      prepareMaskFilter: (plan) => {
+        plans.push(plan);
+        return Effect.succeed({ mounts: [], envVars: {} });
+      },
+    });
+    await Effect.runPromise(
+      Effect.scoped(
+        stage
+          .run({ container: emptyContainerPlan("img", "/work") })
+          .pipe(Effect.provide(fakeLayer)),
+      ),
+    );
+    return plans[0];
+  }
+
+  test("Claude profiles get the hook settings in the host-only session dir", async () => {
+    const plan = await planFor("claude");
+    if (!plan) throw new Error("no plan");
+    const frameDir = path.dirname(plan.secretsFramePath);
+    expect(plan.claudeManagedSettingsPath).toEqual(
+      `${frameDir}/claude-managed-settings.json`,
+    );
+    expect(plan.claudeManagedSettingsPath?.startsWith(plan.socketDir)).toBe(
+      false,
+    );
+  });
+
+  test("Claude as an extra agent also gets the hook settings", async () => {
+    const plan = await planFor("codex", ["claude"]);
+    expect(plan?.claudeManagedSettingsPath).toBeDefined();
+  });
+
+  test("profiles without Claude get no hook settings", async () => {
+    const plan = await planFor("codex");
+    expect(plan).toBeDefined();
+    expect(plan?.claudeManagedSettingsPath).toBeUndefined();
   });
 
   test("socket path over 107 bytes → fails", async () => {
@@ -236,6 +300,7 @@ describe("createMaskFilterStage", () => {
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     const exit = await Effect.runPromiseExit(
@@ -268,6 +333,7 @@ describe("createMaskFilterStage", () => {
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => null,
+      resolveSumiPath: async () => "/fake/sumi",
     });
     const container = emptyContainerPlan("img", "/work");
     await expect(
@@ -279,5 +345,29 @@ describe("createMaskFilterStage", () => {
         ),
       ),
     ).rejects.toThrow(/binary not found/);
+  });
+
+  test("sumi not found → fails", async () => {
+    const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
+    input.profile.mask = {
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
+      filter: true,
+    };
+    const stage = createMaskFilterStage(input, {
+      resolveBinPath: async () => "/fake/nas-mask-filter",
+      resolveSumiPath: async () => null,
+    });
+    await expect(
+      Effect.runPromise(
+        Effect.scoped(
+          stage
+            .run({ container: emptyContainerPlan("img", "/work") })
+            .pipe(Effect.provide(makeMaskFilterServiceFake())),
+        ),
+      ),
+    ).rejects.toThrow(/sumi binary not found/);
   });
 });

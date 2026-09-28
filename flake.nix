@@ -329,7 +329,7 @@
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
         nasAssetsBase = pkgs.runCommand "nas-assets-base" { } ''
-          mkdir -p $out/docker/embed $out/docker/mitmproxy $out/scripts $out/ui $out/hostexec $out/maskfs $out/mask-filter $out/config/templates
+          mkdir -p $out/docker/embed $out/docker/mitmproxy $out/scripts $out/ui $out/hostexec $out/maskfs $out/mask-filter $out/sumi $out/config/templates
 
           cp -r ${self}/src/docker/embed/. $out/docker/embed/
           cp ${self}/src/docker/mitmproxy/nas_addon.py $out/docker/mitmproxy/
@@ -343,6 +343,7 @@
           cp ${hostexecIntercept}/bin/nas-hostexec-gateway $out/hostexec/
           cp ${maskfs}/bin/nas-maskfs $out/maskfs/
           cp ${maskFilter}/bin/nas-mask-filter $out/mask-filter/
+          cp ${sumi}/bin/sumi $out/sumi/
           cp ${self}/src/config/Schema.pkl $out/config/
           cp ${self}/src/config/templates/config.pkl $out/config/templates/
           cp ${self}/src/config/templates/eval.pkl $out/config/templates/
@@ -363,7 +364,7 @@
         '';
         releaseInputs = import ./nix/release {
           inherit pkgs system self nixpkgs bun2nix nix-bundle-elf nasUnwrapped rawPayload pklVersion
-            pklNative dtachMarked hostexecIntercept maskfs maskFilter mitmproxyVendor;
+            pklNative dtachMarked hostexecIntercept maskfs maskFilter sumi mitmproxyVendor;
           pklBinaryPin = pklSourceBySystem.${system};
           nasAssetsBase = nasAssetsBundleBase;
         };

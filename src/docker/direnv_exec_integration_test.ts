@@ -312,7 +312,7 @@ export NAS_DIRENV_TEST_VALUE=loaded
 );
 
 // In the image /bin/bash is the mask wrapper, so direnv loads the environment under
-// nas-mask-filter's supervisor and snapshots the marker it exports to its child.
+// sumi's supervisor and snapshots the marker it exports to its child.
 // Carried into the payload, the marker makes every later bash skip the filter
 // while no supervisor is left running.
 test.skipIf(!integrationAvailable)(
@@ -327,12 +327,12 @@ test.skipIf(!integrationAvailable)(
       const supervisedBash = path.join(fixture.root, "supervised-bash");
       await writeFile(
         supervisedBash,
-        `#!${realBash}\nNAS_MASK_SUPERVISED=1 exec ${shellEscape([realBash])} "$@"\n`,
+        `#!${realBash}\nSUMI_SUPERVISED=1 exec ${shellEscape([realBash])} "$@"\n`,
         { mode: 0o755 },
       );
       // The launcher keeps a marker it was started with, so start it unmarked.
       // Use a non-Bash payload so the ambient wrapper cannot mark it either.
-      fixture.env.NAS_MASK_SUPERVISED = undefined;
+      fixture.env.SUMI_SUPERVISED = undefined;
       const env = { DIRENV_BASH: supervisedBash };
 
       const launched = await launch(fixture, ["/usr/bin/env"], { env });
@@ -340,13 +340,13 @@ test.skipIf(!integrationAvailable)(
       const payloadEnv = launched.stdout.split("\n");
       expect(payloadEnv).toContain("NAS_DIRENV_TEST_VALUE=loaded");
       expect(
-        payloadEnv.filter((line) => line.startsWith("NAS_MASK_SUPERVISED=")),
+        payloadEnv.filter((line) => line.startsWith("SUMI_SUPERVISED=")),
       ).toEqual([]);
 
       const exported = await launch(fixture, ["--export"], { env });
       expect(exported.exitCode).toBe(0);
       expect(exported.stdout).toContain("NAS_DIRENV_TEST_VALUE=loaded");
-      expect(exported.stdout).not.toContain("NAS_MASK_SUPERVISED");
+      expect(exported.stdout).not.toContain("SUMI_SUPERVISED");
     });
   },
 );
@@ -480,7 +480,7 @@ async function currentNasImageAvailable(): Promise<boolean> {
 const currentNasImage = await currentNasImageAvailable();
 
 // Use the shipped wrapper, relocating only its installed interpreter path.
-// The test supervisor puts its child under pipes like nas-mask-filter does.
+// The test supervisor puts its child under pipes like sumi run does.
 async function withMaskWrapper(fixture: Fixture, run: () => Promise<void>) {
   const entrypoint = await readFile(
     new URL("./embed/entrypoint.sh", import.meta.url),
@@ -502,7 +502,7 @@ async function withMaskWrapper(fixture: Fixture, run: () => Promise<void>) {
 while [ "$1" != -- ]; do shift; done
 shift
 printf supervised >> "$TEST_SUPERVISED_MARKER"
-NAS_MASK_SUPERVISED=1 "$@" 2>&1 | cat
+SUMI_SUPERVISED=1 "$@" 2>&1 | cat
 exit \${PIPESTATUS[0]}
 `,
     { mode: 0o755 },
@@ -528,7 +528,7 @@ ${body[1].replaceAll("/tmp/nas-bash-override/bash.real", realBash)}
       NAS_BASH_OVERRIDE: wrapperDir,
       NAS_MASK_FILTER: filter,
       NAS_MASK_SOCKET: socket,
-      NAS_MASK_SUPERVISED: undefined,
+      SUMI_SUPERVISED: undefined,
       TEST_SUPERVISED_MARKER: marker,
     });
     const probe = await runProcess(

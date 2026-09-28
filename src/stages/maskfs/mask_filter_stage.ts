@@ -1,8 +1,9 @@
 /**
  * MaskFilterStage — mask.filter が有効な場合、nas-mask-filter の `--serve`
- * デーモンをセッションスコープで起動し、その socket のディレクトリと
- * フィルタバイナリをコンテナへバインドマウントして、stdout/stderr マスク用の
- * env を ContainerPlan にマージする。
+ * デーモンをセッションスコープで起動し、その socket のディレクトリと sumi を
+ * コンテナへバインドマウントして、stdout/stderr マスク用の env を ContainerPlan に
+ * マージする。Claude Code を使うプロファイルでは、ツール結果とプロンプトを sumi の
+ * hook に通す managed settings もマウントする。
  *
  * 解決済みシークレットのフレームはホスト側にだけ置き、コンテナへは socket
  * しか見せない (C1)。そのため socket はセッションディレクトリの「兄弟」の
@@ -27,6 +28,7 @@ import type { PipelineState } from "../../pipeline/state.ts";
 import type { StageInput } from "../../pipeline/types.ts";
 import { resolveMaskFilterBinPath } from "./mask_filter_path.ts";
 import { MaskFilterService } from "./mask_filter_service.ts";
+import { resolveSumiBinPath } from "./sumi_path.ts";
 
 type StageResult = Pick<PipelineState, "container">;
 
@@ -39,6 +41,7 @@ const MAX_SOCKET_PATH_BYTES = 107;
 /** テスト用フック */
 export interface MaskFilterStageOptions {
   readonly resolveBinPath?: () => Promise<string | null>;
+  readonly resolveSumiPath?: () => Promise<string | null>;
 }
 
 export function createMaskFilterStage(
@@ -76,6 +79,22 @@ export function createMaskFilterStage(
           );
         }
 
+        const resolveSumi = options.resolveSumiPath ?? resolveSumiBinPath;
+        const sumiPath = yield* Effect.tryPromise({
+          try: () => resolveSumi(),
+          catch: (e) => e,
+        });
+        if (!sumiPath) {
+          return yield* Effect.fail(
+            new Error(
+              "[nas] mask: sumi binary not found. Build it with `cd contrib/sumi && zig build` (dev) or reinstall nas (nix).",
+            ),
+          );
+        }
+        const usesClaude =
+          shared.profile.agent === "claude" ||
+          shared.profile.extraAgents.includes("claude");
+
         const runtimeDir = resolveRuntimeSubdir(shared.host, "mask-filter");
         // socket はセッションディレクトリの「兄弟」に置く。マウントするのは
         // socket のあるディレクトリなので、同居させるとフレームごとコンテナへ
@@ -105,6 +124,14 @@ export function createMaskFilterStage(
           {
             secretsFramePath: `${sessionDir}/mask-secrets`,
             filterBinaryHostPath: binaryPath,
+            sumiBinaryHostPath: sumiPath,
+            // セッションディレクトリはマウントしない。ファイル単位のマウントなので
+            // 同居するフレームはコンテナから見えない。
+            ...(usesClaude
+              ? {
+                  claudeManagedSettingsPath: `${sessionDir}/claude-managed-settings.json`,
+                }
+              : {}),
             socketDir,
             socketPath,
             logFile: `${sessionDir}/serve.log`,

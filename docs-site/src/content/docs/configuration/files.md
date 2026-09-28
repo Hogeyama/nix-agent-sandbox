@@ -77,6 +77,8 @@ mask = new MaskConfig {
 
 mask を指定すると `maskfs`、`proxy`、`filter` は既定で true、`apply` はすべての名前付き秘密です。`apply` でファイル表示と出力フィルターの対象を絞れます。HTTP 通信ごとの秘密の扱いは[通信側の設定](/nix-agent-sandbox/configuration/network/#認証ヘッダーと秘密値)で選びます。
 
+出力フィルター（`filter`）は Bash の出力に加えて、Claude Code の `Read` や `Grep` などのツール結果も、会話履歴に記録される前にマスクします。プロンプトや `@` で添付したファイルが登録した値を含む場合は、送信を止めます。この処理を行う hook は、nas がコンテナ内の `/etc/claude-code/managed-settings.d/` に読み取り専用で置くため、ユーザーの `settings.json` を変更しません。秘密値の一覧はホストに残り、コンテナには置きません。
+
 mask を省略するとファイル表示と出力フィルターは無効ですが、プロキシのマスクは既定で有効です。`mask.maskfs = false` ではファイル内の秘密値が見えるようになります。`mask.proxy = false` にする場合は、ネットワーク側の mask / forbid 指定も変更する必要があります。
 
 `.nas/config.pkl` は読み取り専用で保護されますが、ホストコマンドが読む他のスクリプトや設定は自分で保護します。[ホスト実行の入力保護](/nix-agent-sandbox/configuration/host-commands/#実行前の条件)を参照してください。

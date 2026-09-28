@@ -78,18 +78,18 @@ async function makeTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-// 本物の nas-mask-filter の代役。実バイナリに置き換えないのは、これらの Docker
+// 本物の nas-mask-filter (ホスト側) と sumi (コンテナ側) の代役。実バイナリに置き換えないのは、これらの Docker
 // テストを Zig ビルド無しで走らせられるようにするためで、それがこのフィクスチャの
 // 存在理由そのものなので保つ。
 //
 // 実装するのは 3 モード:
 //   --serve <sock>  ホスト側ブローカー。1 接続 = 1 ストリームでマスクして返す。
 //                   シークレットフレームを読むのは**このモードだけ**。
-//   --supervise ... コンテナ側の中継クライアント。子を起動し、その stdout/stderr を
+//   run ...         コンテナ側の中継クライアント (sumi run --socket)。子を起動し、その stdout/stderr を
 //                   socket 経由でマスクして書き戻す。フレームは読まない。
 //   (引数なし)      素の stdin→stdout フィルタ。
 //
-// supervise モードでは子の出力を drain し切ってから子の終了ステータスで exit する
+// run では子の出力を drain し切ってから子の終了ステータスで exit する
 // ため、呼び出し元は「プロセスの終了 = 出力の完了」として扱える。
 const MASK_FILTER_FIXTURE = `#!/usr/bin/env python3
 import os
@@ -285,7 +285,7 @@ def supervise(argv):
     # 入れ子抑止のマーカー。渡さないとラッパーのガードが働かず、入れ子の
     # 検証が何も見ていないことになる。
     env = dict(os.environ)
-    env["NAS_MASK_SUPERVISED"] = "1"
+    env["SUMI_SUPERVISED"] = "1"
     child = subprocess.Popen(
         [argv0 or program] + argv[1:],
         executable=program,
@@ -333,7 +333,7 @@ def filter_stdin():
 args = sys.argv[1:]
 if args and args[0] == "--serve":
     serve(args[1])
-elif args and args[0] == "--supervise":
+elif args and args[0] == "run":
     supervise(args[1:])
 else:
     filter_stdin()
@@ -1157,7 +1157,7 @@ test.skipIf(!canBindMount)(
         [
           "/bin/bash",
           "-c",
-          `/bin/bash -c 'printf "inner=[%s] pw=${secret}\\n" "$NAS_MASK_SUPERVISED"'`,
+          `/bin/bash -c 'printf "inner=[%s] pw=${secret}\\n" "$SUMI_SUPERVISED"'`,
         ],
         {
           workDir,
