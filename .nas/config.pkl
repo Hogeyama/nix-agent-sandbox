@@ -475,7 +475,7 @@ profiles {
   ["claude"] = (baseProfile) {
     agentArgs = new Listing { "--dangerously-skip-permissions" }
     agentState {
-      auth = "shared"
+      auth = "injected"
     }
     env = (baseProfile.env) {
       new {
