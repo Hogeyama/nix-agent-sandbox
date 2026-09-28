@@ -34,7 +34,7 @@
 
 ## 系統1
 
-[settings.json 構成の評価と成立条件](threat-model.md#系統1-settingsjson)を確認し、共通設定と次の設定を同じ managed settings にマージする。
+[settings.json 構成の評価と成立条件](threat-model.md#系統1-settingsjson)を確認し、共通設定と次の設定を同じ managed settings にマージする。以下の `/srv/project` は、対象リポジトリの絶対パスに置き換える。設定ファイルは起動前に確認し、すべての `excludedCommands` を空にする。
 
 ```jsonc
 // /etc/claude-code/managed-settings.json
@@ -51,13 +51,19 @@
       "Read(~/.aws/**)",
       "Read(~/.config/gh/**)", // gh auth login の保存先
       "Read(//tmp/**)",
-      "Read(./.env)" // mask は Bash 側だけ。本体の Read は deny で拒否する
+      "Read(./.env)", // mask は Bash 側だけ。本体の Read は deny で拒否する
+      "Edit(~/.claude/**)", // 元のホスト側の設定・履歴・memory を保護する
+      "Edit(~/.claude.json)",
+      "Edit(//srv/project/.claude-state/settings.json)",
+      "Edit(//srv/project/.claude-state/settings.local.json)",
+      "Edit(//srv/project/.claude/**)" // Write ツールによる変更も拒否する
     ]
   },
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true, // 初期化失敗時に非 sandbox 実行へ fallback しない
-    "allowUnsandboxedCommands": false, // sandbox 外での実行を許可しない
+    "allowUnsandboxedCommands": false, // sandbox 外で再試行する機能を無効にする
+    "excludedCommands": [], // 他の設定ファイルにある例外も起動前に除去する
     "network": {
       "allowedDomains": [
         "api.anthropic.com:443",
@@ -71,6 +77,13 @@
     },
     "filesystem": {
       "allowWrite": ["./.local/tmp"],
+      "denyWrite": [
+        "~/.claude",
+        "~/.claude.json",
+        "/srv/project/.claude-state/settings.json",
+        "/srv/project/.claude-state/settings.local.json",
+        "/srv/project/.claude"
+      ],
       "denyRead": [ // Bash 側の読取拒否
         "/tmp",
         "~/.ssh",
@@ -101,16 +114,23 @@
 ```
 
 ```sh
+export CLAUDE_CONFIG_DIR="$PWD/.claude-state"
+mkdir -p "$CLAUDE_CONFIG_DIR"
 sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の保護でシークレットを隠せない場合のみ
+claude --permission-mode auto
 ```
 
-Bash 側は credential masking、本体の Read は `.env` の deny で保護する。masking は別の token を持ち込む操作を拒否しないため、A1b の強制境界にはならない。[系統1の評価](threat-model.md#系統1-settingsjson)
+`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。元のホスト側の `~/.claude` と `~/.claude.json` は Edit／Write と Bash の両方で書込みを禁止する。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
 
-`excludedCommands` を managed settings だけで固定できないため、この設定に加えて user / project settings から sandbox 外実行経路を追加できない運用が必要となる。
+Bash 側は credential masking、本体の Read は `.env` の deny で保護する。このマスク処理の対象は利用者が渡した token であり、プログラムが攻撃者の用意した別の token を使って通信する操作は残る。[系統1の評価](threat-model.md#系統1-settingsjson)
+
+`excludedCommands` は各設定ファイルの指定が合算されるため、管理者側で空にするだけでは例外の追加を防げない。この例では、`Edit` の拒否ルールで Edit／Write ツールからの設定変更を、`denyWrite` で Bash とその子プロセスからの設定変更を禁止する。上記と異なる `CLAUDE_CONFIG_DIR` や追加の設定ファイルを使う場合は、保護対象のパスも合わせる。[Edit の仕様](https://code.claude.com/docs/en/permissions#read-and-edit)、[sandbox の仕様](https://code.claude.com/docs/en/sandboxing#configure-the-sandbox)
+
+この構成の A1a は、上記の仕様に基づいて ◎ と評価する。追加した書込み禁止ルールの動作は実測していない。
 
 ## 系統2
 
-[srt 構成の評価と成立条件](threat-model.md#系統2-srt)に従い、Claude Code 本体ごと隔離する。この JSON 設定は hostname と自分の credential の保護を扱い、許可サービス上で別の認証主体を使う操作は制限しない。
+[srt 構成の評価と成立条件](threat-model.md#系統2-srt)に従い、Claude Code 本体ごと隔離する。この JSON 設定では接続先の hostname を制限し、利用者が渡した認証情報をマスクする。プログラムが攻撃者の token を使い、許可したサービス上の攻撃者の repo などへ書き込む操作は残る。
 
 ```jsonc
 // ~/.srt-settings.json
@@ -162,7 +182,7 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の�
 srt --settings ~/.srt-settings.json claude --permission-mode auto
 ```
 
-設定・認証・履歴を `.claude-state` に分離し、Git 管理から除外する。この状態は隔離実行専用で、ホストでは使わない。既存 hook の実体を共通条件と異なる場所へ置く場合は、その参照先も `denyWrite` に追加する。
+`.claude-state` はこの設定例で選んだ名前で、保存先を切り替えるのは Claude Code の `CLAUDE_CONFIG_DIR` である。Git 管理から除外し、ホストの通常実行では使わない。srt の `allowWrite` を作業領域に限定し、元のホスト状態への書込みを拒否する。この分離を[実験](experiments/state-isolation/README.md)で確認した。既存 hook の実体を共通条件と異なる場所へ置く場合は、その参照先も `denyWrite` に追加する。
 
 ## 系統3
 
@@ -387,9 +407,34 @@ nas claude
 
 `expect.graphql` は Issue / PR / comment 用の取得経路と owner / repo 名を制限する。必要な field を追加するときも、未信頼情報源へ辿れない経路に限る。許可外の repo・取得経路、mutation、判定不能な要求、REST write、Git push は `review` とする。承認は `once` とし、後続の未信頼取得まで自動許可しない。
 
-Git と nas の自動保護の内訳・対象外は[本体の保護対象表](threat-model.md#系統4-nas)を参照。`git config`、`git remote add`、`git push -u` 等、`.git/config` を更新する操作はホストで行う。
+### nas で保護するファイル
 
-秘密一覧はホスト側で読み、container 内の同じパスは `/dev/null` で隠す。`lines:` はマスク用で、注入には使えない。自動配置する sumi は socket 経由でマスクを依頼する。[保護範囲と実機確認](threat-model.md#系統4-nas)を参照。
+既存の設定や hook が次の保護対象に収まるよう配置する。
+
+| 対象 | 保護と条件 |
+| --- | --- |
+| Git と nas の既存設定 | `.git/config`、`.git/hooks`、`core.hooksPath` の参照先、`config.worktree`、linked worktree の `.git` ポインタ、`.nas` を自動で read-only にする。`.git/hooks` がなければホストに空で作る |
+| 保護対象までの親ディレクトリ | 作業領域の root と、そこから `.git` 等までの親ディレクトリもマウントする。親の名前を変えて同名のディレクトリを作り直す操作で、保護を回避することを防ぐ |
+| 作業領域の `.claude` | 自動保護の対象外なので明示的に read-only mount する。起動前に存在することが必須。存在しないパスは mount されず、新規作成できてしまう |
+| ホストの Claude Code 設定 | `agentState.protectSettings = true` で `~/.claude/settings.json`、plugin、skill、agent、command 等を read-only 共有する。hook 実体も `~/.claude` 配下に置く |
+| MCP 設定 | `~/.claude.json` は RW 共有するため、ホスト・container 双方の managed settings で MCP server を制限する |
+| 共有する履歴・memory 等 | `~/.claude.json`、`~/.claude/history.jsonl`、`projects/` 内の auto memory を含む状態、`file-history/` は RW。ログ・キャッシュとホストにない項目はセッション専用 |
+
+共有するファイルは [Claude 状態の共有定義](../../src/stages/mount/claude_state_fs.ts)と[マウント構成](../../src/agents/claude.ts)に実装されている。これらが生成するマウントを使った[書込み実験](experiments/state-isolation/README.md)では、設定への書込みは拒否されたが、実験用の会話履歴と memory は、ホスト側のファイルにも変更が反映された。`protectSettings` が保護するのは設定類で、履歴・memory は継続利用のため RW 共有する。`~/.claude.json` に含まれる MCP 設定は、両環境の managed settings で制限する。
+
+`.git/config` の保護は、`core.hooksPath` の変更による迂回に加え、`core.fsmonitor`、`filter.*`、`diff.*.textconv` 等からの実行も防ぐために必要である。`git config`、`git remote add`、`git push -u` 等の設定更新は container 内では失敗するので、ホストで行う。共有する設定・plugin の更新もホスト側で行う。
+
+自動保護の対象外は、サブディレクトリに新しく作った `.git`、submodule の `.git/modules`、起動後の `config.worktree`。作業領域のパスが symlink を経由すると `core.hooksPath` や worktree のポインタが保護から漏れる場合もある。ホストが既に使う設定がこれらの範囲にあれば B2a は未達となる。
+
+### nas でのシークレットの扱い
+
+マスクする値の一覧はホスト側で読み、コンテナ内の同じパスは `/dev/null` で隠す。`lines:` はマスクする値の指定に使う。通信に付ける認証情報は別途指定する。
+
+maskfs はファイル内の値を、proxy は HTTP の要求に含まれる値を、`mask.filter` はツールの出力をマスクする。認証情報の代理注入と auto mode の操作審査も使い、シークレットがモデルへ送られたり、誤って保存されたりする被害を減らす。`mask.filter = true` では nas が sumi を自動配置し、Bash の stdout/stderr のマスクと Claude Code の managed hooks を設定する。秘密一覧はホスト側に保持し、container 内の sumi はマスク用 socket に処理を依頼するため、別途 sumi のインストールや `sumi init` は不要。
+
+Read / Grep 等の成功ツール結果は、モデルへの送信とローカル会話履歴への保存より前にマスクする。利用者が実機の Claude Code で成功時のツール出力と保存後の会話履歴を確認し、どちらも値がマスクされていることを確かめた。失敗結果は hook から差し替えられないが、Bash の出力は実行時にマスクする。Git が管理するファイルには、共通条件の[差分への対策](threat-model.md#git-が管理するファイルの差分)も適用する。
+
+Claude のログイン情報は container へ共有せず、既定の `agentState.auth = "injected"` でホスト側が OAuth token を保持・更新する。container にはダミーの `.credentials.json` を見せ、Anthropic の許可した request にだけ本物を注入する。proxy は接続先の証明書を検証し、TLS で通信する要求にだけ本物の認証情報を付ける。平文 HTTP の要求には付けない。一方、TLS を傍受する社内 proxy や自己署名証明書の接続先には対応せず、検証を回避する設定もない。
 
 ## 系統5
 

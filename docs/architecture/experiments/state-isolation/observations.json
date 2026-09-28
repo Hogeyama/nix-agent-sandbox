@@ -1,0 +1,352 @@
+{
+  "date": "2026-09-28T16:35:26.521Z",
+  "revision": "de3b9932a27092e5a1607c022420297a43683744",
+  "srt": "0.0.77",
+  "docker": "Docker version 29.6.2, build v29.6.2",
+  "bwrap": "bubblewrap 0.11.2",
+  "image": "nas-sandbox:latest",
+  "imageId": "sha256:09b9c66587f340c34b5094ee3e041ac2a275c5ff61c2adb7623ad3ef896c40e9",
+  "scope": "Direct filesystem operations by untrusted child processes; synthetic host state; actual srt CLI and production nas state mounts in Docker. No LLM or real credentials. nas nonshared is a mount-level prototype, not a supported profile.",
+  "cases": [
+    {
+      "name": "srt-shared",
+      "mode": "shared",
+      "runtime": "srt",
+      "result": {
+        "status": 0,
+        "signal": null,
+        "stdout": "{\"normalWrite\":true,\"directMemoryWrite\":true,\"directHistoryWrite\":true,\"settingsWrite\":false,\"outsideWrite\":false}\n",
+        "stderr": ""
+      },
+      "child": {
+        "normalWrite": true,
+        "directMemoryWrite": true,
+        "directHistoryWrite": true,
+        "settingsWrite": false,
+        "outsideWrite": false
+      },
+      "hostMemory": "direct-memory",
+      "hostHistory": "direct-history",
+      "hostSettings": "{}",
+      "hostGuard": "original-guard",
+      "selectedState": "direct-memory",
+      "settings": {
+        "network": {
+          "allowedDomains": [],
+          "deniedDomains": []
+        },
+        "filesystem": {
+          "allowWrite": [
+            "<scratch>/srt-shared/work",
+            "<scratch>/srt-shared/synthetic-host/.claude"
+          ],
+          "denyWrite": [
+            "<scratch>/srt-shared/synthetic-host/.claude/settings.json",
+            "<scratch>/srt-shared/work/.claude"
+          ],
+          "denyRead": []
+        }
+      }
+    },
+    {
+      "name": "srt-redirect-only",
+      "mode": "redirect-only",
+      "runtime": "srt",
+      "result": {
+        "status": 0,
+        "signal": null,
+        "stdout": "{\"normalWrite\":true,\"directMemoryWrite\":true,\"directHistoryWrite\":true,\"settingsWrite\":false,\"outsideWrite\":false}\n",
+        "stderr": ""
+      },
+      "child": {
+        "normalWrite": true,
+        "directMemoryWrite": true,
+        "directHistoryWrite": true,
+        "settingsWrite": false,
+        "outsideWrite": false
+      },
+      "hostMemory": "direct-memory",
+      "hostHistory": "direct-history",
+      "hostSettings": "{}",
+      "hostGuard": "original-guard",
+      "selectedState": "selected-write",
+      "settings": {
+        "network": {
+          "allowedDomains": [],
+          "deniedDomains": []
+        },
+        "filesystem": {
+          "allowWrite": [
+            "<scratch>/srt-redirect-only/work",
+            "<scratch>/srt-redirect-only/synthetic-host/.claude"
+          ],
+          "denyWrite": [
+            "<scratch>/srt-redirect-only/synthetic-host/.claude/settings.json",
+            "<scratch>/srt-redirect-only/work/.claude"
+          ],
+          "denyRead": []
+        }
+      }
+    },
+    {
+      "name": "srt-nonshared",
+      "mode": "nonshared",
+      "runtime": "srt",
+      "result": {
+        "status": 0,
+        "signal": null,
+        "stdout": "{\"normalWrite\":true,\"directMemoryWrite\":false,\"directHistoryWrite\":false,\"settingsWrite\":false,\"outsideWrite\":false}\n",
+        "stderr": ""
+      },
+      "child": {
+        "normalWrite": true,
+        "directMemoryWrite": false,
+        "directHistoryWrite": false,
+        "settingsWrite": false,
+        "outsideWrite": false
+      },
+      "hostMemory": "original-memory",
+      "hostHistory": "original-history",
+      "hostSettings": "{}",
+      "hostGuard": "original-guard",
+      "selectedState": "selected-write",
+      "settings": {
+        "network": {
+          "allowedDomains": [],
+          "deniedDomains": []
+        },
+        "filesystem": {
+          "allowWrite": [
+            "<scratch>/srt-nonshared/work"
+          ],
+          "denyWrite": [
+            "<scratch>/srt-nonshared/synthetic-host/.claude/settings.json",
+            "<scratch>/srt-nonshared/work/.claude"
+          ],
+          "denyRead": []
+        }
+      }
+    },
+    {
+      "name": "nas-shared",
+      "mode": "shared",
+      "runtime": "nas",
+      "result": {
+        "status": 0,
+        "signal": null,
+        "stdout": "{\"normalWrite\":true,\"directMemoryWrite\":true,\"directHistoryWrite\":true,\"settingsWrite\":false,\"outsideWrite\":false}\n",
+        "stderr": ""
+      },
+      "child": {
+        "normalWrite": true,
+        "directMemoryWrite": true,
+        "directHistoryWrite": true,
+        "settingsWrite": false,
+        "outsideWrite": false
+      },
+      "hostMemory": "direct-memory",
+      "hostHistory": "direct-history",
+      "hostSettings": "{}",
+      "hostGuard": "original-guard",
+      "selectedState": "direct-memory",
+      "mounts": [
+        {
+          "source": "<runtime-state>",
+          "target": "/probe-home/.claude"
+        },
+        {
+          "source": "<scratch>/nas-shared/synthetic-host/.claude/file-history",
+          "target": "/probe-home/.claude/file-history",
+          "readOnly": false
+        },
+        {
+          "source": "<scratch>/nas-shared/synthetic-host/.claude/history.jsonl",
+          "target": "/probe-home/.claude/history.jsonl",
+          "readOnly": false
+        },
+        {
+          "source": "<scratch>/nas-shared/synthetic-host/.claude/projects",
+          "target": "/probe-home/.claude/projects",
+          "readOnly": false
+        },
+        {
+          "source": "<scratch>/nas-shared/synthetic-host/.claude/settings.json",
+          "target": "/probe-home/.claude/settings.json",
+          "readOnly": true
+        },
+        {
+          "source": "<scratch>/nas-shared/synthetic-host/.claude.json",
+          "target": "/probe-home/.claude.json"
+        }
+      ]
+    },
+    {
+      "name": "nas-redirect-only",
+      "mode": "redirect-only",
+      "runtime": "nas",
+      "result": {
+        "status": 0,
+        "signal": null,
+        "stdout": "{\"normalWrite\":true,\"directMemoryWrite\":true,\"directHistoryWrite\":true,\"settingsWrite\":false,\"outsideWrite\":false}\n",
+        "stderr": ""
+      },
+      "child": {
+        "normalWrite": true,
+        "directMemoryWrite": true,
+        "directHistoryWrite": true,
+        "settingsWrite": false,
+        "outsideWrite": false
+      },
+      "hostMemory": "direct-memory",
+      "hostHistory": "direct-history",
+      "hostSettings": "{}",
+      "hostGuard": "original-guard",
+      "selectedState": "selected-write",
+      "mounts": [
+        {
+          "source": "<runtime-state>",
+          "target": "/probe-home/.claude"
+        },
+        {
+          "source": "<scratch>/nas-redirect-only/synthetic-host/.claude/file-history",
+          "target": "/probe-home/.claude/file-history",
+          "readOnly": false
+        },
+        {
+          "source": "<scratch>/nas-redirect-only/synthetic-host/.claude/history.jsonl",
+          "target": "/probe-home/.claude/history.jsonl",
+          "readOnly": false
+        },
+        {
+          "source": "<scratch>/nas-redirect-only/synthetic-host/.claude/projects",
+          "target": "/probe-home/.claude/projects",
+          "readOnly": false
+        },
+        {
+          "source": "<scratch>/nas-redirect-only/synthetic-host/.claude/settings.json",
+          "target": "/probe-home/.claude/settings.json",
+          "readOnly": true
+        },
+        {
+          "source": "<scratch>/nas-redirect-only/synthetic-host/.claude.json",
+          "target": "/probe-home/.claude.json"
+        }
+      ]
+    },
+    {
+      "name": "nas-nonshared",
+      "mode": "nonshared",
+      "runtime": "nas",
+      "result": {
+        "status": 0,
+        "signal": null,
+        "stdout": "{\"normalWrite\":true,\"directMemoryWrite\":true,\"directHistoryWrite\":true,\"settingsWrite\":false,\"outsideWrite\":false}\n",
+        "stderr": ""
+      },
+      "child": {
+        "normalWrite": true,
+        "directMemoryWrite": true,
+        "directHistoryWrite": true,
+        "settingsWrite": false,
+        "outsideWrite": false
+      },
+      "hostMemory": "original-memory",
+      "hostHistory": "original-history",
+      "hostSettings": "{}",
+      "hostGuard": "original-guard",
+      "selectedState": "selected-write",
+      "mounts": [
+        {
+          "source": "<runtime-state>",
+          "target": "/probe-home/.claude"
+        },
+        {
+          "source": "<scratch>/nas-nonshared/synthetic-host/.claude/settings.json",
+          "target": "/probe-home/.claude/settings.json",
+          "readOnly": true
+        }
+      ]
+    }
+  ],
+  "cleaned": true,
+  "startup": {
+    "claudeVersion": "2.1.283",
+    "scope": "Actual Claude Code --init-only; explicit SessionStart hook writes startup-marker; no conversation, authentication, or resume test.",
+    "environment": {
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+      "DISABLE_AUTOUPDATER": "1",
+      "ANTHROPIC_API_KEY": "state-probe-dummy",
+      "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
+      "CLAUDE_CONFIG_DIR": "<work>/.claude-state",
+      "CLAUDE_CODE_TMPDIR": "<work>/.local/tmp (srt); image default (nas)"
+    },
+    "nasDate": "2026-09-28T16:36:25.786Z",
+    "srtDate": "2026-09-28T16:37:30.807Z",
+    "cases": [
+      {
+        "name": "srt-redirect-only",
+        "result": {
+          "status": 0,
+          "signal": null,
+          "stdout": "",
+          "stderr": ""
+        },
+        "child": {
+          "startupMarker": "startup-ok",
+          "configCreated": true
+        },
+        "hostMemory": "original-memory",
+        "hostHistory": "original-history"
+      },
+      {
+        "name": "srt-nonshared",
+        "result": {
+          "status": 0,
+          "signal": null,
+          "stdout": "",
+          "stderr": ""
+        },
+        "child": {
+          "startupMarker": "startup-ok",
+          "configCreated": true
+        },
+        "hostMemory": "original-memory",
+        "hostHistory": "original-history"
+      },
+      {
+        "name": "nas-redirect-only",
+        "result": {
+          "status": 0,
+          "signal": null,
+          "stdout": "",
+          "stderr": ""
+        },
+        "child": {
+          "startupMarker": "startup-ok",
+          "configCreated": true
+        },
+        "hostMemory": "original-memory",
+        "hostHistory": "original-history"
+      },
+      {
+        "name": "nas-nonshared",
+        "result": {
+          "status": 0,
+          "signal": null,
+          "stdout": "",
+          "stderr": ""
+        },
+        "child": {
+          "startupMarker": "startup-ok",
+          "configCreated": true
+        },
+        "hostMemory": "original-memory",
+        "hostHistory": "original-history"
+      }
+    ],
+    "setupCorrections": [
+      "Separate srt options from Claude options with --; otherwise Claude --settings was parsed by srt.",
+      "Set CLAUDE_CODE_TMPDIR to writable <work>/.local/tmp for srt. The attempt without this failed with EROFS mkdir /tmp/claude after creating the config. Neither initial failure was counted as protection."
+    ]
+  }
+}
