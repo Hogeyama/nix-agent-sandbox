@@ -34,7 +34,7 @@ Claude Code の auto mode は、実行予定の操作を classifier で審査す
 | **A3: 意図しないローカル保存** | `.env` の commit、token の埋め込み、secret を含む API response のログ保存等 | Y 過失による被害を減らす |
 | **B1: 本番変更・公開・権限の変更** | 本番 DB の変更やデプロイ、メール送信、repo の公開範囲・権限・branch protection の変更、deploy key・webhook・App・secret・environment の設定変更、token の発行、package・container・release の公開。エージェントが変更した成果物を、強い権限を持つ CI やサービスが実行する場合も含む | X 敵対的な操作による被害も阻止する |
 | **B2a: ホストのファイルや実行設定の破壊・改変** | 変更を許可していないホストファイルの改変。作業領域内でも、ホストが使う既存の設定・hook・plugin・skill・script とその参照先を含む | X 敵対的な操作による被害も阻止する |
-| **B2b: 作業ファイル・履歴・memory の破壊・汚染** | ファイルや Git 履歴の削除、会話履歴や memory への悪意ある指示の書込み、バックドアの追加、テストやセキュリティ検査の無効化、依存パッケージ・lockfile・ビルドスクリプト・CI workflow・生成物への細工 | Y 過失による被害を減らす |
+| **B2b: 作業ファイル・履歴・memory の破壊・汚染** | 誤ったコマンドによるファイルや Git 履歴の削除、誤った一括置換や上書き、force push による履歴の消失、テストの誤った無効化・削除 | Y 過失による被害を減らす |
 
 A1b は、送信先のアカウントや repo に情報を渡してよいかを扱う。A2 は、正規の相手に送る情報の内容を扱う。サービスへの接続を許可したうえで、共有先と情報の範囲をそれぞれ定める。fine-grained token の権限制限は、その token を使う操作に適用される。A1b では、隔離環境内のプログラムが攻撃者の用意した別の token を使い、攻撃者の repo などへ情報を書き込めるかも確認する。
 
@@ -172,7 +172,7 @@ index や履歴に本物を含む場合は、`git show` や `git diff --cached` 
 
 ## 各方式の評価理由と成立条件
 
-以下では、隔離範囲、許可先サービス内の制限、secret の扱い、P1 の違いを示す。B2b-Y の作業領域での誤操作を減らす審査には、共通条件の対策を使う。履歴や memory への書込みも B2b に含める。
+以下では、隔離範囲、許可先サービス内の制限、secret の扱い、P1 の違いを示す。B2b-Y は全系統で共通条件の auto mode を使い、`rm -rf`、`git reset --hard`、force push 等の破壊的な操作を審査して誤操作を減らす。履歴や memory への書込みも B2b に含める。系統ごとに追加の対策がある場合だけ、各節に記す。
 
 ### 系統1: settings.json
 
@@ -238,8 +238,9 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 - **A1a: ◎** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。
 - **A1b: ○** — `sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では、GitHub への通常の proxy 通信は偽の Authorization header もホストの認証値へ上書きした。一方、`curl --noproxy '*'` は GitHub の公開証明書で TLS 接続し、指定した偽 token に対して `Bad credentials` が返った。ログは認証注入のない `transparent` 経路を示す。接続先のホスト名は制限されるが、この方法ではプログラムが指定した token が GitHub へ届く。実測した範囲は、偽の token に対する GitHub の認証エラーが返るところまでである。
-- **B2a: ◎** — clone mode で VM 内に作業用の clone を作り、ホスト repo は `/run/sandbox/source` に read-only mount する。shared skills と SSH agent forwarding も無効にする。ホスト作業ツリーからの分離は B2b-Y の低減にもなる。
+- **B2a: ◎** — clone mode で VM 内に作業用の clone を作り、ホスト repo は `/run/sandbox/source` に read-only mount する。shared skills と SSH agent forwarding も無効にする。
 - **A2-Y・A3-Y: ○** — secret store と代理注入を使う。ただし、ホスト repo の mount には untracked / `.gitignore` 対象も含まれ、`.env` 等の secret は VM 内から読める。代理注入だけでは隠せないため、[設定例](threat-model-configurations.md#系統5)の secret の移動・読取拒否・sumi 併用と auto mode を組み合わせる。
+- **B2b-Y: ○** — auto mode の審査に加え、作業は VM 内の clone で行うため、誤った削除や上書きがホストの作業ツリーに及ばない。
 
 `gh` の [GraphQL API](https://docs.github.com/en/graphql/guides/forming-calls-with-graphql) は query / mutation とも `POST /graphql` の本文で対象を指定する。[Docker Sandbox の HTTP ルール](https://docs.docker.com/ai/sandboxes/governance/concepts/#http-method-and-path)の公開仕様は method/path までで、取得先を区別できない。この比較では GraphQL の利用が必要なので `POST /graphql` を許可する。その本文で指定される取得先は classifier が審査するため、P1 は ○ とする。
 
