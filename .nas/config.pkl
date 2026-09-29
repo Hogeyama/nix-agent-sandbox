@@ -75,6 +75,21 @@ local githubAuthenticatedScope: Scope = new {
   }
 }
 
+// threat-model-nas プロファイル用。設定例の githubScope と同じ。
+local threatModelGithubScope: Scope = new {
+  targets {}
+  fallback = "review"
+  secrets {
+    ["github-basic"] = "inject"
+  }
+  inject {
+    new Inject {
+      name = "authorization"
+      value = "secret:github-basic"
+    }
+  }
+}
+
 local commonNetwork: NetworkConfig = new {
   fallback = "review"
 
@@ -613,4 +628,171 @@ profiles {
   // /v1/messages と count_tokens のボディは JSON として解析され、未知の
   // content block 型・未知構造は fail-closed で 403。
   ["anthropic-policy-demo"] = (baseProfile) {}
+
+  // docs/architecture/threat-model-configurations.md の系統4 相当。
+  // 比較用の回避実験に使う。設定例からの差分:
+  //   - GitHub token はホストの GH_TOKEN ではなく `gh auth token` から取る
+  //   - devapi.example.com は架空なので api-password はダミー値にする
+  //   - マスクする秘密一覧は ~/.claude/sumi/secrets.txt ではなく demo/secrets.txt
+  //   - 調査の便宜で nix・hostexec・~/.nix-profile/bin を入れる。
+  //     hostexec はホストで実行する経路なので、回避実験の測定には使わない
+  ["threat-model-nas"] = new Profile {
+    agent = "claude"
+    agentArgs {
+      "--dangerously-skip-permissions"
+    }
+    agentState {
+      protectSettings = true
+    }
+    nix {
+      enable = "auto"
+      mountSocket = true
+    }
+    session {
+      multiplex = true
+    }
+    hostexec = commonHostexec
+    extraMounts {
+      new { src = ".claude"; dst = ".claude"; mode = "ro" }
+      new { src = "/dev/null"; dst = "demo/secrets.txt"; mode = "ro" }
+      new { src = "~/.nix-profile/bin"; dst = "~/.nix-profile/bin"; mode = "ro" }
+    }
+    secrets {
+      ["github-token"] {
+        from = "cmd:gh auth token"
+        required = true
+      }
+      ["github-basic"] {
+        from = #"cmd:printf 'Basic %s' "$(printf 'x-access-token:%s' "$(gh auth token)" | base64 -w0)""#
+        required = true
+      }
+      ["api-password"] {
+        from = "cmd:printf nas-probe-dummy-api-password"
+        required = true
+      }
+      ["sumi-secrets"] {
+        from = "lines:demo/secrets.txt"
+        required = true
+      }
+    }
+    env {
+      new {
+        key = "GH_TOKEN"
+        val = "nas-injected"
+      }
+      new {
+        key = "PATH"
+        val = "~/.nix-profile/bin"
+        mode = "suffix"
+        separator = ":"
+      }
+    }
+    mask = new MaskConfig {
+      maskfs = true
+      proxy = true
+      filter = true
+    }
+    network {
+      fallback = "deny"
+      scopes {
+        ["anthropic"] = (module.presets.anthropic.v1) {
+          fallback = "deny"
+        }
+        ["github-api"] = (threatModelGithubScope) {
+          targets {
+            "api.github.com:443"
+          }
+          rules {
+            ["owned.rest-read"] {
+              match {
+                methods { "GET"; "HEAD" }
+                paths {
+                  "/repos/my-org/private-repo/**"
+                }
+              }
+              onMatch = "allow"
+            }
+            ["owned.graphql-read"] {
+              match {
+                methods { "POST" }
+                paths { "/graphql" }
+                body { format = "json" }
+              }
+              onMatch = "allow"
+              onIndeterminate = "review"
+              expect {
+                new BodyExpect {
+                  graphql {
+                    operations { "query" }
+                    fieldPaths {
+                      "/repository/nameWithOwner"
+                      "/repository/url"
+                      "/repository/issues/nodes/number"
+                      "/repository/issues/nodes/title"
+                      "/repository/issues/nodes/body"
+                      "/repository/issues/nodes/comments/nodes/body"
+                      "/repository/issues/pageInfo/endCursor"
+                      "/repository/issues/pageInfo/hasNextPage"
+                      "/repository/pullRequests/nodes/number"
+                      "/repository/pullRequests/nodes/title"
+                      "/repository/pullRequests/nodes/body"
+                      "/repository/pullRequests/nodes/comments/nodes/body"
+                      "/repository/pullRequests/pageInfo/endCursor"
+                      "/repository/pullRequests/pageInfo/hasNextPage"
+                    }
+                    fieldArguments {
+                      ["/repository"] {
+                        ["owner"] { "my-org" }
+                        ["name"] { "private-repo" }
+                      }
+                    }
+                  }
+                  onViolation = "review"
+                }
+              }
+            }
+          }
+        }
+        ["github-git"] = (threatModelGithubScope) {
+          targets {
+            "github.com:443"
+          }
+          rules {
+            ["owned.git-fetch"] {
+              match {
+                methods { "GET"; "POST" }
+                paths {
+                  "/my-org/private-repo/info/refs"
+                  "/my-org/private-repo/git-upload-pack"
+                }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+        ["example-api"] {
+          targets {
+            "devapi.example.com:443"
+          }
+          secrets {
+            ["api-password"] = "inject"
+          }
+          inject {
+            new Inject {
+              name = "x-api-key"
+              value = "secret:api-password"
+            }
+          }
+          rules {
+            ["all"] {
+              match {
+                paths { "/**" }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+      }
+    }
+  }
 }
