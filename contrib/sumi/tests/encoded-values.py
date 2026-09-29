@@ -107,6 +107,20 @@ class EncodedValues(unittest.TestCase):
         # standalone encoding. Keep this limit visible in executable coverage.
         self.assertEqual(self.filter(encoded), encoded)
 
+    def test_base64_listed_value_also_masks_decoded_value(self):
+        value = "Listed/Decoy_7429+value"
+        for encoded in [base64.b64encode(value.encode()),
+                        base64.b64encode(value.encode() + b"\n"),
+                        base64.urlsafe_b64encode(value.encode())]:
+            self.protect(encoded)
+            # The decoded value is expanded like any listed value.
+            for shown in [value, quote(value, safe="")]:
+                with self.subTest(encoded=encoded, shown=shown):
+                    raw = shown.encode()
+                    self.assertEqual(self.filter(b"a=" + raw + b";"),
+                                     b"a=" + b"*" * len(raw) + b";")
+            self.assertEqual(self.filter(encoded), b"*" * len(encoded))
+
     def test_clean_output_is_unchanged(self):
         self.protect(b"UnrelatedDecoy_7429")
         clean = b"normal output\nhttps://example.test/a%2Fb?q=a+b\nYWJjZA==\n"

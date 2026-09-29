@@ -47,6 +47,15 @@ mYImP0rTaNTpaSS
 > [!NOTE]
 > 制限として、各値は 4 バイト以上、全体で 1024 件以下にする必要があります。
 
+値が base64 で書かれている場合（Kubernetes の Secret からコピーした値など）は、復号した値も伏せます。
+例えば `VHIwdWI0ZG9y` と書けば、`VHIwdWI0ZG9y` と `Tr0ub4dor` の両方が対象になります。
+対象になるのは、パディング込みで長さが 4 の倍数の正準な base64（標準・URL-safe のどちらでも）で、復号値が 4 バイト以上の UTF-8 で制御文字を含まない行だけです。
+`echo x | base64` のような末尾の改行は取り除きます。
+条件を満たさない行は、そのまま通常の値として扱います。
+
+> [!WARNING]
+> 偶然この条件を満たす値（例: `dGVzdA==` は `test` の base64）を書くと、復号値も伏せられ、それを含むプロンプトは拒否されます。
+
 ### Claude Codeの設定を生成
 
 下記の `sumi init` コマンドを実行すると、`~/.claude/settings.json` にマスク用の hooks と環境変数 `CLAUDE_CODE_SHELL{,_PREFIX}` が追加されます。
