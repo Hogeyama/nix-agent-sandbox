@@ -7,7 +7,19 @@
 
 import { judgeGraphql } from "./graphql.ts";
 
-export type Decision = { action: "allow" | "deny"; reason?: string };
+/**
+ * `review` is a request that is outside the policy but carries only
+ * credentials strait issued, so a human may let it through. Everything that
+ * fails a transport or credential check is `deny`: no one is ever asked to
+ * pass a foreign token or a request whose target GitHub would read
+ * differently.
+ */
+export type Decision =
+  | { action: "allow" | "deny"; reason?: string }
+  | { action: "review"; reason: string };
+
+/** What srt enforces: a review ends in one of these. */
+export type FinalDecision = Exclude<Decision, { action: "review" }>;
 
 export interface PolicyRequest {
   method: string;
@@ -52,6 +64,7 @@ export const HOSTS = [ANTHROPIC_HOST, GITHUB_API_HOST, GITHUB_HOST] as const;
 
 const allow: Decision = { action: "allow" };
 const deny = (reason: string): Decision => ({ action: "deny", reason });
+const review = (reason: string): Decision => ({ action: "review", reason });
 
 // Claude Code's endpoints on api.anthropic.com, taken from nas's
 // `presets.anthropic.v1`, plus `/api/model_selector/cc`, which Claude Code
@@ -216,7 +229,7 @@ function decideAnthropic(method: string, path: string): Decision {
     if (!route.methods.includes(method)) continue;
     if (route.paths.some((p) => matchPath(p, path))) return allow;
   }
-  return deny(`${method} ${path} is not a Claude Code endpoint`);
+  return review(`${method} ${path} is not a Claude Code endpoint`);
 }
 
 function matchPath(pattern: string, path: string): boolean {
@@ -232,16 +245,16 @@ function decideGithubApi(
   config: PolicyConfig,
 ): Decision {
   if (method !== "GET" && method !== "HEAD") {
-    return deny(`${method} on the GitHub API is not allowed`);
+    return review(`${method} on the GitHub API is not allowed`);
   }
   // /repos/{owner}/{repo} and anything below it.
   const segs = path.split("/");
   if (segs[1] !== "repos" || segs.length < 4) {
-    return deny(`${path} is outside /repos/{owner}/{repo}`);
+    return review(`${path} is outside /repos/{owner}/{repo}`);
   }
   return repoAllowed(segs[2], segs[3], config)
     ? allow
-    : deny(`${segs[2]}/${segs[3]} is not an allowed repository`);
+    : review(`${segs[2]}/${segs[3]} is not an allowed repository`);
 }
 
 function decideGraphql(
@@ -272,7 +285,7 @@ function decideGraphql(
   const verdict = judgeGraphql(body, (owner, name) =>
     repoAllowed(owner, name, config),
   );
-  return verdict.ok ? allow : deny(verdict.reason);
+  return verdict.ok ? allow : review(verdict.reason);
 }
 
 /**
@@ -326,12 +339,12 @@ function decideGit(method: string, url: URL, config: PolicyConfig): Decision {
   } else if (method === "POST" && rest === "git-upload-pack") {
     fetch = true;
   }
-  if (!fetch) return deny(`only git fetch is allowed on ${GITHUB_HOST}`);
+  if (!fetch) return review(`only git fetch is allowed on ${GITHUB_HOST}`);
   return owner !== undefined &&
     repo !== undefined &&
     repoAllowed(owner, repo, config)
     ? allow
-    : deny(`${owner}/${repo} is not an allowed repository`);
+    : review(`${owner}/${repo} is not an allowed repository`);
 }
 
 function repoAllowed(

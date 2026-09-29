@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "strait": "strait"
+    "strait": "strait",
+    "strait-review": "strait-review"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",

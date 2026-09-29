@@ -1,8 +1,8 @@
 # strait
 
-strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued.
+strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued. A request to any other endpoint on an allowed host is held until a human approves or denies it with `strait-review`.
 
-The point is how much code has to be trusted. strait's own code is about 1,150 lines: `policy.ts`, `graphql.ts`, `body.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, srt, two small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
+The point is how much code has to be trusted. strait's own code is about 1,400 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. `review.ts` and the `strait-review` launcher, the approval client, add about 230 more. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, srt, two small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
 
 ## Why srt needs patches
 
@@ -19,11 +19,17 @@ Before the command starts, strait probes the live proxy (`selfcheck.ts`) and ref
 
 Hosts are fixed in code: `api.anthropic.com`, `api.github.com` and `github.com`, on port 443 only. TLS is always terminated. No host can be exempted from termination, and the config cannot add an external proxy.
 
-| Host | Allowed | Everything else |
+| Host | Allowed | Held for approval |
 | --- | --- | --- |
-| `api.anthropic.com` | Claude Code's endpoints: nas's `presets.anthropic.v1` (messages, bootstrap, telemetry and feature flags) plus `GET /api/model_selector/cc` | denied, including the Files API (`/v1/files`) |
-| `api.github.com` | `GET`/`HEAD` on `/repos/{owner}/{repo}` and below, for repositories in `githubRepos`; GraphQL queries that only read listed fields of those repositories (below) | denied: other repos, `/repositories/{id}`, `/user`, every REST write, GraphQL mutations and other GraphQL reads |
-| `github.com` | `git fetch` (`info/refs?service=git-upload-pack`, `git-upload-pack`) for the same repositories | denied, including push (`git-receive-pack`) and web pages |
+| `api.anthropic.com` | Claude Code's endpoints: nas's `presets.anthropic.v1` (messages, bootstrap, telemetry and feature flags) plus `GET /api/model_selector/cc` | everything else, including the Files API (`/v1/files`) |
+| `api.github.com` | `GET`/`HEAD` on `/repos/{owner}/{repo}` and below, for repositories in `githubRepos`; GraphQL queries that only read listed fields of those repositories (below) | other repos, `/repositories/{id}`, `/user`, every REST write, GraphQL mutations and other GraphQL documents |
+| `github.com` | `git fetch` (`info/refs?service=git-upload-pack`, `git-upload-pack`) for the same repositories | push (`info/refs?service=git-receive-pack`, `git-receive-pack`), other repositories and web pages |
+
+Some requests are denied outright and never reach a human:
+
+- a request that fails a transport check: not HTTPS, not port 443, credentials in the URL, a request target that is not in canonical form (below), or a host outside the list
+- a request that carries a credential strait did not issue (see Credentials)
+- a GraphQL request whose body strait cannot read: over 256 KiB, not UTF-8, not JSON, content-encoded, with a duplicated member, or with a query string on the URL
 
 Owner and repo names are compared case-insensitively. A name containing `%` never matches.
 
@@ -64,6 +70,26 @@ strait reads these variables from the host environment. srt replaces each value 
 For git over HTTPS, GitHub accepts only Basic auth. srt swaps a sentinel only where it appears verbatim, and a sentinel inside a base64 value does not. So strait masks the whole `Basic …` header value as one credential. Inside the sandbox, git sends it through `http.extraHeader`.
 
 A request that carries any other credential is denied. That covers a foreign or duplicated `Authorization`, an `x-api-key` sent anywhere else, any `Cookie`, and an `access_token` query parameter. So a token the sandboxed program brings along never reaches upstream, and neither does a sentinel sent to the wrong host.
+
+### Approving held requests
+
+A held request waits in the proxy for up to 240 seconds. Approve or deny it from another terminal on the host:
+
+```sh
+contrib/strait/strait-review                # fzf: Tab selects, Enter approves, Ctrl-D denies
+contrib/strait/strait-review list           # what is waiting, across every running strait
+contrib/strait/strait-review show ID        # one request in full, with a GraphQL query unescaped
+contrib/strait/strait-review approve ID...
+contrib/strait/strait-review deny ID...
+```
+
+strait also sends a desktop notification through `notify-send` when that command exists. If no one answers in time, the request is denied, and the reason the sandboxed client gets says so.
+
+An approval covers one request only. A `git push` makes two requests, `info/refs?service=git-receive-pack` and then `git-receive-pack`, so it needs two approvals. The second one holds the pack in memory while it waits, because srt buffers the body for upstream.
+
+Each running strait listens on `<pid>.sock` in `$XDG_RUNTIME_DIR/strait`, or in `strait-<uid>` under the temp directory when `XDG_RUNTIME_DIR` is unset. The directory must be owned by you and have mode 0700. The sandbox cannot reach the socket for two reasons. srt's seccomp filter blocks `AF_UNIX` sockets on Linux. And strait adds the directory to `denyRead`, which still hides it when srt runs without its seccomp helper.
+
+Everything `strait-review` shows comes from the sandbox: the URL, the reason, which may quote a GraphQL argument, and the body. Control and format characters are therefore shown escaped, so a request cannot forge another line or redraw the terminal.
 
 ## Usage
 
@@ -126,8 +152,8 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 ## Limits
 
 - **GraphQL covers only what gh asked for once.** The captured queries are only each command's first request, from gh 2.46. A different gh version, a flag that adds fields, or a later request in the same command can select a path that is not listed, and that request is denied. `gh api repos/...` works either way.
-- **Deny only.** There is no human approval step yet. A request outside the policy fails immediately.
-- **No write path.** Pushes and REST writes are always denied.
+- **Approvals are per request.** There is no "allow this for the session" scope, because one path such as `/graphql` covers requests of every kind. A command that makes many out-of-policy requests needs one approval each.
+- **Held requests are not tested live.** Whether a client or srt's server gives up before 240 seconds has not been checked on a host. Node's default `requestTimeout` is 300 seconds, which is why the limit is below it.
 - **Not part of strait:** nas features such as file-content masking (maskfs), output masking (sumi) and the audit log.
 - **Tested only on Linux.** macOS uses a different srt backend, and the patches have not been checked there.
 - **An unexplained failure.** Four launches failed to find a command in `~/.local/bin` (`gh` or `claude`) inside the sandbox. Repeated launches right afterwards did not reproduce it, whether back to back, with or without tokens, or with the command run directly or through `bash -c`. The cause is unknown.
@@ -135,7 +161,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 ## Tests
 
 ```sh
-bun run test:strait-unit        # policy, GraphQL and config, from the repo root; no srt needed
+bun run test:strait-unit        # policy, GraphQL, approval and config, from the repo root; no srt needed
 node_modules/.bin/tsc -p contrib/strait/tsconfig.json   # needs `bun install` in contrib/strait first
 GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 ```
@@ -149,3 +175,5 @@ GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 - SOCKS, SSH over CONNECT, and a client that does its own TLS
 - writes to the config file, strait's sources and the patched srt
 - a `bunfig.toml` preload planted in the workspace
+
+The GraphQL and git push probes expect a 403, so answer nothing, or deny, while `probe.sh` runs. Held requests are denied after 240 seconds.

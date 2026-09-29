@@ -11,6 +11,13 @@ import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
+import {
+  Approvals,
+  notify,
+  removeSocket,
+  serve,
+  socketDir,
+} from "./approval.ts";
 import { readBody } from "./body.ts";
 import { parseConfig, type StraitConfig } from "./config.ts";
 import {
@@ -127,6 +134,13 @@ async function main() {
   }
   const present = CREDENTIALS.filter((c) => process.env[c.env]);
 
+  // Created before wrapping: srt on Linux protects only paths that exist.
+  const sockets = socketDir();
+  const socketPath = resolve(sockets, `${process.pid}.sock`);
+  const approvals = new Approvals(undefined, notify);
+  await serve(approvals, socketPath);
+  process.on("exit", () => removeSocket(socketPath));
+
   const sentinels: Sentinels = {};
   await SandboxManager.initialize({
     network: {
@@ -134,23 +148,38 @@ async function main() {
       deniedDomains: [],
       strictAllowlist: true,
       tlsTerminate: {},
-      filterRequest: async (request) =>
-        decide(
+      filterRequest: async (request) => {
+        const body = wantsBody(request.method, request.url)
+          ? await readBody(request)
+          : undefined;
+        const decision = decide(
           {
             method: request.method,
             url: request.url,
             headers: request.headers,
-            body: wantsBody(request.method, request.url)
-              ? await readBody(request)
-              : undefined,
+            body,
           },
           { githubRepos: config.githubRepos },
           sentinels,
-        ),
+        );
+        if (decision.action !== "review") return decision;
+        return approvals.hold(
+          {
+            method: request.method,
+            url: request.url,
+            reason: decision.reason,
+            ...(typeof body === "string" ? { body } : {}),
+          },
+          request.signal,
+        );
+      },
     },
     filesystem: {
       ...config.filesystem,
       denyWrite: protectedPaths(config.filesystem.denyWrite, configPath),
+      // The approval socket must stay out of reach even where srt cannot
+      // block AF_UNIX (no seccomp helper).
+      denyRead: [...new Set([...config.filesystem.denyRead, sockets])],
     },
     credentials: {
       envVars: present.map((c) => ({

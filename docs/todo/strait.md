@@ -1,18 +1,8 @@
 strait の未解決の課題です。2026-09-30 に strait の中で sumi v0.3.0 をリリースしようとして、途中でホストへ作業を渡すことになった。その時に詰まったものを並べる。
 
-**承認の経路がない**
+**Artifacts が推論専用トークンで通るか未確認**
 
-strait は許可リストにないリクエストをすべて拒否し、人が通す手段がない（[README](../../contrib/strait/README.md) の Limits「Deny only」）。今回拒否されたもの:
-
-| 操作 | 拒否した箇所 | 応答 |
-|---|---|---|
-| `git push` | `github.com` の `git-receive-pack` | 403 |
-| `gh release view`（GraphQL） | `api.github.com` の `POST /graphql` | 403 |
-| Artifacts | `api.anthropic.com` の `/v1/code/agent-proxy/frame/...` | 403 `GET /v1/code/agent-proxy/frame/frames is not a Claude Code endpoint` |
-
-Artifacts の送り先は Claude Code 2.1.284 のバイナリから読み取った。`/api/frame/...` を `/v1/code/agent-proxy/frame/...` に書き換えて送っている。このパスを許可したときに、推論専用のトークン（`CLAUDE_CODE_OAUTH_TOKEN`）で通るかどうかは未確認。
-
-案: 拒否したリクエストをホスト側で保留し、承認されたら通す。nas のネットワーク承認と同じ形。push と GraphQL はこれで足り、hostexec は要らない。認証情報はプロキシが持ったままにできる。
+Artifacts は `api.anthropic.com` の `/v1/code/agent-proxy/frame/...` に送られ、strait の許可リストにないので承認待ちになる（2026-09-30 に拒否された時の応答は 403 `GET /v1/code/agent-proxy/frame/frames is not a Claude Code endpoint`）。送り先は Claude Code 2.1.284 のバイナリから読み取った。`/api/frame/...` を `/v1/code/agent-proxy/frame/...` に書き換えて送っている。承認して通したときに、推論専用のトークン（`CLAUDE_CODE_OAUTH_TOKEN`）で受け付けられるかは未確認。受け付けられるなら、承認を 1 件ずつ求めずに済むよう、許可リストへ入れるかを決める。
 
 **ホストでしか動かないコマンドを呼べない**
 

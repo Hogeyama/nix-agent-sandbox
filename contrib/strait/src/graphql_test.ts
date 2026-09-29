@@ -271,6 +271,22 @@ describe("policy around GraphQL", () => {
   test("allowed with the issued token", () => {
     expect(run({ authorization: "token fake_value_gh" })).toBe("allow");
   });
+  test("an unlisted query goes to review, with the reason", () => {
+    const d = decide(
+      {
+        method: "POST",
+        url,
+        headers: new Headers({ "content-type": "application/json" }),
+        body: JSON.stringify({ query: "{ viewer { login } }" }),
+      },
+      { githubRepos: ["my-org/private-repo"] },
+      {},
+    );
+    expect(d).toEqual({
+      action: "review",
+      reason: "GraphQL field /viewer is not allowed",
+    });
+  });
   test("charset=utf-8 is fine", () => {
     expect(run({ "content-type": "application/json; charset=utf-8" })).toBe(
       "allow",
