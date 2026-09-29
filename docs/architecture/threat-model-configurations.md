@@ -136,11 +136,11 @@ Bash 側は credential masking、本体の Read は `.env` の deny で保護す
 // ~/.srt-settings.json
 {
   "network": {
-    "allowedDomains": [
-      "api.anthropic.com",
-      "github.com",
-      "api.github.com",
-      "devapi.example.com"
+    "allowedDomains": [ // ポートを書かないと SSH 等も通る
+      "api.anthropic.com:443",
+      "github.com:443",
+      "api.github.com:443",
+      "devapi.example.com:443"
     ],
     "deniedDomains": [],
     "tlsTerminate": {} // ダミー値の置換に必要
@@ -194,6 +194,8 @@ srt --settings ~/.srt-settings.json -- claude --permission-mode auto
 - Linux の srt は、起動時に存在するパスにだけ `denyWrite` を適用する。作業領域の `.claude` は起動前に作る。
 - 新しい `CLAUDE_CONFIG_DIR` では、初回設定の接続確認が許可外の `platform.claude.com` に向かい、起動できない。`hasCompletedOnboarding` を先に書いて、この確認を省く。
 - `--` で区切らないと、claude への引数が srt の引数として解釈される。
+
+`allowedDomains` の `:443` は、srt 0.0.77 の[実測](experiments/srt-filter-bypass/README.md)に基づいて加えた。ポートを書かない許可では、sandbox 内から `github.com:22` へ SSH で接続でき、TLS 終端も認証情報の代理注入も通らなかった。`:443` を付けた許可では、この接続を proxy が拒否し、`api.github.com` への HTTPS は通った。ただし、この設定で Claude Code を起動しての通信確認はしていない。ポートを絞っても SOCKS 経由の接続は残るため、この構成の A1b は ○ のままである。
 
 ## 系統3
 

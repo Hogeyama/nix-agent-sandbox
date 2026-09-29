@@ -1,0 +1,12 @@
+{
+  "network": {
+    "allowedDomains": ["*.github.com:443"],
+    "deniedDomains": [],
+    "tlsTerminate": { "excludeDomains": [] }
+  },
+  "filesystem": {
+    "allowWrite": ["."],
+    "denyWrite": [],
+    "denyRead": ["~/.ssh", "~/.config/gh"]
+  }
+}

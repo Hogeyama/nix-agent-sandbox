@@ -93,14 +93,14 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | P1: 未信頼情報源の無人取り込み低減 | ○以上 | ○ | ○ | ○ | ◎（GitHub の指定経路） | ○ |
 
-系統1〜3では、隔離環境内のプログラムが攻撃者の token を使い、接続を許可したサービス上の攻撃者の repo などへ情報を書き込める。系統5でも、proxy による認証情報の上書きを通らず、プログラムが指定した token を GitHub に[送れる](experiments/sbx-a1b/README.md)。いずれも提示構成は ○ とし、必要な追加制御を各方式の節で示す。
+系統1〜3では、隔離環境内のプログラムが攻撃者の token を使い、接続を許可したサービス上の攻撃者の repo などへ情報を書き込める。系統2は srt の検査関数を組み込んでも、SOCKS 等の経路で検査を[迂回できる](experiments/srt-filter-bypass/README.md)。系統5でも、proxy による認証情報の上書きを通らず、プログラムが指定した token を GitHub に[送れる](experiments/sbx-a1b/README.md)。いずれも提示構成は ○ とし、必要な追加制御を各方式の節で示す。
 
 ### 選定時に残る条件と負担
 
 | 構成 | 保護範囲と成立条件・負担 |
 | --- | --- |
 | **系統1: settings.json** | Bash を内蔵 sandbox で隔離する。履歴・memory は専用の保存先に分ける。本体によるその他のホストファイルへの書込みには追加の対策が必要。読み込まれる設定ファイルをすべて書込み禁止の対象にする |
-| **系統2: srt** | 本体を含め OS sandbox で隔離する。A1b・P1 のためにサービス内の読み書き先を制限するには、srt を組み込むプログラムと通信を検査する関数を追加で実装・検証する必要がある |
+| **系統2: srt** | 本体を含め OS sandbox で隔離する。A1b・P1 のためにサービス内の読み書き先を制限するには、srt の変更が必要になる。srt 0.0.77 の検査関数 `filterRequest` は SOCKS 等の経路で迂回できる |
 | **系統3: Dev Container** | 既存 container 運用に載せやすい。DNS の問合せを使った情報送信を防ぎ、共有作業領域にある設定や hook への書込みを制限する追加対策が必要 |
 | **系統4: nas** | 提示条件では A1a・A1b・B2a と GitHub の P1 を強制する。API ごとに許可する操作を設定・保守し、ホストと共有する設定を保護する必要がある。履歴や memory はホストと共有する |
 | **系統5: Docker Sandbox** | VM 内の専用 clone で作業し、ホストの作業ツリーを保護する。提示した v2 構成には A1b の対策が必要。v3 の HTTP 制限を使う構成は今後の検証候補 |
@@ -192,14 +192,20 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 [Anthropic srt](https://github.com/anthropics/sandbox-runtime) で Claude Code 本体ごと隔離し、Read / Write / Edit を含む全プロセスに OS sandbox の filesystem / network policy を適用する。[設定例](threat-model-configurations.md#系統2)
 
 - **A1a: ◎** — 本体も含めた外向き通信を hostname allowlist で制限する。
-- **A1b: ○** — `credentials` の mask はダミー値を本物へ置換する。隔離環境内のプログラムが攻撃者の token を付けて送った request は、その token のまま許可先へ届く。使えるアカウントや API を制限するには、srt をライブラリとして組み込む側で `filterRequest` 等を使い、要求ごとに許可・拒否を判定する関数を実装する。[srt の設定定義](https://github.com/anthropics/sandbox-runtime/blob/main/src/sandbox/sandbox-config.ts)
+- **A1b: ○** — `credentials` の mask はダミー値を本物へ置換する。隔離環境内のプログラムが攻撃者の token を付けて送った request は、その token のまま許可先へ届く。srt をライブラリとして組み込めば `filterRequest` で要求ごとに判定できるが、SOCKS 経由などの TLS を終端しない経路には適用されない（本節末の拡張案を参照）。
 - **B2a: ◎** — 作業領域外への write を制限し、[標準保護](https://github.com/anthropics/sandbox-runtime#mandatory-deny-paths-auto-protected-files)で `.git/config`・`.git/hooks` 等を保護する。作業領域の `.claude` は `denyWrite` に追加する。hook 実体を共通条件と異なる場所へ置くなら、その参照先も `denyWrite` に追加する。
 - **A2-Y・A3-Y: ○** — 認証情報のマスクと `denyRead` による読取りの拒否を、Claude Code 本体にも適用する。ツールの出力に残るシークレットは sumi でマスクし、auto mode の操作審査で誤保存を減らす。
 - **P1: ○** — この構成の network policy は hostname 単位であり、GitHub 内の情報源の判定は classifier に依存する。
 
 状態は Claude Code の `CLAUDE_CONFIG_DIR` で作業領域内の `.claude-state` に保存する。これを隔離実行専用とし、srt の filesystem policy で元のホスト状態への書込みを拒否する。[実験](experiments/state-isolation/README.md)でこの分離を確認した。この保存先でも、状態の改変は次の実行へ引き継がれる。
 
-**拡張案**: `filterRequest` は、HTTP の要求と、proxy が TLS を終端して読めるようにした HTTPS の要求を、JavaScript 関数で検査できる。srt を組み込むプログラムに、使えるアカウントを制限する処理と、GitHub の repo・操作・GraphQL 本文を検査する処理を追加すれば、A1b・P1 の改善が見込める。実装後は、別の認証方法やリダイレクトを使う要求も検査され、判定できない要求は拒否されることを確認する。提示 JSON の導入負担は小さいが、この拡張には追加の開発が必要となる。
+**拡張案**: srt をライブラリとして組み込むと、`filterRequest` で HTTP の要求と、srt が TLS を終端した HTTPS の要求を JavaScript 関数で検査できる。ただし srt 0.0.77 の[実測](experiments/srt-filter-bypass/README.md)では、次の経路が TLS 終端を通らず、この関数も認証情報の代理注入も適用されずに許可先へ届いた。どれも sandbox 内でコマンドを実行できれば使え、ホストを先に侵害する必要はない。
+
+- **SOCKS**: srt は同じ proxy のポートで HTTP と SOCKS を受け付け、SOCKS の接続は中身を見ずに中継する。sandbox 内のプログラムが、渡された proxy URL の scheme を `socks5h://` に変えるだけで、指定した token（実測では偽の token）が GitHub に届き、`Bad credentials` が返った。
+- **TLS 以外のプロトコル**: 許可リストにポートがないと `github.com:22` への SSH が GitHub の sshd に届いた。`:443` に絞っても、`*.github.com:443` のように `ssh.github.com:443` を含む許可では SSH が届いた。使い捨ての鍵が拒否されるところまでを確認しており、攻撃者の鍵による push や未信頼 repo の fetch に使えると判断する。
+- **`tlsTerminate.excludeDomains`**: 除外したホストへの HTTPS は検査されない。
+
+そのため `filterRequest` を実装しても A1b・P1 は ○ のままである。◎ にするには、SOCKS 経路でも TLS 終端を強制するよう srt を変更する必要がある。そのうえで、許可リストはホスト名を完全一致で書いてポートを `:443` に限り、GitHub・Anthropic のように攻撃者もアカウントを持てるサービスを `excludeDomains` に入れない。`filterRequest` には、使えるアカウントの制限と GitHub の repo・操作・GraphQL 本文の検査を実装し、別の認証方法やリダイレクトを使う要求も検査され、判定できない要求は拒否されることを確認する。提示 JSON の導入負担は小さいが、この拡張には追加の開発が必要となる。
 
 ### 系統3: Dev Container
 
