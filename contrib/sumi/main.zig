@@ -9,6 +9,7 @@
 //!   sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
 //!   sumi filter --secrets-file F
 //!   sumi --version
+//!   sumi --licenses
 //!
 //! SOURCE は `--secrets-file F` か `--socket SOCKET` のどちらか 1 つ。後者は値の一覧を
 //! 読まず、`nas-mask-filter --serve` のブローカーへバイト列を送ってマスクさせる
@@ -20,6 +21,7 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const licenses = @import("licenses");
 const supervise = @import("supervise");
 const mask_stream = @import("masking").stream;
 const secrets = @import("secrets.zig");
@@ -46,10 +48,17 @@ const usage_text =
     \\       sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
     \\       sumi filter --secrets-file F
     \\       sumi --version
+    \\       sumi --licenses
     \\
     \\SOURCE is exactly one of --secrets-file F or --socket SOCKET.
     \\
 ;
+
+/// `sumi --licenses` が出す、sumi と静的にリンクした部品の著作権・許諾表示。
+const licenses_text =
+    "sumi\n====\n\n" ++ licenses.sumi ++
+    "\nZig standard library and compiler runtime\n=========================================\n\n" ++ licenses.zig ++
+    "\nmusl libc (statically linked)\n=============================\n\n" ++ licenses.musl;
 
 pub fn usage(msg: []const u8) u8 {
     std.debug.print("sumi: {s}\n{s}", .{ msg, usage_text });
@@ -210,6 +219,10 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
         try std.fs.File.stdout().writeAll("\n");
         return 0;
     }
+    if (std.mem.eql(u8, sub, "--licenses")) {
+        try std.fs.File.stdout().writeAll(licenses_text);
+        return 0;
+    }
     if (std.mem.eql(u8, sub, "filter")) return runFilter(allocator, args);
     if (std.mem.eql(u8, sub, "run")) return runSupervised(allocator, args);
 
@@ -319,6 +332,14 @@ test "takeAgent: claude is accepted and consumed" {
     const t = try takeAgent(&.{ "--agent", "claude", "post-tool" });
     try testing.expectEqual(Agent.claude, t.agent.?);
     try testing.expectEqual(@as(usize, 1), t.rest.len);
+}
+
+test "licenses_text carries every bundled notice" {
+    try testing.expect(std.mem.indexOf(u8, licenses_text, "Copyright (c) 2026 Hogeyama") != null);
+    try testing.expect(std.mem.indexOf(u8, licenses_text, "Copyright (c) Zig contributors") != null);
+    try testing.expect(std.mem.indexOf(u8, licenses_text, "Rich Felker") != null);
+    // musl の個別表示 (TRE など) も MIT 本文と一緒に落とさない。
+    try testing.expect(std.mem.indexOf(u8, licenses_text, "Ville Laurikari") != null);
 }
 
 test "takeAgent: missing --agent yields null" {

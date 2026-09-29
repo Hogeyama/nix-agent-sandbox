@@ -141,3 +141,7 @@ sumi は下記の限界があります。これが許容できない場合はよ
 Claude Code を終了し、`init` が更新した設定ファイルを編集します。通常は `~/.claude/settings.json`、`CLAUDE_CONFIG_DIR` を設定していた場合はそのディレクトリの `settings.json` です。`--settings` を指定していた場合は指定したファイルを編集します。`hooks` 内の `PostToolUse`、`PostToolUseFailure`、`UserPromptSubmit` から、sumi を実行する hook を削除してください。
 
 `env` 内の `CLAUDE_CODE_SHELL_PREFIX`、`CLAUDE_CODE_SHELL` も削除します。導入前に値が設定されていた項目は、バックアップにある元の値へ戻してください。
+
+## ライセンス
+
+sumi は MIT License で配布しています（リポジトリの [LICENSE](../../LICENSE)）。配布バイナリには Zig の標準ライブラリと musl libc が静的にリンクされています。これらを含む著作権・許諾表示は `sumi --licenses` で表示できます。

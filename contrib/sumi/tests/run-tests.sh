@@ -90,6 +90,10 @@ check "run masks stdout" 'stdout=*********' "$(cat "$work/run.stdout")"
 check "run masks stderr" 'stderr=**********' "$(cat "$work/run.stderr")"
 check "run keeps the child exit status" "7" "$status"
 
+licenses="$("$sumi" --licenses)"
+check "--licenses exits 0" "0" "$?"
+check "--licenses carries the musl notice" "yes" "$(grep -q 'Rich Felker' <<<"$licenses" && echo yes)"
+
 out="$("$sumi" run --secrets-file "$work/secrets.txt" 'printf %s "$SUMI_SUPERVISED"')"
 record_success_status "run supervised child" "$?"
 check "run marks the child as supervised" "1" "$out"

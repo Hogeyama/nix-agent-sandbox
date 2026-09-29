@@ -229,6 +229,7 @@
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
+              ./LICENSE
               ./contrib/sumi
               ./lib/process-supervisor
               ./lib/masking
@@ -248,6 +249,9 @@
               -Dversion=${sumiVersion}
           '';
           checkPhase = ''
+            # `sumi --licenses` に埋め込む Zig の LICENSE は複製なので、ビルドに使う
+            # Zig の source と食い違っていないことを確かめる。
+            cmp licenses/zig-LICENSE ${zig.src}/LICENSE
             zig build test \
               --global-cache-dir "$TMPDIR/sumi-zig-cache"
             (cd ../../lib/masking && zig build test --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
