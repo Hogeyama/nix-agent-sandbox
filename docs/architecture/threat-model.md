@@ -138,7 +138,7 @@ B1 の本番変更・公開・権限変更は、重要な防御対象である�
 
 全系統で [Claude Code auto mode](https://code.claude.com/docs/ja/auto-mode-config) と必要に応じた手動承認を使う。管理者が配布する設定（managed settings）で、許可済みのものも含めて全 shell コマンドを classifier の審査対象にする。`hard_deny` には、信頼済み repo 以外へのアクセスを、読取りも含めて拒否するよう記述する。これは自然言語のルールであり、強制境界ではないため P1 は ○ とする。[ルール設定](https://code.claude.com/docs/en/auto-mode-config#override-the-block-and-allow-rules)
 
-WebSearch はツール自体を除去する。検索が Anthropic API 側で実行され、結果も `api.anthropic.com` から戻るため、network allowlist や proxy では検索先を判定できない。
+WebSearch はツール自体を除去する。検索は Anthropic API 側で実行され、ページ内容の要約を含む結果が `api.anthropic.com` の応答としてモデルに届く。network allowlist や proxy では取得元を判定できず、未信頼の Web ページの内容が P1 の制限を経ずに取り込まれる。AI 検索の結果に仕込んだ指示で利用者の質問1回からエージェントを乗っ取れることは、ChatGPT の検索機能で[実証されている](https://www.tenable.com/blog/hackedgpt-novel-ai-vulnerabilities-open-the-door-for-private-data-leakage)。
 
 手動承認の増加で確認が形骸化する可能性がある。審査精度・負担の比較実測はしておらず、強制的に承認を待つ機構と、承認判断の正しさは区別する。具体的な設定は[共通設定](threat-model-configurations.md#共通設定)に示す。
 
