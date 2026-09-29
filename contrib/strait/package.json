@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "strait": "strait" },
+  "bin": {
+    "strait": "strait"
+  },
   "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "0.0.77"
+    "@anthropic-ai/sandbox-runtime": "0.0.77",
+    "graphql": "16.14.2"
   },
   "patchedDependencies": {
     "@anthropic-ai/sandbox-runtime@0.0.77": "patches/@anthropic-ai%2Fsandbox-runtime@0.0.77.patch"

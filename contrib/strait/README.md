@@ -2,7 +2,7 @@
 
 strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued.
 
-The point is how much code has to be trusted. strait's own code is about 650 lines: `policy.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. The trusted base is that code, srt, and two small patches to srt.
+The point is how much code has to be trusted. strait's own code is about 1,150 lines: `policy.ts`, `graphql.ts`, `body.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, srt, two small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
 
 ## Why srt needs patches
 
@@ -22,12 +22,23 @@ Hosts are fixed in code: `api.anthropic.com`, `api.github.com` and `github.com`,
 | Host | Allowed | Everything else |
 | --- | --- | --- |
 | `api.anthropic.com` | Claude Code's endpoints: nas's `presets.anthropic.v1` (messages, bootstrap, telemetry and feature flags) plus `GET /api/model_selector/cc` | denied, including the Files API (`/v1/files`) |
-| `api.github.com` | `GET`/`HEAD` on `/repos/{owner}/{repo}` and below, for repositories in `githubRepos` | denied: other repos, `/repositories/{id}`, `/user`, every write, `/graphql` |
+| `api.github.com` | `GET`/`HEAD` on `/repos/{owner}/{repo}` and below, for repositories in `githubRepos`; GraphQL queries that only read listed fields of those repositories (below) | denied: other repos, `/repositories/{id}`, `/user`, every REST write, GraphQL mutations and other GraphQL reads |
 | `github.com` | `git fetch` (`info/refs?service=git-upload-pack`, `git-upload-pack`) for the same repositories | denied, including push (`git-receive-pack`) and web pages |
 
 Owner and repo names are compared case-insensitively. A name containing `%` never matches.
 
 srt forwards the request target exactly as the client sent it, but URL parsing resolves `..`, `%2e` and `\`. So a request whose target changes under parsing is denied, and the path strait judges is always the path GitHub receives.
+
+### GraphQL
+
+`POST /graphql` is the one request whose body strait reads. The body must be `application/json` (optionally `charset=utf-8`), not content-encoded, at most 256 KiB, and a single `{query, variables, operationName}` object with no duplicated member. The URL must have no query string. Then the document must pass these checks:
+
+- Every operation is a `query`. The check covers all operations, whatever `operationName` says.
+- Every selected field lies on a path listed in `GITHUB_FIELDS` in `graphql.ts`. A leaf must be listed exactly. A field with children must lead to a listed leaf. Paths use real field names: aliases are dropped, fragments are expanded where they are used, and type conditions are ignored, so every branch is checked. `@skip` and `@include` do not exempt a field.
+- Every path starts at `repository`, and each `repository` occurrence has `owner` and `name` arguments that resolve to one repository in `githubRepos`. Variables and their declared defaults are resolved per operation.
+- The document is one strait can analyse: it parses, uses no other directive, has no duplicated argument, variable or fragment and no undefined or cyclic fragment, and stays within fixed token, depth and expansion budgets.
+
+The listed paths are the ones gh 2.46 asks for in `pr view`, `pr list`, `pr checks`, `issue view`, `issue list`, `release view`, `release list` and `repo view`, captured in [src/testdata/gh_queries.json](src/testdata/gh_queries.json). Every listed leaf is a scalar. None of the paths reaches another repository's content: that would take a field such as `owner { repositories }` or `author { ... on User { pullRequests } }`, and none is listed. The rules are a trimmed copy of nas's [GraphQL field path policy](../../docs/superpowers/specs/2026-09-20-graphql-field-path-policy-design.md). strait fixes the paths in code, and it requires both owner and name, where nas requires only the owner.
 
 ### Files the sandbox cannot write
 
@@ -114,7 +125,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 
 ## Limits
 
-- **GraphQL is denied.** Many `gh` subcommands, such as `gh pr view` and `gh issue list`, use GraphQL and fail. `gh api repos/...` works.
+- **GraphQL covers only what gh asked for once.** The captured queries are only each command's first request, from gh 2.46. A different gh version, a flag that adds fields, or a later request in the same command can select a path that is not listed, and that request is denied. `gh api repos/...` works either way.
 - **Deny only.** There is no human approval step yet. A request outside the policy fails immediately.
 - **No write path.** Pushes and REST writes are always denied.
 - **Not part of strait:** nas features such as file-content masking (maskfs), output masking (sumi) and the audit log.
@@ -124,7 +135,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 ## Tests
 
 ```sh
-bun run test:strait-unit        # policy and config, from the repo root; no srt needed
+bun run test:strait-unit        # policy, GraphQL and config, from the repo root; no srt needed
 node_modules/.bin/tsc -p contrib/strait/tsconfig.json   # needs `bun install` in contrib/strait first
 GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 ```
@@ -133,7 +144,7 @@ GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 
 - a foreign or duplicated token
 - another repository
-- a REST write, GraphQL and push discovery
+- a REST write, a GraphQL mutation and push discovery
 - the Files API and a host outside the list
 - SOCKS, SSH over CONNECT, and a client that does its own TLS
 - writes to the config file, strait's sources and the patched srt

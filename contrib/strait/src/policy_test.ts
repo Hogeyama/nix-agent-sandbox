@@ -285,7 +285,13 @@ describe("GitHub API", () => {
     ],
     ["write is denied", "POST", `${repo}/issues`, {}, "deny"],
     ["delete is denied", "DELETE", repo, {}, "deny"],
-    ["graphql is denied", "POST", "https://api.github.com/graphql", {}, "deny"],
+    [
+      "graphql without a body is denied",
+      "POST",
+      "https://api.github.com/graphql",
+      {},
+      "deny",
+    ],
   ]);
 });
 

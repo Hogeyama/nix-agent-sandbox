@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
+import { readBody } from "./body.ts";
 import { parseConfig, type StraitConfig } from "./config.ts";
 import {
   ANTHROPIC_HOST,
@@ -19,6 +20,7 @@ import {
   GITHUB_HOST,
   HOSTS,
   type Sentinels,
+  wantsBody,
 } from "./policy.ts";
 import { assertProxyPatched } from "./selfcheck.ts";
 
@@ -138,6 +140,9 @@ async function main() {
             method: request.method,
             url: request.url,
             headers: request.headers,
+            body: wantsBody(request.method, request.url)
+              ? await readBody(request)
+              : undefined,
           },
           { githubRepos: config.githubRepos },
           sentinels,

@@ -1,7 +1,11 @@
 // Request policy evaluated by srt's filterRequest hook.
 //
-// Pure: no srt import, no I/O, no body reads. Anything not explicitly allowed
-// here is denied, and srt itself denies when this throws.
+// Pure: no srt import and no I/O. The caller reads the body only where
+// `wantsBody` says the decision needs it, and passes it in as text. Anything
+// not explicitly allowed here is denied, and srt itself denies when this
+// throws.
+
+import { judgeGraphql } from "./graphql.ts";
 
 export type Decision = { action: "allow" | "deny"; reason?: string };
 
@@ -9,7 +13,15 @@ export interface PolicyRequest {
   method: string;
   url: string;
   headers: Headers;
+  /**
+   * The body as UTF-8 text, read only when `wantsBody` is true. null when it
+   * was not read: over `BODY_LIMIT`, not UTF-8, or the read failed.
+   */
+  body?: string | null;
 }
+
+/** Largest body read for a decision. A larger one is never analysed. */
+export const BODY_LIMIT = 256 * 1024;
 
 /**
  * Sentinels srt substituted for the real credentials inside the sandbox.
@@ -77,6 +89,23 @@ const ANTHROPIC_ROUTES: ReadonlyArray<{ methods: string[]; paths: string[] }> =
     },
   ];
 
+/** Whether `decide` looks at this request's body. */
+export function wantsBody(method: string, url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    method.toUpperCase() === "POST" &&
+    u.hostname === GITHUB_API_HOST &&
+    u.pathname === GRAPHQL_PATH
+  );
+}
+
+const GRAPHQL_PATH = "/graphql";
+
 export function decide(
   req: PolicyRequest,
   config: PolicyConfig,
@@ -110,6 +139,9 @@ export function decide(
     case ANTHROPIC_HOST:
       return decideAnthropic(method, url.pathname);
     case GITHUB_API_HOST:
+      if (method === "POST" && url.pathname === GRAPHQL_PATH) {
+        return decideGraphql(req, url, config);
+      }
       return decideGithubApi(method, url.pathname, config);
     case GITHUB_HOST:
       return decideGit(method, url, config);
@@ -210,6 +242,73 @@ function decideGithubApi(
   return repoAllowed(segs[2], segs[3], config)
     ? allow
     : deny(`${segs[2]}/${segs[3]} is not an allowed repository`);
+}
+
+function decideGraphql(
+  req: PolicyRequest,
+  url: URL,
+  config: PolicyConfig,
+): Decision {
+  // A query string could carry a second document; GitHub reads the body.
+  if (url.search !== "") return deny("GraphQL with a query string");
+  if (req.headers.has("content-encoding")) {
+    return deny("GraphQL body is encoded");
+  }
+  if (!isJsonUtf8(req.headers.get("content-type"))) {
+    return deny("GraphQL body is not application/json");
+  }
+  if (typeof req.body !== "string") return deny("GraphQL body was not read");
+  let body: unknown;
+  try {
+    body = JSON.parse(req.body);
+  } catch {
+    return deny("GraphQL body is not JSON");
+  }
+  // JSON.parse keeps a duplicated member's last value; GitHub's parser need
+  // not, so a query or owner judged here might not be the one executed.
+  if (hasDuplicateMember(req.body)) {
+    return deny("GraphQL body has a duplicated member");
+  }
+  const verdict = judgeGraphql(body, (owner, name) =>
+    repoAllowed(owner, name, config),
+  );
+  return verdict.ok ? allow : deny(verdict.reason);
+}
+
+/**
+ * Whether any object in `text`, which must already be valid JSON, names the
+ * same member twice. Validity lets the scan track only strings and brackets.
+ */
+export function hasDuplicateMember(text: string): boolean {
+  const stack: { keys: Set<string> | null; expectKey: boolean }[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const top = stack[stack.length - 1];
+    if (c === "{") stack.push({ keys: new Set(), expectKey: true });
+    else if (c === "[") stack.push({ keys: null, expectKey: false });
+    else if (c === "}" || c === "]") stack.pop();
+    else if (c === "," && top?.keys) top.expectKey = true;
+    else if (c === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      if (top?.keys && top.expectKey) {
+        const key = JSON.parse(text.slice(i, j + 1)) as string;
+        if (top.keys.has(key)) return true;
+        top.keys.add(key);
+        top.expectKey = false;
+      }
+      i = j;
+    }
+  }
+  return false;
+}
+
+// `application/json`, optionally with `charset=utf-8`, and nothing else.
+function isJsonUtf8(contentType: string | null): boolean {
+  if (contentType === null) return false;
+  const [type, ...params] = contentType.split(";").map((p) => p.trim());
+  if (type?.toLowerCase() !== "application/json") return false;
+  return params.every((p) => /^charset="?utf-8"?$/i.test(p));
 }
 
 function decideGit(method: string, url: URL, config: PolicyConfig): Decision {

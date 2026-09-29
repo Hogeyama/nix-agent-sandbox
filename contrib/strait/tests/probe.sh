@@ -32,6 +32,8 @@ code='-sS -o /dev/null -w %{http_code} --max-time 20'
 # Positive controls: the issued credential is substituted and accepted.
 check "gh api with issued token" '^200' "curl $code -H \"Authorization: token \$GH_TOKEN\" $api"
 check "gh CLI" '"full_name"' "gh api repos/$REPO --jq '{full_name}'"
+check "gh pr list (GraphQL)" 'exit=0' "gh pr list -R $REPO --limit 1 >/dev/null; echo exit=\$?"
+check "gh issue list (GraphQL)" 'exit=0' "gh issue list -R $REPO --limit 1 >/dev/null; echo exit=\$?"
 check "git fetch (Basic via extraheader)" 'HEAD' "git ls-remote https://github.com/$REPO.git HEAD"
 check "anthropic messages route passes" '^40[01]' "curl $code -X POST -H 'content-type: application/json' -d '{}' https://api.anthropic.com/v1/messages"
 
@@ -40,7 +42,11 @@ check "foreign token" '^403' "curl $code -H 'Authorization: Bearer nas-a1b-inval
 check "duplicate Authorization" '^403' "curl $code -H \"Authorization: token \$GH_TOKEN\" -H 'authorization: token attacker' $api"
 check "other repository" '^403' "curl $code https://api.github.com/repos/octocat/hello-world"
 check "REST write" '^403' "curl $code -X POST -d '{}' $api/issues"
-check "graphql" '^403' "curl $code -X POST -d '{\"query\":\"{viewer{login}}\"}' https://api.github.com/graphql"
+gql="curl $code -X POST -H 'content-type: application/json' -H \"Authorization: token \$GH_TOKEN\" https://api.github.com/graphql -d"
+check "graphql viewer" '^403' "$gql '{\"query\":\"{viewer{login}}\"}'"
+check "graphql other repository" '^403' "$gql '{\"query\":\"{repository(owner:\\\"octocat\\\",name:\\\"hello-world\\\"){name}}\"}'"
+check "graphql traversal" '^403' "$gql '{\"query\":\"{repository(owner:\\\"${REPO%/*}\\\",name:\\\"${REPO#*/}\\\"){owner{repositories(first:1){totalCount}}}}\"}'"
+check "graphql mutation" '^403' "$gql '{\"query\":\"mutation{addStar(input:{starrableId:\\\"x\\\"}){clientMutationId}}\"}'"
 check "git push discovery" 'returned error: 403' "git init -q r && cd r && git -c user.name=p -c user.email=p@x -c commit.gpgsign=false commit -q --allow-empty -m p && git push --dry-run https://github.com/$REPO.git HEAD:refs/heads/strait-probe"
 check "files API" '^403' "curl $code https://api.anthropic.com/v1/files"
 check "host outside the list" 'response 403' "curl $code https://example.com/"
