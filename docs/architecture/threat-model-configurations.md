@@ -153,7 +153,8 @@ Bash 側は credential masking、本体の Read は `.env` の deny で保護す
       "~/.ssh",
       "~/.aws",
       "~/.config/gh"
-    ]
+    ],
+    "allowRead": ["/tmp/claude-http-*.sock"] // srt 自身の proxy 用 socket
   },
   "credentials": {
     "envVars": [
@@ -178,11 +179,21 @@ Bash 側は credential masking、本体の Read は `.env` の deny で保護す
 
 ```sh
 export CLAUDE_CONFIG_DIR="$PWD/.claude-state"
+mkdir -p .local/tmp .claude "$CLAUDE_CONFIG_DIR"
+[ -e "$CLAUDE_CONFIG_DIR/.claude.json" ] ||
+  echo '{"hasCompletedOnboarding":true}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の保護でシークレットを隠せない場合のみ
-srt --settings ~/.srt-settings.json claude --permission-mode auto
+srt --settings ~/.srt-settings.json -- claude --permission-mode auto
 ```
 
 `.claude-state` はこの設定例で選んだ名前で、保存先を切り替えるのは Claude Code の `CLAUDE_CONFIG_DIR` である。Git 管理から除外し、ホストの通常実行では使わない。srt の `allowWrite` を作業領域に限定し、元のホスト状態への書込みを拒否する。この分離を[実験](experiments/state-isolation/README.md)で確認した。既存 hook の実体を共通条件と異なる場所へ置く場合は、その参照先も `denyWrite` に追加する。
+
+起動前の準備と引数には、srt 0.0.77 で[起動を試した](experiments/srt-trial/README.md)結果を反映している。
+
+- `allowRead` の例外がないと、sandbox 内から srt の proxy に接続できない。srt は proxy 用の socket を `/tmp` に置いて sandbox に渡すが、`denyRead` の `/tmp` がそれも隠すためである。例外を加えても、`/tmp` の他のファイルは読めない。
+- Linux の srt は、起動時に存在するパスにだけ `denyWrite` を適用する。作業領域の `.claude` は起動前に作る。
+- 新しい `CLAUDE_CONFIG_DIR` では、初回設定の接続確認が許可外の `platform.claude.com` に向かい、起動できない。`hasCompletedOnboarding` を先に書いて、この確認を省く。
+- `--` で区切らないと、claude への引数が srt の引数として解釈される。
 
 ## 系統3
 
