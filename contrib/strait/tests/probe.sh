@@ -9,9 +9,21 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 REPO=${1:-Hogeyama/nix-agent-sandbox}
 : "${GH_TOKEN:?set GH_TOKEN}"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+denier=
+trap 'rm -rf "$work"; [[ -n $denier ]] && kill "$denier" 2>/dev/null' EXIT
 printf '{ "githubRepos": ["%s"] }\n' "$REPO" >"$work/strait.json"
 cd "$work"
+
+# Out-of-policy requests are held for approval. Deny each one as it appears so
+# the bypass attempts below come back as 403 instead of waiting 240 s. It runs
+# in the same environment as `check`, so both look in the same socket
+# directory.
+review() { env -i HOME="$HOME" PATH="$PATH" "$here/strait-review" "$@"; }
+(while :; do
+  review list 2>/dev/null | cut -f1 | xargs -r env -i HOME="$HOME" PATH="$PATH" "$here/strait-review" deny >/dev/null 2>&1
+  sleep 0.5
+done) &
+denier=$!
 
 fails=0
 check() { # name expected-regex command

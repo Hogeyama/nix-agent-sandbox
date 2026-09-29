@@ -85,7 +85,7 @@ contrib/strait/strait-review deny ID...
 
 strait also sends a desktop notification through `notify-send` when that command exists. If no one answers in time, the request is denied, and the reason the sandboxed client gets says so.
 
-An approval covers one request only. A `git push` makes two requests, `info/refs?service=git-receive-pack` and then `git-receive-pack`, so it needs two approvals. The second one holds the pack in memory while it waits, because srt buffers the body for upstream.
+An approval covers one request only. A `git push` makes two requests, `info/refs?service=git-receive-pack` and then `git-receive-pack`, so it needs two approvals. While the second one waits, srt may keep the part of the pack it has already received in memory, because it tees the body for upstream.
 
 Each running strait listens on `<pid>.sock` in `$XDG_RUNTIME_DIR/strait`, or in `strait-<uid>` under the temp directory when `XDG_RUNTIME_DIR` is unset. The directory must be owned by you and have mode 0700. The sandbox cannot reach the socket for two reasons. srt's seccomp filter blocks `AF_UNIX` sockets on Linux. And strait adds the directory to `denyRead`, which still hides it when srt runs without its seccomp helper.
 
@@ -176,4 +176,4 @@ GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 - writes to the config file, strait's sources and the patched srt
 - a `bunfig.toml` preload planted in the workspace
 
-The GraphQL and git push probes expect a 403, so answer nothing, or deny, while `probe.sh` runs. Held requests are denied after 240 seconds.
+The bypass attempts that would be held for approval expect a 403. `probe.sh` runs a background loop that denies every held request as it appears, so do not approve anything while it runs.
