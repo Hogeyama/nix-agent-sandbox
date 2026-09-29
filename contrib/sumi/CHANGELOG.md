@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.4.0] - 2026-09-30
+
 ### Added
 
 - `sumi --licenses` prints the copyright and license notices of sumi and of the Zig standard library and musl libc statically linked into it. Releases up to 0.3.0 shipped the executable without these notices.
