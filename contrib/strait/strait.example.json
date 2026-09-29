@@ -1,0 +1,9 @@
+{
+  "githubRepos": ["my-org/private-repo"],
+  "filesystem": {
+    "allowWrite": ["."],
+    "denyWrite": [".claude"],
+    "denyRead": ["/tmp", "~/.ssh", "~/.aws", "~/.config/gh"],
+    "allowRead": ["/tmp/claude-http-*.sock"]
+  }
+}

@@ -1,0 +1,2 @@
+# Intentionally empty. The launcher passes this file to bun with --config so
+# that bun ignores any bunfig.toml in the working directory.

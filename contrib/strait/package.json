@@ -1,0 +1,13 @@
+{
+  "name": "strait",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "strait": "strait" },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.77"
+  },
+  "patchedDependencies": {
+    "@anthropic-ai/sandbox-runtime@0.0.77": "patches/@anthropic-ai%2Fsandbox-runtime@0.0.77.patch"
+  }
+}

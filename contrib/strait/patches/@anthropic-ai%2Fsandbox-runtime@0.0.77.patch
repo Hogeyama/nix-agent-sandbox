@@ -1,0 +1,28 @@
+--- a/dist/sandbox/mux-proxy.js
++++ b/dist/sandbox/mux-proxy.js
+@@ -94,7 +94,9 @@
+             }
+             client.unshift(peek);
+             if (SOCKS_FIRST_BYTES.has(peek[0])) {
+-                opts.handleSocksConnection(client);
++                // Patched: SOCKS tunnels bypass TLS termination and filterRequest.
++                logForDebugging('mux: SOCKS refused (disabled by patch)');
++                client.destroy();
+             }
+             else {
+                 dispatchHttp(client);
+--- a/dist/sandbox/http-proxy.js
++++ b/dist/sandbox/http-proxy.js
+@@ -299,8 +299,10 @@
+                     }, options.planSigv4, options.maxSigv4ResignBodyBytes);
+                     return;
+                 }
+-                logForDebugging(`[tls-terminate] non-TLS bytes on CONNECT ${hostname}:${port}; opaque-tunnelling`);
+-                head = peeked.head;
++                // Patched: a non-TLS stream would bypass filterRequest; refuse it.
++                logForDebugging(`[tls-terminate] non-TLS bytes on CONNECT ${hostname}:${port}; refused (disabled by patch)`);
++                socket.destroy();
++                return;
+             }
+             else if (options.mitmCA) {
+                 // Per-host termination opt-out: the policy exempts this host (mTLS
