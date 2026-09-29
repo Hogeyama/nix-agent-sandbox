@@ -8,8 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.3.0] - 2026-09-30
+
 ### Added
 
+- `sumi hook --agent codex|copilot`: `post-tool` and `prompt` hooks for Codex and GitHub Copilot CLI. Codex tool results are replaced through blocking feedback, and Copilot prompts are masked after attachment expansion. If masking cannot complete, the content is withheld. `init` and `scan` remain Claude-only.
 - `--socket SOCKET` as an alternative to `--secrets-file F` for `hook`, `run` and `init`. sumi then keeps no list of values and sends each value to a `nas-mask-filter --serve` broker, which returns it masked. Giving both options is rejected.
 - `sumi run SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]` runs a program with its arguments unchanged, for wrappers that replace a whole shell.
 - A secrets-file line that is canonical padded base64 also masks its decoded value, when that value is valid UTF-8 of at least 4 bytes without control characters. A trailing newline in the decoded value is dropped.
