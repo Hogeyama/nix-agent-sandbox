@@ -26,7 +26,7 @@ profiles {
    if b.startswith('amends'):source=b
    elif path.stem=='profiles':
     if b.startswith('extraMounts'):source=quick.replace('    network {',b+'\n    network {',1)
-    elif b.startswith('["dev"]'):source=prefix+'profiles {\n'+b+'\n}'
+    elif b.startswith('["'):source=prefix+'profiles {\n'+b+'\n}'
     else:source=prefix+b
    elif b.startswith('observability'):source=prefix+b
    elif path.stem=='network' and i==2:
