@@ -1,0 +1,73 @@
+{
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+      "github.com",
+      "api.github.com",
+      "devapi.example.com"
+    ],
+    "deniedDomains": [],
+    "tlsTerminate": {}
+  },
+  "filesystem": {
+    "allowWrite": [
+      "."
+    ],
+    "denyWrite": [
+      ".claude",
+      "docs/architecture/experiments/srt-trial",
+      ".local/srt-state/settings.json",
+      ".local/srt-state/settings.local.json"
+    ],
+    "denyRead": [
+      "/tmp",
+      "~/.ssh",
+      "~/.aws",
+      "~/.config/gh"
+    ],
+    "allowRead": [
+      "/tmp/claude-http-*.sock"
+    ]
+  },
+  "credentials": {
+    "envVars": [
+      {
+        "name": "CLAUDE_CODE_OAUTH_TOKEN",
+        "mode": "mask",
+        "injectHosts": [
+          "api.anthropic.com"
+        ]
+      },
+      {
+        "name": "ANTHROPIC_API_KEY",
+        "mode": "mask",
+        "injectHosts": [
+          "api.anthropic.com"
+        ]
+      },
+      {
+        "name": "GH_TOKEN",
+        "mode": "mask",
+        "injectHosts": [
+          "github.com",
+          "api.github.com"
+        ]
+      }
+    ],
+    "files": [
+      {
+        "path": "./.env",
+        "mode": "deny"
+      },
+      {
+        "path": "./docs/architecture/experiments/srt-trial/dummy.env",
+        "mode": "mask",
+        "extract": "API_PASSWORD=(\\S+)",
+        "onExtractNoMatch": "deny",
+        "injectHosts": [
+          "devapi.example.com"
+        ]
+      }
+    ]
+  }
+}
