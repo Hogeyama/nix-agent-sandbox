@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "strait": "strait",
-    "strait-review": "strait-review"
+    "strait-review": "strait-review",
+    "strait-hostexec": "strait-hostexec"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",

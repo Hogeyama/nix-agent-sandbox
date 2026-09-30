@@ -5,7 +5,12 @@ test("empty config uses defaults", () => {
   expect(parseConfig("{}")).toEqual({
     githubRepos: [],
     filesystem: DEFAULT_FILESYSTEM,
+    hostExec: false,
   });
+});
+
+test("hostExec is opt-in", () => {
+  expect(parseConfig('{"hostExec": true}').hostExec).toBe(true);
 });
 
 test("filesystem keys override one by one", () => {
@@ -30,6 +35,7 @@ test.each([
   ["repo with path", { githubRepos: ["my-org/private-repo/issues"] }],
   ["repo with percent", { githubRepos: ["my%2Dorg/repo"] }],
   ["non-string path", { filesystem: { denyRead: [1] } }],
+  ["non-boolean hostExec", { hostExec: "yes" }],
 ])("rejects %s", (_name, value) => {
   expect(() => parseConfig(JSON.stringify(value))).toThrow();
 });

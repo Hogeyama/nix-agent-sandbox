@@ -14,6 +14,8 @@ export interface FilesystemConfig {
 export interface StraitConfig {
   githubRepos: string[];
   filesystem: FilesystemConfig;
+  /** Let the sandbox ask to run commands on the host, each one approved. */
+  hostExec: boolean;
 }
 
 export const DEFAULT_FILESYSTEM: FilesystemConfig = {
@@ -34,7 +36,7 @@ export function parseConfig(text: string): StraitConfig {
     throw new Error(`strait.json is not valid JSON: ${(e as Error).message}`);
   }
   const top = record(raw, "strait.json");
-  rejectUnknown(top, ["githubRepos", "filesystem"], "strait.json");
+  rejectUnknown(top, ["githubRepos", "filesystem", "hostExec"], "strait.json");
 
   const githubRepos = stringArray(top.githubRepos ?? [], "githubRepos");
   for (const r of githubRepos) {
@@ -53,7 +55,11 @@ export function parseConfig(text: string): StraitConfig {
       }
     }
   }
-  return { githubRepos, filesystem };
+  const hostExec = top.hostExec ?? false;
+  if (typeof hostExec !== "boolean") {
+    throw new Error("hostExec must be true or false");
+  }
+  return { githubRepos, filesystem, hostExec };
 }
 
 function record(v: unknown, where: string): Record<string, unknown> {

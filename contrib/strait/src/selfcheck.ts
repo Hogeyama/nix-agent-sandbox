@@ -6,7 +6,9 @@
 // live proxy before starting the command. Against a patched proxy neither
 // probe dials upstream; an unpatched one relays the second to github.com.
 
+import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
+import { fileURLToPath } from "node:url";
 
 const TIMEOUT_MS = 3000;
 
@@ -105,5 +107,24 @@ async function waitFor(cond: () => boolean): Promise<void> {
   while (!cond()) {
     if (Date.now() > deadline) return;
     await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/**
+ * hostexec answers requests through the `respond` patch. Unpatched srt
+ * treats that decision as a denial, which fails closed, but hostexec would
+ * then look enabled and never work; say so at launch instead. No live probe:
+ * reaching filterRequest takes a TLS client that trusts srt's CA.
+ */
+export function assertRespondPatched(): void {
+  const index = fileURLToPath(
+    import.meta.resolve("@anthropic-ai/sandbox-runtime"),
+  );
+  const filter = readFileSync(
+    index.replace(/index\.js$/, "sandbox/request-filter.js"),
+    "utf8",
+  );
+  if (!filter.includes("decision.action === 'respond'")) {
+    throw new Error("hostExec needs the srt respond patch, which is missing");
   }
 }

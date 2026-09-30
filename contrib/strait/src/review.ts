@@ -14,6 +14,7 @@ import { connect } from "node:net";
 import { join, resolve } from "node:path";
 import type { ApprovalRequest, ApprovalResponse, Pending } from "./approval.ts";
 import { socketDir } from "./approval.ts";
+import { type ExecRequest, INHERITED_ENV } from "./hostexec.ts";
 
 interface Held extends Pending {
   /** `<pid>-<n>`, unique across sessions. */
@@ -103,9 +104,12 @@ const visible = (s: string, keepNewlines = false) =>
   );
 
 export function line(h: Held): string {
+  const what = h.exec
+    ? `EXEC ${h.exec.argv.map(shellQuote).join(" ")} (in ${h.exec.cwd})`
+    : `${h.method} ${h.url}`;
   return [
     h.ref,
-    visible(`${h.method} ${h.url}`),
+    visible(what),
     visible(h.reason),
     `(${age(h.since)}, ${visible(h.cwd)})`,
   ].join("\t");
@@ -119,8 +123,23 @@ export function details(h: Held): string {
     `request: ${visible(`${h.method} ${h.url}`)}`,
     `reason:  ${visible(h.reason)}`,
   ];
-  if (h.body !== undefined) out.push("", visible(prettyBody(h.body), true));
+  if (h.exec) out.push("", ...execDetails(h.exec).map((l) => visible(l)));
+  else if (h.body !== undefined) {
+    out.push("", visible(prettyBody(h.body), true));
+  }
   return out.join("\n");
+}
+
+// One argument per line: a shell-quoted join would hide where each one ends.
+function execDetails(e: ExecRequest): string[] {
+  const env = Object.entries(e.env);
+  return [
+    "command, run on the host:",
+    ...e.argv.map((a, i) => `  argv[${i}] ${JSON.stringify(a)}`),
+    `cwd: ${JSON.stringify(e.cwd)}`,
+    `env: ${INHERITED_ENV.join(", ")} from the host${env.length ? ", plus:" : ", nothing else"}`,
+    ...env.map(([k, v]) => `  ${k}=${JSON.stringify(v)}`),
+  ];
 }
 
 // A GraphQL body is easier to judge with its query unescaped.

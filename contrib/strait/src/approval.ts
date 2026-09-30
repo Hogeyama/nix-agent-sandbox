@@ -11,6 +11,7 @@ import { lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExecRequest } from "./hostexec.ts";
 import type { FinalDecision } from "./policy.ts";
 
 /**
@@ -27,6 +28,8 @@ export interface Pending {
   reason: string;
   /** The body strait read to decide, if any (GraphQL). */
   body?: string;
+  /** A command to run on the host, when this is a hostexec request. */
+  exec?: ExecRequest;
   /** Epoch milliseconds. */
   since: number;
 }

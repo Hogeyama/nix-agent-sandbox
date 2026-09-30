@@ -6,6 +6,12 @@
 // throws.
 
 import { judgeGraphql } from "./graphql.ts";
+import {
+  type ExecRequest,
+  HOSTEXEC_HOST,
+  HOSTEXEC_PATH,
+  parseExecRequest,
+} from "./hostexec.ts";
 
 /**
  * `review` is a request that is outside the policy but carries only
@@ -16,7 +22,7 @@ import { judgeGraphql } from "./graphql.ts";
  */
 export type Decision =
   | { action: "allow" | "deny"; reason?: string }
-  | { action: "review"; reason: string };
+  | { action: "review"; reason: string; exec?: ExecRequest };
 
 /** What srt enforces: a review ends in one of these. */
 export type FinalDecision = Exclude<Decision, { action: "review" }>;
@@ -54,6 +60,8 @@ export interface Sentinels {
 export interface PolicyConfig {
   /** `owner/name` pairs whose contents may be read. Compared case-insensitively. */
   githubRepos: readonly string[];
+  /** Whether HOSTEXEC_HOST takes requests to run commands on the host. */
+  hostExec?: boolean;
 }
 
 export const ANTHROPIC_HOST = "api.anthropic.com";
@@ -110,10 +118,10 @@ export function wantsBody(method: string, url: string): boolean {
   } catch {
     return false;
   }
+  if (method.toUpperCase() !== "POST") return false;
   return (
-    method.toUpperCase() === "POST" &&
-    u.hostname === GITHUB_API_HOST &&
-    u.pathname === GRAPHQL_PATH
+    (u.hostname === GITHUB_API_HOST && u.pathname === GRAPHQL_PATH) ||
+    (u.hostname === HOSTEXEC_HOST && u.pathname === HOSTEXEC_PATH)
   );
 }
 
@@ -158,6 +166,10 @@ export function decide(
       return decideGithubApi(method, url.pathname, config);
     case GITHUB_HOST:
       return decideGit(method, url, config);
+    case HOSTEXEC_HOST:
+      return config.hostExec
+        ? decideHostExec(method, url, req)
+        : deny("hostExec is off");
     default:
       return deny(`host ${url.hostname} is not allowed`);
   }
@@ -288,6 +300,32 @@ function decideGraphql(
   return verdict.ok ? allow : review(verdict.reason);
 }
 
+// Every well-formed run goes to a human; there are no rules that allow one.
+function decideHostExec(
+  method: string,
+  url: URL,
+  req: PolicyRequest,
+): Decision {
+  if (
+    method !== "POST" ||
+    url.pathname !== HOSTEXEC_PATH ||
+    url.search !== ""
+  ) {
+    return deny(`hostexec takes only POST ${HOSTEXEC_PATH}`);
+  }
+  if (req.headers.has("content-encoding")) {
+    return deny("hostexec body is encoded");
+  }
+  if (typeof req.body !== "string") return deny("hostexec body was not read");
+  let exec = parseExecRequest(req.body);
+  // Only valid JSON reaches the duplicate scan, which relies on it.
+  if (typeof exec !== "string" && hasDuplicateMember(req.body)) {
+    exec = "hostexec body has a duplicated member";
+  }
+  if (typeof exec === "string") return deny(exec);
+  return { action: "review", reason: "run a command on the host", exec };
+}
+
 /**
  * Whether any object in `text`, which must already be valid JSON, names the
  * same member twice. Validity lets the scan track only strings and brackets.
@@ -303,7 +341,9 @@ export function hasDuplicateMember(text: string): boolean {
     else if (c === "," && top?.keys) top.expectKey = true;
     else if (c === '"') {
       let j = i + 1;
-      while (text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      while (j < text.length && text[j] !== '"') {
+        j += text[j] === "\\" ? 2 : 1;
+      }
       if (top?.keys && top.expectKey) {
         const key = JSON.parse(text.slice(i, j + 1)) as string;
         if (top.keys.has(key)) return true;

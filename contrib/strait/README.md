@@ -2,7 +2,7 @@
 
 strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued. A request to any other endpoint on an allowed host is held until a human approves or denies it with `strait-review`.
 
-The point is how much code has to be trusted. strait's own code is about 1,400 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. `review.ts` and the `strait-review` launcher, the approval client, add about 230 more. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, srt, two small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
+The point is how much code has to be trusted. strait's own code is about 1,600 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. About 100 of those lines are the GraphQL allowlist. The two clients add about 370 more: `review.ts` behind the `strait-review` launcher on the host, and `hostexec_client.ts` behind `strait-hostexec` in the sandbox. The trusted base is that code, srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
 
 ## Why srt needs patches
 
@@ -12,6 +12,8 @@ srt 0.0.77 terminates TLS and calls `filterRequest` only on HTTP proxy requests.
 - **Non-TLS CONNECT.** A CONNECT stream that does not start with a TLS ClientHello is relayed as-is. SSH to `github.com:22` or `ssh.github.com:443` got through this way.
 
 [patches/](patches/) closes both. The mux drops SOCKS connections, and the HTTP proxy closes a CONNECT stream that is not TLS. `package.json` pins srt to exactly `0.0.77` and applies the patch through `patchedDependencies`.
+
+The same patch file adds a third change, which closes nothing but is needed for [host commands](#running-commands-on-the-host). `filterRequest` may return `{action: "respond", status, headers, body}`, and srt then answers the client with that response instead of forwarding the request. Unpatched srt treats that decision as a denial, so a missing patch fails closed. strait also checks for the patch at launch when `hostExec` is on.
 
 Before the command starts, strait probes the live proxy (`selfcheck.ts`) and refuses to run if either patch is missing. So a version bump or a patch that failed to apply fails loudly instead of silently reopening the holes. A test that removes one patch at a time confirmed that each missing patch is caught.
 
@@ -91,6 +93,26 @@ Each running strait listens on `<pid>.sock` in `$XDG_RUNTIME_DIR/strait`, or in 
 
 Everything `strait-review` shows comes from the sandbox: the URL, the reason, which may quote a GraphQL argument, and the body. Control and format characters are therefore shown escaped, so a request cannot forge another line or redraw the terminal.
 
+### Running commands on the host
+
+Some commands cannot run in the sandbox: a `nix build` that needs the daemon, or a tool the sandbox does not have. With `"hostExec": true` in `strait.json`, the sandboxed process can ask for such a command to run on the host:
+
+```sh
+# inside the sandbox
+/path/to/contrib/strait/strait-hostexec --env NIX_CONFIG='...' -- nix build .#sumi
+/path/to/contrib/strait/strait-hostexec --cwd /path/to/repo --env GH_HOST -- gh release view
+```
+
+- `--cwd DIR` sets the working directory; it defaults to the current one. Paths inside the sandbox are the same as on the host.
+- `--env NAME=VALUE` sets a variable, and `--env NAME` copies one from the sandbox. The command gets `PATH` and `HOME` from strait's environment plus exactly these variables, and nothing else from strait. strait's own environment holds the real tokens.
+- Each run is held for approval like any other request. `strait-review` shows every argument on its own line, the working directory and each variable. An approval covers that one run. There are no rules that allow a command automatically.
+- stdout and stderr come back once the command ends, and the exit status is the command's. There is no stdin, and output is not streamed. A refused request exits with 126. If the client goes away, the command is killed.
+- Any real credential strait holds is replaced with `[masked by strait]` in the output, so an approved `gh auth token` cannot hand the real token to the sandbox. Anything else the command prints goes back unmasked, and so does whatever it writes to the files the sandbox can read.
+
+The request travels as `POST https://hostexec.strait.invalid/run` through srt's proxy, so the one exit remains `filterRequest`. The host name does not exist. It is on the allowlist only when `hostExec` is on, and srt never resolves or dials it: strait answers it through the `respond` patch. srt blocks Unix sockets on Linux, so nas's socket-based hostexec is not an option here. srt's `mitmProxy` option cannot be combined with TLS termination.
+
+Nothing limits run time or output size. A command that runs past the approval hold keeps running, because only the wait for approval is limited to 240 seconds.
+
 ## Usage
 
 ```sh
@@ -139,9 +161,10 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 
 ### Config
 
-`strait.json` accepts only two keys, and unknown keys are rejected:
+`strait.json` accepts only three keys, and unknown keys are rejected:
 
 - `githubRepos`: `owner/name` strings.
+- `hostExec`: `true` lets the sandbox ask to run commands on the host (above). Off by default.
 - `filesystem`: `allowWrite`, `denyWrite`, `denyRead`, `allowRead`. These are the same fields as srt's `filesystem` section, with the defaults shown in [strait.example.json](strait.example.json).
 
 **An existing `srt-settings.json` cannot be used as-is.** Copy its `filesystem` section into `strait.json`. The other sections are rejected on purpose:
@@ -153,6 +176,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 
 - **GraphQL covers only what gh asked for once.** The captured queries are only each command's first request, from gh 2.46. A different gh version, a flag that adds fields, or a later request in the same command can select a path that is not listed, and that request is denied. `gh api repos/...` works either way.
 - **Approvals are per request.** There is no "allow this for the session" scope, because one path such as `/graphql` covers requests of every kind. A command that makes many out-of-policy requests needs one approval each.
+- **hostexec is not tested in a real sandbox.** The full path was checked without bubblewrap: `strait-hostexec`, then srt's TLS-terminating proxy, then review, the run on the host, and the answer. It has not been checked that the client, which runs on bun and curl, starts inside bwrap with the default `denyRead` of `/tmp`.
 - **Held requests are not tested live.** Whether a client or srt's server gives up before 240 seconds has not been checked on a host. Node's default `requestTimeout` is 300 seconds, which is why the limit is below it.
 - **Not part of strait:** nas features such as file-content masking (maskfs), output masking (sumi) and the audit log.
 - **Tested only on Linux.** macOS uses a different srt backend, and the patches have not been checked there.
@@ -161,7 +185,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 ## Tests
 
 ```sh
-bun run test:strait-unit        # policy, GraphQL, approval and config, from the repo root; no srt needed
+bun run test:strait-unit        # policy, GraphQL, approval, hostexec and config, from the repo root; no srt needed
 node_modules/.bin/tsc -p contrib/strait/tsconfig.json   # needs `bun install` in contrib/strait first
 GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 ```

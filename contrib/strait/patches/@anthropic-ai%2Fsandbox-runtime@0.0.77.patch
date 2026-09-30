@@ -26,3 +26,27 @@
              }
              else if (options.mitmCA) {
                  // Per-host termination opt-out: the policy exempts this host (mTLS
+--- a/dist/sandbox/request-filter.js
++++ b/dist/sandbox/request-filter.js
+@@ -136,6 +136,21 @@
+         logForDebugging(`[request-filter] allow ${method} ${url}`);
+         return forUpstream;
+     }
++    if (decision.action === 'respond') {
++        // Patched: the callback answers the request itself; nothing goes upstream.
++        logForDebugging(`[request-filter] respond ${method} ${url}`);
++        if (res.headersSent || res.destroyed) {
++            res.destroy();
++        }
++        else {
++            res.writeHead(decision.status, decision.headers ?? {});
++            res.end(decision.body ?? '');
++        }
++        forUpstream.destroy();
++        if (forUpstream !== req)
++            destroyAfterResponse(req, res);
++        return null;
++    }
+     onDeny?.(method, url, decision.reason ?? DEFAULT_DENY_REASON);
+     deny(res, decision);
+     forUpstream.destroy();
