@@ -7,7 +7,7 @@
 // where only the credential strait issues for it is let through.
 
 import { HOSTEXEC_HOST } from "./hostexec.ts";
-import { HOSTS, type HostRule } from "./policy.ts";
+import { HOSTS, type HostRule, isArtifactHost } from "./policy.ts";
 
 export interface FilesystemConfig {
   allowWrite: string[];
@@ -118,7 +118,11 @@ function parseHosts(v: unknown): StraitConfig["hosts"] {
     if (!HOST_NAME.test(host)) {
       throw new Error(`${where}: not an exact lowercase host name`);
     }
-    if ((HOSTS as readonly string[]).includes(host) || host === HOSTEXEC_HOST) {
+    if (
+      (HOSTS as readonly string[]).includes(host) ||
+      host === HOSTEXEC_HOST ||
+      isArtifactHost(host)
+    ) {
       throw new Error(`${where}: this host has a fixed policy`);
     }
     const rule = record(value, where);

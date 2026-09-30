@@ -511,3 +511,29 @@ describe("hosts added in strait.json", () => {
     expect(run("GET", "https://constructor/")).toBe("deny");
   });
 });
+
+describe("Artifact content hosts", () => {
+  const run = (url: string, headers: Record<string, string> = {}) =>
+    decide({ method: "GET", url, headers: new Headers(headers) }, config, s);
+  const host =
+    "https://509165a3-f096-4ffc-8e12-5550470d17e7.frame.claudeusercontent.com";
+
+  test("one Artifact's host goes to review", () => {
+    expect(run(`${host}/`).action).toBe("review");
+    expect(run(`${host}/index.html?x=1`).action).toBe("review");
+  });
+  test("deeper or look-alike names are not Artifact hosts", () => {
+    expect(run("https://a.b.frame.claudeusercontent.com/").action).toBe("deny");
+    expect(run("https://frame.claudeusercontent.com/").action).toBe("deny");
+    expect(
+      run("https://x.frame.claudeusercontent.com.evil.example/").action,
+    ).toBe("deny");
+    expect(run("https://xframe.claudeusercontent.com/").action).toBe("deny");
+  });
+  test("credentials are checked first", () => {
+    expect(run(`${host}/`, { cookie: "s=1" }).action).toBe("deny");
+    expect(
+      run(`${host}/`, { authorization: "Bearer fake_value_oauth" }).action,
+    ).toBe("deny");
+  });
+});

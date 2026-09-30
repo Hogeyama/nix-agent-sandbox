@@ -50,6 +50,10 @@ test.each([
   ["IP address", { hosts: { "169.254.169.254": {} } }],
   ["a fixed host", { hosts: { "api.github.com": {} } }],
   ["the hostexec host", { hosts: { "hostexec.strait.invalid": {} } }],
+  [
+    "an Artifact content host",
+    { hosts: { "abc.frame.claudeusercontent.com": {} } },
+  ],
   ["unknown host key", { hosts: { "a.example.com": { paths: ["/"] } } }],
   [
     "strait's own token for another host",

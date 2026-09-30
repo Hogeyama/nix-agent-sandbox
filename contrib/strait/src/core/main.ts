@@ -26,6 +26,7 @@ import { parseConfig, type StraitConfig } from "./config.ts";
 import { HOSTEXEC_HOST, runOnHost } from "./hostexec.ts";
 import {
   ANTHROPIC_HOST,
+  ARTIFACT_DOMAIN,
   decide,
   type FinalDecision,
   GITHUB_API_HOST,
@@ -243,6 +244,7 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
       allowedDomains: [
         ...HOSTS,
         ...(config.hostExec ? [HOSTEXEC_HOST] : []),
+        ARTIFACT_DOMAIN,
         ...Object.keys(config.hosts),
       ].map((h) => `${h}:443`),
       deniedDomains: [],

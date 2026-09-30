@@ -84,6 +84,21 @@ export const GITHUB_HOST = "github.com";
 /** The only destinations the sandbox may reach, always on port 443. */
 export const HOSTS = [ANTHROPIC_HOST, GITHUB_API_HOST, GITHUB_HOST] as const;
 
+/**
+ * Where Claude Code fetches a published Artifact's content: one host per
+ * Artifact, `<id>.frame.claudeusercontent.com`. Every request there is held
+ * for review, so it takes a wildcard in srt's allowlist; `isArtifactHost`
+ * narrows that to exactly one label under the suffix.
+ */
+export const ARTIFACT_DOMAIN = "*.frame.claudeusercontent.com";
+const ARTIFACT_SUFFIX = ARTIFACT_DOMAIN.slice(1);
+
+export function isArtifactHost(host: string): boolean {
+  if (!host.endsWith(ARTIFACT_SUFFIX)) return false;
+  const label = host.slice(0, -ARTIFACT_SUFFIX.length);
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label);
+}
+
 const allow: Decision = { action: "allow" };
 const deny = (reason: string): Decision => ({ action: "deny", reason });
 const review = (reason: string): Decision => ({ action: "review", reason });
@@ -197,6 +212,11 @@ export function decide(
         ? decideHostExec(method, url, req)
         : deny("hostExec is off");
     default:
+      // Anthropic serves Artifact content from here; a human decides each
+      // fetch, since the host is Anthropic's but the content is anyone's.
+      if (isArtifactHost(url.hostname)) {
+        return review(`${method} on an Artifact content host`);
+      }
       return deny(`host ${url.hostname} is not allowed`);
   }
 }
