@@ -90,7 +90,7 @@ strait review approve k3f9-2 ...
 strait review deny k3f9-2 ...
 ```
 
-`strait review` stays open. Approving or denying reloads the list rather than quitting, and a request that arrives is added within a second. Tab selects several requests at once, and the preview shows the one under the cursor in full. Without a session ID or `--all`, it shows only the sessions started in the current directory.
+`strait review` stays open. Approving or denying reloads the list rather than quitting. It also checks every second for requests that arrived or went away, and reloads when the set changes. Tab selects several requests at once, and the preview shows the one under the cursor in full. Without a session ID or `--all`, it shows only the sessions started in the current directory.
 
 strait also sends a desktop notification through `notify-send` when that command exists. If no one answers in time, the request is denied, and the reason the sandboxed client gets says so.
 
