@@ -474,6 +474,53 @@
             throw "set NAS_REBUILT_BINARY to an absolute executable path and build with --impure"
           else
             mkNasBundle nasAssetsBundle (builtins.path { path = runtime; name = "nas-rebuilt-runtime"; });
+
+        # strait は起動中の自分のディレクトリをサンドボックスから書けなくする。
+        # ワークスペースの contrib/strait から起動すると開発中のソースまで
+        # 書けなくなるので、nix store に入れたこのパッケージから起動する。
+        # srt へのパッチは bun2nix が依存の取得時に当てる。
+        straitSrc = ./contrib/strait;
+        straitPackageJson = builtins.fromJSON (builtins.readFile ./contrib/strait/package.json);
+        strait = b2n.mkDerivation {
+          pname = "strait";
+          version = straitPackageJson.version;
+          src = straitSrc;
+          bunDeps = b2n.fetchBunDeps {
+            bunNix = ./contrib/strait/bun.nix;
+            # bun2nix.patchedDependenciesToOverrides と同じ処理だが、あちらは
+            # store から読み取り専用のままコピーしたファイルに patch を当てて
+            # 失敗するので、書き込めるようにしてから当てる。
+            overrides = pkgs.lib.mapAttrs (name: patchFile: pkg:
+              pkgs.runCommandLocal "patched-${name}" { nativeBuildInputs = [ pkgs.patch ]; } ''
+                cp -r ${pkg}/. $out
+                chmod -R u+w $out
+                patch -p1 -d $out < ${straitSrc}/${patchFile}
+              '') straitPackageJson.patchedDependencies;
+          };
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          dontUseBunCheck = true;
+          buildPhase = ''
+            runHook preBuild
+            # パッチが当たっていない srt は SOCKS と非 TLS の CONNECT を素通しする。
+            # 起動時の selfcheck でも落ちるが、ここで先に止める。
+            for marker in "Patched: SOCKS tunnels bypass" "Patched: a non-TLS stream would bypass" "decision.action === 'respond'"; do
+              grep -rqF "$marker" node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox \
+                || { echo "srt patch missing: $marker" >&2; exit 1; }
+            done
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/share/strait $out/bin
+            cp -r bunfig.toml package.json patches src node_modules \
+              strait strait-review strait-hostexec $out/share/strait/
+            for b in strait strait-review strait-hostexec; do
+              makeWrapper $out/share/strait/$b $out/bin/$b \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bun ]}
+            done
+            runHook postInstall
+          '';
+        };
       in
       {
         packages = {
@@ -484,6 +531,7 @@
           maskfs-bundled = maskfsBundled;
           mask-filter = maskFilter;
           sumi = sumi;
+          strait = strait;
           vscode-nas-approval = vscodeNasApproval;
         } // pkgs.lib.optionalAttrs (builtins.getEnv "NAS_REBUILT_BINARY" != "") {
           bundled-with-runtime = nasBundledWithRuntime;

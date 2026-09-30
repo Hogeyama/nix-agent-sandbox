@@ -80,11 +80,11 @@ A request that carries any other credential is denied. That covers a foreign or 
 A held request waits in the proxy for up to 240 seconds. Approve or deny it from another terminal on the host:
 
 ```sh
-contrib/strait/strait-review                # fzf: Tab selects, Enter approves, Ctrl-D denies
-contrib/strait/strait-review list           # what is waiting, across every running strait
-contrib/strait/strait-review show ID        # one request in full, with a GraphQL query unescaped
-contrib/strait/strait-review approve ID...
-contrib/strait/strait-review deny ID...
+strait-review                # fzf: Tab selects, Enter approves, Ctrl-D denies
+strait-review list           # what is waiting, across every running strait
+strait-review show ID        # one request in full, with a GraphQL query unescaped
+strait-review approve ID...
+strait-review deny ID...
 ```
 
 strait also sends a desktop notification through `notify-send` when that command exists. If no one answers in time, the request is denied, and the reason the sandboxed client gets says so.
@@ -101,8 +101,8 @@ Some commands cannot run in the sandbox: a `nix build` that needs the daemon, or
 
 ```sh
 # inside the sandbox
-/path/to/contrib/strait/strait-hostexec --env NIX_CONFIG='...' -- nix build .#sumi
-/path/to/contrib/strait/strait-hostexec --cwd /path/to/repo --env GH_HOST -- gh release view
+strait-hostexec --env NIX_CONFIG='...' -- nix build .#sumi
+strait-hostexec --cwd /path/to/repo --env GH_HOST -- gh release view
 ```
 
 - `--cwd DIR` sets the working directory; it defaults to the current one. Paths inside the sandbox are the same as on the host.
@@ -118,16 +118,20 @@ Nothing limits run time or output size. A command that runs past the approval ho
 ## Usage
 
 ```sh
-cd contrib/strait && bun install    # applies the srt patch
-cp strait.example.json /path/to/workspace/strait.json   # then edit githubRepos
+nix profile install .#strait    # or: nix build .#strait, and use result/bin
+cp contrib/strait/strait.example.json /path/to/workspace/strait.json   # then edit githubRepos
 
 cd /path/to/workspace
 GH_TOKEN=$(gh auth token) \
 CLAUDE_CODE_OAUTH_TOKEN=... \
-  /path/to/contrib/strait/strait -- claude --permission-mode auto
+  strait -- claude --permission-mode auto
 ```
 
-Always start strait through the `strait` launcher, never with `bun src/main.ts`. Otherwise bun reads `bunfig.toml` and `.env` from the working directory. The working directory is the sandbox's writable workspace, so a `preload` planted there would run on the host, outside the sandbox, at the next launch. The launcher passes `--config=<strait>/bunfig.toml --no-env-file` so that neither file is read.
+Run the packaged strait, not `contrib/strait/strait` from a checkout. strait always makes its own directory read-only in the sandbox, because its code runs on the host at the next launch. Started from a checkout inside the workspace, that directory is the source you are editing, so the sandbox cannot touch it. The package lives in the nix store, which is read-only anyway, and leaves the checkout writable. The package build applies the srt patch and fails if any of its three changes is missing.
+
+For work on strait itself, `cd contrib/strait && bun install` still sets up a checkout for the tests and for running `contrib/strait/strait` directly. After changing a dependency, run `bun2nix -o bun.nix` in `contrib/strait` so the package picks it up.
+
+Always start strait through a launcher (`strait`, or `contrib/strait/strait` in a checkout), never with `bun src/main.ts`. Otherwise bun reads `bunfig.toml` and `.env` from the working directory. The working directory is the sandbox's writable workspace, so a `preload` planted there would run on the host, outside the sandbox, at the next launch. The launcher passes `--config=<strait>/bunfig.toml --no-env-file` so that neither file is read.
 
 Options are `--config <path>` (default `./strait.json`, which must exist) and `--debug` (srt's debug log). The command starts after `--`, or at the first argument that is not an option.
 
