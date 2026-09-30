@@ -1,7 +1,7 @@
 #!/bin/sh
-# Launch strait. Always use this rather than `bun src/main.ts`: bun otherwise
+# Launch strait. Always use this rather than `bun src/cli.ts`: bun otherwise
 # reads bunfig.toml and .env from the working directory, which is the
 # sandbox's writable workspace, and a `preload` there would run on the host
 # at the next launch.
 here=$(dirname "$(readlink -f "$0")")
-exec bun --config="$here/bunfig.toml" --no-env-file "$here/src/main.ts" "$@"
+exec bun --config="$here/bunfig.toml" --no-env-file "$here/src/cli.ts" "$@"

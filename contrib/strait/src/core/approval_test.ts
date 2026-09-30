@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Approvals, serve } from "./approval.ts";
 import {
   ask,
   collect,
@@ -13,7 +12,8 @@ import {
   parseRef,
   structured,
   tuiArgs,
-} from "./review.ts";
+} from "../ui/review.ts";
+import { Approvals, serve } from "./approval.ts";
 import { claimNewSocket, claimSocket, type SessionInfo } from "./session.ts";
 
 const req = {

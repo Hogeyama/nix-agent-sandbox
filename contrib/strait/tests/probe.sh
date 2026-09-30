@@ -92,12 +92,12 @@ check "approved graphql outside the list" '"login"' "curl -sS --max-time 20 -X P
 check "sandbox cannot see held requests" 'held-visible=0 rc=[01]' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-hold=1' >/dev/null & sleep 2; out=\$($here/strait review list --all 2>/dev/null); rc=\$?; echo held-visible=\$(printf '%s' \"\$out\" | grep -c strait-probe-hold) rc=\$rc; kill %1"
 
 # hostexec: runs on the host after approval, with only the declared env.
-check "hostexec approved" 'out=strait-probe-approve exit=7' "$here/strait-hostexec -- sh -c 'echo out=strait-probe-approve; exit 7'; echo exit=\$?"
-check "hostexec env and cwd" '\[strait-probe-approve\]\[\]\[/\]' "$here/strait-hostexec --cwd / --env A=strait-probe-approve -- sh -c 'echo \"[\$A][\$GH_TOKEN][\$(pwd)]\"'"
-check "hostexec output masking" 'masked by strait' "$here/strait-hostexec --env M=strait-probe-approve -- sh -c 'gh auth token'"
+check "hostexec approved" 'out=strait-probe-approve exit=7' "$here/strait hostexec -- sh -c 'echo out=strait-probe-approve; exit 7'; echo exit=\$?"
+check "hostexec env and cwd" '\[strait-probe-approve\]\[\]\[/\]' "$here/strait hostexec --cwd / --env A=strait-probe-approve -- sh -c 'echo \"[\$A][\$GH_TOKEN][\$(pwd)]\"'"
+check "hostexec output masking" 'masked by strait' "$here/strait hostexec --env M=strait-probe-approve -- sh -c 'gh auth token'"
 # strait's own directory is read-only in the sandbox but not on the host.
-check "hostexec runs outside the sandbox" 'wrote-on-host' "$here/strait-hostexec --env M=strait-probe-approve -- sh -c 'touch $here/.strait-probe && rm $here/.strait-probe && echo wrote-on-host'"
-check "hostexec denied" 'exit=126' "$here/strait-hostexec -- echo no; echo exit=\$?"
+check "hostexec runs outside the sandbox" 'wrote-on-host' "$here/strait hostexec --env M=strait-probe-approve -- sh -c 'touch $here/.strait-probe && rm $here/.strait-probe && echo wrote-on-host'"
+check "hostexec denied" 'exit=126' "$here/strait hostexec -- echo no; echo exit=\$?"
 
 # The policy's own files. `: >>` opens for writing without changing content.
 check "write strait.json" 'Read-only|denied' ": >> strait.json && echo WROTE"

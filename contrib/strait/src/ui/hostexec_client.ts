@@ -1,6 +1,6 @@
-// strait-hostexec: ask, from inside the sandbox, to run a command on the host.
+// strait hostexec: ask, from inside the sandbox, to run a command on the host.
 //
-//   strait-hostexec [--cwd DIR] [--env NAME=VALUE | --env NAME]... [--] cmd [args...]
+//   strait hostexec [--cwd DIR] [--env NAME=VALUE | --env NAME]... [--] cmd [args...]
 //
 // The command runs only after a human approves it with `strait review`, with
 // PATH and HOME from the host plus exactly the variables given here
@@ -9,7 +9,7 @@
 // stdin. Exit status is the command's, or 126 when the request is refused.
 
 import { spawn } from "node:child_process";
-import { HOSTEXEC_HOST, HOSTEXEC_PATH } from "./hostexec.ts";
+import { HOSTEXEC_HOST, HOSTEXEC_PATH } from "../core/hostexec.ts";
 
 export interface ClientArgs {
   argv: string[];
@@ -51,16 +51,12 @@ export function parseClientArgs(
   return out;
 }
 
-async function main(): Promise<number> {
-  const parsed = parseClientArgs(
-    process.argv.slice(2),
-    process.cwd(),
-    process.env,
-  );
+export async function hostexecMain(argv: string[]): Promise<number> {
+  const parsed = parseClientArgs(argv, process.cwd(), process.env);
   if (typeof parsed === "string") {
-    console.error(`strait-hostexec: ${parsed}`);
+    console.error(`strait hostexec: ${parsed}`);
     console.error(
-      "usage: strait-hostexec [--cwd DIR] [--env NAME=VALUE | --env NAME]... [--] cmd [args...]",
+      "usage: strait hostexec [--cwd DIR] [--env NAME=VALUE | --env NAME]... [--] cmd [args...]",
     );
     return 2;
   }
@@ -95,7 +91,7 @@ async function main(): Promise<number> {
   const body = text.slice(0, nl);
   if (code !== 0 || status !== "200") {
     console.error(
-      `strait-hostexec: refused (${status || `curl exit ${code}`}): ${body.trim()}`,
+      `strait hostexec: refused (${status || `curl exit ${code}`}): ${body.trim()}`,
     );
     return 126;
   }
@@ -108,14 +104,8 @@ async function main(): Promise<number> {
   process.stdout.write(Buffer.from(result.stdout, "base64"));
   process.stderr.write(Buffer.from(result.stderr, "base64"));
   if (result.signal !== null) {
-    console.error(`strait-hostexec: killed by ${result.signal}`);
+    console.error(`strait hostexec: killed by ${result.signal}`);
     return 128 + 15;
   }
   return result.exitCode ?? 1;
-}
-
-if (import.meta.main) {
-  main().then((code) => {
-    process.exitCode = code;
-  });
 }

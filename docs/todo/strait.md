@@ -4,10 +4,6 @@ strait の未解決の課題です。2026-09-30 に strait の中で sumi v0.3.0
 
 Artifacts は `api.anthropic.com` の `/v1/code/agent-proxy/frame/...` に送られ、strait の許可リストにないので承認待ちになる（2026-09-30 に拒否された時の応答は 403 `GET /v1/code/agent-proxy/frame/frames is not a Claude Code endpoint`）。送り先は Claude Code 2.1.284 のバイナリから読み取った。`/api/frame/...` を `/v1/code/agent-proxy/frame/...` に書き換えて送っている。承認して通したときに、推論専用のトークン（`CLAUDE_CODE_OAUTH_TOKEN`）で受け付けられるかは未確認。受け付けられるなら、承認を 1 件ずつ求めずに済むよう、許可リストへ入れるかを決める。
 
-**hostexec で前回の作業が通るか未確認**
-
-`tests/probe.sh` で、bwrap の中から `strait-hostexec` を起動し、承認・拒否・環境変数・出力のマスクが働くことは確かめた（2026-09-30、ホスト上）。2026-09-30 にホストへ渡した `nix build .#sumi`、`bun run test:sumi`、`python3 docs-site/editorial/check-pkl.py` が実際にこれで通るかは未確認。
-
 **WebSocket が使えない**
 
 srt 0.0.77 は、TLS 終端したコネクションでの upgrade 要求を `filterRequest` より前に拒否する（`tls-terminate-proxy.js` の `inner.on('upgrade', ...)`、コメントは "WebSocket / non-HTTP over TLS — out of scope for now"）。WebSocket は許可にも承認待ちにも出ずに失敗する。2026-09-30 に strait の中から Artifact を publish したとき、publish は通ったが、そのあとの live watch は接続できなかった。通すには、srt にパッチを当てて upgrade 要求にも `filterRequest` をかけ、許可されたものだけを上流へ中継する必要がある。

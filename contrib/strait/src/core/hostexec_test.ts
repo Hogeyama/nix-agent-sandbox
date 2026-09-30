@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 // The patched srt module strait runs with, not a copy.
-import { decideAndRespond } from "../node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/request-filter.js";
+import { decideAndRespond } from "../../node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/request-filter.js";
+import { parseClientArgs } from "../ui/hostexec_client.ts";
+import { line } from "../ui/review.ts";
 import {
   type ExecRequest,
   execEnv,
@@ -10,9 +12,7 @@ import {
   parseExecRequest,
   runOnHost,
 } from "./hostexec.ts";
-import { parseClientArgs } from "./hostexec_client.ts";
 import { decide } from "./policy.ts";
-import { line } from "./review.ts";
 
 const ok: ExecRequest = { argv: ["echo", "hi"], cwd: "/", env: {} };
 

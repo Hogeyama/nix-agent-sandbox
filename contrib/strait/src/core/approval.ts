@@ -6,7 +6,6 @@
 // denyRead, and srt's seccomp filter blocks AF_UNIX inside the sandbox on
 // Linux, so only the host can reach it.
 
-import { spawn } from "node:child_process";
 import { lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -163,22 +162,4 @@ export function removeSocket(path: string): void {
   try {
     unlinkSync(path);
   } catch {}
-}
-
-/** Best effort: a desktop notification, naming the session, if notify-send exists. */
-export function notifier(session: SessionInfo): (p: Pending) => void {
-  return (p) => {
-    try {
-      const child = spawn(
-        "notify-send",
-        [
-          `strait ${session.id}: approval needed`,
-          `${p.method} ${p.url}\n${p.reason}`,
-        ],
-        { stdio: "ignore", detached: true },
-      );
-      child.on("error", () => {});
-      child.unref();
-    } catch {}
-  };
 }

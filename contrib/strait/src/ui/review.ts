@@ -17,10 +17,14 @@ import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { resolve } from "node:path";
-import type { ApprovalRequest, ApprovalResponse, Pending } from "./approval.ts";
-import { socketDir } from "./approval.ts";
-import { type ExecRequest, INHERITED_ENV } from "./hostexec.ts";
-import { isSessionId, type SessionInfo, socketFor } from "./session.ts";
+import type {
+  ApprovalRequest,
+  ApprovalResponse,
+  Pending,
+} from "../core/approval.ts";
+import { socketDir } from "../core/approval.ts";
+import { type ExecRequest, INHERITED_ENV } from "../core/hostexec.ts";
+import { isSessionId, type SessionInfo, socketFor } from "../core/session.ts";
 
 export interface Held extends Pending {
   /** `<session>-<n>`, unique across sessions. */
@@ -262,7 +266,7 @@ export function tuiArgs(self: string, scope: Scope, port: number): string[] {
 }
 
 async function tui(dir: string, scope: Scope): Promise<number> {
-  const self = resolve(import.meta.dir, "..", "strait");
+  const self = resolve(import.meta.dir, "..", "..", "strait");
   const port = await freePort();
   // fzf's --listen accepts actions, including execute, from any local
   // process that knows the port; the key keeps it to this one.

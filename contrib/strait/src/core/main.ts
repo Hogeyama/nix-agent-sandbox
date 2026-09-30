@@ -1,7 +1,9 @@
 // strait: run a command under srt with a fixed network policy.
 //
 //   strait [--config strait.json] [--name NAME] [--debug] -- command [args...]
-//   strait review ...        approve or deny held requests (review.ts)
+//
+// This is the security core; cli.ts calls run() with the UI hooks below, and
+// nothing under src/core imports src/ui (boundary_test.ts).
 //
 // Invariants enforced here rather than left to configuration: TLS is always
 // terminated, no host is exempt from it, the host list is fixed at port 443,
@@ -14,7 +16,7 @@ import { resolve } from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import {
   Approvals,
-  notifier,
+  type Pending,
   removeSocket,
   serve,
   socketDir,
@@ -32,16 +34,34 @@ import {
   type Sentinels,
   wantsBody,
 } from "./policy.ts";
-import { reviewMain } from "./review.ts";
 import { assertProxyPatched, assertRespondPatched } from "./selfcheck.ts";
+import type { SessionInfo } from "./session.ts";
 import {
   claimNewSocket,
   claimSocket,
   isSessionId,
   sessionInfo,
 } from "./session.ts";
-import { findStatusLine, wrapStatusLine } from "./statusline.ts";
 
+/** The strait directory: the launcher, src/, the patch and node_modules. */
+export const STRAIT_ROOT = resolve(import.meta.dir, "..", "..");
+
+/**
+ * What the UI adds to a launch. Neither can widen the policy: `command` only
+ * changes what runs inside the sandbox, and `onPending` only observes.
+ */
+export interface LaunchHooks {
+  /** The command and extra environment to run in the sandbox. */
+  command?(
+    given: string[],
+    session: string,
+  ): {
+    command: string[];
+    env: Record<string, string>;
+  };
+  /** Called when a request is held, e.g. to notify the user. */
+  onPending?(session: SessionInfo): (p: Pending) => void;
+}
 // Credentials read from the host environment and masked inside the sandbox.
 // STRAIT_GIT_AUTH is derived from GH_TOKEN: git over HTTPS only accepts
 // Basic auth, and srt substitutes a sentinel only where it appears verbatim,
@@ -121,11 +141,7 @@ function loadConfig(path: string): StraitConfig {
 // or the patched srt in node_modules, and the next launch would run its
 // policy. These are appended after the user's list so config cannot drop them.
 function protectedPaths(userDenyWrite: string[], configPath: string): string[] {
-  const always = [
-    resolve(configPath),
-    resolve(import.meta.dir, ".."),
-    resolve(".claude"),
-  ];
+  const always = [resolve(configPath), STRAIT_ROOT, resolve(".claude")];
   // srt on Linux applies denyWrite only to paths that exist at wrap time.
   if (!existsSync(always[2])) always.pop();
   else {
@@ -145,11 +161,7 @@ function protectedPaths(userDenyWrite: string[], configPath: string): string[] {
 
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
-async function main() {
-  const argv = process.argv.slice(2);
-  // `review` runs on the host next to the sessions; it starts no sandbox.
-  // To sandbox a program called review, put it after `--`.
-  if (argv[0] === "review") process.exit(await reviewMain(argv.slice(1)));
+export async function run(argv: string[], hooks: LaunchHooks = {}) {
   const { configPath, debug, name, command: given } = parseArgs(argv);
   if (debug) process.env.SRT_DEBUG = "1";
   const config = loadConfig(configPath);
@@ -176,17 +188,18 @@ async function main() {
     name === undefined
       ? await claimNewSocket(sockets)
       : { id: name, path: await claimSocket(sockets, name) };
-  const wrap = config.statusLine
-    ? wrapStatusLine(
-        given,
-        findStatusLine(process.cwd(), process.env),
-        resolve(import.meta.dir, "..", "strait-statusline"),
-      )
-    : { command: given, env: {} };
+  const wrap =
+    config.statusLine && hooks.command
+      ? hooks.command(given, id)
+      : { command: given, env: {} };
   const command = wrap.command;
   const session = sessionInfo(id, given);
 
-  const approvals = new Approvals(session, undefined, notifier(session));
+  const approvals = new Approvals(
+    session,
+    undefined,
+    hooks.onPending?.(session),
+  );
   await serve(approvals, socketPath);
   process.on("exit", () => removeSocket(socketPath));
 
@@ -265,9 +278,9 @@ async function main() {
   const sessionEnv = Object.entries({ STRAIT_SESSION: id, ...wrap.env })
     .map(([k, v]) => `export ${k}=${shellQuote(v)}; `)
     .join("");
-  // strait-hostexec sits next to the launcher, in the package or a checkout;
-  // put it on the sandbox's PATH so an agent can call it by name.
-  const straitDir = shellQuote(resolve(import.meta.dir, ".."));
+  // Put the launcher on the sandbox's PATH, so an agent can call
+  // `strait hostexec` by name, from the package or a checkout alike.
+  const straitDir = shellQuote(STRAIT_ROOT);
   const pathSetup = config.hostExec ? `export PATH=${straitDir}:"$PATH"; ` : "";
   const inner = `${gitSetup}${sessionEnv}${pathSetup}exec ${command.map(shellQuote).join(" ")}`;
   const wrapped = await SandboxManager.wrapWithSandbox(inner);
@@ -303,8 +316,9 @@ async function main() {
   });
 }
 
-main().catch(async (e) => {
+/** Report a launch failure and take srt down. */
+export async function fail(e: unknown): Promise<never> {
   console.error(`strait: ${e instanceof Error ? e.message : String(e)}`);
   await SandboxManager.reset().catch(() => {});
   process.exit(1);
-});
+}

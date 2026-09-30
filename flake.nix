@@ -513,11 +513,9 @@
             runHook preInstall
             mkdir -p $out/share/strait $out/bin
             cp -r bunfig.toml package.json patches src node_modules \
-              strait strait-hostexec strait-statusline $out/share/strait/
-            for b in strait strait-hostexec; do
-              makeWrapper $out/share/strait/$b $out/bin/$b \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bun ]}
-            done
+              strait strait-statusline $out/share/strait/
+            makeWrapper $out/share/strait/strait $out/bin/strait \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bun ]}
             runHook postInstall
           '';
         };

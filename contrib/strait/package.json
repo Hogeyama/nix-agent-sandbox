@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "strait": "strait",
-    "strait-hostexec": "strait-hostexec"
+    "strait": "strait"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",

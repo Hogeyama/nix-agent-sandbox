@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { isSessionId, newSessionId, sessionInfo } from "./session.ts";
+import { isSessionId, newSessionId, sessionInfo } from "../core/session.ts";
 import { findStatusLine, wrapStatusLine } from "./statusline.ts";
 
 const files = (m: Record<string, unknown>) => (path: string) =>
@@ -76,7 +76,7 @@ describe("wrapStatusLine", () => {
 });
 
 describe("strait-statusline", () => {
-  const script = resolve(import.meta.dir, "..", "strait-statusline");
+  const script = resolve(import.meta.dir, "..", "..", "strait-statusline");
   const run = (env: Record<string, string>) =>
     spawnSync("sh", [script], {
       input: '{"model":{"display_name":"Opus"}}',

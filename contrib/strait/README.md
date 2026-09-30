@@ -2,7 +2,9 @@
 
 strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued. A request to any other endpoint on an allowed host is held until a human approves or denies it with `strait review`.
 
-The point is how much code has to be trusted. strait's own code is about 1,900 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `session.ts`, `statusline.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher and the `strait-statusline` script. About 100 of those lines are the GraphQL allowlist. The two clients add about 500 more: `review.ts`, which `strait review` runs on the host, and `hostexec_client.ts` behind `strait-hostexec` in the sandbox. The trusted base is that code, srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
+The point is how much code has to be trusted. What decides what leaves the sandbox and what runs on the host is `src/core/`, about 1,800 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `session.ts`, `config.ts`, `selfcheck.ts` and `main.ts`. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, the `strait` launcher, `src/cli.ts` (which routes subcommands), srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
+
+`src/ui/`, about 600 lines, cannot widen the policy: `strait review` can only answer requests that are already held, the status line and the desktop notification only report, and `strait hostexec` runs inside the sandbox, which is untrusted anyway. `src/core/` imports nothing from `src/ui/`, and a test checks that. So a change under `src/ui/` needs no security review, except for one point. `strait review` escapes what it shows (see below), so that a request cannot pass itself off as another one.
 
 ## Why srt needs patches
 
@@ -108,12 +110,12 @@ Everything `strait review` shows comes from the sandbox: the URL, the reason, wh
 
 ### Running commands on the host
 
-Some commands cannot run in the sandbox: a `nix build` that needs the daemon, or a tool the sandbox does not have. With `"hostExec": true` in `strait.json`, the sandboxed process can ask for such a command to run on the host. strait puts `strait-hostexec` on the sandbox's `PATH`:
+Some commands cannot run in the sandbox: a `nix build` that needs the daemon, or a tool the sandbox does not have. With `"hostExec": true` in `strait.json`, the sandboxed process can ask for such a command to run on the host. strait puts itself on the sandbox's `PATH`, so the sandbox runs `strait hostexec`:
 
 ```sh
 # inside the sandbox
-strait-hostexec --env NIX_CONFIG='...' -- nix build .#sumi
-strait-hostexec --cwd /path/to/repo --env GH_HOST -- gh release view
+strait hostexec --env NIX_CONFIG='...' -- nix build .#sumi
+strait hostexec --cwd /path/to/repo --env GH_HOST -- gh release view
 ```
 
 - `--cwd DIR` sets the working directory; it defaults to the current one. Paths inside the sandbox are the same as on the host.
@@ -142,7 +144,7 @@ Run the packaged strait, not `contrib/strait/strait` from a checkout. strait alw
 
 For work on strait itself, `cd contrib/strait && bun install` still sets up a checkout for the tests and for running `contrib/strait/strait` directly. After changing a dependency, run `bun2nix -o bun.nix` in `contrib/strait` so the package picks it up.
 
-Always start strait through a launcher (`strait`, or `contrib/strait/strait` in a checkout), never with `bun src/main.ts`. Otherwise bun reads `bunfig.toml` and `.env` from the working directory. The working directory is the sandbox's writable workspace, so a `preload` planted there would run on the host, outside the sandbox, at the next launch. The launcher passes `--config=<strait>/bunfig.toml --no-env-file` so that neither file is read.
+Always start strait through a launcher (`strait`, or `contrib/strait/strait` in a checkout), never with `bun src/cli.ts`. Otherwise bun reads `bunfig.toml` and `.env` from the working directory. The working directory is the sandbox's writable workspace, so a `preload` planted there would run on the host, outside the sandbox, at the next launch. The launcher passes `--config=<strait>/bunfig.toml --no-env-file` so that neither file is read.
 
 Options are `--config <path>` (default `./strait.json`, which must exist) and `--debug` (srt's debug log). The command starts after `--`, or at the first argument that is not an option.
 
