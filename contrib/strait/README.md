@@ -177,6 +177,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 ## Limits
 
 - **GraphQL covers only what gh asked for once.** The captured queries are only each command's first request, from gh 2.46. A different gh version, a flag that adds fields, or a later request in the same command can select a path that is not listed, and that request is denied. `gh api repos/...` works either way.
+- **No WebSocket.** srt refuses every upgrade request on a TLS-terminated connection before `filterRequest` runs (`tls-terminate-proxy.js`, "out of scope for now"). A WebSocket therefore never reaches the policy or approval and simply fails. For example, Claude Code's live watch of a published Artifact cannot connect.
 - **Approvals are per request.** There is no "allow this for the session" scope, because one path such as `/graphql` covers requests of every kind. A command that makes many out-of-policy requests needs one approval each.
 - **Long holds are not tested live.** `probe.sh` approves and denies within a second. Whether a client or srt's server gives up before 240 seconds has not been checked. Node's default `requestTimeout` is 300 seconds, which is why the limit is below it.
 - **Not part of strait:** nas features such as file-content masking (maskfs), output masking (sumi) and the audit log.
