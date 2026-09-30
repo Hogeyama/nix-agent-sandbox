@@ -176,8 +176,7 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 
 - **GraphQL covers only what gh asked for once.** The captured queries are only each command's first request, from gh 2.46. A different gh version, a flag that adds fields, or a later request in the same command can select a path that is not listed, and that request is denied. `gh api repos/...` works either way.
 - **Approvals are per request.** There is no "allow this for the session" scope, because one path such as `/graphql` covers requests of every kind. A command that makes many out-of-policy requests needs one approval each.
-- **hostexec is not tested in a real sandbox.** The full path was checked without bubblewrap: `strait-hostexec`, then srt's TLS-terminating proxy, then review, the run on the host, and the answer. It has not been checked that the client, which runs on bun and curl, starts inside bwrap with the default `denyRead` of `/tmp`.
-- **Held requests are not tested live.** Whether a client or srt's server gives up before 240 seconds has not been checked on a host. Node's default `requestTimeout` is 300 seconds, which is why the limit is below it.
+- **Long holds are not tested live.** `probe.sh` approves and denies within a second. Whether a client or srt's server gives up before 240 seconds has not been checked. Node's default `requestTimeout` is 300 seconds, which is why the limit is below it.
 - **Not part of strait:** nas features such as file-content masking (maskfs), output masking (sumi) and the audit log.
 - **Tested only on Linux.** macOS uses a different srt backend, and the patches have not been checked there.
 - **An unexplained failure.** Four launches failed to find a command in `~/.local/bin` (`gh` or `claude`) inside the sandbox. Repeated launches right afterwards did not reproduce it, whether back to back, with or without tokens, or with the command run directly or through `bash -c`. The cause is unknown.
@@ -199,5 +198,7 @@ GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 - SOCKS, SSH over CONNECT, and a client that does its own TLS
 - writes to the config file, strait's sources and the patched srt
 - a `bunfig.toml` preload planted in the workspace
+
+It also checks approval and hostexec: an approved REST read of another repository and an approved GraphQL query outside the list go through, the sandbox cannot see a held request, and an approved host command runs outside the sandbox with only the declared environment and its output masked, while a denied one exits with 126.
 
 The bypass attempts that would be held for approval expect a 403. `probe.sh` runs a background loop that denies every held request as it appears, so do not approve anything while it runs.

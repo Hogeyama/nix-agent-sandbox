@@ -11,16 +11,27 @@ REPO=${1:-Hogeyama/nix-agent-sandbox}
 work=$(mktemp -d)
 denier=
 trap 'rm -rf "$work"; [[ -n $denier ]] && kill "$denier" 2>/dev/null' EXIT
-printf '{ "githubRepos": ["%s"] }\n' "$REPO" >"$work/strait.json"
+printf '{ "githubRepos": ["%s"], "hostExec": true }\n' "$REPO" >"$work/strait.json"
 cd "$work"
 
-# Out-of-policy requests are held for approval. Deny each one as it appears so
-# the bypass attempts below come back as 403 instead of waiting 240 s. It runs
-# in the same environment as `check`, so both look in the same socket
-# directory.
+# Out-of-policy requests are held for approval. A background reviewer answers
+# each one as it appears, so the bypass attempts below come back as 403
+# instead of waiting 240 s. It reads each request in full (`show`, which
+# includes a GraphQL body and a hostexec argv): one carrying
+# `strait-probe-approve` (or `strait_probe_approve`, as a GraphQL alias) is
+# approved, one carrying `strait-probe-hold` is left
+# waiting, and the rest are denied. It runs in the same environment as
+# `check`, so both look in the same socket directory.
 review() { env -i HOME="$HOME" PATH="$PATH" "$here/strait-review" "$@"; }
 (while :; do
-  review list 2>/dev/null | cut -f1 | xargs -r env -i HOME="$HOME" PATH="$PATH" "$here/strait-review" deny >/dev/null 2>&1
+  for id in $(review list 2>/dev/null | cut -f1); do
+    shown=$(review show "$id" 2>/dev/null)
+    case $shown in
+    *strait-probe-hold*) ;;
+    *strait-probe-approve* | *strait_probe_approve*) review approve "$id" >/dev/null 2>&1 ;;
+    *) review deny "$id" >/dev/null 2>&1 ;;
+    esac
+  done
   sleep 0.5
 done) &
 denier=$!
@@ -51,7 +62,11 @@ check "anthropic messages route passes" '^40[01]' "curl $code -X POST -H 'conten
 
 # Bypass attempts.
 check "foreign token" '^403' "curl $code -H 'Authorization: Bearer nas-a1b-invalid' $api"
-check "duplicate Authorization" '^403' "curl $code -H \"Authorization: token \$GH_TOKEN\" -H 'authorization: token attacker' $api"
+# node:http keeps the first of duplicated Authorization headers and drops the
+# rest, and srt builds both the filter's view and the upstream request from
+# that. So only the first one matters, and only it is ever sent.
+check "duplicate Authorization, foreign first" '^403' "curl $code -H 'Authorization: token attacker' -H \"authorization: token \$GH_TOKEN\" $api"
+check "duplicate Authorization, foreign dropped" '^200' "curl $code -H \"Authorization: token \$GH_TOKEN\" -H 'authorization: token attacker' $api"
 check "other repository" '^403' "curl $code https://api.github.com/repos/octocat/hello-world"
 check "REST write" '^403' "curl $code -X POST -d '{}' $api/issues"
 gql="curl $code -X POST -H 'content-type: application/json' -H \"Authorization: token \$GH_TOKEN\" https://api.github.com/graphql -d"
@@ -65,6 +80,20 @@ check "host outside the list" 'response 403' "curl $code https://example.com/"
 check "SOCKS scheme swap" 'exit=97' "curl $code --cacert /etc/ssl/certs/ca-certificates.crt -x \"\${HTTPS_PROXY/http:/socks5h:}\" $api; echo exit=\$?"
 check "SSH over CONNECT" 'SSH_EXIT=255' "eval \"timeout 30 \$GIT_SSH_COMMAND -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 443 -T git@github.com\"; echo SSH_EXIT=\$?"
 check "own TLS without srt CA" 'exit=60' "curl $code --cacert /etc/ssl/certs/ca-certificates.crt $api; echo exit=\$?"
+
+# Approval: a held request goes through once approved.
+check "approved REST read of another repo" '^200' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-approve=1'"
+check "approved graphql outside the list" '"login"' "curl -sS --max-time 20 -X POST -H 'content-type: application/json' -H \"Authorization: token \$GH_TOKEN\" https://api.github.com/graphql -d '{\"query\":\"{strait_probe_approve: viewer{login}}\"}'"
+# The sandbox cannot reach the approval socket, even with a request waiting.
+check "sandbox cannot see held requests" 'nothing is waiting' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-hold=1' >/dev/null & sleep 2; $here/strait-review list; kill %1"
+
+# hostexec: runs on the host after approval, with only the declared env.
+check "hostexec approved" 'out=strait-probe-approve exit=7' "$here/strait-hostexec -- sh -c 'echo out=strait-probe-approve; exit 7'; echo exit=\$?"
+check "hostexec env and cwd" '\[strait-probe-approve\]\[\]\[/\]' "$here/strait-hostexec --cwd / --env A=strait-probe-approve -- sh -c 'echo \"[\$A][\$GH_TOKEN][\$(pwd)]\"'"
+check "hostexec output masking" 'masked by strait' "$here/strait-hostexec --env M=strait-probe-approve -- sh -c 'gh auth token'"
+# strait's own directory is read-only in the sandbox but not on the host.
+check "hostexec runs outside the sandbox" 'wrote-on-host' "$here/strait-hostexec --env M=strait-probe-approve -- sh -c 'touch $here/.strait-probe && rm $here/.strait-probe && echo wrote-on-host'"
+check "hostexec denied" 'exit=126' "$here/strait-hostexec -- echo no; echo exit=\$?"
 
 # The policy's own files. `: >>` opens for writing without changing content.
 check "write strait.json" 'Read-only|denied' ": >> strait.json && echo WROTE"

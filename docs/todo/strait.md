@@ -4,12 +4,9 @@ strait の未解決の課題です。2026-09-30 に strait の中で sumi v0.3.0
 
 Artifacts は `api.anthropic.com` の `/v1/code/agent-proxy/frame/...` に送られ、strait の許可リストにないので承認待ちになる（2026-09-30 に拒否された時の応答は 403 `GET /v1/code/agent-proxy/frame/frames is not a Claude Code endpoint`）。送り先は Claude Code 2.1.284 のバイナリから読み取った。`/api/frame/...` を `/v1/code/agent-proxy/frame/...` に書き換えて送っている。承認して通したときに、推論専用のトークン（`CLAUDE_CODE_OAUTH_TOKEN`）で受け付けられるかは未確認。受け付けられるなら、承認を 1 件ずつ求めずに済むよう、許可リストへ入れるかを決める。
 
-**hostexec を実際のサンドボックスの中で試していない**
+**hostexec で前回の作業が通るか未確認**
 
-`hostExec`（[README](../../contrib/strait/README.md) の「Running commands on the host」）は、bwrap を使えないコンテナの中で、bwrap 抜きに srt のプロキシ、承認、ホストでの実行、応答までを通して確かめただけ。Linux のホストで、次の 2 つを確かめる。
-
-- `strait-hostexec`（bun と curl で動く）が bwrap の中で起動するか。既定の `denyRead` には `/tmp` が入っている。
-- 2026-09-30 にホストへ渡した `nix build .#sumi`、`bun run test:sumi`、`python3 docs-site/editorial/check-pkl.py` がこれで通るか。
+`tests/probe.sh` で、bwrap の中から `strait-hostexec` を起動し、承認・拒否・環境変数・出力のマスクが働くことは確かめた（2026-09-30、ホスト上）。2026-09-30 にホストへ渡した `nix build .#sumi`、`bun run test:sumi`、`python3 docs-site/editorial/check-pkl.py` が実際にこれで通るかは未確認。
 
 **Remote Control が使えない**
 

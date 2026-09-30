@@ -223,7 +223,9 @@ function acceptedAuthorizations(host: string, s: Sentinels): string[] {
 }
 
 // The scheme is case-insensitive; the credential must match byte for byte.
-// Duplicate headers arrive joined with ", " and so never match.
+// Through srt, node:http keeps only the first of duplicated Authorization
+// headers, and the same deduplicated set goes upstream. Headers built any
+// other way arrive joined with ", " and never match.
 function sameAuthorization(got: string, expected: string): boolean {
   const g = splitScheme(got);
   const e = splitScheme(expected);
