@@ -40,7 +40,8 @@ fails=0
 check() { # name expected-regex command
   local name=$1 want=$2 cmd=$3 got
   got=$(env -i HOME="$HOME" PATH="$PATH" GH_TOKEN="$GH_TOKEN" TERM=dumb \
-    "$here/strait" --config strait.json -- bash -c "$cmd" 2>&1 | tail -3 | tr '\n' ' ')
+    "$here/strait" --config strait.json -- bash -c "$cmd" 2>&1 |
+    grep -v '^strait: session ' | tail -3 | tr '\n' ' ')
   if [[ $got =~ $want ]]; then
     printf 'ok    %-34s %s\n' "$name" "$got"
   else

@@ -265,7 +265,11 @@ async function main() {
   const sessionEnv = Object.entries({ STRAIT_SESSION: id, ...wrap.env })
     .map(([k, v]) => `export ${k}=${shellQuote(v)}; `)
     .join("");
-  const inner = `${gitSetup}${sessionEnv}exec ${command.map(shellQuote).join(" ")}`;
+  // strait-hostexec sits next to the launcher, in the package or a checkout;
+  // put it on the sandbox's PATH so an agent can call it by name.
+  const straitDir = shellQuote(resolve(import.meta.dir, ".."));
+  const pathSetup = config.hostExec ? `export PATH=${straitDir}:"$PATH"; ` : "";
+  const inner = `${gitSetup}${sessionEnv}${pathSetup}exec ${command.map(shellQuote).join(" ")}`;
   const wrapped = await SandboxManager.wrapWithSandbox(inner);
 
   // srt mints a sentinel per masked credential while wrapping; learn which is

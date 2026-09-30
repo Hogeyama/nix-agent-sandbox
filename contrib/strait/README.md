@@ -108,7 +108,7 @@ Everything `strait review` shows comes from the sandbox: the URL, the reason, wh
 
 ### Running commands on the host
 
-Some commands cannot run in the sandbox: a `nix build` that needs the daemon, or a tool the sandbox does not have. With `"hostExec": true` in `strait.json`, the sandboxed process can ask for such a command to run on the host:
+Some commands cannot run in the sandbox: a `nix build` that needs the daemon, or a tool the sandbox does not have. With `"hostExec": true` in `strait.json`, the sandboxed process can ask for such a command to run on the host. strait puts `strait-hostexec` on the sandbox's `PATH`:
 
 ```sh
 # inside the sandbox
