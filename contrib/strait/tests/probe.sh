@@ -11,7 +11,10 @@ REPO=${1:-Hogeyama/nix-agent-sandbox}
 work=$(mktemp -d)
 denier=
 trap 'rm -rf "$work"; [[ -n $denier ]] && kill "$denier" 2>/dev/null' EXIT
-printf '{ "githubRepos": ["%s"], "hostExec": true }\n' "$REPO" >"$work/strait.json"
+# httpbin.org stands in for an added host: it echoes the headers it got, which
+# shows what strait let through and what srt injected.
+printf '{ "githubRepos": ["%s"], "hostExec": true, "hosts": { "httpbin.org": { "credential": { "env": "PROBE_KEY", "header": "x-api-key" } } } }\n' "$REPO" >"$work/strait.json"
+PROBE_KEY=strait-probe-real-$RANDOM$RANDOM
 cd "$work"
 
 # Out-of-policy requests are held for approval. A background reviewer answers
@@ -39,7 +42,7 @@ denier=$!
 fails=0
 check() { # name expected-regex command
   local name=$1 want=$2 cmd=$3 got
-  got=$(env -i HOME="$HOME" PATH="$PATH" GH_TOKEN="$GH_TOKEN" TERM=dumb \
+  got=$(env -i HOME="$HOME" PATH="$PATH" GH_TOKEN="$GH_TOKEN" PROBE_KEY="$PROBE_KEY" TERM=dumb \
     "$here/strait" --config strait.json -- bash -c "$cmd" 2>&1 |
     grep -v '^strait: session ' | tail -3 | tr '\n' ' ')
   if [[ $got =~ $want ]]; then
@@ -81,6 +84,13 @@ check "host outside the list" 'response 403' "curl $code https://example.com/"
 check "SOCKS scheme swap" 'exit=97' "curl $code --cacert /etc/ssl/certs/ca-certificates.crt -x \"\${HTTPS_PROXY/http:/socks5h:}\" $api; echo exit=\$?"
 check "SSH over CONNECT" 'SSH_EXIT=255' "eval \"timeout 30 \$GIT_SSH_COMMAND -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 443 -T git@github.com\"; echo SSH_EXIT=\$?"
 check "own TLS without srt CA" 'exit=60' "curl $code --cacert /etc/ssl/certs/ca-certificates.crt $api; echo exit=\$?"
+
+# An added host: only the issued key goes through, and upstream gets the real one.
+check "added host: issued key injected" "\"X-Api-Key\": \"$PROBE_KEY\"" "curl -sS --max-time 20 -H \"x-api-key: \$PROBE_KEY\" https://httpbin.org/headers | tr -d '\\n'"
+check "added host: sandbox sees a sentinel" '^masked $' "[ \"\$PROBE_KEY\" != '$PROBE_KEY' ] && echo masked"
+check "added host: foreign key" '^403' "curl $code -H 'x-api-key: attacker' https://httpbin.org/headers"
+check "added host: duplicated key" '^403' "curl $code -H \"x-api-key: \$PROBE_KEY\" -H 'x-api-key: attacker' https://httpbin.org/headers"
+check "added host: other auth header" '^403' "curl $code -H 'Authorization: Bearer attacker' https://httpbin.org/headers"
 
 # Approval: a held request goes through once approved.
 check "approved REST read of another repo" '^200' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-approve=1'"

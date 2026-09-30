@@ -241,6 +241,6 @@ GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 - writes to the config file, strait's sources and the patched srt
 - a `bunfig.toml` preload planted in the workspace
 
-It also checks approval and hostexec: an approved REST read of another repository and an approved GraphQL query outside the list go through, the sandbox cannot see a held request, and an approved host command runs outside the sandbox with only the declared environment and its output masked, while a denied one exits with 126.
+It checks an added host through httpbin.org, which echoes the headers it receives: the issued key arrives as the real value, and a foreign key, a duplicated key header or another authorization header is denied. It also checks approval and hostexec: an approved REST read of another repository and an approved GraphQL query outside the list go through, the sandbox cannot see a held request, and an approved host command runs outside the sandbox with only the declared environment and its output masked, while a denied one exits with 126.
 
 The bypass attempts that would be held for approval expect a 403. `probe.sh` runs a background loop that denies every held request as it appears, so do not approve anything while it runs.
