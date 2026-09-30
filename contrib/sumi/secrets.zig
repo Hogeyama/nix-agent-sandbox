@@ -6,8 +6,8 @@
 //!
 //! 行が正準な base64(標準またはURL-safe のアルファベット、パディング込みで
 //! 長さが 4 の倍数、再エンコードで元に戻る)なら、復号した値も伏せる対象に
-//! 加える。復号値の末尾の LF / CRLF は取り除き、UTF-8 として有効・4 バイト以上・
-//! 制御文字を含まないものだけを採る。条件を満たさない行は通常の値として扱うだけで
+//! 加える。復号値の末尾の LF / CRLF は取り除き、4 バイト以上のものだけを採る。
+//! 条件を満たさない行は通常の値として扱うだけで
 //! エラーにはしない。復号値は 1024 件の上限に数えない。
 
 const std = @import("std");
@@ -101,8 +101,7 @@ fn decodeBase64(allocator: std.mem.Allocator, line: []const u8) error{OutOfMemor
         } else if (std.mem.endsWith(u8, value, "\n")) {
             value = value[0 .. value.len - 1];
         }
-        if (value.len < MIN_LEN or !std.unicode.utf8ValidateSlice(value)) return null;
-        for (value) |c| if (c < 0x20 or c == 0x7f) return null;
+        if (value.len < MIN_LEN) return null;
         keep = true;
         return allocator.realloc(decoded, value.len) catch |err| {
             allocator.free(decoded);
@@ -183,6 +182,8 @@ test "decodeBase64: canonical padded base64 in both alphabets is decoded" {
     try expectDecoded("aHVudGVyMnh5eg==", "hunter2xyz");
     try expectDecoded("fn5-Pz8_", "~~~???");
     try expectDecoded("fn5+Pz8/", "~~~???");
+    try expectDecoded("//79/Q==", "\xff\xfe\xfd\xfd");
+    try expectDecoded("YQliYw==", "a\tbc");
 }
 
 test "decodeBase64: a trailing LF or CRLF is stripped from the value and the line" {
@@ -196,8 +197,6 @@ test "decodeBase64: lines that are not a plausible encoded secret are left alone
     try expectDecoded("VHIwdWI0ZG9", null); // unpadded
     try expectDecoded("dGVzdB==", null); // non-canonical padding bits
     try expectDecoded("YWJj", null); // decodes to 3 bytes
-    try expectDecoded("//79/Q==", null); // not UTF-8
-    try expectDecoded("YQliYw==", null); // control character
     try expectDecoded("pass word", null);
 }
 

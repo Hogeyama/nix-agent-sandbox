@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- A canonical padded base64 line in the secrets file masks its decoded value whenever that value is at least 4 bytes, even if it is not valid UTF-8 or contains control characters.
+
 ## [0.4.0] - 2026-09-30
 
 ### Added
