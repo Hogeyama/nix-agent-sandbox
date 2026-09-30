@@ -2,7 +2,7 @@
 
 strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued. A request to any other endpoint on an allowed host is held until a human approves or denies it with `strait review`.
 
-The point is how much code has to be trusted. What decides what leaves the sandbox and what runs on the host is `src/core/`, about 1,800 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `session.ts`, `config.ts`, `selfcheck.ts` and `main.ts`. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, the `strait` launcher, `src/cli.ts` (which routes subcommands), srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
+The point is how much code has to be trusted. What decides what leaves the sandbox and what runs on the host is `src/core/`, about 2,000 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `session.ts`, `config.ts`, `selfcheck.ts` and `main.ts`. About 100 of those lines are the GraphQL allowlist. The trusted base is that code, the `strait` launcher, `src/cli.ts` (which routes subcommands), srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
 
 `src/ui/`, about 600 lines, cannot widen the policy: `strait review` can only answer requests that are already held, the status line and the desktop notification only report, and `strait hostexec` runs inside the sandbox, which is untrusted anyway. `src/core/` imports nothing from `src/ui/`, and a test checks that. So a change under `src/ui/` needs no security review, except for one point. `strait review` escapes what it shows (see below), so that a request cannot pass itself off as another one.
 
@@ -21,7 +21,7 @@ Before the command starts, strait probes the live proxy (`selfcheck.ts`) and ref
 
 ## What the policy allows
 
-Hosts are fixed in code: `api.anthropic.com`, `api.github.com` and `github.com`, on port 443 only. TLS is always terminated. No host can be exempted from termination, and the config cannot add an external proxy.
+The policies for `api.anthropic.com`, `api.github.com` and `github.com` are fixed in code. `strait.json` can add other hosts ([Added hosts](#added-hosts)). Every host is reached on port 443 only, and TLS is always terminated. No host can be exempted from termination, and the config cannot add an external proxy.
 
 | Host | Allowed | Held for approval |
 | --- | --- | --- |
@@ -38,6 +38,26 @@ Some requests are denied outright and never reach a human:
 Owner and repo names are compared case-insensitively. A name containing `%` never matches.
 
 srt forwards the request target exactly as the client sent it, but URL parsing resolves `..`, `%2e` and `\`. So a request whose target changes under parsing is denied, and the path strait judges is always the path GitHub receives.
+
+### Added hosts
+
+A host listed under `hosts` in `strait.json` takes every request on port 443, whatever its method or path, after the same transport checks as the fixed hosts. Credentials are the part strait still controls:
+
+```json
+{
+  "hosts": {
+    "devapi.example.com": { "credential": { "env": "DEVAPI_KEY", "header": "x-api-key" } },
+    "api.example.org": { "credential": { "env": "ORG_TOKEN", "header": "authorization", "scheme": "Bearer" } },
+    "docs.example.com": {}
+  }
+}
+```
+
+- `credential.env` names a variable in strait's environment, which must be set. srt masks it in the sandbox like strait's own credentials, and puts the real value back only on requests to this host.
+- A request to the host may carry only that credential, in `credential.header`, as the value itself or as `<scheme> <value>`. Any other value in that header, a duplicated header, an `Authorization` or `x-api-key` header that is not the credential, a `Cookie` or an `access_token` query parameter is denied. A host without `credential` takes none of these.
+- Names are exact and lowercase. There are no wildcards, ports or IP addresses, and the fixed hosts cannot be redefined. A variable cannot be one of strait's own (`GH_TOKEN` and the others), and one variable cannot serve two hosts.
+
+Adding a host is a decision about who may receive what the sandbox sends. strait checks the credential, not the account behind it. So add only a service like the `devapi.example.com` of the [threat model](../../docs/architecture/threat-model.md): its one form of authentication is the header strait checks, and a valid key reaches only your own environment. On a service where the sandbox could reach someone else's account or forward data elsewhere, a host-wide allow lets it do so.
 
 ### GraphQL
 
@@ -180,16 +200,17 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 
 ### Config
 
-`strait.json` accepts only four keys, and unknown keys are rejected:
+`strait.json` accepts only five keys, and unknown keys are rejected:
 
 - `githubRepos`: `owner/name` strings.
 - `hostExec`: `true` lets the sandbox ask to run commands on the host (above). Off by default.
 - `statusLine`: `false` keeps strait from putting the session ID in Claude Code's status line. On by default.
+- `hosts`: hosts to allow besides the fixed ones, each with the credential it takes ([Added hosts](#added-hosts)).
 - `filesystem`: `allowWrite`, `denyWrite`, `denyRead`, `allowRead`. These are the same fields as srt's `filesystem` section, with the defaults shown in [strait.example.json](strait.example.json).
 
 **An existing `srt-settings.json` cannot be used as-is.** Copy its `filesystem` section into `strait.json`. The other sections are rejected on purpose:
 
-- `network`: hosts, TLS termination and the filter are fixed in code.
+- `network`: TLS termination and the filter are fixed in code. Add hosts with `hosts` instead.
 - `credentials`: strait takes credentials only from the environment variables above. File masking (`credentials.files`) is not supported. Put files the agent must not read, such as `.env`, in `denyRead` instead.
 
 ## Limits

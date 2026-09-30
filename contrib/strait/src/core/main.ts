@@ -78,7 +78,7 @@ const CREDENTIALS = [
 ] as const satisfies ReadonlyArray<{
   env: string;
   host: string;
-  key: keyof Sentinels;
+  key: Exclude<keyof Sentinels, "hosts">;
 }>;
 
 function usage(): never {
@@ -172,7 +172,42 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
     ).toString("base64");
     process.env.STRAIT_GIT_AUTH = `Basic ${basic}`;
   }
-  const present = CREDENTIALS.filter((c) => process.env[c.env]);
+  const sentinels: Sentinels = {};
+  const hostSentinels: Record<string, string> = {};
+  sentinels.hosts = hostSentinels;
+  // Every credential srt masks: strait's own when set, and each configured
+  // host's, which must be set. `assign` records the sentinel srt mints.
+  const present = [
+    ...CREDENTIALS.filter((c) => process.env[c.env]).map((c) => ({
+      env: c.env,
+      host: c.host,
+      assign: (s: string) => {
+        sentinels[c.key] = s;
+      },
+    })),
+    ...Object.entries(config.hosts).flatMap(([host, rule]) => {
+      if (rule.credential === undefined) return [];
+      const { env } = rule.credential;
+      if (!process.env[env]) {
+        throw new Error(`hosts.${host}.credential.env: ${env} is not set`);
+      }
+      return [
+        {
+          env,
+          host,
+          assign: (s: string) => {
+            hostSentinels[host] = s;
+          },
+        },
+      ];
+    }),
+  ];
+  // Sentinels are matched back to credentials by real value below, so two
+  // credentials with one value could not be told apart.
+  const values = present.map((c) => process.env[c.env] as string);
+  if (new Set(values).size !== values.length) {
+    throw new Error("two credentials have the same value");
+  }
   // What a host command must not print back into the sandbox. The git value
   // is `Basic <base64>`, and output may carry either part.
   const secrets = () =>
@@ -203,12 +238,12 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
   await serve(approvals, socketPath);
   process.on("exit", () => removeSocket(socketPath));
 
-  const sentinels: Sentinels = {};
   await SandboxManager.initialize({
     network: {
       allowedDomains: [
         ...HOSTS,
         ...(config.hostExec ? [HOSTEXEC_HOST] : []),
+        ...Object.keys(config.hosts),
       ].map((h) => `${h}:443`),
       deniedDomains: [],
       strictAllowlist: true,
@@ -224,7 +259,11 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
             headers: request.headers,
             body,
           },
-          { githubRepos: config.githubRepos, hostExec: config.hostExec },
+          {
+            githubRepos: config.githubRepos,
+            hostExec: config.hostExec,
+            hosts: config.hosts,
+          },
           sentinels,
         );
         if (decision.action !== "review") return decision;
@@ -287,17 +326,21 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
 
   // srt mints a sentinel per masked credential while wrapping; learn which is
   // which by matching real values, which never leave this process.
-  const realToKey = new Map<string, keyof Sentinels>(
-    present.map((c) => [process.env[c.env] as string, c.key]),
+  const byValue = new Map(
+    present.map((c) => [process.env[c.env] as string, c]),
   );
+  const minted = new Set<string>();
   for (const [
     sentinel,
     real,
   ] of SandboxManager.getSentinelRegistry().entries()) {
-    const key = realToKey.get(real);
-    if (key) sentinels[key] = sentinel;
+    const c = byValue.get(real);
+    if (c) {
+      c.assign(sentinel);
+      minted.add(c.env);
+    }
   }
-  const missing = present.filter((c) => sentinels[c.key] === undefined);
+  const missing = present.filter((c) => !minted.has(c.env));
   if (missing.length > 0) {
     throw new Error(`srt did not mask ${missing.map((c) => c.env).join(", ")}`);
   }

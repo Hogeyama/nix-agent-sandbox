@@ -55,6 +55,18 @@ export interface Sentinels {
   anthropicOauth?: string;
   /** `ANTHROPIC_API_KEY`, sent as `x-api-key`. */
   anthropicApiKey?: string;
+  /** The credential of each configured host that takes one, by host. */
+  hosts?: Readonly<Record<string, string>>;
+}
+
+/**
+ * A host added in strait.json. Every request to it on port 443 is allowed,
+ * after the same transport checks as any other; the only credential it may
+ * carry is the one strait issued, in `header`, as `<scheme> <credential>`
+ * when a scheme is given.
+ */
+export interface HostRule {
+  credential?: { header: string; scheme?: string };
 }
 
 export interface PolicyConfig {
@@ -62,6 +74,8 @@ export interface PolicyConfig {
   githubRepos: readonly string[];
   /** Whether HOSTEXEC_HOST takes requests to run commands on the host. */
   hostExec?: boolean;
+  /** Hosts added in strait.json, by exact lowercase name. */
+  hosts?: Readonly<Record<string, HostRule>>;
 }
 
 export const ANTHROPIC_HOST = "api.anthropic.com";
@@ -152,6 +166,18 @@ export function decide(
     return deny("request target is not in canonical form");
   }
 
+  const rule = Object.hasOwn(config.hosts ?? {}, url.hostname)
+    ? config.hosts?.[url.hostname]
+    : undefined;
+  if (rule !== undefined) {
+    return decideConfiguredHost(
+      req,
+      url,
+      rule,
+      sentinels.hosts?.[url.hostname],
+    );
+  }
+
   const credential = checkCredentials(req, url, sentinels);
   if (credential) return credential;
 
@@ -203,6 +229,44 @@ function checkCredentials(
     if (!ok) return deny("x-api-key was not issued by strait");
   }
   return undefined;
+}
+
+/** Headers that carry credentials; each must hold exactly what strait issued. */
+const CREDENTIAL_HEADERS = ["authorization", "x-api-key"];
+
+function decideConfiguredHost(
+  req: PolicyRequest,
+  url: URL,
+  rule: HostRule,
+  sentinel: string | undefined,
+): Decision {
+  if (req.headers.has("cookie")) return deny("cookies are not forwarded");
+  if (url.searchParams.has("access_token")) {
+    return deny("credential in the query string");
+  }
+  const c = rule.credential;
+  const issued =
+    c === undefined || sentinel === undefined
+      ? undefined
+      : c.scheme === undefined
+        ? sentinel
+        : `${c.scheme} ${sentinel}`;
+  for (const name of new Set([
+    ...CREDENTIAL_HEADERS,
+    ...(c ? [c.header] : []),
+  ])) {
+    const got = req.headers.get(name);
+    if (got === null) continue;
+    // A duplicated header arrives joined with ", " and never matches.
+    const ok =
+      name === c?.header &&
+      issued !== undefined &&
+      (c.scheme === undefined
+        ? got === issued
+        : sameAuthorization(got, issued));
+    if (!ok) return deny(`${name} was not issued by strait`);
+  }
+  return allow;
 }
 
 function acceptedAuthorizations(host: string, s: Sentinels): string[] {

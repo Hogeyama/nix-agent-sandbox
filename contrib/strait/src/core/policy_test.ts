@@ -410,3 +410,104 @@ describe("Anthropic", () => {
     ],
   ]);
 });
+
+describe("hosts added in strait.json", () => {
+  const cfg: PolicyConfig = {
+    githubRepos: [],
+    hosts: {
+      "devapi.example.com": { credential: { header: "x-api-key" } },
+      "api.example.org": {
+        credential: { header: "authorization", scheme: "Bearer" },
+      },
+      "docs.example.com": {},
+    },
+  };
+  const sen: Sentinels = {
+    githubToken: "fake_value_gh",
+    hosts: { "devapi.example.com": "fake_dev", "api.example.org": "fake_org" },
+  };
+  const run = (
+    method: string,
+    url: string,
+    headers: Record<string, string> | [string, string][] = {},
+  ) => decide({ method, url, headers: new Headers(headers) }, cfg, sen).action;
+
+  test("any method and path", () => {
+    expect(run("GET", "https://devapi.example.com/")).toBe("allow");
+    expect(run("DELETE", "https://devapi.example.com/v1/things/1?x=y")).toBe(
+      "allow",
+    );
+    expect(run("GET", "https://docs.example.com/guide")).toBe("allow");
+  });
+  test("the issued credential in its header", () => {
+    expect(
+      run("POST", "https://devapi.example.com/v1", { "x-api-key": "fake_dev" }),
+    ).toBe("allow");
+    expect(
+      run("GET", "https://api.example.org/", {
+        authorization: "bearer fake_org",
+      }),
+    ).toBe("allow");
+  });
+  test("a foreign key is denied", () => {
+    expect(
+      run("GET", "https://devapi.example.com/", { "x-api-key": "attacker" }),
+    ).toBe("deny");
+    expect(
+      run("GET", "https://api.example.org/", {
+        authorization: "Bearer attacker",
+      }),
+    ).toBe("deny");
+  });
+  test("the credential in another header, or another host's, is denied", () => {
+    expect(
+      run("GET", "https://devapi.example.com/", {
+        authorization: "Bearer fake_dev",
+      }),
+    ).toBe("deny");
+    expect(
+      run("GET", "https://devapi.example.com/", { "x-api-key": "fake_org" }),
+    ).toBe("deny");
+    expect(
+      run("GET", "https://devapi.example.com/", {
+        authorization: "token fake_value_gh",
+      }),
+    ).toBe("deny");
+  });
+  test("a host without a credential takes none", () => {
+    expect(
+      run("GET", "https://docs.example.com/", { authorization: "Bearer x" }),
+    ).toBe("deny");
+    expect(run("GET", "https://docs.example.com/", { "x-api-key": "x" })).toBe(
+      "deny",
+    );
+  });
+  test("a duplicated key header is denied", () => {
+    expect(
+      run("GET", "https://devapi.example.com/", [
+        ["x-api-key", "fake_dev"],
+        ["x-api-key", "attacker"],
+      ]),
+    ).toBe("deny");
+  });
+  test("cookies and query-string tokens are denied", () => {
+    expect(run("GET", "https://devapi.example.com/", { cookie: "s=1" })).toBe(
+      "deny",
+    );
+    expect(run("GET", "https://devapi.example.com/?access_token=x")).toBe(
+      "deny",
+    );
+  });
+  test("transport checks still apply", () => {
+    expect(run("GET", "http://devapi.example.com/")).toBe("deny");
+    expect(run("GET", "https://devapi.example.com:8443/")).toBe("deny");
+    expect(run("GET", "https://devapi.example.com/a/../b")).toBe("deny");
+  });
+  test("a name that is not configured is not allowed", () => {
+    expect(run("GET", "https://devapi.example.com.evil.example/")).toBe("deny");
+    expect(run("GET", "https://example.com/")).toBe("deny");
+  });
+  test("an inherited property name is not a host", () => {
+    expect(run("GET", "https://constructor/")).toBe("deny");
+  });
+});
