@@ -65,9 +65,12 @@ export async function collect(dir: string, scope: Scope): Promise<Held[]> {
           .filter(isSessionId);
   const held: Held[] = [];
   for (const id of ids) {
-    // A session that crashed leaves a socket nobody answers; skip it.
+    // A session that crashed leaves a socket nobody answers, and one started
+    // by an older strait answers without `session`; skip both, so that one
+    // bad socket does not hide every other session's requests.
     const res = await ask(socketFor(dir, id), { op: "list" });
     if (res === null || !("pending" in res)) continue;
+    if (typeof res.session !== "object" || res.session === null) continue;
     if ("cwd" in scope && res.session.cwd !== scope.cwd) continue;
     for (const p of res.pending) {
       held.push({
@@ -332,12 +335,25 @@ function parseScope(args: string[]): { scope: Scope; json: boolean } {
   return { scope, json };
 }
 
+/**
+ * Whether a named session is running. A misspelt ID would otherwise show an
+ * empty list that never fills, which looks exactly like nothing waiting.
+ */
+async function running(dir: string, scope: Scope): Promise<boolean> {
+  if (!("session" in scope)) return true;
+  const res = await ask(socketFor(dir, scope.session), { op: "list" });
+  if (res !== null && "pending" in res) return true;
+  console.error(`strait review: session ${scope.session} is not running`);
+  return false;
+}
+
 export async function reviewMain(argv: string[]): Promise<number> {
   const dir = socketDir();
   const [cmd, ...rest] = argv;
   switch (cmd) {
     case "list": {
       const { scope } = parseScope(rest);
+      if (!(await running(dir, scope))) return 1;
       for (const h of await collect(dir, scope)) console.log(line(h));
       return 0;
     }
@@ -362,6 +378,7 @@ export async function reviewMain(argv: string[]): Promise<number> {
     }
     default: {
       const { scope, json } = parseScope(argv);
+      if (!(await running(dir, scope))) return 1;
       if (json) {
         console.log(
           JSON.stringify((await collect(dir, scope)).map(structured)),

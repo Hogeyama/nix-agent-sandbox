@@ -85,7 +85,10 @@ check "own TLS without srt CA" 'exit=60' "curl $code --cacert /etc/ssl/certs/ca-
 check "approved REST read of another repo" '^200' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-approve=1'"
 check "approved graphql outside the list" '"login"' "curl -sS --max-time 20 -X POST -H 'content-type: application/json' -H \"Authorization: token \$GH_TOKEN\" https://api.github.com/graphql -d '{\"query\":\"{strait_probe_approve: viewer{login}}\"}'"
 # The sandbox cannot reach the approval socket, even with a request waiting.
-check "sandbox cannot see held requests" 'listed=0' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-hold=1' >/dev/null & sleep 2; echo listed=\$($here/strait review list --all 2>/dev/null | wc -l); kill %1"
+# The held request is there (the host reviewer leaves it), but `strait review`
+# inside the sandbox must not show it. It may list nothing or fail to open the
+# socket directory (exit 1); a missing command (127) is a failure of the probe.
+check "sandbox cannot see held requests" 'held-visible=0 rc=[01]' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-hold=1' >/dev/null & sleep 2; out=\$($here/strait review list --all 2>/dev/null); rc=\$?; echo held-visible=\$(printf '%s' \"\$out\" | grep -c strait-probe-hold) rc=\$rc; kill %1"
 
 # hostexec: runs on the host after approval, with only the declared env.
 check "hostexec approved" 'out=strait-probe-approve exit=7' "$here/strait-hostexec -- sh -c 'echo out=strait-probe-approve; exit 7'; echo exit=\$?"

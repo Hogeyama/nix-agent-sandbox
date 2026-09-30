@@ -14,7 +14,7 @@ import {
   structured,
   tuiArgs,
 } from "./review.ts";
-import { claimSocket, type SessionInfo } from "./session.ts";
+import { claimNewSocket, claimSocket, type SessionInfo } from "./session.ts";
 
 const req = {
   method: "POST",
@@ -164,6 +164,40 @@ describe("socket", () => {
         s1.close();
         s2.close();
       }
+    },
+  );
+
+  test.skipIf(!unixSockets)(
+    "a socket from an older strait is skipped, not fatal",
+    async () => {
+      // Before session IDs, the socket was `<pid>.sock` and `list` answered
+      // with `cwd` instead of `session`.
+      const old = createServer((c) =>
+        c.end(
+          `${JSON.stringify({ pending: [{ ...req, id: "1", since: 0 }], cwd: "/w" })}\n`,
+        ),
+      );
+      await new Promise<void>((r) => old.listen(join(dir, "4242.sock"), r));
+      const current = new Approvals(session({ id: "cur", cwd: "/w" }), 10_000);
+      const server = await serve(current, join(dir, "cur.sock"));
+      try {
+        current.hold(req);
+        expect((await collect(dir, { cwd: "/w" })).map((h) => h.ref)).toEqual([
+          "cur-1",
+        ]);
+      } finally {
+        for (const p of current.list()) current.decide(p.id, false);
+        server.close();
+        old.close();
+      }
+    },
+  );
+
+  test.skipIf(!unixSockets)(
+    "a generated ID is drawn again, not reused",
+    async () => {
+      const { id, path } = await claimNewSocket(dir);
+      expect(path).toBe(join(dir, `${id}.sock`));
     },
   );
 

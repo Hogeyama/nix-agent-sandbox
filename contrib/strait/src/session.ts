@@ -70,11 +70,31 @@ export const socketFor = (dir: string, id: string) => join(dir, `${id}.sock`);
  * answers on was left by a session that died, and is removed.
  */
 export async function claimSocket(dir: string, id: string): Promise<string> {
+  return (await claim(dir, id)) ?? fail(id);
+}
+
+/**
+ * A generated ID that happens to be taken is simply drawn again; only a name
+ * the user chose is an error when it is in use.
+ */
+export async function claimNewSocket(
+  dir: string,
+): Promise<{ id: string; path: string }> {
+  for (;;) {
+    const id = newSessionId();
+    const path = await claim(dir, id);
+    if (path !== undefined) return { id, path };
+  }
+}
+
+function fail(id: string): never {
+  throw new Error(`session ${id} is already running`);
+}
+
+async function claim(dir: string, id: string): Promise<string | undefined> {
   const path = socketFor(dir, id);
   if (existsSync(path)) {
-    if (await answers(path)) {
-      throw new Error(`session ${id} is already running`);
-    }
+    if (await answers(path)) return undefined;
     removeSocket(path);
   }
   return path;

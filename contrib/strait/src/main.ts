@@ -35,9 +35,9 @@ import {
 import { reviewMain } from "./review.ts";
 import { assertProxyPatched, assertRespondPatched } from "./selfcheck.ts";
 import {
+  claimNewSocket,
   claimSocket,
   isSessionId,
-  newSessionId,
   sessionInfo,
 } from "./session.ts";
 import { findStatusLine, wrapStatusLine } from "./statusline.ts";
@@ -170,7 +170,12 @@ async function main() {
     });
   if (config.hostExec) assertRespondPatched();
 
-  const id = name ?? newSessionId();
+  // Created before wrapping: srt on Linux protects only paths that exist.
+  const sockets = socketDir();
+  const { id, path: socketPath } =
+    name === undefined
+      ? await claimNewSocket(sockets)
+      : { id: name, path: await claimSocket(sockets, name) };
   const wrap = config.statusLine
     ? wrapStatusLine(
         given,
@@ -181,9 +186,6 @@ async function main() {
   const command = wrap.command;
   const session = sessionInfo(id, given);
 
-  // Created before wrapping: srt on Linux protects only paths that exist.
-  const sockets = socketDir();
-  const socketPath = await claimSocket(sockets, id);
   const approvals = new Approvals(session, undefined, notifier(session));
   await serve(approvals, socketPath);
   process.on("exit", () => removeSocket(socketPath));
