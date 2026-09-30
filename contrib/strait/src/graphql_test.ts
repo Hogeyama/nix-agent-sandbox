@@ -82,6 +82,52 @@ describe("allowed", () => {
   ]);
 });
 
+describe("reasons list every violation", () => {
+  test("each disallowed field at its topmost path, in document order", () => {
+    expect(
+      judge(
+        repo(
+          "name owner { repositories(first: 1) { nodes { name } } } forks { totalCount } stargazers { totalCount }",
+        ),
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        "GraphQL fields /repository/owner/repositories, /repository/forks, /repository/stargazers are not allowed",
+    });
+  });
+  test("a disallowed field is named once however often it appears", () => {
+    expect(
+      judge(repo("forks { totalCount } f2: forks { totalCount }")),
+    ).toEqual({
+      ok: false,
+      reason: "GraphQL field /repository/forks is not allowed",
+    });
+  });
+  test("operations, fields and repositories together", () => {
+    expect(
+      judge(
+        `${repo("name")} mutation M { addStar(input: {}) { clientMutationId } } query O { repository(owner: "octocat", name: "hello-world") { name } viewer { login } }`,
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        "only GraphQL queries are allowed (found mutation); GraphQL fields /addStar, /viewer are not allowed; octocat/hello-world is not an allowed repository",
+    });
+  });
+  test("nothing is cut off", () => {
+    const fields = Array.from(
+      { length: 30 },
+      (_, i) => `f${i}: forks${i} { totalCount }`,
+    );
+    const verdict = judge(repo(fields.join(" ")));
+    expect(verdict.ok).toBe(false);
+    for (let i = 0; i < 30; i++) {
+      expect(verdict.ok || verdict.reason).toContain(`/repository/forks${i}`);
+    }
+  });
+});
+
 describe("paths", () => {
   refuses([
     [

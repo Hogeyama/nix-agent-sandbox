@@ -194,32 +194,50 @@ export function judgeGraphql(
   );
   if (analysed === null) return bad("GraphQL document cannot be analysed");
 
-  if (analysed.operations.some((op) => op !== "query")) {
-    return { ok: false, reason: "only GraphQL queries are allowed" };
+  // Every violation is reported, not just the first: the reason is what a
+  // reviewer reads before approving, and a list that stops early would hide
+  // the rest of what the document fetches.
+  const problems: string[] = [];
+  const others = [
+    ...new Set(analysed.operations.filter((op) => op !== "query")),
+  ];
+  if (others.length > 0) {
+    problems.push(
+      `only GraphQL queries are allowed (found ${others.join(", ")})`,
+    );
   }
+  // A field outside the list is reported once, at its topmost path; its
+  // children are outside too and would only repeat it. Parents come before
+  // their children in `fields`.
+  const outside: string[] = [];
+  const within = (path: string) =>
+    outside.some((p) => path === p || path.startsWith(`${p}/`));
+  const repos = new Set<string>();
   for (const o of analysed.fields) {
     const ok = o.leaf ? allowed.leaves.has(o.path) : allowed.inner.has(o.path);
     if (!ok) {
-      return { ok: false, reason: `GraphQL field ${o.path} is not allowed` };
+      if (!within(o.path)) outside.push(o.path);
+      continue;
     }
     if (o.path === REPOSITORY_PATH) {
       const owner = o.args.get("owner");
       const name = o.args.get("name");
       if (owner === undefined || name === undefined) {
-        return {
-          ok: false,
-          reason: "GraphQL repository needs owner and name strings",
-        };
-      }
-      if (!isRepoAllowed(owner, name)) {
-        return {
-          ok: false,
-          reason: `${owner}/${name} is not an allowed repository`,
-        };
+        repos.add("GraphQL repository needs owner and name strings");
+      } else if (!isRepoAllowed(owner, name)) {
+        repos.add(`${owner}/${name} is not an allowed repository`);
       }
     }
   }
-  return { ok: true };
+  if (outside.length === 1) {
+    problems.push(`GraphQL field ${outside[0]} is not allowed`);
+  } else if (outside.length > 1) {
+    problems.push(`GraphQL fields ${outside.join(", ")} are not allowed`);
+  }
+  problems.push(...repos);
+  return problems.length === 0
+    ? { ok: true }
+    : { ok: false, reason: problems.join("; ") };
 }
 
 /** Leaves and the proper prefixes of the listed paths. */
