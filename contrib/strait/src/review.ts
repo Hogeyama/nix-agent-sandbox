@@ -1,27 +1,35 @@
-// strait-review: approve or deny requests that running strait sessions hold.
+// strait review: approve or deny requests that running strait sessions hold.
 //
-//   strait-review                 pick with fzf (Enter approves, Ctrl-D denies)
-//   strait-review list            print what is waiting
-//   strait-review show ID         print one request in full
-//   strait-review approve ID...
-//   strait-review deny ID...
+//   strait review [--all] [SESSION]          stay open in fzf: Enter approves,
+//                                            Ctrl-D denies, Esc quits
+//   strait review --json [--all] [SESSION]   print what is waiting as JSON
+//   strait review list [--all] [SESSION]     print what is waiting, one per line
+//   strait review show REF                   print one request in full
+//   strait review approve REF...
+//   strait review deny REF...
 //
-// An ID is `<pid>-<n>`: the strait process and its request number. Every
+// Without SESSION, only the sessions started in the current directory are
+// shown; --all shows every session. A REF is `<session>-<n>`: the session ID
+// (statusline.ts shows it in Claude Code) and the request's number. Every
 // approval covers that one request only.
 
+import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { connect } from "node:net";
-import { join, resolve } from "node:path";
+import { connect, createServer } from "node:net";
+import { resolve } from "node:path";
 import type { ApprovalRequest, ApprovalResponse, Pending } from "./approval.ts";
 import { socketDir } from "./approval.ts";
 import { type ExecRequest, INHERITED_ENV } from "./hostexec.ts";
+import { isSessionId, type SessionInfo, socketFor } from "./session.ts";
 
-interface Held extends Pending {
-  /** `<pid>-<n>`, unique across sessions. */
+export interface Held extends Pending {
+  /** `<session>-<n>`, unique across sessions. */
   ref: string;
-  pid: string;
-  cwd: string;
+  session: SessionInfo;
 }
+
+/** Which sessions to look at. */
+export type Scope = { session: string } | { cwd: string } | { all: true };
 
 export function ask(
   path: string,
@@ -47,22 +55,39 @@ export function ask(
   });
 }
 
-const socketFor = (dir: string, pid: string) => join(dir, `${pid}.sock`);
-
-export async function collect(dir: string): Promise<Held[]> {
-  const pids = readdirSync(dir)
-    .filter((f) => /^\d+\.sock$/.test(f))
-    .map((f) => f.slice(0, -".sock".length));
+export async function collect(dir: string, scope: Scope): Promise<Held[]> {
+  const ids =
+    "session" in scope
+      ? [scope.session]
+      : readdirSync(dir)
+          .filter((f) => f.endsWith(".sock"))
+          .map((f) => f.slice(0, -".sock".length))
+          .filter(isSessionId);
   const held: Held[] = [];
-  for (const pid of pids) {
+  for (const id of ids) {
     // A session that crashed leaves a socket nobody answers; skip it.
-    const res = await ask(socketFor(dir, pid), { op: "list" });
+    const res = await ask(socketFor(dir, id), { op: "list" });
     if (res === null || !("pending" in res)) continue;
+    if ("cwd" in scope && res.session.cwd !== scope.cwd) continue;
     for (const p of res.pending) {
-      held.push({ ...p, pid, cwd: res.cwd, ref: `${pid}-${p.id}` });
+      held.push({
+        ...p,
+        session: res.session,
+        ref: `${res.session.id}-${p.id}`,
+      });
     }
   }
   return held.sort((a, b) => a.since - b.since);
+}
+
+/** `<session>-<n>` split at the last `-`; a session ID never ends in one. */
+export function parseRef(ref: string): { session: string; id: string } | null {
+  const i = ref.lastIndexOf("-");
+  const session = ref.slice(0, i);
+  const id = ref.slice(i + 1);
+  return i > 0 && isSessionId(session) && /^\d+$/.test(id)
+    ? { session, id }
+    : null;
 }
 
 async function settle(
@@ -72,11 +97,11 @@ async function settle(
 ): Promise<boolean> {
   let ok = true;
   for (const ref of refs) {
-    const m = /^(\d+)-(\d+)$/.exec(ref);
-    const res = m
-      ? await ask(socketFor(dir, m[1] as string), {
+    const r = parseRef(ref);
+    const res = r
+      ? await ask(socketFor(dir, r.session), {
           op: "decide",
-          id: m[2] as string,
+          id: r.id,
           approve,
         })
       : null;
@@ -103,22 +128,35 @@ const visible = (s: string, keepNewlines = false) =>
       : `\\u{${(c.codePointAt(0) ?? 0).toString(16)}}`,
   );
 
+/** Where a session runs, as far as strait could tell. */
+function terminal(s: SessionInfo): string {
+  const parts = [
+    s.tmuxPane ? `tmux ${s.tmuxPane}` : undefined,
+    s.tty?.replace(/^\/dev\//, ""),
+  ].filter((p) => p !== undefined);
+  return parts.length ? parts.join(" ") : "no tty";
+}
+
+/** One line per request; fields are tab-separated and the first is the REF. */
 export function line(h: Held): string {
   const what = h.exec
     ? `EXEC ${h.exec.argv.map(shellQuote).join(" ")} (in ${h.exec.cwd})`
     : `${h.method} ${h.url}`;
   return [
     h.ref,
+    `[${h.session.id}]`,
     visible(what),
     visible(h.reason),
-    `(${age(h.since)}, ${visible(h.cwd)})`,
+    `(${age(h.since)}, ${visible(terminal(h.session))})`,
   ].join("\t");
 }
 
 export function details(h: Held): string {
+  const s = h.session;
   const out = [
     `id:      ${h.ref}`,
-    `session: ${visible(h.cwd)} (pid ${h.pid})`,
+    `session: ${s.id}, ${visible(s.command.map(shellQuote).join(" "))}`,
+    `         in ${visible(s.cwd)}, ${visible(terminal(s))}, started ${new Date(s.startedAt).toLocaleString()}`,
     `waiting: ${age(h.since)}`,
     `request: ${visible(`${h.method} ${h.url}`)}`,
     `reason:  ${visible(h.reason)}`,
@@ -153,79 +191,162 @@ function prettyBody(body: string): string {
   return body;
 }
 
-async function fzf(
-  input: string,
-  args: string[],
-): Promise<{ code: number; out: string }> {
-  const child = Bun.spawn(["fzf", ...args], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "inherit",
-  });
-  child.stdin.write(input);
-  child.stdin.end();
-  const out = await new Response(child.stdout).text();
-  return { code: await child.exited, out };
-}
-
-async function interactive(dir: string): Promise<number> {
-  const held = await collect(dir);
-  if (held.length === 0) {
-    console.log("nothing is waiting");
-    return 0;
-  }
-  const self = resolve(import.meta.dir, "..", "strait-review");
-  let result: { code: number; out: string };
-  try {
-    result = await fzf(`${held.map(line).join("\n")}\n`, [
-      "--multi",
-      "--delimiter=\t",
-      "--with-nth=2..",
-      "--expect=enter,ctrl-d",
-      "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
-      "--prompt=strait> ",
-      "--no-sort",
-      `--preview=${shellQuote(self)} show {1}`,
-      "--preview-window=down,60%,wrap",
-    ]);
-  } catch {
-    console.error(
-      "fzf is not installed; use `strait-review list` and approve/deny",
-    );
-    return 2;
-  }
-  // 130 is Esc or Ctrl-C, 1 is no match.
-  if (result.code === 130 || result.code === 1) return 0;
-  if (result.code !== 0) throw new Error(`fzf exited with ${result.code}`);
-  const [key, ...picked] = result.out.trimEnd().split("\n");
-  const refs = picked.map((l) => l.split("\t")[0] as string);
-  if (refs.length === 0) return 0;
-  return (await settle(dir, refs, key !== "ctrl-d")) ? 0 : 1;
+/** The machine-readable form of `strait review --json`. */
+export function structured(h: Held): Record<string, unknown> {
+  return {
+    ref: h.ref,
+    session: h.session,
+    method: h.method,
+    url: h.url,
+    reason: h.reason,
+    since: new Date(h.since).toISOString(),
+    ...(h.exec ? { exec: h.exec } : {}),
+    ...(h.body !== undefined ? { body: h.body } : {}),
+  };
 }
 
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
+function scopeArgs(scope: Scope): string[] {
+  if ("session" in scope) return [scope.session];
+  if ("all" in scope) return ["--all"];
+  return [];
+}
+
+function freePort(): Promise<number> {
+  return new Promise((done, fail) => {
+    const s = createServer();
+    s.once("error", fail);
+    s.listen(0, "127.0.0.1", () => {
+      const { port } = s.address() as { port: number };
+      s.close(() => done(port));
+    });
+  });
+}
+
+/**
+ * The fzf arguments for the resident review. Approving or denying runs
+ * `strait review approve|deny` on the selection and reloads the list, so fzf
+ * stays open; `reload` is also what the poller sends when something new
+ * arrives.
+ */
+export function tuiArgs(self: string, scope: Scope, port: number): string[] {
+  const strait = shellQuote(self);
+  const list = [
+    strait,
+    "review",
+    "list",
+    ...scopeArgs(scope).map(shellQuote),
+  ].join(" ");
+  return [
+    "--multi",
+    "--delimiter=\t",
+    "--with-nth=2..",
+    "--no-sort",
+    // Keep the cursor on the same request when the list reloads.
+    "--track",
+    "--id-nth=1",
+    "--prompt=strait> ",
+    "--header=Enter: approve | Ctrl-D: deny | Tab: select several | Ctrl-R: reload | Esc: quit",
+    `--bind=start:reload(${list})`,
+    `--bind=enter:execute-silent(${strait} review approve {+1})+clear-selection+reload(${list})`,
+    `--bind=ctrl-d:execute-silent(${strait} review deny {+1})+clear-selection+reload(${list})`,
+    `--bind=ctrl-r:reload(${list})`,
+    `--preview=${strait} review show {1}`,
+    "--preview-window=right,55%,wrap",
+    `--listen=127.0.0.1:${port}`,
+  ];
+}
+
+async function tui(dir: string, scope: Scope): Promise<number> {
+  const self = resolve(import.meta.dir, "..", "strait");
+  const port = await freePort();
+  // fzf's --listen accepts actions, including execute, from any local
+  // process that knows the port; the key keeps it to this one.
+  const key = randomUUID();
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn(["fzf", ...tuiArgs(self, scope, port)], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "inherit",
+      env: { ...process.env, FZF_API_KEY: key },
+    });
+  } catch {
+    console.error(
+      "fzf is not installed; use `strait review list` with approve/deny",
+    );
+    return 2;
+  }
+  // Reload when what is waiting changes, not on a timer: a reload moves the
+  // list under the cursor, so doing it for nothing gets in the way.
+  let last = (await collect(dir, scope)).map((h) => h.ref).join(" ");
+  const list = ["review", "list", ...scopeArgs(scope)]
+    .map(shellQuote)
+    .join(" ");
+  const poll = setInterval(async () => {
+    const now = (await collect(dir, scope)).map((h) => h.ref).join(" ");
+    if (now === last) return;
+    last = now;
+    await fetch(`http://127.0.0.1:${port}`, {
+      method: "POST",
+      headers: { "x-api-key": key },
+      body: `reload(${shellQuote(self)} ${list})`,
+    }).catch(() => {});
+  }, 1000);
+  const code = await child.exited;
+  clearInterval(poll);
+  // 130 is Esc or Ctrl-C.
+  return code === 130 || code === 0 ? 0 : code;
+}
+
 function usage(): never {
   console.error(
-    "usage: strait-review [list | show ID | approve ID... | deny ID...]",
+    "usage: strait review [--json] [--all] [SESSION]\n" +
+      "       strait review list [--all] [SESSION]\n" +
+      "       strait review show REF\n" +
+      "       strait review approve|deny REF...",
   );
   process.exit(2);
 }
 
-async function main(argv: string[]): Promise<number> {
+/** `[--json] [--all] [SESSION]`, in any order. */
+function parseScope(args: string[]): { scope: Scope; json: boolean } {
+  let json = false;
+  let all = false;
+  let session: string | undefined;
+  for (const a of args) {
+    if (a === "--json") json = true;
+    else if (a === "--all") all = true;
+    else if (!a.startsWith("-") && session === undefined && isSessionId(a)) {
+      session = a;
+    } else usage();
+  }
+  if (all && session !== undefined) usage();
+  const scope: Scope =
+    session !== undefined
+      ? { session }
+      : all
+        ? { all: true }
+        : { cwd: process.cwd() };
+  return { scope, json };
+}
+
+export async function reviewMain(argv: string[]): Promise<number> {
   const dir = socketDir();
   const [cmd, ...rest] = argv;
   switch (cmd) {
-    case undefined:
-      return interactive(dir);
     case "list": {
-      const held = await collect(dir);
-      for (const h of held) console.log(line(h));
-      if (held.length === 0) console.error("nothing is waiting");
+      const { scope } = parseScope(rest);
+      for (const h of await collect(dir, scope)) console.log(line(h));
       return 0;
     }
     case "show": {
-      const h = (await collect(dir)).find((x) => x.ref === rest[0]);
+      const r = rest[0] === undefined ? null : parseRef(rest[0]);
+      if (r === null || rest.length !== 1) usage();
+      const h = (await collect(dir, { session: r.session })).find(
+        (x) => x.ref === rest[0],
+      );
       if (h === undefined) {
         console.log(`${rest[0]} is no longer waiting`);
         return 1;
@@ -234,20 +355,20 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "approve":
-    case "deny":
-      if (rest.length === 0) usage();
-      return (await settle(dir, rest, cmd === "approve")) ? 0 : 1;
-    default:
-      usage();
+    case "deny": {
+      const refs = rest.filter((r) => r !== "");
+      if (refs.length === 0) return 2;
+      return (await settle(dir, refs, cmd === "approve")) ? 0 : 1;
+    }
+    default: {
+      const { scope, json } = parseScope(argv);
+      if (json) {
+        console.log(
+          JSON.stringify((await collect(dir, scope)).map(structured)),
+        );
+        return 0;
+      }
+      return tui(dir, scope);
+    }
   }
-}
-
-if (import.meta.main) {
-  main(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`strait-review: ${e instanceof Error ? e.message : e}`);
-      process.exit(1);
-    },
-  );
 }

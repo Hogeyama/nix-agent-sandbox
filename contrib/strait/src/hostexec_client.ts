@@ -2,7 +2,7 @@
 //
 //   strait-hostexec [--cwd DIR] [--env NAME=VALUE | --env NAME]... [--] cmd [args...]
 //
-// The command runs only after a human approves it with strait-review, with
+// The command runs only after a human approves it with `strait review`, with
 // PATH and HOME from the host plus exactly the variables given here
 // (`--env NAME` copies this shell's value). The working directory defaults
 // to the current one. Output comes back once the command ends; there is no

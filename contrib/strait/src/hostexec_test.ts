@@ -221,9 +221,8 @@ describe("review display", () => {
   test("shows the command and its directory", () => {
     const l = line({
       id: "1",
-      ref: "9-1",
-      pid: "9",
-      cwd: "/w",
+      ref: "k3f9-1",
+      session: { id: "k3f9", cwd: "/w", command: ["claude"], startedAt: 0 },
       since: Date.now(),
       method: "POST",
       url: "https://hostexec.strait.invalid/run",

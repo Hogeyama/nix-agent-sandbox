@@ -1,6 +1,7 @@
 // strait: run a command under srt with a fixed network policy.
 //
-//   strait [--config strait.json] [--debug] -- command [args...]
+//   strait [--config strait.json] [--name NAME] [--debug] -- command [args...]
+//   strait review ...        approve or deny held requests (review.ts)
 //
 // Invariants enforced here rather than left to configuration: TLS is always
 // terminated, no host is exempt from it, the host list is fixed at port 443,
@@ -13,7 +14,7 @@ import { resolve } from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import {
   Approvals,
-  notify,
+  notifier,
   removeSocket,
   serve,
   socketDir,
@@ -31,7 +32,15 @@ import {
   type Sentinels,
   wantsBody,
 } from "./policy.ts";
+import { reviewMain } from "./review.ts";
 import { assertProxyPatched, assertRespondPatched } from "./selfcheck.ts";
+import {
+  claimSocket,
+  isSessionId,
+  newSessionId,
+  sessionInfo,
+} from "./session.ts";
+import { findStatusLine, wrapStatusLine } from "./statusline.ts";
 
 // Credentials read from the host environment and masked inside the sandbox.
 // STRAIT_GIT_AUTH is derived from GH_TOKEN: git over HTTPS only accepts
@@ -54,7 +63,8 @@ const CREDENTIALS = [
 
 function usage(): never {
   console.error(
-    "usage: strait [--config strait.json] [--debug] -- command [args...]",
+    "usage: strait [--config strait.json] [--name NAME] [--debug] -- command [args...]\n" +
+      "       strait review [--json] [--all] [SESSION]",
   );
   process.exit(2);
 }
@@ -64,6 +74,7 @@ function usage(): never {
 function parseArgs(argv: string[]) {
   let configPath = "strait.json";
   let debug = false;
+  let name: string | undefined;
   let i = 0;
   for (; i < argv.length; i++) {
     const a = argv[i];
@@ -72,13 +83,24 @@ function parseArgs(argv: string[]) {
       break;
     }
     if (a === "--config" && i + 1 < argv.length) configPath = argv[++i];
+    else if (a === "--name" && i + 1 < argv.length) name = argv[++i];
     else if (a === "--debug") debug = true;
     else if (a.startsWith("-")) usage();
     else break;
   }
   const command = argv.slice(i);
   if (command.length === 0) usage();
-  return { configPath, debug, command };
+  // A session named like a review subcommand could not be selected there.
+  if (
+    name !== undefined &&
+    (!isSessionId(name) || ["list", "show", "approve", "deny"].includes(name))
+  ) {
+    console.error(
+      `strait: --name ${JSON.stringify(name)}: use letters, digits, _ and -, at most 32, not ending in -`,
+    );
+    process.exit(2);
+  }
+  return { configPath, debug, name, command };
 }
 
 // A missing config is an error, not an empty policy: a path that does not
@@ -124,7 +146,11 @@ function protectedPaths(userDenyWrite: string[], configPath: string): string[] {
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 async function main() {
-  const { configPath, debug, command } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  // `review` runs on the host next to the sessions; it starts no sandbox.
+  // To sandbox a program called review, put it after `--`.
+  if (argv[0] === "review") process.exit(await reviewMain(argv.slice(1)));
+  const { configPath, debug, name, command: given } = parseArgs(argv);
   if (debug) process.env.SRT_DEBUG = "1";
   const config = loadConfig(configPath);
 
@@ -144,10 +170,21 @@ async function main() {
     });
   if (config.hostExec) assertRespondPatched();
 
+  const id = name ?? newSessionId();
+  const wrap = config.statusLine
+    ? wrapStatusLine(
+        given,
+        findStatusLine(process.cwd(), process.env),
+        resolve(import.meta.dir, "..", "strait-statusline"),
+      )
+    : { command: given, env: {} };
+  const command = wrap.command;
+  const session = sessionInfo(id, given);
+
   // Created before wrapping: srt on Linux protects only paths that exist.
   const sockets = socketDir();
-  const socketPath = resolve(sockets, `${process.pid}.sock`);
-  const approvals = new Approvals(undefined, notify);
+  const socketPath = await claimSocket(sockets, id);
+  const approvals = new Approvals(session, undefined, notifier(session));
   await serve(approvals, socketPath);
   process.on("exit", () => removeSocket(socketPath));
 
@@ -221,7 +258,12 @@ async function main() {
   const gitSetup = process.env.STRAIT_GIT_AUTH
     ? 'export GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader; export GIT_CONFIG_VALUE_0="Authorization: $STRAIT_GIT_AUTH"; '
     : "";
-  const inner = `${gitSetup}exec ${command.map(shellQuote).join(" ")}`;
+  // The session ID, for the wrapped status line and for the agent to name
+  // when it tells the user to approve something.
+  const sessionEnv = Object.entries({ STRAIT_SESSION: id, ...wrap.env })
+    .map(([k, v]) => `export ${k}=${shellQuote(v)}; `)
+    .join("");
+  const inner = `${gitSetup}${sessionEnv}exec ${command.map(shellQuote).join(" ")}`;
   const wrapped = await SandboxManager.wrapWithSandbox(inner);
 
   // srt mints a sentinel per masked credential while wrapping; learn which is
@@ -241,6 +283,9 @@ async function main() {
     throw new Error(`srt did not mask ${missing.map((c) => c.env).join(", ")}`);
   }
 
+  console.error(
+    `strait: session ${id} (approve held requests with: strait review ${id})`,
+  );
   const child = spawn(wrapped, { shell: true, stdio: "inherit" });
   const forward = (sig: NodeJS.Signals) => () => child.kill(sig);
   process.on("SIGINT", forward("SIGINT"));

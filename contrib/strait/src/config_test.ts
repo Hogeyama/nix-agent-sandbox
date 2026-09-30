@@ -6,7 +6,12 @@ test("empty config uses defaults", () => {
     githubRepos: [],
     filesystem: DEFAULT_FILESYSTEM,
     hostExec: false,
+    statusLine: true,
   });
+});
+
+test("the status line can be left alone", () => {
+  expect(parseConfig('{"statusLine": false}').statusLine).toBe(false);
 });
 
 test("hostExec is opt-in", () => {
@@ -36,6 +41,7 @@ test.each([
   ["repo with percent", { githubRepos: ["my%2Dorg/repo"] }],
   ["non-string path", { filesystem: { denyRead: [1] } }],
   ["non-boolean hostExec", { hostExec: "yes" }],
+  ["non-boolean statusLine", { statusLine: "no" }],
 ])("rejects %s", (_name, value) => {
   expect(() => parseConfig(JSON.stringify(value))).toThrow();
 });

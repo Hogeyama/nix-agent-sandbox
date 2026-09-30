@@ -1,5 +1,5 @@
 #!/bin/sh
 # Run a command on the host from inside a strait sandbox, after a human
-# approves it with strait-review. Needs `"hostExec": true` in strait.json.
+# approves it with `strait review`. Needs `"hostExec": true` in strait.json.
 here=$(dirname "$(readlink -f "$0")")
 exec bun --config="$here/bunfig.toml" --no-env-file "$here/src/hostexec_client.ts" "$@"

@@ -16,6 +16,8 @@ export interface StraitConfig {
   filesystem: FilesystemConfig;
   /** Let the sandbox ask to run commands on the host, each one approved. */
   hostExec: boolean;
+  /** Put the session ID in Claude Code's status line (statusline.ts). */
+  statusLine: boolean;
 }
 
 export const DEFAULT_FILESYSTEM: FilesystemConfig = {
@@ -36,7 +38,11 @@ export function parseConfig(text: string): StraitConfig {
     throw new Error(`strait.json is not valid JSON: ${(e as Error).message}`);
   }
   const top = record(raw, "strait.json");
-  rejectUnknown(top, ["githubRepos", "filesystem", "hostExec"], "strait.json");
+  rejectUnknown(
+    top,
+    ["githubRepos", "filesystem", "hostExec", "statusLine"],
+    "strait.json",
+  );
 
   const githubRepos = stringArray(top.githubRepos ?? [], "githubRepos");
   for (const r of githubRepos) {
@@ -59,7 +65,11 @@ export function parseConfig(text: string): StraitConfig {
   if (typeof hostExec !== "boolean") {
     throw new Error("hostExec must be true or false");
   }
-  return { githubRepos, filesystem, hostExec };
+  const statusLine = top.statusLine ?? true;
+  if (typeof statusLine !== "boolean") {
+    throw new Error("statusLine must be true or false");
+  }
+  return { githubRepos, filesystem, hostExec, statusLine };
 }
 
 function record(v: unknown, where: string): Record<string, unknown> {

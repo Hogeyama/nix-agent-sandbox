@@ -1,0 +1,11 @@
+#!/bin/sh
+# Claude Code's status line under strait: the session ID, then whatever the
+# user's own status line prints. strait sets it through `--settings` and passes
+# the original command in STRAIT_STATUSLINE_INNER.
+input=$(cat)
+printf '[strait:%s] ' "${STRAIT_SESSION:-?}"
+if [ -n "${STRAIT_STATUSLINE_INNER:-}" ]; then
+  printf '%s' "$input" | sh -c "$STRAIT_STATUSLINE_INNER"
+else
+  echo
+fi

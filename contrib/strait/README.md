@@ -1,8 +1,8 @@
 # strait
 
-strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued. A request to any other endpoint on an allowed host is held until a human approves or denies it with `strait-review`.
+strait runs a command, typically Claude Code, under [srt](https://github.com/anthropics/sandbox-runtime) (Anthropic's sandbox-runtime) with a fixed network policy. Every HTTPS request the sandboxed process makes goes through strait's `filterRequest` policy. A request is allowed only if it goes to an allowed endpoint and carries no credential except the ones strait issued. A request to any other endpoint on an allowed host is held until a human approves or denies it with `strait review`.
 
-The point is how much code has to be trusted. strait's own code is about 1,600 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher. About 100 of those lines are the GraphQL allowlist. The two clients add about 370 more: `review.ts` behind the `strait-review` launcher on the host, and `hostexec_client.ts` behind `strait-hostexec` in the sandbox. The trusted base is that code, srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
+The point is how much code has to be trusted. strait's own code is about 1,900 lines: `policy.ts`, `graphql.ts`, `body.ts`, `approval.ts`, `hostexec.ts`, `session.ts`, `statusline.ts`, `config.ts`, `selfcheck.ts` and `main.ts`, plus the `strait` launcher and the `strait-statusline` script. About 100 of those lines are the GraphQL allowlist. The two clients add about 500 more: `review.ts`, which `strait review` runs on the host, and `hostexec_client.ts` behind `strait-hostexec` in the sandbox. The trusted base is that code, srt, three small patches to srt, and graphql-js, which parses GraphQL documents. Both packages are pinned to exact versions in `package.json`.
 
 ## Why srt needs patches
 
@@ -80,20 +80,31 @@ A request that carries any other credential is denied. That covers a foreign or 
 A held request waits in the proxy for up to 240 seconds. Approve or deny it from another terminal on the host:
 
 ```sh
-strait-review                # fzf: Tab selects, Enter approves, Ctrl-D denies
-strait-review list           # what is waiting, across every running strait
-strait-review show ID        # one request in full, with a GraphQL query unescaped
-strait-review approve ID...
-strait-review deny ID...
+strait review                  # stays open in fzf: Enter approves, Ctrl-D denies, Esc quits
+strait review k3f9             # the same, for one session
+strait review --all            # the same, for every session
+strait review --json [k3f9]    # what is waiting, as JSON
+strait review list [k3f9]      # what is waiting, one line each
+strait review show k3f9-2      # one request in full, with a GraphQL query unescaped
+strait review approve k3f9-2 ...
+strait review deny k3f9-2 ...
 ```
+
+`strait review` stays open. Approving or denying reloads the list rather than quitting, and a request that arrives is added within a second. Tab selects several requests at once, and the preview shows the one under the cursor in full. Without a session ID or `--all`, it shows only the sessions started in the current directory.
 
 strait also sends a desktop notification through `notify-send` when that command exists. If no one answers in time, the request is denied, and the reason the sandboxed client gets says so.
 
 An approval covers one request only. A `git push` makes two requests, `info/refs?service=git-receive-pack` and then `git-receive-pack`, so it needs two approvals. While the second one waits, srt may keep the part of the pack it has already received in memory, because it tees the body for upstream.
 
-Each running strait listens on `<pid>.sock` in `$XDG_RUNTIME_DIR/strait`, or in `strait-<uid>` under the temp directory when `XDG_RUNTIME_DIR` is unset. The directory must be owned by you and have mode 0700. The sandbox cannot reach the socket for two reasons. srt's seccomp filter blocks `AF_UNIX` sockets on Linux. And strait adds the directory to `denyRead`, which still hides it when srt runs without its seccomp helper.
+#### Which session a request came from
 
-Everything `strait-review` shows comes from the sandbox: the URL, the reason, which may quote a GraphQL argument, and the body. Control and format characters are therefore shown escaped, so a request cannot forge another line or redraw the terminal.
+Several strait sessions often run in the same directory, so each has a session ID: four random characters such as `k3f9`, or the name given with `strait --name NAME`. A second session cannot take a name that a running one holds. strait prints the ID when it starts. Every request ID is `<session>-<n>`, and the list shows the session, the tmux pane and the terminal (`tmux %12 pts/3`). `show` adds the command, the directory and the start time.
+
+To match a request to a terminal at a glance, strait puts the ID in Claude Code's status line. When the command is `claude`, strait adds `--settings` with a status line that prints `[strait:k3f9]` and then runs the status line you already have. strait finds that one in `.claude/settings.local.json`, `.claude/settings.json` and then the user settings, in that order. Set `"statusLine": false` in `strait.json` to leave the status line alone. The sandboxed process also gets the ID as `STRAIT_SESSION`, so an agent can name it when it asks you to approve something.
+
+Each running strait listens on `<session>.sock` in `$XDG_RUNTIME_DIR/strait`, or in `strait-<uid>` under the temp directory when `XDG_RUNTIME_DIR` is unset. The directory must be owned by you and have mode 0700. The sandbox cannot reach the socket for two reasons. srt's seccomp filter blocks `AF_UNIX` sockets on Linux. And strait adds the directory to `denyRead`, which still hides it when srt runs without its seccomp helper. `strait review` and strait must agree on `XDG_RUNTIME_DIR`, or they look in different directories.
+
+Everything `strait review` shows comes from the sandbox: the URL, the reason, which may quote a GraphQL argument, and the body. Control and format characters are therefore shown escaped, so a request cannot forge another line or redraw the terminal. The resident review has fzf listen on a localhost port for reloads, and it sets `FZF_API_KEY`, so no other local process can drive it.
 
 ### Running commands on the host
 
@@ -107,7 +118,7 @@ strait-hostexec --cwd /path/to/repo --env GH_HOST -- gh release view
 
 - `--cwd DIR` sets the working directory; it defaults to the current one. Paths inside the sandbox are the same as on the host.
 - `--env NAME=VALUE` sets a variable, and `--env NAME` copies one from the sandbox. The command gets `PATH` and `HOME` from strait's environment plus exactly these variables, and nothing else from strait. strait's own environment holds the real tokens.
-- Each run is held for approval like any other request. `strait-review` shows every argument on its own line, the working directory and each variable. An approval covers that one run. There are no rules that allow a command automatically.
+- Each run is held for approval like any other request. `strait review` shows every argument on its own line, the working directory and each variable. An approval covers that one run. There are no rules that allow a command automatically.
 - stdout and stderr come back once the command ends, and the exit status is the command's. There is no stdin, and output is not streamed. A refused request exits with 126. If the client goes away, the command is killed.
 - Any real credential strait holds is replaced with `[masked by strait]` in the output, so an approved `gh auth token` cannot hand the real token to the sandbox. Anything else the command prints goes back unmasked, and so does whatever it writes to the files the sandbox can read.
 
@@ -167,10 +178,11 @@ This was checked on the host with Claude Code 2.1.284. From inside the sandbox, 
 
 ### Config
 
-`strait.json` accepts only three keys, and unknown keys are rejected:
+`strait.json` accepts only four keys, and unknown keys are rejected:
 
 - `githubRepos`: `owner/name` strings.
 - `hostExec`: `true` lets the sandbox ask to run commands on the host (above). Off by default.
+- `statusLine`: `false` keeps strait from putting the session ID in Claude Code's status line. On by default.
 - `filesystem`: `allowWrite`, `denyWrite`, `denyRead`, `allowRead`. These are the same fields as srt's `filesystem` section, with the defaults shown in [strait.example.json](strait.example.json).
 
 **An existing `srt-settings.json` cannot be used as-is.** Copy its `filesystem` section into `strait.json`. The other sections are rejected on purpose:

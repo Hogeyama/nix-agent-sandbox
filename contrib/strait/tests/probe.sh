@@ -22,9 +22,9 @@ cd "$work"
 # approved, one carrying `strait-probe-hold` is left
 # waiting, and the rest are denied. It runs in the same environment as
 # `check`, so both look in the same socket directory.
-review() { env -i HOME="$HOME" PATH="$PATH" "$here/strait-review" "$@"; }
+review() { env -i HOME="$HOME" PATH="$PATH" "$here/strait" review "$@"; }
 (while :; do
-  for id in $(review list 2>/dev/null | cut -f1); do
+  for id in $(review list --all 2>/dev/null | cut -f1); do
     shown=$(review show "$id" 2>/dev/null)
     case $shown in
     *strait-probe-hold*) ;;
@@ -85,7 +85,7 @@ check "own TLS without srt CA" 'exit=60' "curl $code --cacert /etc/ssl/certs/ca-
 check "approved REST read of another repo" '^200' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-approve=1'"
 check "approved graphql outside the list" '"login"' "curl -sS --max-time 20 -X POST -H 'content-type: application/json' -H \"Authorization: token \$GH_TOKEN\" https://api.github.com/graphql -d '{\"query\":\"{strait_probe_approve: viewer{login}}\"}'"
 # The sandbox cannot reach the approval socket, even with a request waiting.
-check "sandbox cannot see held requests" 'nothing is waiting' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-hold=1' >/dev/null & sleep 2; $here/strait-review list; kill %1"
+check "sandbox cannot see held requests" 'listed=0' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-hold=1' >/dev/null & sleep 2; echo listed=\$($here/strait review list --all 2>/dev/null | wc -l); kill %1"
 
 # hostexec: runs on the host after approval, with only the declared env.
 check "hostexec approved" 'out=strait-probe-approve exit=7' "$here/strait-hostexec -- sh -c 'echo out=strait-probe-approve; exit 7'; echo exit=\$?"

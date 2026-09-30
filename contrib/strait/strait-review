@@ -1,6 +1,0 @@
-#!/bin/sh
-# Approve or deny requests that running strait sessions hold. Run it on the
-# host, outside the sandbox. Like the strait launcher, it keeps bun from
-# reading bunfig.toml and .env in the working directory.
-here=$(dirname "$(readlink -f "$0")")
-exec bun --config="$here/bunfig.toml" --no-env-file "$here/src/review.ts" "$@"

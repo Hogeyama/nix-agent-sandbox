@@ -1,7 +1,7 @@
-// Holding requests for a human, and the Unix socket strait-review talks to.
+// Holding requests for a human, and the Unix socket `strait review` talks to.
 //
 // A request that `decide` sends to review waits in filterRequest until someone
-// approves or denies it with strait-review, or until HOLD_MS passes. The
+// approves or denies it with `strait review`, or until HOLD_MS passes. The
 // socket lives in a 0700 directory outside the workspace that main.ts adds to
 // denyRead, and srt's seccomp filter blocks AF_UNIX inside the sandbox on
 // Linux, so only the host can reach it.
@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecRequest } from "./hostexec.ts";
 import type { FinalDecision } from "./policy.ts";
+import type { SessionInfo } from "./session.ts";
 
 /**
  * How long a request waits. Below node:http's default requestTimeout (300 s),
@@ -39,7 +40,7 @@ export type ApprovalRequest =
   | { op: "decide"; id: string; approve: boolean };
 
 export type ApprovalResponse =
-  | { pending: Pending[]; cwd: string }
+  | { pending: Pending[]; session: SessionInfo }
   | { ok: boolean }
   | { error: string };
 
@@ -51,6 +52,7 @@ export class Approvals {
   private next = 1;
 
   constructor(
+    private readonly session: SessionInfo,
     private readonly holdMs = HOLD_MS,
     private readonly onPending: (p: Pending) => void = () => {},
   ) {}
@@ -75,7 +77,7 @@ export class Approvals {
         () =>
           done({
             action: "deny",
-            reason: `${request.reason}; not approved within ${this.holdMs / 1000} s (run strait-review on the host)`,
+            reason: `${request.reason}; not approved within ${this.holdMs / 1000} s (run "strait review ${this.session.id}" on the host)`,
           }),
         this.holdMs,
       );
@@ -103,7 +105,9 @@ export class Approvals {
   }
 
   handle(req: ApprovalRequest): ApprovalResponse {
-    if (req.op === "list") return { pending: this.list(), cwd: process.cwd() };
+    if (req.op === "list") {
+      return { pending: this.list(), session: this.session };
+    }
     if (req.op === "decide") return { ok: this.decide(req.id, req.approve) };
     return { error: "unknown op" };
   }
@@ -161,15 +165,20 @@ export function removeSocket(path: string): void {
   } catch {}
 }
 
-/** Best effort: a desktop notification if notify-send exists. */
-export function notify(p: Pending): void {
-  try {
-    const child = spawn(
-      "notify-send",
-      ["strait: approval needed", `${p.method} ${p.url}\n${p.reason}`],
-      { stdio: "ignore", detached: true },
-    );
-    child.on("error", () => {});
-    child.unref();
-  } catch {}
+/** Best effort: a desktop notification, naming the session, if notify-send exists. */
+export function notifier(session: SessionInfo): (p: Pending) => void {
+  return (p) => {
+    try {
+      const child = spawn(
+        "notify-send",
+        [
+          `strait ${session.id}: approval needed`,
+          `${p.method} ${p.url}\n${p.reason}`,
+        ],
+        { stdio: "ignore", detached: true },
+      );
+      child.on("error", () => {});
+      child.unref();
+    } catch {}
+  };
 }
