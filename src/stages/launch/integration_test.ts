@@ -240,6 +240,13 @@ def serve(sock_path):
         worker.start()
 
 
+def shutdown_quietly(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def pump_to_socket(src_fd, sock):
     # 読んだ塊をフレームに包んで送り、最後に長さ 0 のフレームで終わりを伝える。
     # half-close はしない。
@@ -251,7 +258,10 @@ def pump_to_socket(src_fd, sock):
             sock.sendall(struct.pack(">I", len(data)) + data)
         sock.sendall(struct.pack(">I", 0))
     except OSError:
-        pass
+        # 終わりのフレームを送れないまま黙ると、サーバーは待ち続け、
+        # pump_from_socket が recv で止まって join が戻らない。両方向を
+        # 閉じて recv を起こす。
+        shutdown_quietly(sock)
 
 
 def pump_from_socket(sock, dst):
@@ -263,7 +273,7 @@ def pump_from_socket(sock, dst):
             dst.write(data)
             dst.flush()
     except OSError:
-        pass
+        shutdown_quietly(sock)
 
 
 def supervise(argv):
