@@ -84,9 +84,9 @@ test("protected state shares only credentials and history writable; unknown conf
       expect(await readFile(path.join(dir, ".credentials.json"), "utf8")).toBe(
         '{"test":"old"}',
       );
-      expect(await readFile(state.claudeJson, "utf8")).toBe(
-        '{"existing":true}',
-      );
+      expect(await readFile(state.claudeJson, "utf8")).toBe("{}\n");
+      expect(state.claudeJson).not.toBe(path.join(home, ".claude.json"));
+      expect((await stat(state.claudeJson)).mode & 0o777).toBe(0o600);
       expect((await stat(state.runtimeDir)).mode & 0o777).toBe(0o700);
       expect((await stat(path.join(dir, "history.jsonl"))).mode & 0o777).toBe(
         0o600,
@@ -95,6 +95,47 @@ test("protected state shares only credentials and history writable; unknown conf
       await removeProtectedClaudeState(state);
     }
     expect(await Bun.file(path.join(dir, "settings.json")).exists()).toBe(true);
+    expect(await Bun.file(state.claudeJson).exists()).toBe(false);
+    expect(await readFile(path.join(home, ".claude.json"), "utf8")).toBe(
+      '{"existing":true}',
+    );
+  });
+});
+
+test("protected state seeds the private ~/.claude.json from claudeJson", async () => {
+  await withHome(async (home) => {
+    const state = await prepareProtectedClaudeState(home, {
+      claudeJson: { hasCompletedOnboarding: true, nested: { key: [1] } },
+    });
+    try {
+      expect(JSON.parse(await readFile(state.claudeJson, "utf8"))).toEqual({
+        hasCompletedOnboarding: true,
+        nested: { key: [1] },
+      });
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+  });
+});
+
+test("protected state neither follows nor binds a symlinked host ~/.claude.json", async () => {
+  await withHome(async (home) => {
+    await mkdir(path.join(home, ".claude"));
+    await writeFile(path.join(home, "unrelated"), "untouched");
+    await symlink(
+      path.join(home, "unrelated"),
+      path.join(home, ".claude.json"),
+    );
+    const state = await prepareProtectedClaudeState(home);
+    try {
+      expect((await lstat(state.claudeJson)).isFile()).toBe(true);
+      expect(await readFile(state.claudeJson, "utf8")).toBe("{}\n");
+    } finally {
+      await removeProtectedClaudeState(state);
+    }
+    expect(await readFile(path.join(home, "unrelated"), "utf8")).toBe(
+      "untouched",
+    );
   });
 });
 
@@ -105,6 +146,7 @@ test("first login sources exist and sessions get distinct private roots", async 
       const second = await prepareProtectedClaudeState(home);
       try {
         expect(first.runtimeDir).not.toBe(second.runtimeDir);
+        expect(first.claudeJson).not.toBe(second.claudeJson);
         expect(await readFile(first.claudeJson, "utf8")).toBe("{}\n");
         expect(
           await readFile(path.join(home, ".claude/.credentials.json"), "utf8"),
@@ -119,15 +161,14 @@ test("first login sources exist and sessions get distinct private roots", async 
     } finally {
       await removeProtectedClaudeState(first);
     }
-    expect(await Bun.file(first.claudeJson).exists()).toBe(true);
+    expect(await Bun.file(first.claudeJson).exists()).toBe(false);
+    expect(await Bun.file(path.join(home, ".claude.json")).exists()).toBe(
+      false,
+    );
   });
 });
 
-for (const entry of [
-  ".claude.json",
-  ".claude/.credentials.json",
-  ".claude/projects",
-]) {
+for (const entry of [".claude/.credentials.json", ".claude/projects"]) {
   test(`rejects a writable symlink at ${entry}`, async () => {
     await withHome(async (home) => {
       await mkdir(path.join(home, ".claude"));

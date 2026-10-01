@@ -222,10 +222,17 @@ export type AgentCredentialsConfig =
 /** ホストのエージェント状態ディレクトリ (`~/.claude` 等) の扱い */
 export interface AgentStateConfig {
   /**
-   * Claude は設定類を RO、認証・履歴・プロジェクト状態を RW 共有する。
+   * Claude は設定類を RO、認証・履歴・プロジェクト状態を RW 共有し、
+   * `~/.claude.json` はセッション専用にする。
    * Codex / Copilot は実在する設定ファイルを RO で上乗せする。
    */
   protectSettings: boolean;
+  /**
+   * `protectSettings` が立っているとき、コンテナの `~/.claude.json` の初期内容。
+   * コンテナにはホストの `~/.claude.json` の代わりにセッション専用のファイルを
+   * 見せる。Pkl の空 Mapping は `{}` になり、テスト等で組み立てた値では省略できる。
+   */
+  claudeJson?: Readonly<Record<string, unknown>>;
   /**
    * 未指定ならエージェントごとの既定値 (`resolveAgentCredentials`) に従う。
    * Pkl は null のプロパティを JSON に出力しないので、未指定は undefined になる。

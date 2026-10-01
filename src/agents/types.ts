@@ -21,6 +21,8 @@ export interface ClaudeStatePaths {
  * underneath it.
  */
 export interface ProtectedClaudeState {
+  /** Session-private directory holding `runtimeDir` and, when protected, `claudeJson`. */
+  readonly rootDir: string;
   readonly runtimeDir: string;
   readonly claudeJson: string;
   readonly entries: readonly {

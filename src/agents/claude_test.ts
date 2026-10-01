@@ -117,6 +117,7 @@ test("protectSettings fails closed when the protected state was not prepared", (
 });
 
 const protectedState = {
+  rootDir: "/private",
   runtimeDir: "/private/claude-state",
   claudeJson: "/host/home/.claude.json",
   entries: [

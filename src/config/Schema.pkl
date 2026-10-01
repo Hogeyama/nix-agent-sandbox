@@ -106,15 +106,27 @@ class AgentStateConfig {
   /// ホストのエージェント設定を読み取り専用でマウントする。
   ///
   /// Claude は ~/.claude の設定・plugins・skills・hooks 等を RO で共有する。
-  /// 認証情報・履歴・projects（auto memory を含む）と ~/.claude.json は RW、
+  /// 認証情報・履歴・projects（auto memory を含む）は RW、
   /// ログ・キャッシュとホストに存在しない項目はセッション専用にする。
-  /// ~/.claude.json の MCP 設定を制限するには、ホスト・コンテナの両方で
-  /// managed settings を設定する。
+  /// ~/.claude.json はホストのファイルを共有せず、`claudeJson` を初期内容とする
+  /// セッション専用のファイルにする。
   /// Codex / Copilot は実在する設定ファイルだけを RO で上乗せする。
   /// ワークスペース内の設定は保護しない。
   ///
   /// 既定は false。コンテナからの設定変更や既存 plugin の更新は RO で失敗する。
   protectSettings: Boolean = false
+
+  /// `protectSettings = true` のとき、コンテナの ~/.claude.json の初期内容。
+  ///
+  /// ホストの ~/.claude.json は読まない。コンテナ内での変更はセッションの
+  /// 終了とともに消える。`protectSettings = false` で空でない値を書くとエラー。
+  ///
+  /// ```
+  /// claudeJson {
+  ///   ["hasCompletedOnboarding"] = true
+  /// }
+  /// ```
+  claudeJson: Mapping<String, Any> = new {}
 
   /// エージェント自身のログイン情報の扱い。
   ///

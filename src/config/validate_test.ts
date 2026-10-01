@@ -1818,6 +1818,51 @@ test("validateConfig: the refusal never repeats the value it refused", () => {
 });
 
 // ---------------------------------------------------------------------------
+// agentState.claudeJson
+// ---------------------------------------------------------------------------
+
+test("validate: agentState.claudeJson is rejected without protectSettings", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agentState: {
+          protectSettings: false,
+          claudeJson: { hasCompletedOnboarding: true },
+        },
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).toThrow(
+    /agentState\.claudeJson requires agentState\.protectSettings = true/,
+  );
+});
+
+test("validate: an empty agentState.claudeJson is accepted without protectSettings", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agentState: { protectSettings: false, claudeJson: {} },
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+});
+
+test("validate: agentState.claudeJson is accepted with protectSettings", () => {
+  const config = makeConfig({
+    profiles: {
+      p: makeProfile({
+        agentState: {
+          protectSettings: true,
+          claudeJson: { hasCompletedOnboarding: true },
+        },
+      }),
+    },
+  });
+  expect(() => validateConfig(config)).not.toThrow();
+});
+
+// ---------------------------------------------------------------------------
 // agentState.auth
 // ---------------------------------------------------------------------------
 

@@ -1000,6 +1000,7 @@ test("MountStage: agentState.protectSettings reaches the agent mounts", () => {
     mountProbes,
     undefined,
     {
+      rootDir: "/tmp",
       runtimeDir: "/tmp/claude-state",
       claudeJson: `${TEST_HOME}/.claude.json`,
       entries: [
@@ -2452,6 +2453,7 @@ test("IDE with an extra Claude: the dummy credentials overlay still lands after 
     codexState: { codexDir: "/state:$x/codex dir" },
   };
   const protectedClaudeState = {
+    rootDir: "/state:$x",
     runtimeDir: "/state:$x/claude private",
     claudeJson: "/state:$x/claude private.json",
     entries: [],
@@ -2530,6 +2532,7 @@ test("MountStage run(): prepares protected Claude state before planning and reta
     mountProbes,
   });
   const prepared = {
+    rootDir: "/private",
     runtimeDir: "/private/claude",
     claudeJson: `${TEST_HOME}/.claude.json`,
     entries: [],
@@ -2602,6 +2605,7 @@ for (const protectSettings of [true, false] as const) {
       mountProbes,
     });
     const prepared = {
+      rootDir: "/private",
       runtimeDir: "/private/claude-state",
       claudeJson: `${TEST_HOME}/.claude.json`,
       entries: [],
@@ -2737,6 +2741,7 @@ test("MountStage: an extra Claude receives the dummy credentials file", () => {
     mountProbes,
     undefined,
     {
+      rootDir: "/private",
       runtimeDir: "/private/claude",
       claudeJson: "/private/claude.json",
       entries: [],

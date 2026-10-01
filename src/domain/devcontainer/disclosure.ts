@@ -57,10 +57,10 @@ export function describeDevcontainerSharing(
             topic: "Claude credentials",
             detail: usesProxiedClaudeCredentials(profile)
               ? profile.agentState.protectSettings
-                ? "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down"
+                ? "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; history and projects (including auto memory) shared read-write; other host ~/.claude configuration read-only; ~/.claude.json, logs, and caches session-private; shared state kept on the host after down"
                 : "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; ~/.claude.json and the ~/.claude entries present on the host at session start, read-write and kept on the host after down; top-level ~/.claude entries created in the container, session-private and discarded on down"
               : profile.agentState.protectSettings
-                ? "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down"
+                ? "host Claude credentials, history, and projects (including auto memory) shared read-write; other host ~/.claude configuration read-only; ~/.claude.json, logs, and caches session-private; shared state kept on the host after down"
                 : "host ~/.claude and ~/.claude.json, read-write; kept on the host after down",
           },
     );

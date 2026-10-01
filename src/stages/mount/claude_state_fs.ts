@@ -90,6 +90,12 @@ async function ensureFileCreated(file: string, content: string): Promise<void> {
   }
 }
 
+export interface PrepareClaudeStateOptions {
+  readonly shareCredentials?: boolean;
+  readonly protectSettings?: boolean;
+  readonly claudeJson?: Readonly<Record<string, unknown>>;
+}
+
 /**
  * Prepare bind sources for a session-private Claude state root: entries
  * under `~/.claude` are exposed individually instead of bind-mounting the
@@ -122,29 +128,33 @@ async function ensureFileCreated(file: string, content: string): Promise<void> {
  * that applies under `protectSettings: true`.
  *
  * `~/.claude.json` sits outside `~/.claude` and is bound on its own, not
- * through the private root. With `protectSettings: false` it is created if
- * missing and bound as-is even when it is a symlink, so the container
- * reads and writes the same file the host's Claude Code uses as its
- * `~/.claude.json`. With `protectSettings: true` it must be a regular
- * file.
+ * through the private root. With `protectSettings: false` it is the host
+ * file, created if missing and bound as-is even when it is a symlink, so
+ * the container reads and writes the same file the host's Claude Code uses
+ * as its `~/.claude.json`. With `protectSettings: true` the host file is
+ * neither bound nor copied. It declares MCP servers (user scope and per
+ * project) that the host's Claude Code starts, so a container that could
+ * write it would get its own commands run on the host the next time Claude
+ * starts there; a copy would still carry the host's MCP servers and
+ * per-project trust into the container. The container instead gets a
+ * session-private file whose initial content is `claudeJson` (default
+ * `{}`), discarded with the private root.
  */
 export async function prepareProtectedClaudeState(
   hostHome: string,
-  options: { shareCredentials?: boolean; protectSettings?: boolean } = {},
+  options: PrepareClaudeStateOptions = {},
 ): Promise<ProtectedClaudeState> {
   const protectSettings = options.protectSettings !== false;
   const shareCredentials = options.shareCredentials !== false;
   const claudeDir = path.join(hostHome, ".claude");
-  const claudeJson = path.join(hostHome, ".claude.json");
+  const hostClaudeJson = path.join(hostHome, ".claude.json");
   const sharedFiles = CLAUDE_SHARED_FILES.filter(
     (name) => shareCredentials || name !== ".credentials.json",
   );
   await mkdir(claudeDir, { recursive: true, mode: 0o700 });
-  if (protectSettings) {
-    await ensureSharedPath(claudeJson, false);
-  } else {
+  if (!protectSettings) {
     // Bound as-is even when it is a symlink; see the doc comment above.
-    await ensureFileCreated(claudeJson, "{}\n");
+    await ensureFileCreated(hostClaudeJson, "{}\n");
   }
   for (const name of CLAUDE_SHARED_DIRECTORIES) {
     const target = path.join(claudeDir, name);
@@ -166,13 +176,27 @@ export async function prepareProtectedClaudeState(
     .filter((name) => !protectSettings || !PRIVATE_ENTRIES.has(name))
     .filter((name) => shareCredentials || name !== ".credentials.json");
 
+  // The private ~/.claude.json sits beside runtimeDir, not inside it:
+  // runtimeDir is what the container sees as ~/.claude.
+  const rootDir = await mkdtemp(path.join(tmpdir(), "nas-claude-state-"));
   // Keep the parent writable: Claude creates sibling temporary files before
   // replacing credentials, then falls back to in-place writes for bind mounts.
-  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-claude-state-"));
+  const runtimeDir = path.join(rootDir, "claude");
+  const claudeJson = protectSettings
+    ? path.join(rootDir, "claude.json")
+    : hostClaudeJson;
 
   type Entry = ProtectedClaudeState["entries"][number];
   const entries: Entry[] = [];
   try {
+    await mkdir(runtimeDir, { mode: 0o700 });
+    if (protectSettings) {
+      await writeFile(
+        claudeJson,
+        `${JSON.stringify(options.claudeJson ?? {}, null, 2)}\n`,
+        { flag: "wx", mode: 0o600 },
+      );
+    }
     for (const name of names) {
       const source = path.join(claudeDir, name);
       if (!protectSettings && (await isExistingSymlink(source))) {
@@ -187,14 +211,14 @@ export async function prepareProtectedClaudeState(
       });
     }
   } catch (error) {
-    await rm(runtimeDir, { recursive: true, force: true });
+    await rm(rootDir, { recursive: true, force: true });
     throw error;
   }
-  return { runtimeDir, claudeJson, entries };
+  return { rootDir, runtimeDir, claudeJson, entries };
 }
 
 export async function removeProtectedClaudeState(
   state: ProtectedClaudeState,
 ): Promise<void> {
-  await rm(state.runtimeDir, { recursive: true, force: true });
+  await rm(state.rootDir, { recursive: true, force: true });
 }

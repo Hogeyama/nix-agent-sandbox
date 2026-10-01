@@ -144,7 +144,7 @@ test("describeDevcontainerSharing: Claude credentials text is pinned for each au
       [
         "injected",
         true,
-        "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down",
+        "credentials stay on the host and are injected by the proxy; the container sees a dummy credentials file; history and projects (including auto memory) shared read-write; other host ~/.claude configuration read-only; ~/.claude.json, logs, and caches session-private; shared state kept on the host after down",
       ],
       [
         "passthrough",
@@ -154,7 +154,7 @@ test("describeDevcontainerSharing: Claude credentials text is pinned for each au
       [
         "passthrough",
         true,
-        "host Claude credentials, history, projects (including auto memory), and ~/.claude.json shared read-write; other host ~/.claude configuration read-only; logs and caches session-private; shared state kept on the host after down",
+        "host Claude credentials, history, and projects (including auto memory) shared read-write; other host ~/.claude configuration read-only; ~/.claude.json, logs, and caches session-private; shared state kept on the host after down",
       ],
     ];
   for (const [auth, protectSettings, expected] of cases) {
@@ -173,9 +173,8 @@ test("protected Claude state discloses both writable sharing and private runtime
   };
   const text = detail(profile, "Claude credentials");
   expect(text).toContain("auto memory");
-  expect(text).toContain("~/.claude.json shared read-write");
   expect(text).toContain("configuration read-only");
-  expect(text).toContain("logs and caches session-private");
+  expect(text).toContain("~/.claude.json, logs, and caches session-private");
 });
 
 test("codex disclosure names the shared ~/.codex directory", () => {

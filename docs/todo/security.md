@@ -28,11 +28,10 @@ nas の未対応の課題。各項目の `[検証]` は 2026-07-12 の裏取り�
   ユーザが次回 **host 上で直接** `claude` を起動した瞬間に host 任意コード実行。
 - **現状**: `profile.agentState.protectSettings = true`（既定 false）で、Claude は `~/.claude` の設定・plugins・
   skills・agents・commands・hooks 等を RO で共有し、認証・履歴・projects（auto memory を含む）だけを RW 共有する。
+  `~/.claude.json` はホストのファイルを共有せず、`agentState.claudeJson` を初期内容とするセッション専用の
+  ファイルにする。
   Codex / Copilot は実在する設定ファイルだけを RO overlay する。
 - **残る穴**:
-  - **`~/.claude.json` の `mcpServers`** — 実行中の更新用に RW 共有する。
-    ホスト・コンテナの両方で managed settings に `allowManagedMcpServersOnly: true` と
-    `allowedMcpServers: []` を配置すれば、このファイルからの MCP 起動を拒否できる。nas は自動設定しない。
   - **workspace 内の `.claude/settings.json`・`.github/hooks/`** — RW のまま。user scope と違い当該リポジトリ限定なので
     severity は低い。
 - **未検証**: コンテナ内 claude は起動時に一度 `~/.claude/settings.json` を書く（内容は同一）。

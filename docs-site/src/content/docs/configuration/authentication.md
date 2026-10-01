@@ -138,11 +138,24 @@ Claude では、ホストの設定・plugins・skills・agents・commands・hook
 
 | Claude の保存先 | 扱い |
 | --- | --- |
-| `~/.claude.json` | 読み書き可能で共有 |
+| `~/.claude.json` | ホストのファイルは共有しない。`agentState.claudeJson` を初期内容とするセッション専用のファイルを見せ、終了時に削除 |
 | `~/.claude/.credentials.json` | `agentState.auth = "injected"`（既定）ならダミーファイルを見せ、ホストの実体とは共有しない。`"passthrough"` なら読み書き可能で共有 |
 | `~/.claude/history.jsonl`、`projects/`、`file-history/` | 読み書き可能で共有。`projects/` 内の auto memory も含む |
 | ログ・キャッシュ・shell snapshots | セッション専用。終了時に削除 |
 | その他の `~/.claude/` 直下の項目 | ホストにあれば読み取り専用で共有。なければセッション専用 |
+
+コンテナの `~/.claude.json` はホストの `~/.claude.json` を読まずに作るので、オンボーディングの完了状態やプロジェクトごとの信頼、`mcpServers` などはホストから引き継ぎません。必要な値は `agentState.claudeJson` に書きます。Mapping は JSON のオブジェクトとしてそのまま書き出されます。
+
+```pkl
+agentState {
+  protectSettings = true
+  claudeJson {
+    ["hasCompletedOnboarding"] = true
+  }
+}
+```
+
+`agentState.claudeJson` は `protectSettings = true` のときだけ使います。`protectSettings = false` のプロファイルで空でない値を書くと、設定の検証でエラーになります。
 
 履歴・プロジェクトなど共有先がなければ、起動時に作成します。`~/.claude/.credentials.json` も `agentState.auth = "passthrough"` のときは同様に、なければ作成したうえで共有します。ホストの設定変更や既存 plugin の更新はホストで行ってください。コンテナ内からの更新は読み取り専用のため失敗します。
 
@@ -156,15 +169,6 @@ Codex / Copilot は状態ディレクトリを読み書き可能で共有し、�
 Codex の `~/.codex/auth.json` は、`agentState.auth = "injected"`（既定）ならダミーファイルを見せ、ホストの実体とは共有しません。
 
 ### 保護しないもの
-
-`~/.claude.json` は Claude が実行中に更新するため、読み書き可能で共有します。ここに追加された MCP サーバーの起動も防ぐには、ホスト・コンテナの両方に次の [managed settings](https://code.claude.com/docs/en/managed-mcp#restrict-the-allowlist-to-managed-settings-only) を配置します。nas が自動で追加する設定ではありません。
-
-```json
-{
-  "allowManagedMcpServersOnly": true,
-  "allowedMcpServers": []
-}
-```
 
 作業フォルダーの `.claude/settings.json`、`.git/hooks`、`.github/hooks/` は保護しません。信頼できないリポジトリでは、ホストでそのフォルダーの hooks が動く操作をする前に中身を確認してください。
 

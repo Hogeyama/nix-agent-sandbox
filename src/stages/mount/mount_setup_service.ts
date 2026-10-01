@@ -15,6 +15,7 @@ import {
   removeDummyClaudeCredentials,
 } from "./claude_credentials_fs.ts";
 import {
+  type PrepareClaudeStateOptions,
   prepareProtectedClaudeState,
   removeProtectedClaudeState,
 } from "./claude_state_fs.ts";
@@ -48,7 +49,7 @@ export class MountSetupService extends Context.Tag("nas/MountSetupService")<
   {
     readonly prepareClaudeState: (
       hostHome: string,
-      options?: { shareCredentials?: boolean; protectSettings?: boolean },
+      options?: PrepareClaudeStateOptions,
     ) => Effect.Effect<ProtectedClaudeState, unknown, Scope.Scope>;
     readonly prepareClaudeCredentials: (
       hostHome: string,
@@ -146,7 +147,7 @@ export const MountSetupServiceLive: Layer.Layer<
 export interface MountSetupServiceFakeConfig {
   readonly prepareClaudeState?: (
     hostHome: string,
-    options?: { shareCredentials?: boolean; protectSettings?: boolean },
+    options?: PrepareClaudeStateOptions,
   ) => Effect.Effect<ProtectedClaudeState, unknown, Scope.Scope>;
   readonly prepareClaudeCredentials?: (
     hostHome: string,

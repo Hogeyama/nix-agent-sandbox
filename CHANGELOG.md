@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Agent settings**: with `agentState.protectSettings = true`, the container's `~/.claude.json` is a session-private file instead of the host's, discarded when the session ends. The host file declares MCP servers that the host's Claude Code starts, so an agent that rewrote it got host code execution the next time the user started Claude outside the container. The private file does not inherit anything from the host file; `agentState.claudeJson` sets its initial content, for example `claudeJson { ["hasCompletedOnboarding"] = true }`. A non-empty `claudeJson` without `protectSettings` is a config error.
+
 - **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. Dev Container profiles reject `extraAgents` for now.
 
 ### Changed

@@ -136,6 +136,7 @@ export function createMountStage(
           ? yield* mountSetupService.prepareClaudeState(shared.host.home, {
               shareCredentials: !proxiedClaudeCredentials,
               protectSettings: shared.profile.agentState.protectSettings,
+              claudeJson: shared.profile.agentState.claudeJson,
             })
           : undefined;
         const claudeCredentialsFile = proxiedClaudeCredentials

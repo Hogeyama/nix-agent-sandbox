@@ -85,10 +85,27 @@ function validateExtraAgents(name: string, profile: Profile): string[] {
   return errors;
 }
 
+// セッション専用の ~/.claude.json は protectSettings のときだけ作る。それ以外では
+// ホストのファイルをそのまま共有するので、書いた値はどこにも反映されない。
+function validateClaudeJson(name: string, profile: Profile): string[] {
+  const claudeJson = profile.agentState.claudeJson;
+  if (
+    profile.agentState.protectSettings ||
+    claudeJson === undefined ||
+    Object.keys(claudeJson).length === 0
+  ) {
+    return [];
+  }
+  return [
+    `profile "${name}": agentState.claudeJson requires agentState.protectSettings = true; without it the container shares the host ~/.claude.json`,
+  ];
+}
+
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
 
   errors.push(...validateAgentCredentials(name, profile));
+  errors.push(...validateClaudeJson(name, profile));
   errors.push(...validateExtraAgents(name, profile));
 
   if (profile.mode === "acp") {
