@@ -10,6 +10,7 @@ nas の未対応の課題。各項目の `[検証]` は 2026-07-12 の裏取り�
 | **P1** | `/nix` RW マウント | Sec | 小〜中 |
 | **P2** | DinD sidecar `--privileged` | Sec | 中 |
 | **P2** | workspace RO 保護の残る穴 | Sec | 小〜中 |
+| **P2** | `extraMounts` の src が無いと RO 保護が空振りする | Sec | 小 |
 | **P2** | SSRF の拒否範囲の残り | Sec | 小 |
 | **P2** | migrate.ts ~1900 行の整理 | Refactor | 中 |
 | **P3** | 承認画面で引数の境界と平文 request の inject 省略が見えない | UX/Sec | 小 |
@@ -32,8 +33,17 @@ nas の未対応の課題。各項目の `[検証]` は 2026-07-12 の裏取り�
   ファイルにする。
   Codex / Copilot は実在する設定ファイルだけを RO overlay する。
 - **残る穴**:
+  - **既定（false）のままだと塞がらない。quickstart も設定していない** — `src/config/Schema.pkl` の既定は false、
+    `docs/quickstart.md` の `baseProfile` も `agentState` に触れない。false では Claude の認証を proxy で付ける
+    （`agentState.auth` 既定の `injected`）ときも、private root の全エントリが RW になる
+    （`src/stages/mount/claude_state_fs.ts` の `prepareProtectedClaudeState` のコメントと、
+    `claude_state_fs_test.ts` の "protectSettings: false mounts every entry read-write"）。
+    加えてホストの `~/.claude.json` もそのまま RW で共有される。ここにはホストの Claude Code が起動する
+    MCP server の定義があるので、hook と別のホスト実行経路になる。
+    対応案: quickstart に `agentState { protectSettings = true; claudeJson { ["hasCompletedOnboarding"] = true } }`
+    を入れる。既定を true にするかは下の「未検証」次第。
   - **workspace 内の `.claude/settings.json`・`.github/hooks/`** — RW のまま。user scope と違い当該リポジトリ限定なので
-    severity は低い。
+    severity は低い。`extraMounts` で RO にしても、`.claude` が無いと空振りする（P2 の該当項目）。
 - **未検証**: コンテナ内 claude は起動時に一度 `~/.claude/settings.json` を書く（内容は同一）。
   RO 化で EROFS/EBUSY をどう扱うかは実測していない。VS Code 拡張ではエラーになったため既定を false にした。
 
@@ -60,6 +70,17 @@ nas の未対応の課題。各項目の `[検証]` は 2026-07-12 の裏取り�
   `.git/modules`、起動後に作られた `config.worktree`。
 - nas worktree の中の `.nas/config.pkl` は RO にならない（worktree 作成前に探すため）。その worktree
   から後で nas を起動すると、既存の trust ゲートが内容の変化を検知して再確認する。
+
+### `extraMounts` の src が無いと RO 保護が空振りする
+
+- `src/stages/mount/stage.ts:434` は、src が存在しない `extraMounts` を警告だけ出してスキップする。
+  `mode = "ro"` で書き込みを塞ぐつもりのマウントも黙って外れ、エージェントが dst を新しく作れる。
+  例: `.claude` が無い workspace で `{ src = ".claude"; dst = ".claude"; mode = "ro" }`
+  （`threat-model-configurations.md` の系統4 は「起動前に作っておく」を条件にしている）。
+- 対応案: `mode = "ro"` で src が無いときは、スキップせずに `/dev/null` を dst に RO でマウントする。
+- 未検証: dst がディレクトリとして使われるパス（`.claude`）にファイルが置かれたとき、Claude Code が
+  どう振る舞うか。dst が workspace の bind mount の中なら、Docker がホストの workspace に
+  空の mountpoint を作るはず（`.git/hooks` で空ディレクトリを作るのと同じ扱いにするか）。
 
 ### SSRF の拒否範囲の残り（H5/H6）
 
