@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 // The patched srt module strait runs with, not a copy.
 import { decideAndRespond } from "../../node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/request-filter.js";
 import { parseClientArgs } from "../ui/hostexec_client.ts";
@@ -125,7 +128,110 @@ describe("runOnHost", () => {
     setTimeout(() => ac.abort(), 50);
     expect((await run).signal).toBe("SIGTERM");
   });
+
+  test("an already aborted client runs nothing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "strait-hostexec-test-"));
+    try {
+      const ac = new AbortController();
+      ac.abort();
+      const r = await runOnHost(
+        { argv: ["touch", join(dir, "ran")], cwd: "/", env: {} },
+        [],
+        ac.signal,
+      );
+      expect(r.exitCode).toBeNull();
+      expect(existsSync(join(dir, "ran"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // What the shell starts, including a child that ignores SIGTERM and one
+  // left behind when the shell itself has already exited, holding the
+  // output pipe open.
+  describe.skipIf(!procfs)("the whole process tree stops", () => {
+    const stubborn = `sh -c 'trap "" TERM; echo $$ >"$D/stubborn.pid"; exec sleep 300' &`;
+    const cases: [string, string][] = [
+      [
+        "while the shell runs",
+        `${stubborn} sleep 300 & echo $! >"$D/plain.pid"
+         until [ -s "$D/stubborn.pid" ]; do sleep 0.01; done
+         echo $$ >"$D/leader.pid"; : >"$D/ready"; wait`,
+      ],
+      [
+        "after the shell has exited",
+        `${stubborn}
+         until [ -s "$D/stubborn.pid" ]; do sleep 0.01; done
+         echo $$ >"$D/leader.pid"; : >"$D/ready"`,
+      ],
+    ];
+    for (const [name, script] of cases) {
+      test(name, async () => {
+        const dir = mkdtempSync(join(tmpdir(), "strait-hostexec-test-"));
+        const ac = new AbortController();
+        const pids = () =>
+          ["leader", "stubborn", "plain"].flatMap((n) => {
+            const f = join(dir, `${n}.pid`);
+            return existsSync(f) ? [Number(readFileSync(f, "utf8"))] : [];
+          });
+        try {
+          const run = runOnHost(
+            { argv: ["sh", "-c", script], cwd: "/", env: { D: dir } },
+            [],
+            ac.signal,
+            200,
+          );
+          await waitFor(() => existsSync(join(dir, "ready")));
+          const leader = Number(readFileSync(join(dir, "leader.pid"), "utf8"));
+          if (name.startsWith("after")) await waitFor(() => !alive(leader));
+          expect(pids().filter(alive).length).toBeGreaterThan(0);
+          ac.abort();
+          await within(run);
+          expect(pids().filter(alive)).toEqual([]);
+        } finally {
+          ac.abort();
+          for (const pid of pids()) {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {}
+          }
+          rmSync(dir, { recursive: true, force: true });
+        }
+        // Above every wait in the test, so a failure still reaches finally.
+      }, 20_000);
+    }
+  });
 });
+
+const procfs = existsSync("/proc/self/stat");
+
+/** A zombie counts as gone: nothing reaps orphans in some containers. */
+function alive(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting");
+    await Bun.sleep(10);
+  }
+}
+
+function within<T>(p: Promise<T>, ms = 5000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_, fail) => {
+      timer = setTimeout(() => fail(new Error("did not settle")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 describe("mask", () => {
   test("leaves bytes that are not UTF-8 alone", () => {

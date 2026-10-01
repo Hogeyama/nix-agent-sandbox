@@ -93,27 +93,49 @@ export function execEnv(
   return { ...env, ...req.env };
 }
 
+/** How long a stopped command's processes get after SIGTERM before SIGKILL. */
+export const KILL_GRACE_MS = 5_000;
+
 /**
  * Run the command with no stdin, collecting its output. `secrets` are
  * replaced in the output, so a command that prints a token (`gh auth token`)
- * does not hand the real value to the sandbox. The command is killed if the
- * sandboxed client goes away.
+ * does not hand the real value to the sandbox. The command is stopped if the
+ * sandboxed client goes away, and is not started if it already has.
  */
 export function runOnHost(
   req: ExecRequest,
   secrets: readonly string[],
   signal?: AbortSignal,
+  graceMs = KILL_GRACE_MS,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve({
+        exitCode: null,
+        signal: null,
+        stdout: "",
+        stderr: Buffer.from("strait: not run, the client went away\n").toString(
+          "base64",
+        ),
+      });
+    }
     const out: Buffer[] = [];
     const err: Buffer[] = [];
+    // In a process group of its own, so that stopping it reaches what it
+    // started too: a shell's or a build's children would otherwise outlive
+    // it and keep running, maybe holding the output pipes open. A child
+    // that makes its own group (setsid, a daemon) still escapes.
     const child = spawn(req.argv[0] as string, req.argv.slice(1), {
       cwd: req.cwd,
       env: execEnv(req, process.env),
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
-    const kill = () => child.kill("SIGTERM");
-    signal?.addEventListener("abort", kill, { once: true });
+    let stopped: Promise<void> = Promise.resolve();
+    const stop = () => {
+      stopped = stopGroup(child.pid, graceMs);
+    };
+    signal?.addEventListener("abort", stop, { once: true });
     child.stdout.on("data", (c: Buffer) => out.push(c));
     child.stderr.on("data", (c: Buffer) => err.push(c));
     let done = false;
@@ -121,20 +143,55 @@ export function runOnHost(
       // A spawn failure can emit both "error" and "close".
       if (done) return;
       done = true;
-      signal?.removeEventListener("abort", kill);
-      resolve({
-        ...r,
-        stdout: mask(Buffer.concat(out), secrets).toString("base64"),
-        stderr: mask(
-          Buffer.concat([...err, Buffer.from(extra)]),
-          secrets,
-        ).toString("base64"),
-      });
+      signal?.removeEventListener("abort", stop);
+      // The leader's exit does not end a stop: the rest of its group may
+      // still be running.
+      void stopped.then(() =>
+        resolve({
+          ...r,
+          stdout: mask(Buffer.concat(out), secrets).toString("base64"),
+          stderr: mask(
+            Buffer.concat([...err, Buffer.from(extra)]),
+            secrets,
+          ).toString("base64"),
+        }),
+      );
     };
     child.on("error", (e) =>
       finish({ exitCode: 127, signal: null }, `strait: ${e.message}\n`),
     );
     child.on("close", (code, sig) => finish({ exitCode: code, signal: sig }));
+  });
+}
+
+/**
+ * SIGTERM the process group, then SIGKILL it if anything in it is still
+ * there after `graceMs`. Resolves once the group is gone or killed.
+ */
+function stopGroup(pgid: number | undefined, graceMs: number): Promise<void> {
+  // No pid: spawning failed, so there is nothing to stop.
+  if (pgid === undefined) return Promise.resolve();
+  const send = (sig: NodeJS.Signals | 0) => {
+    try {
+      process.kill(-pgid, sig);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!send("SIGTERM")) return Promise.resolve();
+  const deadline = Date.now() + graceMs;
+  return new Promise((done) => {
+    const poll = setInterval(() => {
+      const there = send(0);
+      if (there && Date.now() < deadline) return;
+      // An unreaped zombie keeps the group alive until the deadline, when
+      // SIGKILL does no harm. A group seen gone is not signalled again: its
+      // ID may already belong to someone else.
+      if (there) send("SIGKILL");
+      clearInterval(poll);
+      done();
+    }, 50);
   });
 }
 
