@@ -6,14 +6,15 @@ and product-specific protocols stay with their product.
 | Library | Owns | Used by |
 | --- | --- | --- |
 | `masking/` | Byte-pattern masking and incremental stream masking | maskfs, mask-filter, sumi, process-supervisor |
-| `process-supervisor/` | Child-process supervision, output draining, the masking-broker relay client, and the broker server | mask-filter, sumi |
+| `process-supervisor/` | Child-process supervision, output draining, the masking-broker relay client and server, ADDR parsing (Unix path, `unix://`, loopback `tcp://`), the TCP listener and direct/proxy TCP connect, and the framed broker input protocol | mask-filter, sumi |
 
 `masking/root.zig` exposes `mask` and `stream`. Import it as the `masking`
 module. `process-supervisor/supervise.zig` is the `supervise` module and depends
 on `masking`; it exposes the broker server as `supervise.serve`. Neither library imports product sources.
 
 Product code remains in `src/mask-filter/`, `src/hostexec/intercept/`,
-`contrib/maskfs/`, and `contrib/sumi/`. The broker server (`serve.zig`) and its client (`relay.zig`) both live in
+`contrib/maskfs/`, and `contrib/sumi/`. The broker server (`serve.zig`), its client (`relay.zig`), the address parser
+(`address.zig`) and the frame codec (`frame.zig`) all live in
 `process-supervisor/`; each product reads its own secrets format and passes
 the values to `supervise.serve.run`.
 
