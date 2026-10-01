@@ -62,6 +62,8 @@ const std = @import("std");
 const posix = std.posix;
 const mask_stream = @import("masking").stream;
 const relay_mod = @import("relay.zig");
+/// ホスト側で待ち受けるブローカーのサーバー実装を公開する。relay はこのサーバーのクライアントにあたる。
+pub const serve = @import("serve.zig");
 
 const MaskStream = mask_stream.MaskStream;
 const Relay = relay_mod.Relay;
@@ -833,4 +835,5 @@ test "exitCodeFromStatus: killed by signal maps to 128+signo" {
 // Keep relay tests in the shared supervisor suite.
 test {
     _ = relay_mod;
+    _ = serve;
 }

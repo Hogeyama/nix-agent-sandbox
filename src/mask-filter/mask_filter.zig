@@ -15,7 +15,7 @@
 //!   nas-mask-filter --serve SOCKET
 //!       サーブモード (ホスト側常駐)。SOCKET で待ち受け、接続ごとに 1 ストリームとして
 //!       マスクする。シークレットフレームをコンテナへ渡さずにマスクを効かせるための
-//!       モード。詳細は serve.zig の冒頭コメントを参照。
+//!       モード。詳細は lib/process-supervisor/serve.zig の冒頭コメントを参照。
 //!
 //! シークレットフレーム (NAS_MASK_SECRETS_FILE) が要るのは **filter と serve だけ**。
 //! どちらもホスト側で動く。supervise はコンテナ内で動くので、フレームを読ませると
@@ -31,8 +31,8 @@
 
 const std = @import("std");
 const mask_stream = @import("masking").stream;
-const serve = @import("serve.zig");
 const supervise = @import("supervise");
+const serve = supervise.serve;
 
 const allocator = std.heap.page_allocator;
 
@@ -209,7 +209,7 @@ pub fn main() !u8 {
             // ここで出す診断は「起動に失敗した」ことだけで、ストリーム由来の
             // バイトは含まない。serve モードの stdout/stderr はホスト上の
             // ログファイルに向くので、平文が混じってはならない
-            // (serve.zig の「出力の不変条件」を参照)。
+            // (lib/process-supervisor/serve.zig の「出力の不変条件」を参照)。
             return serve.run(allocator, secrets, sock_path) catch |err| {
                 std.debug.print("nas-mask-filter: serve failed: {}\n", .{err});
                 return 1;
@@ -232,10 +232,6 @@ pub fn main() !u8 {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-
-test {
-    _ = @import("serve.zig");
-}
 
 // ---------------------------------------------------------------------------
 // parseMode tests
