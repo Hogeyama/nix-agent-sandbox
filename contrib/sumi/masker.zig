@@ -168,8 +168,8 @@ fn freeMany(allocator: std.mem.Allocator, got: []?[]u8) void {
 const testing = std.testing;
 const posix = std.posix;
 
-/// テスト用のブローカー。接続を `connections` 本受け、それぞれ入力を読み切ってから
-/// 一覧でマスクして返す。
+/// テスト用のブローカー。接続を `connections` 本受け、それぞれ入力を終わりの
+/// フレームまで読み切ってから一覧でマスクして返す。
 pub const TestBroker = struct {
     path_buf: [107]u8 = undefined,
     path: []const u8 = "",
@@ -204,10 +204,19 @@ pub const TestBroker = struct {
             var data: std.ArrayList(u8) = .empty;
             defer data.deinit(std.heap.page_allocator);
             var buf: [4096]u8 = undefined;
+            // 入力は `[u32 ビッグエンディアンの長さ][本文]` のフレームで届き、長さ 0 の
+            // フレームで終わる。終わりの前に切れた接続には何も返さない。
             while (true) {
-                const got = posix.read(peer, &buf) catch return;
-                if (got == 0) break;
-                data.appendSlice(std.heap.page_allocator, buf[0..got]) catch return;
+                var header: [4]u8 = undefined;
+                if (!readExactly(peer, &header)) return;
+                var left: usize = std.mem.readInt(u32, &header, .big);
+                if (left == 0) break;
+                while (left > 0) {
+                    const want = @min(left, buf.len);
+                    if (!readExactly(peer, buf[0..want])) return;
+                    data.appendSlice(std.heap.page_allocator, buf[0..want]) catch return;
+                    left -= want;
+                }
             }
             mask.maskAll(data.items, self.values, null);
             var off: usize = 0;
@@ -216,6 +225,21 @@ pub const TestBroker = struct {
         }
     }
 };
+
+/// buf を埋めるまで読む。クライアントの不具合でテストが止まらないよう、1 回の待ちを
+/// 5 秒で区切る。EOF・タイムアウト・エラーは false。
+fn readExactly(fd: posix.socket_t, buf: []u8) bool {
+    var off: usize = 0;
+    while (off < buf.len) {
+        var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+        const ready = posix.poll(&pfd, 5000) catch return false;
+        if (ready == 0) return false;
+        const n = posix.read(fd, buf[off..]) catch return false;
+        if (n == 0) return false;
+        off += n;
+    }
+    return true;
+}
 
 test "SourceOption: exactly one of --secrets-file and --socket" {
     var opt = SourceOption{};

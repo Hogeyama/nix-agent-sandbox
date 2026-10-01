@@ -10,6 +10,22 @@
 //! 「N 書いたら N 読める」と仮定してはならず、書きながら並行して読み続ける
 //! 必要がある (読まずに書き続けると双方の socket バッファが埋まって詰まる)。
 //!
+//! プロトコル
+//! ----------
+//! クライアント → サーバ: 生バイトを `[u32 ビッグエンディアンの長さ][本文]` の
+//! フレーム (frame.zig) に包んで送り、長さ 0 のフレームで入力の終わりを伝える。
+//! サーバ → クライアント: マスク済みバイトを区切りなしで流し、末尾を送り切ったら
+//! close する。**サーバの close が出力の終わり**。
+//!
+//! half-close (`shutdown(SHUT_WR)`) で入力の終わりを伝えないのは、srt の proxy が
+//! half-close を通さず、半分閉じた時点で逆向きも閉じてしまい、サーバが返す末尾が
+//! 届かなくなるため。
+//!
+//! 終わりのフレームを送り切っても、サーバが末尾を返し終えたとは限らない。
+//! マスクは長さを保存するので、サーバが閉じたときに「終わりのフレームを送り
+//! 切った」かつ「受け取ったバイト数が送った本文の合計と等しい」ことを確かめ、
+//! そうでなければ失敗にする (`Relay.checkComplete`)。
+//!
 //! なぜ supervise.zig の FdWriter を流用しないのか
 //! ----------------------------------------------
 //! FdWriter は書き込みエラーを黙って捨て、短絡書き込みを完了扱いにする。
@@ -22,8 +38,11 @@
 const std = @import("std");
 const posix = std.posix;
 
-/// パイプ / socket の 1 回の read で受け取る最大バイト数。
-pub const CHUNK_SIZE: usize = 64 * 1024;
+const frame = @import("frame.zig");
+
+/// パイプ / socket の 1 回の read で受け取る最大バイト数。1 フレームの本文の
+/// 上限と同じ値にして、パイプから読んだ塊をそのまま 1 フレームで送れるようにする。
+pub const CHUNK_SIZE: usize = frame.MAX_BODY;
 
 const address = @import("address.zig");
 const MAX_SOCKET_PATH = address.MAX_SOCKET_PATH;
@@ -41,6 +60,9 @@ pub const RelayError = error{
     RelayConnectFailed,
     /// 接続後の入出力に失敗した。マスクできたか分からないバイトは出さない。
     RelayFailed,
+    /// サーバが応答を返し終える前に閉じた (終わりのフレームを送り切る前に
+    /// 閉じた、または受け取ったバイト数が送った本文の合計と違う)。
+    RelayClosedEarly,
 };
 
 /// **出力先 fd 専用**のエラー集合。socket 側で使ってはならない。
@@ -360,17 +382,21 @@ fn percentDecodeInto(dst: []u8, raw: []const u8) usize {
     return decoded.len;
 }
 
-/// ブローカーへの 1 接続。生バイトを送り、マスク済みバイトを出力先 fd へ流す。
+/// ブローカーへの 1 接続。生バイトをフレームに包んで送り、マスク済みバイトを
+/// 出力先 fd へ流す。
 pub const Relay = struct {
     fd: posix.socket_t,
-    /// まだ socket へ書けていない生バイト。短絡書き込みの残りはここに留まり、
-    /// 次の POLLOUT で続きを書く。**1 バイトも落としてはならない**。
+    /// まだ socket へ書けていないフレーム (ヘッダと本文)。短絡書き込みの残りは
+    /// ここに留まり、次の POLLOUT で続きを書く。**1 バイトも落としてはならない**。
     pending: std.ArrayList(u8) = .empty,
-    /// shutdown(SHUT_WR) 済みか。これ以降 queueWrite してはならない
-    /// (half-close 後の write は EPIPE になる)。
-    write_closed: bool = false,
-    /// サーバが close した (read が 0 を返した)。half-close 前にこうなったのは
-    /// 切り捨てであって完了ではない — 呼び出し側で致命扱いにすること。
+    /// 終わりのフレームをキューに積んだか。これ以降 queueWrite してはならない。
+    end_queued: bool = false,
+    /// キューに積んだフレームの本文の合計バイト数 (ヘッダは含めない)。
+    body_queued: usize = 0,
+    /// サーバから受け取ったバイト数。
+    received: usize = 0,
+    /// サーバが close した (read が 0 を返した)。完了かどうかは
+    /// `checkComplete` で確かめること。
     read_eof: bool = false,
 
     /// addr のブローカーへ接続する。
@@ -418,16 +444,41 @@ pub const Relay = struct {
         return self.pending.items.len;
     }
 
-    /// 生バイトを送信キューへ積む。実際の write は pumpWritable が行う。
+    /// 生バイトをフレームに包んで送信キューへ積む。CHUNK_SIZE を越える分は
+    /// 複数のフレームに分ける。空のバイト列は何も積まない (長さ 0 のフレームは
+    /// 入力の終わりを意味するので、空の書き込みで終わらせてはならない)。
+    /// 実際の write は pumpWritable が行う。
     pub fn queueWrite(self: *Relay, gpa: std.mem.Allocator, bytes: []const u8) RelayError!void {
-        std.debug.assert(!self.write_closed);
-        self.pending.appendSlice(gpa, bytes) catch return error.RelayFailed;
+        std.debug.assert(!self.end_queued);
+        var rest = bytes;
+        while (rest.len > 0) {
+            const n = @min(rest.len, frame.MAX_BODY);
+            const h = frame.header(n);
+            self.pending.ensureUnusedCapacity(gpa, h.len + n) catch return error.RelayFailed;
+            self.pending.appendSliceAssumeCapacity(&h);
+            self.pending.appendSliceAssumeCapacity(rest[0..n]);
+            self.body_queued += n;
+            rest = rest[n..];
+        }
+    }
+
+    /// 入力の終わり (長さ 0 のフレーム) を送信キューへ積む。サーバは受け取ると
+    /// 保持中の overlap をフラッシュしてから close する。
+    ///
+    /// キューに残っているフレームの後ろに積むので、キューが空になるのを待たずに
+    /// 呼んでよい。half-close と違い、積んだ後もそれより前のバイトは送れる。
+    pub fn queueEnd(self: *Relay, gpa: std.mem.Allocator) RelayError!void {
+        if (self.end_queued) return;
+        self.pending.appendSlice(gpa, &frame.header(0)) catch return error.RelayFailed;
+        self.end_queued = true;
     }
 
     /// POLLOUT が立ったときに呼ぶ。書けた分だけキューから取り除く。
     pub fn pumpWritable(self: *Relay) RelayError!void {
         if (self.pending.items.len == 0) return;
-        const n = posix.write(self.fd, self.pending.items) catch |err| switch (err) {
+        // 呼び出し元は SIGPIPE を無視しているとは限らない (hook は普通の
+        // プロセス)。サーバが先に閉じたときに死なず失敗を返すため NOSIGNAL で送る。
+        const n = posix.send(self.fd, self.pending.items, posix.MSG.NOSIGNAL) catch |err| switch (err) {
             error.WouldBlock => return,
             else => return error.RelayFailed,
         };
@@ -435,6 +486,21 @@ pub const Relay = struct {
         const remaining = self.pending.items.len - n;
         std.mem.copyForwards(u8, self.pending.items[0..remaining], self.pending.items[n..]);
         self.pending.items.len = remaining;
+    }
+
+    /// マスク済みバイトを buf へ 1 回読み、受け取ったバイト数に数える。
+    /// 戻り値は読めたバイト数 (0 は EAGAIN か EOF)。EOF は `read_eof` で区別する。
+    pub fn readSome(self: *Relay, buf: []u8) RelayError!usize {
+        const n = posix.read(self.fd, buf) catch |err| switch (err) {
+            error.WouldBlock => return 0,
+            else => return error.RelayFailed,
+        };
+        if (n == 0) {
+            self.read_eof = true;
+            return 0;
+        }
+        self.received += n;
+        return n;
     }
 
     /// POLLIN / POLLHUP が立ったときに呼ぶ。マスク済みバイトを 1 回読んで
@@ -449,28 +515,23 @@ pub const Relay = struct {
         dst_fd: posix.fd_t,
         buf: []u8,
     ) (RelayError || DestError)!usize {
-        const n = posix.read(self.fd, buf) catch |err| switch (err) {
-            error.WouldBlock => return 0,
-            else => return error.RelayFailed,
-        };
-        if (n == 0) {
-            self.read_eof = true;
-            return 0;
-        }
+        const n = try self.readSome(buf);
+        if (n == 0) return 0;
         try writeAllToDest(dst_fd, buf[0..n]);
         return n;
     }
 
-    /// このストリームの終わりをサーバへ伝える。サーバは保持中の overlap を
-    /// フラッシュしてから close する。
+    /// サーバが close した後に呼び、応答を最後まで受け取ったかを確かめる。
     ///
-    /// **キューが空でないうちに呼んではならない**: shutdown(SHUT_WR) 後の write は
-    /// EPIPE になり、子が 0 で終わっていても全出力を捨てて 121 になる。
-    pub fn halfClose(self: *Relay) RelayError!void {
-        if (self.write_closed) return;
-        std.debug.assert(self.pending.items.len == 0);
-        posix.shutdown(self.fd, .send) catch return error.RelayFailed;
-        self.write_closed = true;
+    /// 終わりのフレームを送り切る前に閉じたのは切り捨て (接続数上限を超えた
+    /// 接続はサーバが accept して即 close する)。送り切っていても、それは
+    /// サーバが処理を終えたことを意味しない: 末尾を返さずに閉じられると、送信の
+    /// 完了だけを見ていては欠けた出力が成功になる。マスクは長さを保存するので、
+    /// 受け取ったバイト数と送った本文の合計を比べてそれを検出する。
+    pub fn checkComplete(self: *const Relay) RelayError!void {
+        std.debug.assert(self.read_eof);
+        if (!self.end_queued or self.pending.items.len != 0) return error.RelayClosedEarly;
+        if (self.received != self.body_queued) return error.RelayClosedEarly;
     }
 };
 
@@ -478,14 +539,17 @@ pub const Relay = struct {
 const ROUND_TRIP_IDLE_MS: i64 = 5000;
 
 /// 1 回分のバイト列をブローカーでマスクして返す。1 接続 = 1 ストリームの
-/// プロトコルをそのまま使い、全体を書いて half-close し、サーバが close するまで読む。
+/// プロトコルをそのまま使い、全体をフレームで送って終わりのフレームを送り、
+/// サーバが close するまで読む。
 ///
 /// 書き込みと読み出しは poll で並行させる。サーバは接続ごとの未送信バイト数に
 /// 上限を持ち、それを超えると read を止めるので、書き終えてから読む実装は
-/// 大きな入力で双方が止まる。
+/// 大きな入力で双方が止まる。送信キューには 1 フレームずつ積む。入力全体を
+/// 一度に積むと、入力の複製を抱えたうえ、短い write のたびに残り全体を前詰め
+/// することになる。
 ///
-/// マスクは長さを保存するので、応答が入力と同じ長さでなければ失敗とする。
-/// 途中で切れた応答を「マスク済み」として返さないため。
+/// 応答が最後まで届いたかは `Relay.checkComplete` で確かめる。途中で切れた
+/// 応答を「マスク済み」として返さないため。
 pub fn maskOnce(
     gpa: std.mem.Allocator,
     addr: address.Address,
@@ -497,15 +561,20 @@ pub fn maskOnce(
 
     const out = try gpa.alloc(u8, input.len);
     errdefer gpa.free(out);
-    var written: usize = 0;
-    var received: usize = 0;
+    var queued: usize = 0;
     var deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
 
     while (!relay.read_eof) {
-        if (written == input.len and !relay.write_closed) try relay.halfClose();
+        if (relay.pendingLen() == 0) {
+            if (queued < input.len) {
+                const n = @min(input.len - queued, CHUNK_SIZE);
+                try relay.queueWrite(gpa, input[queued..][0..n]);
+                queued += n;
+            } else try relay.queueEnd(gpa);
+        }
 
         var pfd = [_]posix.pollfd{.{ .fd = relay.fd, .events = posix.POLL.IN, .revents = 0 }};
-        if (written < input.len) pfd[0].events |= posix.POLL.OUT;
+        if (relay.pendingLen() > 0) pfd[0].events |= posix.POLL.OUT;
         const now = std.time.milliTimestamp();
         if (now >= deadline) return error.RelayFailed;
         const ready = posix.poll(&pfd, @intCast(deadline - now)) catch return error.RelayFailed;
@@ -517,38 +586,21 @@ pub fn maskOnce(
             // 入力より長い応答は受け取らない。末尾 1 バイトぶんの余地を残して
             // 読み、超過したら失敗にする。
             var spill: [1]u8 = undefined;
-            const buf = if (received < out.len) out[received..] else spill[0..];
-            const got: ?usize = posix.read(relay.fd, buf) catch |err| switch (err) {
-                error.WouldBlock => null,
-                else => return error.RelayFailed,
-            };
-            if (got) |n| {
-                if (n == 0) {
-                    relay.read_eof = true;
-                } else {
-                    if (received >= out.len) return error.RelayFailed;
-                    received += n;
-                    deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
-                }
+            const buf = if (relay.received < out.len) out[relay.received..] else spill[0..];
+            if (try relay.readSome(buf) > 0) {
+                if (relay.received > out.len) return error.RelayFailed;
+                deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
             }
         }
         if (relay.read_eof) break;
 
-        if (written < input.len and revents & posix.POLL.OUT != 0) {
-            // 呼び出し元は SIGPIPE を無視しているとは限らない (hook は普通の
-            // プロセス)。サーバが先に閉じたときに死なず失敗を返すため NOSIGNAL で送る。
-            const n = posix.send(relay.fd, input[written..], posix.MSG.NOSIGNAL) catch |err| switch (err) {
-                error.WouldBlock => 0,
-                else => return error.RelayFailed,
-            };
-            if (n > 0) {
-                written += n;
-                deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
-            }
+        if (revents & posix.POLL.OUT != 0) {
+            const before = relay.pendingLen();
+            try relay.pumpWritable();
+            if (relay.pendingLen() != before) deadline = std.time.milliTimestamp() + ROUND_TRIP_IDLE_MS;
         }
     }
-    // half-close より前にサーバが閉じたのは切り捨て (接続数上限など)。
-    if (!relay.write_closed or received != input.len) return error.RelayFailed;
+    try relay.checkComplete();
     return out;
 }
 
@@ -597,7 +649,7 @@ fn waitReadable(fd: posix.fd_t) !void {
     try testing.expect(ready > 0);
 }
 
-test "Relay: relays bytes out and back, and half-close is the EOF signal" {
+test "Relay: input goes out as frames, an empty frame ends it, and there is no half-close" {
     var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
     const path = try std.fmt.bufPrint(
         &path_buf,
@@ -617,15 +669,18 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
     const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
     defer posix.close(peer);
 
-    // 送信キューは pumpWritable まで実際には書かれない。
+    // 送信キューは pumpWritable まで実際には書かれない。ヘッダ 4 バイト + 本文。
     try relay.queueWrite(testing.allocator, "hello");
-    try testing.expectEqual(@as(usize, 5), relay.pendingLen());
+    try testing.expectEqual(@as(usize, 9), relay.pendingLen());
+    // 空の書き込みは何も積まない (長さ 0 のフレームは入力の終わりになってしまう)。
+    try relay.queueWrite(testing.allocator, "");
+    try testing.expectEqual(@as(usize, 9), relay.pendingLen());
     try relay.pumpWritable();
     try testing.expectEqual(@as(usize, 0), relay.pendingLen());
 
     var in: [16]u8 = undefined;
-    try testing.expectEqual(@as(usize, 5), try posix.read(peer, &in));
-    try testing.expectEqualStrings("hello", in[0..5]);
+    try testing.expectEqual(@as(usize, 9), try posix.read(peer, &in));
+    try testing.expectEqualSlices(u8, "\x00\x00\x00\x05hello", in[0..9]);
 
     // サーバが返したマスク済みバイトは出力先 fd へそのまま流れる。
     _ = try posix.write(peer, "HELLO");
@@ -639,16 +694,64 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
     try testing.expectEqual(@as(usize, 5), try posix.read(out_pipe[0], &got));
     try testing.expectEqualStrings("HELLO", got[0..5]);
 
-    // half-close はサーバ側では read == 0 として観測される。
-    try relay.halfClose();
-    try testing.expect(relay.write_closed);
-    try testing.expectEqual(@as(usize, 0), try posix.read(peer, &in));
+    // 入力の終わりは長さ 0 のフレーム。half-close はしないので、その後の read は
+    // EOF (0) ではなく「まだ何も来ていない」になる。
+    try relay.queueEnd(testing.allocator);
+    try relay.pumpWritable();
+    try testing.expectEqual(@as(usize, 4), try posix.read(peer, &in));
+    try testing.expectEqualSlices(u8, "\x00\x00\x00\x00", in[0..4]);
+    try testing.expectError(error.WouldBlock, posix.recv(peer, &in, posix.MSG.DONTWAIT));
 
-    // サーバが close したら read_eof が立つ。
+    // サーバが close したら read_eof が立ち、送った本文と同じ長さを受け取って
+    // いれば完了。
     posix.shutdown(peer, .send) catch {};
     try waitReadable(relay.fd);
     try testing.expectEqual(@as(usize, 0), try relay.pumpReadable(out_pipe[1], &buf));
     try testing.expect(relay.read_eof);
+    try relay.checkComplete();
+}
+
+test "Relay.queueWrite: input over CHUNK_SIZE is split into frames of at most CHUNK_SIZE" {
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-split-{d}.sock", .{std.c.getpid()});
+    const listener = try listenAt(path);
+    defer {
+        posix.close(listener);
+        posix.unlink(path) catch {};
+    }
+    var relay = try Relay.connect(.{ .unix = path }, null);
+    defer relay.deinit(testing.allocator);
+
+    const payload = try testing.allocator.alloc(u8, CHUNK_SIZE + 1);
+    defer testing.allocator.free(payload);
+    @memset(payload, 'x');
+    try relay.queueWrite(testing.allocator, payload);
+    const q = relay.pending.items;
+    try testing.expectEqual(@as(usize, 4 + CHUNK_SIZE + 4 + 1), q.len);
+    try testing.expectEqual(@as(u32, CHUNK_SIZE), std.mem.readInt(u32, q[0..4], .big));
+    try testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, q[4 + CHUNK_SIZE ..][0..4], .big));
+    try testing.expectEqual(CHUNK_SIZE + 1, relay.body_queued);
+}
+
+test "Relay.checkComplete: a close before the end frame or with a short response fails" {
+    const cases = [_]struct { end_queued: bool, pending: usize, body: usize, received: usize }{
+        // 終わりのフレームを積んでいない。
+        .{ .end_queued = false, .pending = 0, .body = 3, .received = 3 },
+        // 積んだが送り切っていない。
+        .{ .end_queued = true, .pending = 4, .body = 3, .received = 3 },
+        // 送り切ったが、末尾が返ってこなかった。
+        .{ .end_queued = true, .pending = 0, .body = 3, .received = 2 },
+        // 送った以上のバイトが返ってきた。
+        .{ .end_queued = true, .pending = 0, .body = 3, .received = 4 },
+    };
+    for (cases) |c| {
+        var relay = Relay{ .fd = -1, .end_queued = c.end_queued, .body_queued = c.body, .received = c.received, .read_eof = true };
+        defer relay.pending.deinit(testing.allocator);
+        try relay.pending.appendNTimes(testing.allocator, 0, c.pending);
+        try testing.expectError(error.RelayClosedEarly, relay.checkComplete());
+    }
+    const ok = Relay{ .fd = -1, .end_queued = true, .body_queued = 3, .received = 3, .read_eof = true };
+    try ok.checkComplete();
 }
 
 // 出力先の EPIPE は「もう誰も読んでいない」だけでマスクの失敗ではないので、
@@ -699,27 +802,63 @@ test "Relay.pumpReadable: a closed destination is reported apart from mask failu
     );
 }
 
-/// テスト用のブローカー。1 接続を受け、読んだバイトの小文字 'x' を '*' にして返す。
+/// テストの相手から buf を埋めるまで読む。クライアントの不具合でテストが
+/// 止まらないよう、1 回の待ちを 5 秒で区切る。EOF・タイムアウト・エラーは false。
+fn readExactly(fd: posix.socket_t, buf: []u8) bool {
+    var off: usize = 0;
+    while (off < buf.len) {
+        var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+        const ready = posix.poll(&pfd, 5000) catch return false;
+        if (ready == 0) return false;
+        const n = posix.read(fd, buf[off..]) catch return false;
+        if (n == 0) return false;
+        off += n;
+    }
+    return true;
+}
+
+/// テスト用のブローカー。1 接続を受け、フレームの本文の小文字 'x' を '*' にして返す。
 /// 読み終える前に書き始めるので、背圧のかかる大きな入力でも止まらないことを確かめられる。
+/// 本物のサーバと同じく末尾 (ここでは最後の 1 バイト) を保持し、終わりのフレームで返す。
 const StarServer = struct {
-    fn run(listener: posix.socket_t, truncate: bool) void {
+    const Mode = enum {
+        /// 終わりのフレームで保持中の末尾を返してから閉じる。
+        echo,
+        /// 最初の read の直後に閉じる。
+        cut,
+        /// 終わりのフレームを受け取った後、保持中の末尾を返さずに閉じる。
+        drop_tail,
+    };
+
+    fn run(listener: posix.socket_t, mode: Mode) void {
         // クライアントが接続に失敗したときにテストが join で止まらないよう、待つ時間を区切る。
         var lp = [_]posix.pollfd{.{ .fd = listener, .events = posix.POLL.IN, .revents = 0 }};
         const ready = posix.poll(&lp, 5000) catch return;
         if (ready == 0) return;
         const peer = posix.accept(listener, null, null, posix.SOCK.CLOEXEC) catch return;
         defer posix.close(peer);
+        var held: ?u8 = null;
         var buf: [4096]u8 = undefined;
         while (true) {
-            const n = posix.read(peer, &buf) catch return;
-            if (n == 0) break;
-            if (truncate) return;
-            for (buf[0..n]) |*b| {
-                if (b.* == 'x') b.* = '*';
+            var h: [4]u8 = undefined;
+            if (!readExactly(peer, &h)) return;
+            if (mode == .cut) return;
+            var left: usize = std.mem.readInt(u32, &h, .big);
+            if (left == 0) break;
+            while (left > 0) {
+                const n = @min(left, buf.len);
+                if (!readExactly(peer, buf[0..n])) return;
+                left -= n;
+                for (buf[0..n]) |*b| {
+                    if (b.* == 'x') b.* = '*';
+                }
+                if (held) |b| writeAllBlocking(peer, &.{b}) catch return;
+                writeAllBlocking(peer, buf[0 .. n - 1]) catch return;
+                held = buf[n - 1];
             }
-            var off: usize = 0;
-            while (off < n) off += posix.write(peer, buf[off..n]) catch return;
         }
+        if (mode == .drop_tail) return;
+        if (held) |b| writeAllBlocking(peer, &.{b}) catch return;
     }
 };
 
@@ -731,7 +870,7 @@ test "maskOnce: a large input round-trips through the broker" {
         posix.close(listener);
         posix.unlink(path) catch {};
     }
-    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, false });
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, StarServer.Mode.echo });
     defer server.join();
 
     const input = try testing.allocator.alloc(u8, 2 * 1024 * 1024);
@@ -743,7 +882,23 @@ test "maskOnce: a large input round-trips through the broker" {
     for (got, 0..) |b, i| try testing.expectEqual(@as(u8, if (i % 3 == 0) '*' else 'a'), b);
 }
 
-test "maskOnce: a response cut short by the broker is a failure" {
+test "maskOnce: an empty input sends only the end frame" {
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-empty-{d}.sock", .{std.c.getpid()});
+    const listener = try listenAt(path);
+    defer {
+        posix.close(listener);
+        posix.unlink(path) catch {};
+    }
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, StarServer.Mode.echo });
+    defer server.join();
+
+    const got = try maskOnce(testing.allocator, .{ .unix = path }, null, "");
+    defer testing.allocator.free(got);
+    try testing.expectEqual(@as(usize, 0), got.len);
+}
+
+test "maskOnce: a broker that closes before the end frame is a failure" {
     var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-cut-{d}.sock", .{std.c.getpid()});
     const listener = try listenAt(path);
@@ -751,10 +906,33 @@ test "maskOnce: a response cut short by the broker is a failure" {
         posix.close(listener);
         posix.unlink(path) catch {};
     }
-    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, true });
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, StarServer.Mode.cut });
     defer server.join();
 
-    try testing.expectError(error.RelayFailed, maskOnce(testing.allocator, .{ .unix = path }, null, "xxxx"));
+    // サーバが閉じたのを送信の失敗で知るか、EOF で知るかはタイミングによる。
+    // どちらでも失敗であること。
+    if (maskOnce(testing.allocator, .{ .unix = path }, null, "xxxx")) |got| {
+        testing.allocator.free(got);
+        return error.TestUnexpectedResult;
+    } else |err| switch (err) {
+        error.RelayFailed, error.RelayClosedEarly => {},
+        else => return err,
+    }
+}
+
+// 終わりのフレームを送り切っただけでは、サーバが末尾を返し終えたことにならない。
+test "maskOnce: a broker that closes after the end frame without the tail is a failure" {
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-notail-{d}.sock", .{std.c.getpid()});
+    const listener = try listenAt(path);
+    defer {
+        posix.close(listener);
+        posix.unlink(path) catch {};
+    }
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, StarServer.Mode.drop_tail });
+    defer server.join();
+
+    try testing.expectError(error.RelayClosedEarly, maskOnce(testing.allocator, .{ .unix = path }, null, "axbxc"));
 }
 
 test "maskOnce: a missing broker fails" {
@@ -790,27 +968,27 @@ test "Relay.pumpWritable: a short write leaves the remainder queued" {
     defer testing.allocator.free(payload);
     @memset(payload, 'x');
     try relay.queueWrite(testing.allocator, payload);
+    // フレームのヘッダも含め、キューに積んだバイト列がそのままの順で届くこと。
+    const expected = try testing.allocator.dupe(u8, relay.pending.items);
+    defer testing.allocator.free(expected);
 
     try relay.pumpWritable();
     const left = relay.pendingLen();
     try testing.expect(left > 0);
-    try testing.expect(left < payload.len);
+    try testing.expect(left < expected.len);
 
     // 残りは前詰めされていて、続きが正しい位置から書けること。
-    var drained: usize = payload.len - left;
+    var drained: usize = 0;
     var in: [64 * 1024]u8 = undefined;
-    while (relay.pendingLen() > 0) {
-        const n = posix.read(peer, &in) catch |err| switch (err) {
-            error.WouldBlock => break,
-            else => return err,
-        };
+    while (drained < expected.len) {
+        const n = try posix.read(peer, &in);
         if (n == 0) break;
-        for (in[0..n]) |b| try testing.expectEqual(@as(u8, 'x'), b);
+        try testing.expectEqualSlices(u8, expected[drained..][0..n], in[0..n]);
         drained += n;
         try relay.pumpWritable();
     }
     try testing.expect(relay.pendingLen() == 0);
-    try testing.expect(drained > 0);
+    try testing.expectEqual(expected.len, drained);
 }
 
 // --- TCP / proxy -----------------------------------------------------------
@@ -834,8 +1012,7 @@ fn expectNoPendingConnection(listener: posix.socket_t) !void {
 }
 
 /// テスト用の CONNECT proxy。1 接続だけ受け、要求ヘッダを記録する。
-/// `reply` が null なら要求行の宛先へ実際につなぎ、200 を返してから両方向を中継する
-/// (half-close も相手側へ伝える。プロトコルは half-close をストリームの終わりに使う)。
+/// `reply` が null なら要求行の宛先へ実際につなぎ、200 を返してから両方向を中継する。
 /// null でなければ `reply` をそのまま 1 回の write で返し、相手が閉じるまで待つ。
 const TestProxy = struct {
     listener: posix.socket_t,
@@ -903,25 +1080,22 @@ const TestProxy = struct {
         try splice(client, upstream);
     }
 
+    /// srt の proxy と同じく half-close を通さない: どちらかの向きで EOF を
+    /// 受け取ったら、両方の接続を閉じる。
     fn splice(a: posix.socket_t, b: posix.socket_t) !void {
-        var open = [2]bool{ true, true };
         var buf: [16 * 1024]u8 = undefined;
-        while (open[0] or open[1]) {
+        while (true) {
             var pfd = [_]posix.pollfd{
-                .{ .fd = if (open[0]) a else -1, .events = posix.POLL.IN, .revents = 0 },
-                .{ .fd = if (open[1]) b else -1, .events = posix.POLL.IN, .revents = 0 },
+                .{ .fd = a, .events = posix.POLL.IN, .revents = 0 },
+                .{ .fd = b, .events = posix.POLL.IN, .revents = 0 },
             };
             if (try posix.poll(&pfd, 5000) == 0) return;
             const ends = [2][2]posix.socket_t{ .{ a, b }, .{ b, a } };
             for (0..2) |i| {
-                if (!open[i] or pfd[i].revents == 0) continue;
+                if (pfd[i].revents == 0) continue;
                 const n = try posix.read(ends[i][0], &buf);
-                if (n == 0) {
-                    open[i] = false;
-                    posix.shutdown(ends[i][1], .send) catch {};
-                } else {
-                    try writeAllBlocking(ends[i][1], buf[0..n]);
-                }
+                if (n == 0) return;
+                try writeAllBlocking(ends[i][1], buf[0..n]);
             }
         }
     }
@@ -940,7 +1114,7 @@ fn expectStarred(input: []const u8, got: []const u8) !void {
 test "maskOnce: loopback TCP round-trips directly" {
     const l = try listenTcp();
     defer posix.close(l.fd);
-    const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, false });
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, StarServer.Mode.echo });
     defer server.join();
 
     const got = try maskOnce(testing.allocator, .{ .tcp = l.addr }, null, "axbxc");
@@ -951,7 +1125,7 @@ test "maskOnce: loopback TCP round-trips directly" {
 test "maskOnce: a large input round-trips through a loopback CONNECT proxy" {
     const l = try listenTcp();
     defer posix.close(l.fd);
-    const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, false });
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, StarServer.Mode.echo });
     defer server.join();
     var proxy = try TestProxy.init(null);
     defer proxy.deinit();

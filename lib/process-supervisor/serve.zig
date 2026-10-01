@@ -15,13 +15,32 @@
 //!
 //! プロトコル
 //! ----------
-//! 1 接続 = 1 ストリーム。クライアントは生バイトを書き、マスク済みバイトを読む。
-//! フレーミングはない。マスクは長さを保存するが、チャンク境界を跨ぐシークレットを
+//! 1 接続 = 1 ストリーム。Unix ソケットと TCP で同じものを使う。
+//!
+//! - クライアント → サーバ: `[u32 ビッグエンディアンの長さ][本文]` のフレーム
+//!   (frame.zig) の繰り返し。長さは 1..`frame.MAX_BODY`。**長さ 0 のフレームが
+//!   入力の終わり**。
+//! - サーバ → クライアント: マスク済みバイトを区切りなしで流す。終わりのフレームを
+//!   受け取ったら保持中の overlap をフラッシュし、送り切ったら close する。
+//!   **サーバの close が出力の終わり**。
+//!
+//! 入力の終わりを half-close (`shutdown(SHUT_WR)`) で伝えないのは、srt の proxy が
+//! half-close を通さず、クライアントが半分閉じた時点で逆向きも閉じてしまい、
+//! フラッシュした末尾が届かなくなるため。
+//!
+//! フレームの境界とマスクの境界は関係づけない。本文をつなげたバイト列を 1 本の
+//! ストリームとして MaskStream に渡すので、シークレットがフレームを跨いでも
+//! マスクされる。マスクは長さを保存するが、チャンク境界を跨ぐシークレットを
 //! 取りこぼさないためサーバは末尾 `maxSecretLen - 1` バイトを保持する。したがって
 //! **応答はバイト同期ではない**: クライアントは「N 書いたら N 読める」と
 //! 仮定してはならない。
-//! クライアントが `shutdown(SHUT_WR)` すると、サーバは保持中の overlap を
-//! フラッシュしてから close する。クライアントはサーバが close するまで読む。
+//!
+//! 次の場合は保持中の末尾を送らずに close する: 長さが上限を越えている (相手は
+//! クライアントではない)、終わりのフレームの前に EOF になった (クライアントが
+//! 落ちた)。終わりのフレームを読んだ後はその接続から読まない。後から届いた
+//! バイトは処理せず、末尾を送り切ったら close する (close の直前に読み捨てる。
+//! `discardUnread`)。送るのはマスク済みの末尾だけなので、余分なバイトがあっても
+//! 漏れは起きない。
 //!
 //! 単一 poll ループでの多重化
 //! --------------------------
@@ -58,6 +77,7 @@ const std = @import("std");
 const posix = std.posix;
 const mask_stream = @import("masking").stream;
 const address = @import("address.zig");
+const frame = @import("frame.zig");
 
 const BUF_SIZE = mask_stream.BUF_SIZE;
 
@@ -127,6 +147,10 @@ const QUEUE_RETAIN_BYTES: usize = 2 * BUF_SIZE;
 
 const LISTEN_BACKLOG: u31 = 128;
 
+/// close の前に読み捨てる、終わりのフレームより後ろのバイトの上限 (discardUnread)。
+/// 余分なバイトはクライアントの不具合なので、ふつうは数フレーム分も無い。
+const MAX_DISCARD_BYTES: usize = 256 * 1024;
+
 /// poll のタイムアウト。listener のバックオフは poll から抜けた時にしか
 /// 解除できないので、無限待ちにすると EMFILE 後に listener が二度と
 /// 復帰しなくなる。
@@ -161,71 +185,115 @@ const ConnError = error{Failed};
 const Conn = struct {
     fd: posix.fd_t,
     /// MaskStream は ~192KiB を確保するため、accept 時ではなく
-    /// **最初の 1 バイトを受け取った時点** で初期化する。accept 時に確保すると
-    /// connect(2) 1 回がホストの 192KiB になる。
+    /// **本文の最初の 1 バイトを受け取った時点** で初期化する。accept 時や
+    /// ヘッダの時点で確保すると、connect(2) 1 回 (とヘッダ 4 バイト) が
+    /// ホストの 192KiB になる。
     stream: ?mask_stream.MaskStream = null,
     out: std.ArrayList(u8) = .empty,
-    /// クライアントが half-close した (read が 0 を返した)。
-    read_eof: bool = false,
+    /// 読みかけのフレームのヘッダ。
+    header: [frame.HEADER_LEN]u8 = undefined,
+    /// header に読めたバイト数。
+    header_len: usize = 0,
+    /// 今のフレームの本文の残りバイト数。0 ならヘッダを読んでいる。
+    body_left: usize = 0,
+    /// 終わりのフレーム (長さ 0) を受け取った。これ以降は読まない。
+    end_received: bool = false,
 
     fn deinit(self: *Conn, gpa: std.mem.Allocator) void {
         if (self.stream) |*s| s.deinit(gpa);
         self.out.deinit(gpa);
+        if (self.end_received) discardUnread(self.fd);
         posix.shutdown(self.fd, .send) catch {};
         posix.close(self.fd);
         self.* = undefined;
     }
 
     fn wantsRead(self: *const Conn) bool {
-        return !self.read_eof and self.out.items.len < MAX_QUEUED_BYTES;
+        return !self.end_received and self.out.items.len < MAX_QUEUED_BYTES;
     }
 
     fn wantsWrite(self: *const Conn) bool {
         return self.out.items.len > 0;
     }
 
-    /// half-close 後にフラッシュし切った = この接続はもう閉じてよい。
+    /// 終わりのフレームの後にフラッシュし切った = この接続はもう閉じてよい。
     fn finished(self: *const Conn) bool {
-        return self.read_eof and self.out.items.len == 0;
+        return self.end_received and self.out.items.len == 0;
     }
 
+    /// POLLIN が立ったときに呼ぶ。ヘッダか本文を 1 回読む。
+    ///
+    /// ヘッダは残りのバイト数だけ、本文はそのフレームの残りだけを読む。1 回の
+    /// read が次のフレームにかからないので、終わりのフレームの後ろに余分な
+    /// バイトが続いていても、それを読み込んで MaskStream に渡すことはない。
     fn readable(
         self: *Conn,
         gpa: std.mem.Allocator,
         secrets: []const []const u8,
         scratch: []u8,
     ) ConnError!void {
+        if (self.body_left == 0) return self.readHeader(gpa);
+        return self.readBody(gpa, secrets, scratch);
+    }
+
+    fn readHeader(self: *Conn, gpa: std.mem.Allocator) ConnError!void {
+        const n = posix.read(self.fd, self.header[self.header_len..]) catch |err| switch (err) {
+            error.WouldBlock => return,
+            else => return error.Failed,
+        };
+        // 終わりのフレームの前の EOF はクライアントが落ちたということ。
+        // 保持中の末尾は返さずに閉じる。
+        if (n == 0) return error.Failed;
+        self.header_len += n;
+        if (self.header_len < frame.HEADER_LEN) return;
+        self.header_len = 0;
+
+        const len = frame.bodyLen(&self.header);
+        if (len == 0) {
+            self.end_received = true;
+            // 保持していた overlap をここでフラッシュする。本文が 1 バイトも
+            // 来ていなければ MaskStream は無く、フラッシュするものもない。
+            if (self.stream) |*stream| {
+                stream.finish(QueueWriter{ .gpa = gpa, .out = &self.out }) catch return error.Failed;
+            }
+            return;
+        }
+        // 上限を越える長さを送ってくるのはこのプロトコルのクライアントではない。
+        if (len > frame.MAX_BODY) return error.Failed;
+        self.body_left = len;
+    }
+
+    fn readBody(
+        self: *Conn,
+        gpa: std.mem.Allocator,
+        secrets: []const []const u8,
+        scratch: []u8,
+    ) ConnError!void {
         const writer = QueueWriter{ .gpa = gpa, .out = &self.out };
+        const want = @min(self.body_left, BUF_SIZE);
 
         if (self.stream == null) {
             // まだ MaskStream がないので、共有バッファへ読んでから初期化する。
-            const n = posix.read(self.fd, scratch) catch |err| switch (err) {
+            const n = posix.read(self.fd, scratch[0..want]) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return error.Failed,
             };
-            if (n == 0) {
-                // 1 バイトも来ないまま half-close。フラッシュするものはない。
-                self.read_eof = true;
-                return;
-            }
+            if (n == 0) return error.Failed;
             self.stream = mask_stream.MaskStream.init(gpa, secrets) catch return error.Failed;
             @memcpy(self.stream.?.readBuf()[0..n], scratch[0..n]);
             self.stream.?.push(n, writer) catch return error.Failed;
+            self.body_left -= n;
             return;
         }
 
         const stream = &self.stream.?;
-        const n = posix.read(self.fd, stream.readBuf()) catch |err| switch (err) {
+        const n = posix.read(self.fd, stream.readBuf()[0..want]) catch |err| switch (err) {
             error.WouldBlock => return,
             else => return error.Failed,
         };
-        if (n == 0) {
-            self.read_eof = true;
-            // 保持していた overlap をここでフラッシュする。
-            stream.finish(writer) catch return error.Failed;
-            return;
-        }
+        if (n == 0) return error.Failed;
         stream.push(n, writer) catch return error.Failed;
+        self.body_left -= n;
     }
 
     fn writable(self: *Conn, gpa: std.mem.Allocator) ConnError!void {
@@ -256,6 +324,25 @@ const Conn = struct {
         }
     }
 };
+
+/// 終わりのフレームの後に届いて読まずにいたバイトを、close の前に読み捨てる。
+///
+/// 受信キューにバイトを残したまま close すると、Linux は相手へ reset を送る
+/// (AF_UNIX では相手の次の read が ECONNRESET、TCP では RST で、送り切っていない
+/// 末尾も捨てられうる)。末尾を送り切ってから閉じても、クライアントには失敗として
+/// 届いてしまう。ここで読んだバイトは MaskStream には渡さない。
+///
+/// 読み捨てる量には上限を置く。終わりのフレームの後も送り続けるクライアントを
+/// 相手に、この接続だけで poll ループを止めないため。
+fn discardUnread(fd: posix.fd_t) void {
+    var sink: [4096]u8 = undefined;
+    var budget: usize = MAX_DISCARD_BYTES;
+    while (budget > 0) {
+        const n = posix.read(fd, sink[0..@min(sink.len, budget)]) catch return;
+        if (n == 0) return;
+        budget -= n;
+    }
+}
 
 /// 接続は 1 シェルあたり 2 本で `make -j` は数百に達するので、
 /// 起動時に soft limit を hard limit まで上げておく。
@@ -519,8 +606,10 @@ test "run: a loopback TCP listener masks a connection" {
     const conn = stream orelse return error.ConnectFailed;
     defer conn.close();
 
+    // 入力はフレームで送り、長さ 0 のフレームで終える。half-close はしない。
+    try conn.writeAll(&frame.header(16));
     try conn.writeAll("a secret-value b");
-    try posix.shutdown(conn.handle, .send);
+    try conn.writeAll(&frame.header(0));
 
     var got: [64]u8 = undefined;
     var total: usize = 0;
@@ -545,4 +634,190 @@ test "run: a non-socket at the listen path is left alone" {
     var content: [16]u8 = undefined;
     const got = try std.fs.cwd().readFile(path, &content);
     try testing.expectEqualStrings("original", got);
+}
+
+// --- フレームの読み取り (Conn 単体) -----------------------------------------
+
+const TEST_SECRETS: []const []const u8 = &.{"secret-value"};
+
+/// テスト用の接続。server 側を Conn に渡し、client 側からフレームを書く。
+const ConnPair = struct {
+    conn: Conn,
+    client: posix.socket_t,
+    scratch: []u8,
+
+    fn init() !ConnPair {
+        var fds: [2]posix.socket_t = undefined;
+        if (std.c.socketpair(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0, &fds) != 0) return error.SocketPair;
+        errdefer {
+            posix.close(fds[0]);
+            posix.close(fds[1]);
+        }
+        const flags = try posix.fcntl(fds[0], posix.F.GETFL, 0);
+        _ = try posix.fcntl(fds[0], posix.F.SETFL, flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
+        return .{
+            .conn = .{ .fd = fds[0] },
+            .client = fds[1],
+            .scratch = try testing.allocator.alloc(u8, BUF_SIZE),
+        };
+    }
+
+    fn deinit(self: *ConnPair) void {
+        posix.close(self.client);
+        testing.allocator.free(self.scratch);
+    }
+
+    fn send(self: *ConnPair, bytes: []const u8) !void {
+        var off: usize = 0;
+        while (off < bytes.len) off += try posix.send(self.client, bytes[off..], posix.MSG.NOSIGNAL);
+    }
+
+    fn sendFrame(self: *ConnPair, body: []const u8) !void {
+        try self.send(&frame.header(body.len));
+        try self.send(body);
+    }
+
+    /// 1 回だけ readable を呼ぶ (読めるまで待つ)。
+    fn readOnce(self: *ConnPair) ConnError!void {
+        var pfd = [_]posix.pollfd{.{ .fd = self.conn.fd, .events = posix.POLL.IN, .revents = 0 }};
+        _ = posix.poll(&pfd, 5000) catch return error.Failed;
+        return self.conn.readable(testing.allocator, TEST_SECRETS, self.scratch);
+    }
+
+    /// run のループと同じ判定で、この接続だけを回す。最後まで送り切って閉じる
+    /// ところまで進んだら true、途中で落とされたら false。どちらの場合も接続は
+    /// 閉じる (Conn.deinit)。
+    fn drive(self: *ConnPair) !bool {
+        defer self.conn.deinit(testing.allocator);
+        while (!self.conn.finished()) {
+            var events: i16 = 0;
+            if (self.conn.wantsRead()) events |= posix.POLL.IN;
+            if (self.conn.wantsWrite()) events |= posix.POLL.OUT;
+            var pfd = [_]posix.pollfd{.{ .fd = self.conn.fd, .events = events, .revents = 0 }};
+            if (try posix.poll(&pfd, 5000) == 0) return error.Timeout;
+            const revents = pfd[0].revents;
+            if (revents & posix.POLL.IN != 0) {
+                self.conn.readable(testing.allocator, TEST_SECRETS, self.scratch) catch return false;
+            } else if (revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
+                return false;
+            }
+            if (revents & posix.POLL.OUT != 0) self.conn.writable(testing.allocator) catch return false;
+        }
+        return true;
+    }
+
+    /// サーバが閉じるまでに返したバイト列。
+    fn received(self: *ConnPair, buf: []u8) ![]const u8 {
+        var total: usize = 0;
+        while (true) {
+            const n = try posix.read(self.client, buf[total..]);
+            if (n == 0) return buf[0..total];
+            total += n;
+        }
+    }
+};
+
+test "Conn: a secret split across frames is still masked" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    try p.sendFrame("a secr");
+    try p.sendFrame("et-value b");
+    try p.sendFrame("");
+    try testing.expect(try p.drive());
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("a ************ b", try p.received(&buf));
+}
+
+test "Conn: a frame of exactly the maximum length is accepted" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    const body = try testing.allocator.alloc(u8, frame.MAX_BODY);
+    defer testing.allocator.free(body);
+    @memset(body, 'a');
+    try p.sendFrame(body);
+    try p.sendFrame("");
+    try testing.expect(try p.drive());
+    const buf = try testing.allocator.alloc(u8, frame.MAX_BODY + 1);
+    defer testing.allocator.free(buf);
+    try testing.expectEqualSlices(u8, body, try p.received(buf));
+}
+
+// 長さが上限を越えるのはクライアントではない何か。保持中の末尾も返さない。
+test "Conn: a length over the maximum closes without flushing the held tail" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    // シークレットより短い入力は丸ごと overlap として保持される。
+    try p.sendFrame("abc");
+    var h: [4]u8 = undefined;
+    std.mem.writeInt(u32, &h, frame.MAX_BODY + 1, .big);
+    try p.send(&h);
+    try testing.expect(!try p.drive());
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("", try p.received(&buf));
+}
+
+// 終わりのフレームの前の EOF はクライアントが落ちたということ。返す先もない。
+test "Conn: EOF before the end frame closes without flushing the held tail" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    try p.sendFrame("abc");
+    try posix.shutdown(p.client, .send);
+    try testing.expect(!try p.drive());
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("", try p.received(&buf));
+}
+
+test "Conn: bytes after the end frame in the same read are not processed" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    // 1 回の write で届けば、サーバの 1 回の read に収まりうる。
+    var all: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&all);
+    try w.writeAll(&frame.header(3));
+    try w.writeAll("abc");
+    try w.writeAll(&frame.header(0));
+    try w.writeAll(&frame.header(3));
+    try w.writeAll("XYZ");
+    try w.writeAll(&frame.header(0));
+    try p.send(w.buffered());
+    try testing.expect(try p.drive());
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("abc", try p.received(&buf));
+}
+
+test "Conn: after the end frame the connection is not read, and late bytes are not processed" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    try p.sendFrame("abc");
+    try p.sendFrame("");
+    while (!p.conn.end_received) try p.readOnce();
+    // 終わりを受け取ったら、もう POLLIN を待たない。
+    try testing.expect(!p.conn.wantsRead());
+    try p.sendFrame("XYZ");
+    try p.sendFrame("");
+    try testing.expect(try p.drive());
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("abc", try p.received(&buf));
+}
+
+// accept しただけの接続や、本文のないヘッダだけでは MaskStream を確保しない。
+test "Conn: the mask stream is allocated only on the first body byte" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    defer p.conn.deinit(testing.allocator);
+    try p.send(&frame.header(5));
+    try p.readOnce();
+    try testing.expect(p.conn.stream == null);
+    try p.send("a");
+    try p.readOnce();
+    try testing.expect(p.conn.stream != null);
+}
+
+test "Conn: an input of only the end frame closes with nothing to send" {
+    var p = try ConnPair.init();
+    defer p.deinit();
+    try p.sendFrame("");
+    try testing.expect(try p.drive());
+    var buf: [8]u8 = undefined;
+    try testing.expectEqualStrings("", try p.received(&buf));
 }

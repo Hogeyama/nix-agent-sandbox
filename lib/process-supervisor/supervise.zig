@@ -52,8 +52,8 @@
 //!   phase 1 (子が生存中): パイプ・self-pipe・生きているリレーを無期限に poll。
 //!   phase 2 (子が終了済み): 同じ poll 集合を DRAIN_IDLE_MS で回し、
 //!            アイドルになったパイプを done とみなす。
-//!   phase 3 (両パイプ done): パイプの poll をやめ、送信キューを吐き切って
-//!            half-close し、SOCKET_DRAIN_MS の**別の**期限で両リレーの EOF を待つ。
+//!   phase 3 (両パイプ done): パイプの poll をやめ、送信キューと終わりの
+//!            フレームを吐き切り、SOCKET_DRAIN_MS の**別の**期限で両リレーの EOF を待つ。
 //!
 //! phase 2 と phase 3 で期限を共有してはならない。少し混んだサーバの応答待ちが
 //! 「もう出力は無い」と誤判定されて末尾が切れる。
@@ -86,7 +86,7 @@ const CHUNK_SIZE = relay_mod.CHUNK_SIZE;
 /// スーパーバイザが居座り、呼び出し元がハングしてしまう。
 const DRAIN_IDLE_MS: i32 = 100;
 
-/// half-close 後、リレーが EOF に達するのを待つ**無進捗**許容時間 (ms)。
+/// 終わりのフレームを積んだ後、リレーが EOF に達するのを待つ**無進捗**許容時間 (ms)。
 ///
 /// DRAIN_IDLE_MS と共有してはならない。パイプ側の 100ms は「バックグラウンド
 /// プロセスがパイプを握っている」を検出するための短い猶予だが、socket 側は
@@ -423,13 +423,12 @@ pub fn run(
     var drain_deadline: ?i64 = null;
 
     while (!streams[0].done() or !streams[1].done()) {
-        // パイプを読み切っていて送信キューも空になったストリームだけ half-close
-        // する。キューが残っているうちに shutdown(SHUT_WR) すると、その後の
-        // write が EPIPE になって全出力を捨てることになる (子が 0 で終わって
-        // いても 121)。
+        // パイプを読み切ったストリームは入力の終わりを伝える。終わりのフレームは
+        // 送信キューの後ろに積まれるので、キューが残っていても先に積んでよい
+        // (half-close と違い、それより前のバイトが送れなくなることはない)。
         for (&streams) |*s| {
             if (s.done()) continue;
-            if (s.pipe_done and s.relay.pendingLen() == 0) try s.relay.halfClose();
+            if (s.pipe_done) try s.relay.queueEnd(allocator);
         }
 
         const pipes_all_done = streams[0].pipe_done and streams[1].pipe_done;
@@ -502,10 +501,12 @@ pub fn run(
                 };
                 if (n > 0) progress = true;
                 if (s.relay.read_eof) {
-                    // half-close 前にサーバが閉じたのは「完了」ではなく
-                    // 切り捨て。接続数上限を超えた接続はサーバが accept して
-                    // 即 close するので、この経路が fail-closed の要になる。
-                    if (!s.relay.write_closed) return error.RelayClosedEarly;
+                    // サーバの close は、終わりのフレームを送り切り、送った本文と
+                    // 同じ長さを受け取っていたときだけ「完了」。それ以外は切り捨てで、
+                    // 子が 0 で終わっていても 121 にする。接続数上限を超えた接続は
+                    // サーバが accept して即 close するし、末尾を返さずに落ちた
+                    // サーバも同じ形で現れるので、この経路が fail-closed の要になる。
+                    try s.relay.checkComplete();
                     progress = true;
                 }
             }
@@ -837,6 +838,87 @@ test "exitCodeFromStatus: killed by signal maps to 128+signo" {
     try testing.expectEqual(@as(u8, 128 + 2), exitCodeFromStatus(2)); // SIGINT
     try testing.expectEqual(@as(u8, 128 + 15), exitCodeFromStatus(15)); // SIGTERM
     try testing.expectEqual(@as(u8, 128 + 9), exitCodeFromStatus(9)); // SIGKILL
+}
+
+/// 入力をフレームとして終わりのフレームまで読み、何も返さずに閉じるブローカー。
+/// `connections` 本の接続を受ける。終わりのフレームの前に EOF になった接続も閉じる。
+/// 何も返さないのは、supervise.run がマスク済みバイトを本物の stdout (テストでは
+/// build runner との通信路) へ書くため。
+const SilentBroker = struct {
+    fn run(listener: posix.socket_t, connections: usize) void {
+        var served: usize = 0;
+        while (served < connections) : (served += 1) {
+            var lp = [_]posix.pollfd{.{ .fd = listener, .events = posix.POLL.IN, .revents = 0 }};
+            const ready = posix.poll(&lp, 5000) catch return;
+            if (ready == 0) return;
+            const peer = posix.accept(listener, null, null, posix.SOCK.CLOEXEC) catch return;
+            defer posix.close(peer);
+            while (true) {
+                var h: [4]u8 = undefined;
+                if (!readExactly(peer, &h)) break;
+                const len = std.mem.readInt(u32, &h, .big);
+                if (len == 0) break;
+                var left: usize = len;
+                var buf: [4096]u8 = undefined;
+                while (left > 0) {
+                    const want = @min(left, buf.len);
+                    if (!readExactly(peer, buf[0..want])) return;
+                    left -= want;
+                }
+            }
+        }
+    }
+
+    fn readExactly(fd: posix.socket_t, buf: []u8) bool {
+        var off: usize = 0;
+        while (off < buf.len) {
+            var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+            const ready = posix.poll(&pfd, 5000) catch return false;
+            if (ready == 0) return false;
+            const n = posix.read(fd, buf[off..]) catch return false;
+            if (n == 0) return false;
+            off += n;
+        }
+        return true;
+    }
+};
+
+// 終わりのフレームを送り切っただけでは完了ではない。サーバーが保持中の末尾を
+// 返さずに閉じたら、子が 0 で終わっていても失敗にしなければならない (呼び出し元が
+// 121 にする)。成功にすると、欠けた出力が 0 とともにエージェントへ届く。
+test "run: a broker that closes after the end frame without returning the tail fails" {
+    var path_buf: [address.MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-sv-notail-{d}.sock", .{std.c.getpid()});
+    var un = posix.sockaddr.un{ .family = posix.AF.UNIX, .path = undefined };
+    @memset(&un.path, 0);
+    @memcpy(un.path[0..path.len], path);
+    const listener = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    defer posix.close(listener);
+    posix.unlink(path) catch {};
+    try posix.bind(listener, @ptrCast(&un), @sizeOf(posix.sockaddr.un));
+    defer posix.unlink(path) catch {};
+    try posix.listen(listener, 4);
+
+    const broker = try std.Thread.spawn(.{}, SilentBroker.run, .{ listener, 2 });
+    defer broker.join();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const res = run(arena.allocator(), .{ .unix = path }, null, "sh", "/bin/sh", &.{ "-c", "printf abc" }, .{
+        .prog_name = "test",
+        .marker_env = "TEST_SUPERVISED=1",
+    });
+    // run はプロセス全体のシグナルの扱いを変える (SIGTERM などを子へ転送して
+    // 自分は死なない、SIGPIPE を無視する)。テストランナーが SIGTERM で止められ
+    // なくなるので既定へ戻す。SIGCHLD の self-pipe も閉じられないまま残るので、
+    // 後のテストで番号の再利用先へ書き込まないよう外しておく。
+    for (CHILD_RESET_SIGNALS) |sig| setDisposition(sig, posix.SIG.DFL);
+    g_sig_write_fd.store(-1, .monotonic);
+    g_child_pid.store(0, .monotonic);
+    if (res) |code| {
+        std.debug.print("run returned {d} instead of failing\n", .{code});
+        return error.TestUnexpectedResult;
+    } else |_| {}
 }
 
 // Keep relay tests in the shared supervisor suite.

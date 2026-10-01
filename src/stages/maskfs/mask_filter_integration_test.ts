@@ -306,14 +306,30 @@ async function runSupervisedOverSocket(
 }
 
 /**
- * `writes` を (必要なら間隔を空けて) 送り、half-close してからサーバが
- * close するまで読み続ける。`openDelayMs` を渡すと、接続後 1 バイトも
- * 書かないまま黙っている時間を作れる。
+ * ブローカーへの入力のフレーム `[u32 ビッグエンディアンの長さ][本文]`。本文は
+ * 1..64KiB で、長さ 0 のフレームが入力の終わりを表す
+ * (lib/process-supervisor/frame.zig)。
+ */
+const MAX_FRAME_BODY = 64 * 1024;
+const END_FRAME = Buffer.alloc(4);
+
+function frameBytes(body: Buffer): Buffer {
+  const parts: Buffer[] = [];
+  for (let off = 0; off < body.length; off += MAX_FRAME_BODY) {
+    const chunk = body.subarray(off, off + MAX_FRAME_BODY);
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(chunk.length);
+    parts.push(header, chunk);
+  }
+  return Buffer.concat(parts);
+}
+
+/**
+ * `writes` を 1 つずつフレームにして (必要なら間隔を空けて) 送り、終わりの
+ * フレームを送ってからサーバが close するまで読み続ける。`openDelayMs` を渡すと、
+ * 接続後 1 バイトも書かないまま黙っている時間を作れる。
  *
- * Bun 1.3.9 の node:net は `.end()` が half-close ではなく full close に
- * なるため、サーバが EOF 後にフラッシュした末尾を受け取れない。このプロトコルは
- * フラッシュ経路全体が half-close に紐づいているので、クライアントは
- * Bun.connect + shutdown() でなければならない。
+ * half-close はしない。プロトコルは入力の終わりを長さ 0 のフレームで伝える。
  */
 function maskOverSocket(
   sockPath: string,
@@ -329,10 +345,10 @@ function maskOverSocket(
         async open(s) {
           if (openDelayMs) await Bun.sleep(openDelayMs);
           for (const w of writes) {
-            s.write(Buffer.from(w));
+            s.write(frameBytes(Buffer.from(w)));
             if (gapMs) await Bun.sleep(gapMs);
           }
-          s.shutdown();
+          s.write(END_FRAME);
         },
         data(_s, d) {
           chunks.push(Buffer.from(d));
@@ -349,8 +365,8 @@ function maskOverSocket(
 }
 
 /**
- * バルク転送用のクライアント。`payload` を書き切って half-close し、サーバが
- * close するまで読み続けるのは maskOverSocket と同じだが、受信のたびに
+ * バルク転送用のクライアント。`payload` をフレームで書き切って終わりのフレームを
+ * 送り、サーバが close するまで読み続けるのは maskOverSocket と同じだが、受信のたびに
  * 同期的に `readStallMs` だけ止まる「遅い読み手」を演じる点が違う。
  *
  * これがないとサーバの `write(2)` は毎回全量成功してしまい、送信キューの
@@ -369,7 +385,7 @@ function maskOverSocketSlowReader(
   payload: string,
   readStallMs = 40,
 ): Promise<string> {
-  const buf = Buffer.from(payload);
+  const buf = Buffer.concat([frameBytes(Buffer.from(payload)), END_FRAME]);
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     Bun.connect({
@@ -382,7 +398,6 @@ function maskOverSocketSlowReader(
             if (n > 0) off += n;
             else await Bun.sleep(1);
           }
-          s.shutdown();
         },
         data(_s, d) {
           chunks.push(Buffer.from(d));
@@ -419,6 +434,7 @@ function maskOverSocketSlowReader(
  */
 const STALLING_CLIENT_PY = `import os
 import socket
+import struct
 import sys
 import time
 
@@ -430,18 +446,22 @@ s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.connect(sock_path)
 s.setblocking(False)
 
-chunk = b"x" * 65536
+# 本文 64KiB のフレームを繰り返し送る。部分的にしか送れなくてもフレームの途中から
+# 続けられるよう、繰り返しの中の位置を offset で持つ。
+frame = struct.pack(">I", 65536) + b"x" * 65536
+offset = 0
 sent = 0
 blocked_since = None
 while sent < limit_bytes:
     try:
-        n = s.send(chunk)
+        n = s.send(frame[offset:])
     except BlockingIOError:
         n = 0
     except OSError:
         break
     if n > 0:
         sent += n
+        offset = (offset + n) % len(frame)
         blocked_since = None
         continue
     now = time.monotonic()
@@ -606,10 +626,11 @@ describe("nas-mask-filter --supervise", () => {
     },
   );
 
-  // constraint 2 の回帰テスト。キューが残っているうちに half-close すると、
-  // その後の write が EPIPE になって全出力が捨てられ、子が 0 で終わっていても
-  // 121 になる。パイプが EOF になった時点でまだ数 MB がキューと socket の
-  // 往復に残っている量を流して、末尾まで欠けないことを見る。
+  // constraint 2 の回帰テスト。パイプが EOF になった時点で送信キューに残って
+  // いる分は、入力の終わりより前に送り切らなければならない (以前の half-close の
+  // プロトコルでは、キューが残っているうちに half-close すると以降の write が
+  // EPIPE になり、全出力が捨てられた)。パイプが EOF になった時点でまだ数 MB が
+  // キューと socket の往復に残っている量を流して、末尾まで欠けないことを見る。
   test.skipIf(!binaryPath)(
     "preserves multi-megabyte output through the socket",
     async () => {
@@ -628,15 +649,15 @@ describe("nas-mask-filter --supervise", () => {
   // 上の「量を流すだけ」のテストでは constraint 2 の失敗経路に**届かない**。
   // 読み手が遅れていなければ 1 周回ごとに送信キューを丸ごと吐き切れてしまい、
   // パイプが EOF になった瞬間のキューは常に空なので、「キューが残っていても
-  // half-close する」壊し方を入れても素通りする (実測: 壊した実装でも 20 万行が
-  // 揃った)。
+  // 入力を終わらせる」壊し方を入れても素通りする (half-close のプロトコルでの
+  // 実測: 壊した実装でも 20 万行が揃った)。
   //
   // 呼び出し元が遅いと連鎖が詰まる: 出力先 fd への write が止まり、サーバの
   // 送信キューが上限に達してこちらの socket が詰まり、こちらの送信キューに
-  // 数百 KB が残ったままパイプが EOF に達する。この状態で half-close すると
-  // 以降の write が EPIPE になり、残りが丸ごと消える。上と同じ壊し方を入れた
-  // 実測では 200000 行中 188295 行しか届かず、しかも exit は 0 だった
-  // (= 呼び出し元は欠落に気付けない)。だから遅い読み手が要る。
+  // 数百 KB が残ったままパイプが EOF に達する。この状態で入力を終わらせて
+  // 残りを捨てると、末尾が丸ごと消える。上と同じ壊し方を half-close の
+  // プロトコルで入れた実測では 200000 行中 188295 行しか届かず、しかも exit は
+  // 0 だった (= 呼び出し元は欠落に気付けない)。だから遅い読み手が要る。
   test.skipIf(!binaryPath)(
     "preserves the tail when the caller reads slowly",
     async () => {
@@ -884,7 +905,8 @@ describe("nas-mask-filter --supervise", () => {
   // クライアントが応答も拒否も得られないまま待たされるため)。したがって
   // 上限超過のリレーが観測するのは「接続はできたが即座にきれいな EOF」で、
   // これを「ストリーム完了」と取り違えると 1 バイトも中継しないまま exit 0 に
-  // なる。half-close 前の EOF は切り捨てとして 121 にしなければならない。
+  // なる。終わりのフレームを送り切る前の EOF は切り捨てとして 121 に
+  // しなければならない。
   //
   // 実サーバで 512 本積むのは遅いので、同じ挙動 (accept して即 close) の
   // listener を立てて経路だけを再現する。
@@ -925,6 +947,73 @@ describe("nas-mask-filter --supervise", () => {
         const stdout = await new Response(proc.stdout).text();
         expect(await proc.exited).toBe(121);
         expect(stdout).toBe("");
+      } finally {
+        server.stop(true);
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
+
+  // 終わりのフレームを送り切っても、サーバが末尾を返し終えたとは限らない。
+  // 末尾を返さずに閉じたサーバ (処理の途中で落ちた等) を完了と取り違えると、
+  // 欠けた出力が exit 0 とともに届く。リレーは送った本文と受け取ったバイト数を
+  // 比べ、合わなければ子が 0 で終わっていても 121 にしなければならない。
+  test.skipIf(!binaryPath)(
+    "fails closed when the broker closes after the end frame without the tail",
+    async () => {
+      const sockPath = shortSockPath("notail");
+      const pending = new Map<object, Buffer>();
+      const server = Bun.listen({
+        unix: sockPath,
+        socket: {
+          data(s, d) {
+            // 終わりのフレームまで読み、何も返さずに閉じる。
+            let buf = Buffer.concat([pending.get(s) ?? Buffer.alloc(0), d]);
+            while (buf.length >= 4) {
+              const len = buf.readUInt32BE(0);
+              if (len === 0) {
+                pending.delete(s);
+                s.end();
+                return;
+              }
+              if (buf.length < 4 + len) break;
+              buf = buf.subarray(4 + len);
+            }
+            pending.set(s, buf);
+          },
+          close(s) {
+            pending.delete(s);
+          },
+          error() {},
+        },
+      });
+      try {
+        const proc = Bun.spawn(
+          [
+            binaryPath!,
+            "--supervise",
+            "--socket",
+            sockPath,
+            "--",
+            realBashPath(),
+            "-c",
+            "echo pw=hunter2",
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env },
+          },
+        );
+        const [stdout, stderr] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(await proc.exited).toBe(121);
+        expect(stdout).toBe("");
+        expect(stderr).toContain("mask broker closed early");
       } finally {
         server.stop(true);
         fs.rmSync(sockPath, { force: true });

@@ -183,18 +183,37 @@ class MaskStream:
         return out
 
 
+def recv_exactly(conn, n):
+    buf = b""
+    while len(buf) < n:
+        data = conn.recv(n - len(buf))
+        if not data:
+            return None
+        buf += data
+    return buf
+
+
 def serve_conn(conn, secrets):
     stream = MaskStream(secrets)
     try:
+        # 入力は [u32 ビッグエンディアンの長さ][本文] のフレームで届き、長さ 0 の
+        # フレームが終わりの合図。終わりの前に切れた接続には末尾を返さない。
         while True:
-            data = conn.recv(BUF_SIZE)
-            if not data:
+            header = recv_exactly(conn, 4)
+            if header is None:
+                return
+            length = struct.unpack(">I", header)[0]
+            if length == 0:
                 break
+            if length > BUF_SIZE:
+                return
+            data = recv_exactly(conn, length)
+            if data is None:
+                return
             out = stream.push(data)
             if out:
                 conn.sendall(out)
-        # クライアントの half-close が EOF の合図。保持中の overlap を
-        # フラッシュしてから close する。
+        # 保持中の overlap をフラッシュしてから close する。
         tail = stream.finish()
         if tail:
             conn.sendall(tail)
@@ -222,19 +241,17 @@ def serve(sock_path):
 
 
 def pump_to_socket(src_fd, sock):
+    # 読んだ塊をフレームに包んで送り、最後に長さ 0 のフレームで終わりを伝える。
+    # half-close はしない。
     try:
         while True:
             data = os.read(src_fd, BUF_SIZE)
             if not data:
                 break
-            sock.sendall(data)
+            sock.sendall(struct.pack(">I", len(data)) + data)
+        sock.sendall(struct.pack(">I", 0))
     except OSError:
         pass
-    finally:
-        try:
-            sock.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
 
 
 def pump_from_socket(sock, dst):
