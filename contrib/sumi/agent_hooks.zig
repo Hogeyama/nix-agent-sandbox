@@ -93,7 +93,10 @@ pub fn main(a: std.mem.Allocator, comptime agent: cli.Agent, comptime event: Eve
     while (i < args.len) : (i += 2) {
         if (!masker.SourceOption.isName(args[i]) or i + 1 == args.len or std.mem.startsWith(u8, args[i + 1], "--"))
             return cli.usage("hook requires --server ADDR or --secrets-file FILE");
-        source.take(args[i], args[i + 1]) catch return cli.usage("hook requires exactly one masking source");
+        source.take(args[i], args[i + 1]) catch |err| switch (err) {
+            error.InvalidServerAddress => return cli.usage("hook --server takes a Unix socket path, unix:///PATH, tcp://127.0.0.1:PORT or tcp://[::1]:PORT"),
+            else => return cli.usage("hook requires exactly one masking source"),
+        };
     }
     const selected = source.finish() catch return cli.usage("hook requires a masking source");
     const action: std.posix.Sigaction = .{ .handler = .{ .handler = Deadline(agent, event).expired }, .mask = std.posix.sigemptyset(), .flags = 0 };

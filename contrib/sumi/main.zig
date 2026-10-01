@@ -377,6 +377,14 @@ test "argument allocation failure becomes a handled startup failure" {
     try testing.expectEqual(@as(?[][:0]u8, null), processArgs(testing.failing_allocator));
 }
 
+test "codex and copilot hooks reject an invalid --server ADDR as a usage error" {
+    inline for (.{ "codex", "copilot" }) |agent| {
+        inline for (.{ "post-tool", "prompt" }) |event| {
+            try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "hook", "--agent", agent, event, "--server", "tcp://localhost:1" }, unavailableSelfPath));
+        }
+    }
+}
+
 test "post-tool and prompt dispatch do not resolve the executable path" {
     try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "hook", "--agent", "claude", "post-tool", "--invalid", "x" }, unavailableSelfPath));
     try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "hook", "--agent", "claude", "prompt", "--invalid", "x" }, unavailableSelfPath));
