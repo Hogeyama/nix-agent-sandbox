@@ -178,6 +178,7 @@ check "post-tool over serve masks the output" 'pw=*********' "$(jq -nr --arg o "
 kill "$serve_pid" 2>/dev/null
 wait "$serve_pid" 2>/dev/null
 serve_pid=""
+check "serve writes nothing to stderr while serving" "0" "$(wc -c < "$work/serve.err" | tr -d ' ')"
 
 "$sumi" serve --secrets-file "$work/missing.txt" --listen "$serve_dir/missing.sock" >/dev/null 2>"$work/serve-missing.err"
 status=$?
@@ -190,6 +191,10 @@ check "serve leaves the non-socket file intact" "keep" "$(cat "$work/not-a-socke
 check "serve explains the non-socket path" "yes" "$(grep -q 'not a socket' "$work/serve-nonsock.err" && echo yes || echo no)"
 check "serve with a missing list creates no socket" "no" "$([ -e "$serve_dir/missing.sock" ] && echo yes || echo no)"
 check "serve with a missing list says why" "yes" "$(grep -q 'missing or unreadable' "$work/serve-missing.err" && echo yes || echo no)"
+
+"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_dir/no-such-dir/mask.sock" >/dev/null 2>"$work/serve-bind.err"
+check "serve exits 1 when it cannot bind" "1" "$?"
+check "serve reports a bind failure" "yes" "$(grep -q 'serve failed' "$work/serve-bind.err" && echo yes || echo no)"
 
 "$sumi" serve --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "serve without --listen exits 2" "2" "$?"
