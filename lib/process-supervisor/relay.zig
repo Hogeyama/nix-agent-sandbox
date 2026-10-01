@@ -158,33 +158,114 @@ fn connectOnce(family: u32, sa: *const posix.sockaddr, len: posix.socklen_t) ?po
     return fd;
 }
 
-/// proxy へつなぎ、CONNECT が通るまで直接接続と同じ回数・間隔で再試行する。
+/// proxy へつなぎ、CONNECT が通るまで再試行する。全体を、開始時に単調時計で
+/// 決めた `budget_ms` (本番は PROXY_CONNECT_TIMEOUT_MS) の期限に収める。
+/// proxy への TCP 接続、CONNECT の送受信、再試行の間の待ちは、どれも残り時間の
+/// 中で行う。`SO_RCVTIMEO` は 1 回の read の待ちしか区切らないので、数秒おきに
+/// 少しずつ返す proxy には 1 回の試行でもいくらでも延ばされる。hook は Claude Code
+/// の時間制限の中で動くので、応答しない proxy で長く止まってはならない。
+///
 /// 1 回の試行は connect(2) 1 回と CONNECT のやりとり 1 回で、connectRetrying を
 /// 入れ子にはしない (入れ子にすると試行回数が掛け算になる)。
 ///
 /// 再試行するのは、proxy が起動直後だったり宛先へのつなぎ込みに一瞬失敗したり
-/// (502 など、早すぎる close、応答の遅れ) という、待てば通りうる失敗である。
-/// 403 だけは再試行しない: `allowedDomains` に無い宛先への拒否は設定で決まり、
-/// 待っても変わらない。
+/// (すぐ返る 502 など、早すぎる close) という、待てば通りうる失敗で、期限の中で
+/// 最大 CONNECT_ATTEMPTS 回まで。403 は再試行しない: `allowedDomains` に無い
+/// 宛先への拒否は設定で決まり、待っても変わらない。期限切れも失敗にする。
+/// どの場合も直接接続へはフォールバックしない (`routeFor`)。
 fn connectViaProxy(
     proxy: std.net.Address,
     target: std.net.Address,
     userinfo: ?[]const u8,
+    budget_ms: u64,
 ) RelayError!posix.socket_t {
+    const deadline = Deadline.start(budget_ms) orelse return error.RelayConnectFailed;
     var attempt: usize = 0;
     while (attempt < CONNECT_ATTEMPTS) : (attempt += 1) {
-        if (attempt > 0) std.Thread.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
-        const fd = connectOnce(proxy.any.family, &proxy.any, proxy.getOsSockLen()) orelse continue;
-        proxyHandshake(fd, target, userinfo) catch |err| {
+        if (attempt > 0) {
+            const left = deadline.remainingMs();
+            if (left == 0) break;
+            const wait_ms: u64 = @min(CONNECT_RETRY_MS, left);
+            std.Thread.sleep(wait_ms * std.time.ns_per_ms);
+        }
+        const fd = connectOnceBefore(proxy, deadline) orelse continue;
+        proxyHandshake(fd, target, userinfo, deadline) catch |err| {
             posix.close(fd);
             switch (err) {
-                error.ProxyForbidden => return error.RelayConnectFailed,
+                error.ProxyForbidden, error.ProxyTimedOut => return error.RelayConnectFailed,
                 error.ProxyHandshakeFailed => continue,
             }
         };
         return fd;
     }
     return error.RelayConnectFailed;
+}
+
+/// 単調時計で決めた期限。壁時計は NTP などで戻りうるので使わない。
+const Deadline = struct {
+    started: std.time.Instant,
+    budget_ns: u64,
+
+    fn start(budget_ms: u64) ?Deadline {
+        const now = std.time.Instant.now() catch return null;
+        return .{ .started = now, .budget_ns = budget_ms * std.time.ns_per_ms };
+    }
+
+    /// 残り時間 (ミリ秒、切り上げ)。切れていれば 0。切り上げるのは、1 ms 未満の
+    /// 残りで poll を 0 ms にして空回りしないため。
+    fn remainingMs(self: Deadline) u64 {
+        const now = std.time.Instant.now() catch return 0;
+        const elapsed = now.since(self.started);
+        if (elapsed >= self.budget_ns) return 0;
+        return std.math.divCeil(u64, self.budget_ns - elapsed, std.time.ns_per_ms) catch 0;
+    }
+
+    /// poll に渡す待ち時間。
+    fn pollMs(self: Deadline) i32 {
+        return @intCast(@min(self.remainingMs(), std.math.maxInt(i32)));
+    }
+};
+
+/// 期限までに fd が `events` のどれかになるのを待つ。期限切れなら false。
+fn waitFor(fd: posix.socket_t, events: i16, deadline: Deadline) error{Failed}!bool {
+    while (true) {
+        const ms = deadline.pollMs();
+        if (ms == 0) return false;
+        var pfd = [_]posix.pollfd{.{ .fd = fd, .events = events, .revents = 0 }};
+        const n = posix.poll(&pfd, ms) catch return error.Failed;
+        if (n > 0) return true;
+    }
+}
+
+/// proxy への connect(2) を 1 回、期限までに済ませる。非ブロッキングで始めて
+/// 完了を poll で待つ。ブロッキングの connect(2) は、proxy の accept キューが
+/// 詰まって SYN が落とされると、カーネルの再送が尽きるまで (数十秒から 2 分) 戻らない。
+///
+/// TCP の非ブロッキング connect は完了を POLLOUT で知らせるので、AF_UNIX のような
+/// 「EAGAIN のまま繋がらない」問題 (Relay.connect の説明) は起きない。
+/// fd は非ブロッキングのまま返し、CONNECT のやりとりも poll で期限を守る。
+fn connectOnceBefore(proxy: std.net.Address, deadline: Deadline) ?posix.socket_t {
+    const fd = posix.socket(
+        proxy.any.family,
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK,
+        0,
+    ) catch return null;
+    posix.connect(fd, &proxy.any, proxy.getOsSockLen()) catch |err| switch (err) {
+        error.WouldBlock => {
+            const ready = waitFor(fd, posix.POLL.OUT, deadline) catch false;
+            const ok = ready and if (posix.getsockoptError(fd)) |_| true else |_| false;
+            if (!ok) {
+                posix.close(fd);
+                return null;
+            }
+        },
+        else => {
+            // 失敗した socket は状態が未規定なので使い回さず作り直す。
+            posix.close(fd);
+            return null;
+        },
+    };
+    return fd;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,8 +304,10 @@ const MAX_PROXY_CREDENTIAL: usize = MAX_PROXY_USERINFO + 1;
 /// proxy の応答ヘッダの上限。CONNECT の応答はふつう 1 行と空行だけなので、
 /// これを越えるのは proxy ではない何かとみなす。
 const MAX_PROXY_RESPONSE: usize = 8 * 1024;
-/// proxy の応答を待つ上限 (秒)。proxy が黙ると hook や run がいつまでも止まるため。
-const PROXY_RESPONSE_TIMEOUT_S = 5;
+/// proxy 経由の接続処理全体 (TCP 接続、CONNECT の送受信、再試行の間の待ち) の
+/// 期限 (ミリ秒)。proxy が黙ったり少しずつ返したりしても、hook や run をこれ以上
+/// 止めないため。
+const PROXY_CONNECT_TIMEOUT_MS: u64 = 5000;
 
 const ProxyRoute = union(enum) {
     direct,
@@ -330,26 +413,35 @@ fn validPercentEncoding(s: []const u8) bool {
 const HandshakeError = error{
     /// proxy が 403 で拒否した。再試行しない。
     ProxyForbidden,
-    /// それ以外の失敗 (200 以外の応答、早すぎる close、受信タイムアウトなど)。
+    /// 接続処理全体の期限が切れた。再試行しない。
+    ProxyTimedOut,
+    /// それ以外の失敗 (200 以外の応答、早すぎる close など)。
     ProxyHandshakeFailed,
 };
 
-/// proxy に CONNECT を送り、200 が返ることを確かめる。どちらの失敗も、呼び出し元
+/// proxy に CONNECT を送り、200 が返ることを確かめる。どの失敗も、呼び出し元
 /// では最終的に `RelayConnectFailed` (ブローカーに接続できないのと同じ扱い) になる。
+/// fd は非ブロッキングで、送るのも受けるのも `deadline` までに済ませる。
 ///
 /// 資格情報を含むので、要求も応答もどこにも出力しない。
-fn proxyHandshake(fd: posix.socket_t, target: std.net.Address, userinfo: ?[]const u8) HandshakeError!void {
-    const tv = posix.timeval{ .sec = PROXY_RESPONSE_TIMEOUT_S, .usec = 0 };
-    posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&tv)) catch
-        return error.ProxyHandshakeFailed;
-
+fn proxyHandshake(
+    fd: posix.socket_t,
+    target: std.net.Address,
+    userinfo: ?[]const u8,
+    deadline: Deadline,
+) HandshakeError!void {
     var req_buf: [256 + std.base64.standard.Encoder.calcSize(MAX_PROXY_CREDENTIAL)]u8 = undefined;
     defer std.crypto.secureZero(u8, &req_buf);
     const req = buildConnectRequest(&req_buf, target, userinfo) catch return error.ProxyHandshakeFailed;
     var off: usize = 0;
     while (off < req.len) {
+        if (!(waitFor(fd, posix.POLL.OUT, deadline) catch return error.ProxyHandshakeFailed))
+            return error.ProxyTimedOut;
         // proxy が先に閉じても SIGPIPE で死なず失敗を返すため NOSIGNAL で送る。
-        const n = posix.send(fd, req[off..], posix.MSG.NOSIGNAL) catch return error.ProxyHandshakeFailed;
+        const n = posix.send(fd, req[off..], posix.MSG.NOSIGNAL) catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => return error.ProxyHandshakeFailed,
+        };
         if (n == 0) return error.ProxyHandshakeFailed;
         off += n;
     }
@@ -358,8 +450,12 @@ fn proxyHandshake(fd: posix.socket_t, target: std.net.Address, userinfo: ?[]cons
     var len: usize = 0;
     const end = while (true) {
         if (len == resp.len) return error.ProxyHandshakeFailed;
-        // 受信タイムアウトは WouldBlock として返る。
-        const n = posix.read(fd, resp[len..]) catch return error.ProxyHandshakeFailed;
+        if (!(waitFor(fd, posix.POLL.IN, deadline) catch return error.ProxyHandshakeFailed))
+            return error.ProxyTimedOut;
+        const n = posix.read(fd, resp[len..]) catch |err| switch (err) {
+            error.WouldBlock => continue,
+            else => return error.ProxyHandshakeFailed,
+        };
         if (n == 0) return error.ProxyHandshakeFailed;
         const from = len -| 3;
         len += n;
@@ -445,8 +541,10 @@ pub const Relay = struct {
     /// **ブロッキングの connect(2) を使い、成功してから非ブロッキングに切り替える**。
     /// AF_UNIX の非ブロッキング connect は「backlog が一杯でまだ繋がっていない」を
     /// EAGAIN で返すが、TCP と違って完了を知らせる POLLOUT が来ない。EAGAIN を
-    /// 成功扱いにすると、1 バイトも届かないリレーが黙って出来上がる。TCP も同じ
-    /// 手順に揃え、proxy との CONNECT のやりとりもブロッキングのうちに済ませる。
+    /// 成功扱いにすると、1 バイトも届かないリレーが黙って出来上がる。直接の TCP も
+    /// 同じ手順に揃える。proxy 経由だけは、接続と CONNECT のやりとりを期限の中で
+    /// 終えるため非ブロッキングで行う (`connectViaProxy`)。TCP の非ブロッキング
+    /// connect は完了を POLLOUT で知らせるので、上の問題は起きない。
     ///
     /// fd は SOCK_CLOEXEC で作る (proxy への socket も同じ)。子へ漏れると単なる
     /// 情報漏れではなく**注入オラクル**になる: ストリーム途中に 1 バイト差し込むと
@@ -460,7 +558,7 @@ pub const Relay = struct {
             .unix => |path| try connectUnix(path),
             .tcp => |target| switch (try routeFor(proxy)) {
                 .direct => try connectTcp(target),
-                .connect => |p| try connectViaProxy(p.addr, target, p.userinfo),
+                .connect => |p| try connectViaProxy(p.addr, target, p.userinfo, PROXY_CONNECT_TIMEOUT_MS),
             },
         };
         setNonBlocking(fd) catch {
@@ -1057,7 +1155,14 @@ const ProxyAction = union(enum) {
     close,
     /// 要求を読んだら何も返さず、相手が閉じるまで待つ。
     silent,
+    /// 要求を読んだら、終わらないヘッダをこの間隔 (ミリ秒) で 1 バイトずつ返し続ける。
+    /// 相手が閉じて send が失敗するか、TRICKLE_MAX_MS が過ぎたらやめる。
+    trickle: u64,
 };
+
+/// trickle を続ける上限。クライアントが期限を守らなくてもテストのスレッドが
+/// 終わるようにする (クライアントの不具合でスイートが止まらないため)。
+const TRICKLE_MAX_MS: i64 = 10_000;
 
 /// テスト用の CONNECT proxy。`actions` の数だけ接続を順に受け、それぞれに対応する
 /// 動作をする。最初の要求ヘッダを記録する。
@@ -1119,6 +1224,7 @@ const TestProxy = struct {
                     try waitClosed(client);
                 },
                 .silent => try waitClosed(client),
+                .trickle => |interval_ms| trickle(client, interval_ms),
                 .tunnel => {
                     // "CONNECT host:port HTTP/1.1"
                     const line_end = std.mem.indexOf(u8, req[0..len], "\r\n").?;
@@ -1135,7 +1241,20 @@ const TestProxy = struct {
         }
     }
 
-    /// 相手が閉じるまで読み捨てる。クライアントの受信タイムアウト (5 秒) より長く待つ。
+    /// ヘッダの終わり (`\r\n\r\n`) を含まないバイト列を 1 バイトずつ返す。
+    /// 1 回の read の待ちは毎回短いので、読み取りごとのタイムアウトでは切れない。
+    fn trickle(fd: posix.socket_t, interval_ms: u64) void {
+        const text = "HTTP/1.1 200 OK\r\nX-Pad: ";
+        const started = std.time.milliTimestamp();
+        var i: usize = 0;
+        while (std.time.milliTimestamp() - started < TRICKLE_MAX_MS) : (i += 1) {
+            const b: u8 = if (i < text.len) text[i] else 'a';
+            _ = posix.send(fd, &[_]u8{b}, posix.MSG.NOSIGNAL) catch return;
+            std.Thread.sleep(interval_ms * std.time.ns_per_ms);
+        }
+    }
+
+    /// 相手が閉じるまで読み捨てる。クライアントの接続処理の期限 (5 秒) より長く待つ。
     /// 応答を読み切らずに閉じたクライアントからは RST が届くので、read のエラーも
     /// 「閉じた」として扱う (エラーで抜けると次の接続を受けなくなる)。
     fn waitClosed(fd: posix.socket_t) !void {
@@ -1242,7 +1361,7 @@ test "Relay.connect: a 403 from the proxy fails without retrying or going direct
     try testing.expectError(error.RelayConnectFailed, res);
     try testing.expectEqual(@as(usize, 1), proxy.accepted);
     try expectNoPendingConnection(l.fd);
-    // 再試行して 2 回目の接続が受信タイムアウト (5 秒) で落ちたのではなく、
+    // 再試行して 2 回目の接続が期限 (5 秒) で落ちたのではなく、
     // 403 を見て即座に断ったこと。
     try testing.expect(elapsed < 2000);
 }
@@ -1278,9 +1397,36 @@ test "Relay.connect: a proxy failure other than 403 is retried" {
     try expectProxyRetried(.{ .reply = "ICY 200 OK\r\n\r\n" });
 }
 
-// 受信タイムアウト (5 秒) を 1 回待つので遅い。
-test "Relay.connect: a proxy that does not answer in time is retried" {
-    try expectProxyRetried(.silent);
+/// 期限を短くして proxy 経由でつなぎ、`action` の proxy が期限ちょうどで
+/// 失敗させられることを確かめる。期限が切れたら再試行せず、直接もつながない。
+fn expectProxyDeadline(action: ProxyAction) !void {
+    const budget_ms: u64 = 600;
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    var proxy = try TestProxy.init(&.{action});
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+    defer pt.join();
+
+    const started = std.time.milliTimestamp();
+    const res = connectViaProxy(proxy.addr, l.addr, null, budget_ms);
+    const elapsed = std.time.milliTimestamp() - started;
+    if (res) |fd| posix.close(fd) else |_| {}
+    try testing.expectError(error.RelayConnectFailed, res);
+    try testing.expect(elapsed >= budget_ms);
+    // 1 回の read ごとの待ちではなく、接続処理全体で切れたこと。
+    try testing.expect(elapsed < budget_ms + 1000);
+    try testing.expectEqual(@as(usize, 1), proxy.accepted);
+    try expectNoPendingConnection(l.fd);
+    try expectNoPendingConnection(proxy.listener);
+}
+
+test "connectViaProxy: a proxy that accepts and never replies fails at the overall deadline" {
+    try expectProxyDeadline(.silent);
+}
+
+test "connectViaProxy: a proxy that trickles its header fails at the overall deadline" {
+    try expectProxyDeadline(.{ .trickle = 100 });
 }
 
 test "Relay.connect: a proxy that keeps failing gives up after the direct-connect attempt count" {
