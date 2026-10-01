@@ -193,9 +193,30 @@ check "serve explains the non-socket path" "yes" "$(grep -q 'not a socket' "$wor
 check "serve with a missing list creates no socket" "no" "$([ -e "$serve_dir/missing.sock" ] && echo yes || echo no)"
 check "serve with a missing list says why" "yes" "$(grep -q 'missing or unreadable' "$work/serve-missing.err" && echo yes || echo no)"
 
-timeout 5 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_dir/no-such-dir/mask.sock" >/dev/null 2>"$work/serve-bind.err"
-check "serve exits 1 when it cannot bind" "1" "$?"
-check "serve reports a bind failure" "yes" "$(grep -q 'serve failed' "$work/serve-bind.err" && echo yes || echo no)"
+nested_sock="$serve_dir/made/by-serve/mask.sock"
+"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$nested_sock" 2>/dev/null &
+serve_pid=$!
+for _ in $(seq 50); do
+  "$sumi" run --socket "$nested_sock" true >/dev/null 2>&1 && break
+  sleep 0.1
+done
+check "serve creates a missing socket directory" "yes" "$([ -S "$nested_sock" ] && echo yes || echo no)"
+check "serve makes the socket directory private to its owner" "700" "$(stat -c %a "$serve_dir/made/by-serve" 2>/dev/null)"
+kill "$serve_pid" 2>/dev/null
+wait "$serve_pid" 2>/dev/null
+serve_pid=""
+
+timeout 5 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$work/not-a-socket/sub/mask.sock" >/dev/null 2>"$work/serve-mkdir.err"
+check "serve exits 1 when it cannot create the socket directory" "1" "$?"
+check "serve reports a directory creation failure" "yes" "$(grep -q 'cannot create the directory' "$work/serve-mkdir.err" && echo yes || echo no)"
+
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir -m 500 "$serve_dir/read-only"
+  timeout 5 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_dir/read-only/mask.sock" >/dev/null 2>"$work/serve-bind.err"
+  check "serve exits 1 when it cannot bind" "1" "$?"
+  check "serve reports a bind failure" "yes" "$(grep -q 'serve failed' "$work/serve-bind.err" && echo yes || echo no)"
+  chmod 700 "$serve_dir/read-only"
+fi
 
 timeout 5 "$sumi" serve --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "serve without --listen exits 2" "2" "$?"

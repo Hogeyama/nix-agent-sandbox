@@ -121,6 +121,24 @@ fn parseServeArgs(args: []const []const u8) error{InvalidArguments}!ServeArgs {
     };
 }
 
+/// `--listen` のパスを置くディレクトリが無ければ作る。ソケットの直上は他ユーザに
+/// 中を見せないよう 0700 で作り、それより上は `mkdir -p` と同じく umask に任せる。
+/// 既にあるディレクトリの権限は変えない。
+fn makeSocketDir(sock_path: []const u8) !void {
+    const dir = std.fs.path.dirname(sock_path) orelse return;
+    std.posix.mkdir(dir, 0o700) catch |err| switch (err) {
+        error.PathAlreadyExists => return,
+        error.FileNotFound => {
+            if (std.fs.path.dirname(dir)) |parent| try std.fs.cwd().makePath(parent);
+            std.posix.mkdir(dir, 0o700) catch |retry| switch (retry) {
+                error.PathAlreadyExists => return,
+                else => return retry,
+            };
+        },
+        else => return err,
+    };
+}
+
 /// serve は一覧をこのプロセスに持ち、`--socket` で接続してくる hook と run の
 /// 問い合わせに答える。診断は定数の文言と利用者が渡した値だけにし、
 /// 接続から届いたバイトは混ぜない (supervise.serve の「出力の不変条件」)。
@@ -129,6 +147,10 @@ fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     supervise.serve.validateSocketPath(parsed.listen) catch return usage("the --listen path must be 1 to 107 bytes");
     const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
         std.debug.print("sumi: {s}\n", .{secrets.describe(err)});
+        return 1;
+    };
+    makeSocketDir(parsed.listen) catch |err| {
+        std.debug.print("sumi: cannot create the directory of the --listen path: {s}\n", .{@errorName(err)});
         return 1;
     };
     // 接続ごとに確保と解放を繰り返すので、arena ではなく解放できるアロケータを渡す。
