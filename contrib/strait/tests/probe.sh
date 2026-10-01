@@ -9,8 +9,21 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 REPO=${1:-Hogeyama/nix-agent-sandbox}
 : "${GH_TOKEN:?set GH_TOKEN}"
 work=$(mktemp -d)
+# This run's own socket directory. With the shared one, the reviewer below
+# would also answer requests held by every other strait session of this user,
+# approving any of them that happened to mention the marker. It is outside
+# $work, which the sandbox can write, and short enough for a socket path.
+rt=$(mktemp -d /tmp/sp.XXXXXX)
+touch "$rt/.run"
 denier=
-trap 'rm -rf "$work"; [[ -n $denier ]] && kill "$denier" 2>/dev/null' EXIT
+cleanup() {
+  # Stop the reviewer before its directory goes: it finishes the review it is
+  # running and then sees the flag gone.
+  rm -f "$rt/.run"
+  [[ -n $denier ]] && wait "$denier" 2>/dev/null
+  rm -rf "$work" "$rt"
+}
+trap cleanup EXIT
 # httpbin.org stands in for an added host: it echoes the headers it got, which
 # shows what strait let through and what srt injected.
 printf '{ "githubRepos": ["%s"], "hostExec": true, "hosts": { "httpbin.org": { "credential": { "env": "PROBE_KEY", "header": "x-api-key" } } } }\n' "$REPO" >"$work/strait.json"
@@ -24,9 +37,10 @@ cd "$work"
 # `strait-probe-approve` (or `strait_probe_approve`, as a GraphQL alias) is
 # approved, one carrying `strait-probe-hold` is left
 # waiting, and the rest are denied. It runs in the same environment as
-# `check`, so both look in the same socket directory.
-review() { env -i HOME="$HOME" PATH="$PATH" "$here/strait" review "$@"; }
-(while :; do
+# `check`, so both look in the same socket directory, and that directory is
+# this run's alone, so it never reaches another session's requests.
+review() { env -i HOME="$HOME" PATH="$PATH" XDG_RUNTIME_DIR="$rt" "$here/strait" review "$@"; }
+(while [[ -e $rt/.run ]]; do
   for id in $(review list --all 2>/dev/null | cut -f1); do
     shown=$(review show "$id" 2>/dev/null)
     case $shown in
@@ -42,7 +56,7 @@ denier=$!
 fails=0
 check() { # name expected-regex command
   local name=$1 want=$2 cmd=$3 got
-  got=$(env -i HOME="$HOME" PATH="$PATH" GH_TOKEN="$GH_TOKEN" PROBE_KEY="$PROBE_KEY" TERM=dumb \
+  got=$(env -i HOME="$HOME" PATH="$PATH" XDG_RUNTIME_DIR="$rt" GH_TOKEN="$GH_TOKEN" PROBE_KEY="$PROBE_KEY" TERM=dumb \
     "$here/strait" --config strait.json -- bash -c "$cmd" 2>&1 |
     grep -v '^strait: session ' | tail -3 | tr '\n' ' ')
   if [[ $got =~ $want ]]; then
