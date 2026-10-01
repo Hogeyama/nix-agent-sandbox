@@ -64,6 +64,8 @@ const mask_stream = @import("masking").stream;
 const relay_mod = @import("relay.zig");
 /// ホスト側で待ち受けるブローカーのサーバー実装を公開する。relay はこのサーバーのクライアントにあたる。
 pub const serve = @import("serve.zig");
+/// ブローカーのアドレス (ADDR) の解釈。serve と relay が共有する。
+pub const address = @import("address.zig");
 
 const MaskStream = mask_stream.MaskStream;
 const Relay = relay_mod.Relay;
@@ -836,4 +838,5 @@ test "exitCodeFromStatus: killed by signal maps to 128+signo" {
 test {
     _ = relay_mod;
     _ = serve;
+    _ = address;
 }

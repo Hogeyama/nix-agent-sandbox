@@ -447,6 +447,6 @@ test "serve arguments reject missing, repeated and unknown options" {
 }
 
 test "serve rejects a socket path that cannot be bound before reading the list" {
-    const too_long = "/" ** (supervise.serve.MAX_SOCKET_PATH + 1);
+    const too_long = "/" ** (supervise.address.MAX_SOCKET_PATH + 1);
     try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "serve", "--secrets-file", "/nonexistent/sumi-secrets", "--listen", too_long }, unavailableSelfPath));
 }

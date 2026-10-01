@@ -22,8 +22,7 @@ const posix = std.posix;
 /// パイプ / socket の 1 回の read で受け取る最大バイト数。
 pub const CHUNK_SIZE: usize = 64 * 1024;
 
-/// sun_path は 108 バイトで、終端 NUL の分 1 バイト使う。
-pub const MAX_SOCKET_PATH: usize = 107;
+const MAX_SOCKET_PATH = @import("address.zig").MAX_SOCKET_PATH;
 
 /// connect の再試行回数と間隔。デーモンは起動済みのはずなので、これは
 /// 「起動直後にわずかにずれた」「backlog が一瞬詰まった」を吸収するための

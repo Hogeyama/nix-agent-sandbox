@@ -52,11 +52,11 @@
 const std = @import("std");
 const posix = std.posix;
 const mask_stream = @import("masking").stream;
+const address = @import("address.zig");
 
 const BUF_SIZE = mask_stream.BUF_SIZE;
 
-/// sun_path は 108 バイトで、終端 NUL の分 1 バイト使う。
-pub const MAX_SOCKET_PATH: usize = 107;
+const MAX_SOCKET_PATH = address.MAX_SOCKET_PATH;
 
 /// 同時接続数の上限。1 シェルにつき 2 接続で、`make -j` は数百のシェルを走らせる。
 /// 上限を超えた接続は accept して即 close する (下の accept ループのコメント参照)。
