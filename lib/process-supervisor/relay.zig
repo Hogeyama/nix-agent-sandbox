@@ -218,6 +218,8 @@ fn selectProxy(lookup: *const fn ([]const u8) ?[]const u8) ?[]const u8 {
 /// proxy の URL のユーザー情報の上限。srt のトークン程度を想定し、要求を
 /// スタック上の固定長バッファで組み立てるために上限を置く。
 const MAX_PROXY_USERINFO: usize = 512;
+/// デコードした資格情報の上限。`:` の無いユーザー情報には `:` を足すので 1 多い。
+const MAX_PROXY_CREDENTIAL: usize = MAX_PROXY_USERINFO + 1;
 /// proxy の応答ヘッダの上限。CONNECT の応答はふつう 1 行と空行だけなので、
 /// これを越えるのは proxy ではない何かとみなす。
 const MAX_PROXY_RESPONSE: usize = 8 * 1024;
@@ -341,7 +343,7 @@ fn proxyHandshake(fd: posix.socket_t, target: std.net.Address, userinfo: ?[]cons
     posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&tv)) catch
         return error.ProxyHandshakeFailed;
 
-    var req_buf: [256 + std.base64.standard.Encoder.calcSize(MAX_PROXY_USERINFO)]u8 = undefined;
+    var req_buf: [256 + std.base64.standard.Encoder.calcSize(MAX_PROXY_CREDENTIAL)]u8 = undefined;
     defer std.crypto.secureZero(u8, &req_buf);
     const req = buildConnectRequest(&req_buf, target, userinfo) catch return error.ProxyHandshakeFailed;
     var off: usize = 0;
@@ -387,10 +389,10 @@ fn buildConnectRequest(buf: []u8, target: std.net.Address, userinfo: ?[]const u8
     // std.net.Address の書式は IPv6 を `[::1]:PORT` と角括弧付きで書く。
     try w.print("CONNECT {f} HTTP/1.1\r\nHost: {f}\r\n", .{ target, target });
     if (userinfo) |u| {
-        var cred_buf: [MAX_PROXY_USERINFO]u8 = undefined;
+        var cred_buf: [MAX_PROXY_CREDENTIAL]u8 = undefined;
         defer std.crypto.secureZero(u8, &cred_buf);
         const cred = decodeUserinfo(&cred_buf, u);
-        var b64_buf: [std.base64.standard.Encoder.calcSize(MAX_PROXY_USERINFO)]u8 = undefined;
+        var b64_buf: [std.base64.standard.Encoder.calcSize(MAX_PROXY_CREDENTIAL)]u8 = undefined;
         defer std.crypto.secureZero(u8, &b64_buf);
         const b64 = std.base64.standard.Encoder.encode(&b64_buf, cred);
         try w.print("Proxy-Authorization: Basic {s}\r\n", .{b64});
@@ -401,14 +403,14 @@ fn buildConnectRequest(buf: []u8, target: std.net.Address, userinfo: ?[]const u8
 
 /// `user[:pass]` をそれぞれパーセントデコードし、`user:pass` にして返す。
 /// デコード前に `:` で区切るのは、パスワード中の `%3A` を区切りと取り違えないため。
+/// `:` が無いときも `user:` にする。Basic 認証の資格情報は `user-id ":" password`
+/// の形で、`:` は省けない (RFC 7617)。
 fn decodeUserinfo(buf: []u8, userinfo: []const u8) []const u8 {
     const colon = std.mem.indexOfScalar(u8, userinfo, ':');
     var len = percentDecodeInto(buf, userinfo[0 .. colon orelse userinfo.len]);
-    if (colon) |c| {
-        buf[len] = ':';
-        len += 1;
-        len += percentDecodeInto(buf[len..], userinfo[c + 1 ..]);
-    }
+    buf[len] = ':';
+    len += 1;
+    if (colon) |c| len += percentDecodeInto(buf[len..], userinfo[c + 1 ..]);
     return buf[0..len];
 }
 
@@ -1336,6 +1338,11 @@ fn expectProxyAuthorization(userinfo: []const u8, credential: []const u8) !void 
 test "Relay.connect: userinfo in the proxy URL becomes Proxy-Authorization" {
     // パスワード中の `@` はパーセントエンコードで渡される。デコードしてから base64 にする。
     try expectProxyAuthorization("srt:p%40ss:w@", "srt:p@ss:w");
+}
+
+// Basic 認証の資格情報は `user-id ":" password` で、`:` は省けない (RFC 7617)。
+test "Relay.connect: userinfo without a colon is sent as user with an empty password" {
+    try expectProxyAuthorization("srt@", "srt:");
 }
 
 test "Relay.connect: a non-loopback or non-http proxy is ignored and the target is dialed directly" {
