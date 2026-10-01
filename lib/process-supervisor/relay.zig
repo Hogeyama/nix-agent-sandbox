@@ -134,8 +134,7 @@ fn connectTcp(target: std.net.Address) RelayError!posix.socket_t {
     return connectRetrying(target.any.family, &target.any, target.getOsSockLen());
 }
 
-/// connect(2) の失敗だけを CONNECT_ATTEMPTS まで再試行する。proxy が返した拒否
-/// (403 など) はここには来ない: 拒否は設定で決まるもので、待っても変わらない。
+/// connect(2) の失敗を CONNECT_ATTEMPTS まで再試行する。
 fn connectRetrying(
     family: u32,
     sa: *const posix.sockaddr,
@@ -144,12 +143,44 @@ fn connectRetrying(
     var attempt: usize = 0;
     while (attempt < CONNECT_ATTEMPTS) : (attempt += 1) {
         if (attempt > 0) std.Thread.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
+        if (connectOnce(family, sa, len)) |fd| return fd;
+    }
+    return error.RelayConnectFailed;
+}
 
-        const fd = posix.socket(family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0) catch continue;
-        posix.connect(fd, sa, len) catch {
-            // 失敗した socket は状態が未規定なので使い回さず作り直す。
+fn connectOnce(family: u32, sa: *const posix.sockaddr, len: posix.socklen_t) ?posix.socket_t {
+    const fd = posix.socket(family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0) catch return null;
+    posix.connect(fd, sa, len) catch {
+        // 失敗した socket は状態が未規定なので使い回さず作り直す。
+        posix.close(fd);
+        return null;
+    };
+    return fd;
+}
+
+/// proxy へつなぎ、CONNECT が通るまで直接接続と同じ回数・間隔で再試行する。
+/// 1 回の試行は connect(2) 1 回と CONNECT のやりとり 1 回で、connectRetrying を
+/// 入れ子にはしない (入れ子にすると試行回数が掛け算になる)。
+///
+/// 再試行するのは、proxy が起動直後だったり宛先へのつなぎ込みに一瞬失敗したり
+/// (502 など、早すぎる close、応答の遅れ) という、待てば通りうる失敗である。
+/// 403 だけは再試行しない: `allowedDomains` に無い宛先への拒否は設定で決まり、
+/// 待っても変わらない。
+fn connectViaProxy(
+    proxy: std.net.Address,
+    target: std.net.Address,
+    userinfo: ?[]const u8,
+) RelayError!posix.socket_t {
+    var attempt: usize = 0;
+    while (attempt < CONNECT_ATTEMPTS) : (attempt += 1) {
+        if (attempt > 0) std.Thread.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
+        const fd = connectOnce(proxy.any.family, &proxy.any, proxy.getOsSockLen()) orelse continue;
+        proxyHandshake(fd, target, userinfo) catch |err| {
             posix.close(fd);
-            continue;
+            switch (err) {
+                error.ProxyForbidden => return error.RelayConnectFailed,
+                error.ProxyHandshakeFailed => continue,
+            }
         };
         return fd;
     }
@@ -294,49 +325,57 @@ fn validPercentEncoding(s: []const u8) bool {
     return true;
 }
 
-/// proxy に CONNECT を送り、200 が返ることを確かめる。失敗はすべて
-/// `RelayConnectFailed` (呼び出し元ではブローカーに接続できないのと同じ扱い)。
-/// 再試行はしない: 拒否は設定で決まり、待っても変わらない。
+const HandshakeError = error{
+    /// proxy が 403 で拒否した。再試行しない。
+    ProxyForbidden,
+    /// それ以外の失敗 (200 以外の応答、早すぎる close、受信タイムアウトなど)。
+    ProxyHandshakeFailed,
+};
+
+/// proxy に CONNECT を送り、200 が返ることを確かめる。どちらの失敗も、呼び出し元
+/// では最終的に `RelayConnectFailed` (ブローカーに接続できないのと同じ扱い) になる。
 ///
 /// 資格情報を含むので、要求も応答もどこにも出力しない。
-fn proxyHandshake(fd: posix.socket_t, target: std.net.Address, userinfo: ?[]const u8) RelayError!void {
+fn proxyHandshake(fd: posix.socket_t, target: std.net.Address, userinfo: ?[]const u8) HandshakeError!void {
     const tv = posix.timeval{ .sec = PROXY_RESPONSE_TIMEOUT_S, .usec = 0 };
     posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&tv)) catch
-        return error.RelayConnectFailed;
+        return error.ProxyHandshakeFailed;
 
     var req_buf: [256 + std.base64.standard.Encoder.calcSize(MAX_PROXY_USERINFO)]u8 = undefined;
     defer std.crypto.secureZero(u8, &req_buf);
-    const req = buildConnectRequest(&req_buf, target, userinfo) catch return error.RelayConnectFailed;
+    const req = buildConnectRequest(&req_buf, target, userinfo) catch return error.ProxyHandshakeFailed;
     var off: usize = 0;
     while (off < req.len) {
         // proxy が先に閉じても SIGPIPE で死なず失敗を返すため NOSIGNAL で送る。
-        const n = posix.send(fd, req[off..], posix.MSG.NOSIGNAL) catch return error.RelayConnectFailed;
-        if (n == 0) return error.RelayConnectFailed;
+        const n = posix.send(fd, req[off..], posix.MSG.NOSIGNAL) catch return error.ProxyHandshakeFailed;
+        if (n == 0) return error.ProxyHandshakeFailed;
         off += n;
     }
 
     var resp: [MAX_PROXY_RESPONSE]u8 = undefined;
     var len: usize = 0;
     const end = while (true) {
-        if (len == resp.len) return error.RelayConnectFailed;
-        // 受信タイムアウトは WouldBlock として返る。どちらも致命。
-        const n = posix.read(fd, resp[len..]) catch return error.RelayConnectFailed;
-        if (n == 0) return error.RelayConnectFailed;
+        if (len == resp.len) return error.ProxyHandshakeFailed;
+        // 受信タイムアウトは WouldBlock として返る。
+        const n = posix.read(fd, resp[len..]) catch return error.ProxyHandshakeFailed;
+        if (n == 0) return error.ProxyHandshakeFailed;
         const from = len -| 3;
         len += n;
         if (std.mem.indexOfPos(u8, resp[0..len], from, "\r\n\r\n")) |i| break i + 4;
     };
+    if (statusIs(resp[0..len], "403")) return error.ProxyForbidden;
     // ブローカーは自分からは何も送らないので、ヘッダの後ろにバイトがあるのは
     // 相手が CONNECT を素通しする proxy ではないということ。ストリームの頭に
     // 混ざったまま出力へ流さないため失敗にする。
-    if (end != len) return error.RelayConnectFailed;
-    if (!isConnectEstablished(resp[0..len])) return error.RelayConnectFailed;
+    if (end != len) return error.ProxyHandshakeFailed;
+    if (!statusIs(resp[0..len], "200")) return error.ProxyHandshakeFailed;
 }
 
-fn isConnectEstablished(header: []const u8) bool {
-    for ([_][]const u8{ "HTTP/1.0 200", "HTTP/1.1 200" }) |prefix| {
+/// 状態行が `HTTP/1.0 <code>` か `HTTP/1.1 <code>` か。
+fn statusIs(header: []const u8, comptime code: []const u8) bool {
+    for ([_][]const u8{ "HTTP/1.0 " ++ code, "HTTP/1.1 " ++ code }) |prefix| {
         if (!std.mem.startsWith(u8, header, prefix)) continue;
-        // `HTTP/1.1 2000` のような別の状態コードを 200 と取り違えない。
+        // `HTTP/1.1 2000` のような別の状態コードを取り違えない。
         const next = header[prefix.len];
         return next == ' ' or next == '\r';
     }
@@ -419,12 +458,7 @@ pub const Relay = struct {
             .unix => |path| try connectUnix(path),
             .tcp => |target| switch (try routeFor(proxy)) {
                 .direct => try connectTcp(target),
-                .connect => |p| blk: {
-                    const fd = try connectTcp(p.addr);
-                    errdefer posix.close(fd);
-                    try proxyHandshake(fd, target, p.userinfo);
-                    break :blk fd;
-                },
+                .connect => |p| try connectViaProxy(p.addr, target, p.userinfo),
             },
         };
         setNonBlocking(fd) catch {
@@ -1011,20 +1045,31 @@ fn expectNoPendingConnection(listener: posix.socket_t) !void {
     try testing.expectEqual(@as(usize, 0), try posix.poll(&pfd, 0));
 }
 
-/// テスト用の CONNECT proxy。1 接続だけ受け、要求ヘッダを記録する。
-/// `reply` が null なら要求行の宛先へ実際につなぎ、200 を返してから両方向を中継する。
-/// null でなければ `reply` をそのまま 1 回の write で返し、相手が閉じるまで待つ。
+/// テスト用の CONNECT proxy が 1 接続ごとにすること。
+const ProxyAction = union(enum) {
+    /// 要求行の宛先へ実際につなぎ、200 を返してから両方向を中継する。
+    tunnel,
+    /// この応答をそのまま 1 回の write で返し、相手が閉じるまで待つ。
+    reply: []const u8,
+    /// 要求を読んだら何も返さずに閉じる。
+    close,
+    /// 要求を読んだら何も返さず、相手が閉じるまで待つ。
+    silent,
+};
+
+/// テスト用の CONNECT proxy。`actions` の数だけ接続を順に受け、それぞれに対応する
+/// 動作をする。最初の要求ヘッダを記録する。
 const TestProxy = struct {
     listener: posix.socket_t,
     addr: std.net.Address,
-    reply: ?[]const u8,
+    actions: []const ProxyAction,
     request: [4096]u8 = undefined,
     request_len: usize = 0,
     accepted: usize = 0,
 
-    fn init(reply: ?[]const u8) !TestProxy {
+    fn init(actions: []const ProxyAction) !TestProxy {
         const l = try listenTcp();
-        return .{ .listener = l.fd, .addr = l.addr, .reply = reply };
+        return .{ .listener = l.fd, .addr = l.addr, .actions = actions };
     }
 
     fn deinit(self: *TestProxy) void {
@@ -1044,40 +1089,60 @@ const TestProxy = struct {
     }
 
     fn serve(self: *TestProxy) !void {
-        // クライアントの不具合でテストが止まらないよう、accept は時間を区切る。
-        var lp = [_]posix.pollfd{.{ .fd = self.listener, .events = posix.POLL.IN, .revents = 0 }};
-        if (try posix.poll(&lp, 5000) == 0) return;
-        const client = try posix.accept(self.listener, null, null, posix.SOCK.CLOEXEC);
-        defer posix.close(client);
-        self.accepted += 1;
+        for (self.actions) |action| {
+            // クライアントの不具合でテストが止まらないよう、accept は時間を区切る。
+            var lp = [_]posix.pollfd{.{ .fd = self.listener, .events = posix.POLL.IN, .revents = 0 }};
+            if (try posix.poll(&lp, 5000) == 0) return;
+            const client = try posix.accept(self.listener, null, null, posix.SOCK.CLOEXEC);
+            defer posix.close(client);
+            self.accepted += 1;
 
-        while (std.mem.indexOf(u8, self.requestText(), "\r\n\r\n") == null) {
-            if (self.request_len == self.request.len) return;
-            const n = try posix.read(client, self.request[self.request_len..]);
-            if (n == 0) return;
-            self.request_len += n;
-        }
-
-        if (self.reply) |r| {
-            try writeAllBlocking(client, r);
-            var sink: [4096]u8 = undefined;
-            var cp = [_]posix.pollfd{.{ .fd = client, .events = posix.POLL.IN, .revents = 0 }};
-            while (try posix.poll(&cp, 5000) > 0) {
-                if (try posix.read(client, &sink) == 0) break;
+            var req: [4096]u8 = undefined;
+            var len: usize = 0;
+            while (std.mem.indexOf(u8, req[0..len], "\r\n\r\n") == null) {
+                if (len == req.len) return;
+                const n = try posix.read(client, req[len..]);
+                if (n == 0) return;
+                len += n;
             }
-            return;
-        }
+            if (self.accepted == 1) {
+                @memcpy(self.request[0..len], req[0..len]);
+                self.request_len = len;
+            }
 
-        // "CONNECT host:port HTTP/1.1"
-        const line_end = std.mem.indexOf(u8, self.requestText(), "\r\n").?;
-        var it = std.mem.splitScalar(u8, self.request[0..line_end], ' ');
-        _ = it.next();
-        const target = try std.net.Address.parseIpAndPort(it.next() orelse return);
-        const upstream = try posix.socket(target.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
-        defer posix.close(upstream);
-        try posix.connect(upstream, &target.any, target.getOsSockLen());
-        try writeAllBlocking(client, "HTTP/1.1 200 Connection established\r\n\r\n");
-        try splice(client, upstream);
+            switch (action) {
+                .close => {},
+                .reply => |r| {
+                    try writeAllBlocking(client, r);
+                    try waitClosed(client);
+                },
+                .silent => try waitClosed(client),
+                .tunnel => {
+                    // "CONNECT host:port HTTP/1.1"
+                    const line_end = std.mem.indexOf(u8, req[0..len], "\r\n").?;
+                    var it = std.mem.splitScalar(u8, req[0..line_end], ' ');
+                    _ = it.next();
+                    const target = try std.net.Address.parseIpAndPort(it.next() orelse return);
+                    const upstream = try posix.socket(target.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+                    defer posix.close(upstream);
+                    try posix.connect(upstream, &target.any, target.getOsSockLen());
+                    try writeAllBlocking(client, "HTTP/1.1 200 Connection established\r\n\r\n");
+                    try splice(client, upstream);
+                },
+            }
+        }
+    }
+
+    /// 相手が閉じるまで読み捨てる。クライアントの受信タイムアウト (5 秒) より長く待つ。
+    /// 応答を読み切らずに閉じたクライアントからは RST が届くので、read のエラーも
+    /// 「閉じた」として扱う (エラーで抜けると次の接続を受けなくなる)。
+    fn waitClosed(fd: posix.socket_t) !void {
+        var sink: [4096]u8 = undefined;
+        var cp = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+        while (try posix.poll(&cp, 10_000) > 0) {
+            const n = posix.read(fd, &sink) catch return;
+            if (n == 0) return;
+        }
     }
 
     /// srt の proxy と同じく half-close を通さない: どちらかの向きで EOF を
@@ -1127,7 +1192,7 @@ test "maskOnce: a large input round-trips through a loopback CONNECT proxy" {
     defer posix.close(l.fd);
     const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, StarServer.Mode.echo });
     defer server.join();
-    var proxy = try TestProxy.init(null);
+    var proxy = try TestProxy.init(&.{.tunnel});
     defer proxy.deinit();
     const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
     defer pt.join();
@@ -1149,7 +1214,7 @@ test "maskOnce: a large input round-trips through a loopback CONNECT proxy" {
 }
 
 test "Relay.connect: an IPv6 target is written in brackets on the CONNECT line" {
-    var proxy = try TestProxy.init("HTTP/1.1 403 Forbidden\r\n\r\n");
+    var proxy = try TestProxy.init(&.{.{ .reply = "HTTP/1.1 403 Forbidden\r\n\r\n" }});
     defer proxy.deinit();
     const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
     var url_buf: [64]u8 = undefined;
@@ -1160,12 +1225,10 @@ test "Relay.connect: an IPv6 target is written in brackets on the CONNECT line" 
     try testing.expect(std.mem.startsWith(u8, proxy.requestText(), "CONNECT [::1]:4242 HTTP/1.1\r\nHost: [::1]:4242\r\n"));
 }
 
-/// proxy に `reply` を返させ、接続が RelayConnectFailed になること、proxy には 1 回だけ
-/// つないだこと、宛先へ直接はつながなかったこと (フォールバックしない) を確かめる。
-fn expectProxyRejects(reply: []const u8) !void {
+test "Relay.connect: a 403 from the proxy fails without retrying or going direct" {
     const l = try listenTcp();
     defer posix.close(l.fd);
-    var proxy = try TestProxy.init(reply);
+    var proxy = try TestProxy.init(&.{.{ .reply = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n" }});
     defer proxy.deinit();
     const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
 
@@ -1177,33 +1240,70 @@ fn expectProxyRejects(reply: []const u8) !void {
     try testing.expectError(error.RelayConnectFailed, res);
     try testing.expectEqual(@as(usize, 1), proxy.accepted);
     try expectNoPendingConnection(l.fd);
-    // 受信タイムアウト (5 秒) で落ちたのではなく、応答を見て即座に断ったこと。
+    // 再試行して 2 回目の接続が受信タイムアウト (5 秒) で落ちたのではなく、
+    // 403 を見て即座に断ったこと。
     try testing.expect(elapsed < 2000);
 }
 
-test "Relay.connect: a 403 from the proxy fails without retrying or going direct" {
-    try expectProxyRejects("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+/// 1 回目の接続で `first` の動作をし、2 回目で 200 を返す proxy に対して、
+/// 再試行して接続できることを確かめる。宛先へ直接はつながない。
+fn expectProxyRetried(first: ProxyAction) !void {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    var proxy = try TestProxy.init(&.{ first, .{ .reply = "HTTP/1.1 200 Connection established\r\n\r\n" } });
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+    defer pt.join();
+
+    var url_buf: [64]u8 = undefined;
+    var relay = try Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, ""));
+    relay.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), proxy.accepted);
+    try expectNoPendingConnection(l.fd);
 }
 
-test "Relay.connect: a proxy response header over 8 KiB fails" {
-    const reply = "HTTP/1.1 200 OK\r\nX-Pad: " ++ ("a" ** (9 * 1024));
-    try expectProxyRejects(reply);
+// proxy が起動直後だったり、宛先へのつなぎ込みに一瞬失敗したりしただけの失敗は、
+// 直接接続と同じく待てば通りうる。
+test "Relay.connect: a proxy failure other than 403 is retried" {
+    try expectProxyRetried(.{ .reply = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n" });
+    try expectProxyRetried(.close);
+    // ヘッダが上限を越える、ヘッダの後ろにバイトがある、状態行が HTTP/1.x 200 でない。
+    // どれも接続には使わないが、403 ではないので再試行する。
+    try expectProxyRetried(.{ .reply = "HTTP/1.1 200 OK\r\nX-Pad: " ++ ("a" ** (9 * 1024)) });
+    try expectProxyRetried(.{ .reply = "HTTP/1.1 200 OK\r\n\r\nunexpected" });
+    try expectProxyRetried(.{ .reply = "HTTP/1.1 2000 OK\r\n\r\n" });
+    try expectProxyRetried(.{ .reply = "HTTP/2 200\r\n\r\n" });
+    try expectProxyRetried(.{ .reply = "ICY 200 OK\r\n\r\n" });
 }
 
-test "Relay.connect: bytes after the proxy's response header fail" {
-    try expectProxyRejects("HTTP/1.1 200 OK\r\n\r\nunexpected");
+// 受信タイムアウト (5 秒) を 1 回待つので遅い。
+test "Relay.connect: a proxy that does not answer in time is retried" {
+    try expectProxyRetried(.silent);
 }
 
-test "Relay.connect: a status line that is not HTTP/1.x 200 fails" {
-    try expectProxyRejects("HTTP/1.1 2000 OK\r\n\r\n");
-    try expectProxyRejects("HTTP/2 200\r\n\r\n");
-    try expectProxyRejects("ICY 200 OK\r\n\r\n");
+test "Relay.connect: a proxy that keeps failing gives up after the direct-connect attempt count" {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    const bad: ProxyAction = .{ .reply = "HTTP/1.1 502 Bad Gateway\r\n\r\n" };
+    var proxy = try TestProxy.init(&([_]ProxyAction{bad} ** CONNECT_ATTEMPTS));
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+
+    var url_buf: [64]u8 = undefined;
+    const res = Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, ""));
+    pt.join();
+    try testing.expectError(error.RelayConnectFailed, res);
+    try testing.expectEqual(CONNECT_ATTEMPTS, proxy.accepted);
+    // 再試行し尽くしても宛先へ直接はつながない。
+    try expectNoPendingConnection(l.fd);
+    // それ以上は proxy にもつながない。
+    try expectNoPendingConnection(proxy.listener);
 }
 
 test "Relay.connect: HTTP/1.0 200 from the proxy is accepted" {
     const l = try listenTcp();
     defer posix.close(l.fd);
-    var proxy = try TestProxy.init("HTTP/1.0 200 Connection established\r\n\r\n");
+    var proxy = try TestProxy.init(&.{.{ .reply = "HTTP/1.0 200 Connection established\r\n\r\n" }});
     defer proxy.deinit();
     const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
     defer pt.join();
@@ -1212,24 +1312,30 @@ test "Relay.connect: HTTP/1.0 200 from the proxy is accepted" {
     relay.deinit(testing.allocator);
 }
 
-test "Relay.connect: userinfo in the proxy URL becomes Proxy-Authorization" {
+/// URL に `userinfo` (末尾の `@` を含む) を付けて接続し、`credential` の base64 が
+/// Proxy-Authorization に載ることを確かめる。
+fn expectProxyAuthorization(userinfo: []const u8, credential: []const u8) !void {
     const l = try listenTcp();
     defer posix.close(l.fd);
-    var proxy = try TestProxy.init("HTTP/1.1 200 OK\r\n\r\n");
+    var proxy = try TestProxy.init(&.{.{ .reply = "HTTP/1.1 200 OK\r\n\r\n" }});
     defer proxy.deinit();
     const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
     defer pt.join();
 
-    // パスワード中の `@` はパーセントエンコードで渡される。デコードしてから base64 にする。
     var url_buf: [96]u8 = undefined;
-    var relay = try Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, "srt:p%40ss:w@"));
+    var relay = try Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, userinfo));
     relay.deinit(testing.allocator);
 
     var b64: [64]u8 = undefined;
-    const enc = std.base64.standard.Encoder.encode(&b64, "srt:p@ss:w");
+    const enc = std.base64.standard.Encoder.encode(&b64, credential);
     var want_buf: [128]u8 = undefined;
     const want = try std.fmt.bufPrint(&want_buf, "\r\nProxy-Authorization: Basic {s}\r\n", .{enc});
     try testing.expect(std.mem.indexOf(u8, proxy.requestText(), want) != null);
+}
+
+test "Relay.connect: userinfo in the proxy URL becomes Proxy-Authorization" {
+    // パスワード中の `@` はパーセントエンコードで渡される。デコードしてから base64 にする。
+    try expectProxyAuthorization("srt:p%40ss:w@", "srt:p@ss:w");
 }
 
 test "Relay.connect: a non-loopback or non-http proxy is ignored and the target is dialed directly" {
