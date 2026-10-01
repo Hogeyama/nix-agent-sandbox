@@ -132,6 +132,7 @@ const LISTENER_BACKOFF_MS: i64 = 1000;
 pub const ServeError = error{
     EmptySocketPath,
     SocketPathTooLong,
+    ListenPathNotSocket,
 };
 
 /// bind する前に AF_UNIX のパス長制限を検査する。
@@ -280,7 +281,16 @@ fn bindListener(sock_path: []const u8) !posix.socket_t {
     errdefer posix.close(fd);
 
     // 前回のセッションの stale socket が残っていると bind が EADDRINUSE になる。
-    posix.unlink(sock_path) catch {};
+    // パスは利用者が指定するので、消すのはソケットだけにする。通常ファイル、
+    // ディレクトリ、シンボリックリンクなどは、秘密ファイルを誤って渡された場合も
+    // 含めて触らずに拒否する。
+    if (posix.fstatat(posix.AT.FDCWD, sock_path, posix.AT.SYMLINK_NOFOLLOW)) |st| {
+        if (!posix.S.ISSOCK(st.mode)) return error.ListenPathNotSocket;
+        posix.unlink(sock_path) catch {};
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
 
     // bind 直後の一瞬でも他ユーザから connect できないよう umask を絞り、
     // その後 chmod で 0600 を確定させる。
@@ -452,4 +462,19 @@ test "validateSocketPath: 107 bytes is the maximum accepted length" {
 test "validateSocketPath: 108 bytes is too long" {
     const too_long = "/" ** (MAX_SOCKET_PATH + 1);
     try testing.expectError(error.SocketPathTooLong, validateSocketPath(too_long));
+}
+
+test "run: a non-socket at the listen path is left alone" {
+    // テストの作業ディレクトリ (build.zig の setCwd) は書き込み可能で、相対パスなら
+    // AF_UNIX の上限にも収まる。/tmp は Nix のサンドボックスで書けるとは限らない。
+    var name_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrint(&name_buf, "serve-nonsock-{x}", .{std.crypto.random.int(u64)});
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = "original" });
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    try testing.expectError(error.ListenPathNotSocket, run(testing.allocator, &.{"secret-value"}, path));
+
+    var content: [16]u8 = undefined;
+    const got = try std.fs.cwd().readFile(path, &content);
+    try testing.expectEqualStrings("original", got);
 }

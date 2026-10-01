@@ -182,6 +182,12 @@ serve_pid=""
 "$sumi" serve --secrets-file "$work/missing.txt" --listen "$serve_dir/missing.sock" >/dev/null 2>"$work/serve-missing.err"
 status=$?
 check "serve with a missing list exits 1" "1" "$status"
+printf keep > "$work/not-a-socket"
+"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$work/not-a-socket" >/dev/null 2>"$work/serve-nonsock.err"
+status=$?
+check "serve refuses a listen path that is not a socket" "1" "$status"
+check "serve leaves the non-socket file intact" "keep" "$(cat "$work/not-a-socket")"
+check "serve explains the non-socket path" "yes" "$(grep -q 'not a socket' "$work/serve-nonsock.err" && echo yes || echo no)"
 check "serve with a missing list creates no socket" "no" "$([ -e "$serve_dir/missing.sock" ] && echo yes || echo no)"
 check "serve with a missing list says why" "yes" "$(grep -q 'missing or unreadable' "$work/serve-missing.err" && echo yes || echo no)"
 

@@ -133,6 +133,10 @@ fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     };
     // 接続ごとに確保と解放を繰り返すので、arena ではなく解放できるアロケータを渡す。
     return supervise.serve.run(std.heap.page_allocator, list, parsed.listen) catch |err| {
+        if (err == error.ListenPathNotSocket) {
+            std.debug.print("sumi: the --listen path exists and is not a socket\n", .{});
+            return 1;
+        }
         std.debug.print("sumi: serve failed: {s}\n", .{@errorName(err)});
         return 1;
     };
