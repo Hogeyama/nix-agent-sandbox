@@ -12,8 +12,10 @@ command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 work="$(mktemp -d)"
 serve_pid=""
 serve_dir=""
+proxy_pid=""
 cleanup() {
   [ -n "$serve_pid" ] && kill "$serve_pid" 2>/dev/null
+  [ -n "$proxy_pid" ] && kill "$proxy_pid" 2>/dev/null
   rm -rf "$work"
   [ -n "$serve_dir" ] && rm -rf "$serve_dir"
 }
@@ -161,20 +163,24 @@ printf '%s\n%s\n' "$current" "$(printf %s "$decoded" | base64)" > "$work/serve-s
 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_sock" 2>"$work/serve.err" &
 serve_pid=$!
 for _ in $(seq 50); do
-  "$sumi" run --socket "$serve_sock" true >/dev/null 2>&1 && break
+  "$sumi" run --server "$serve_sock" true >/dev/null 2>&1 && break
   sleep 0.1
 done
 check "serve creates its socket" "yes" "$([ -S "$serve_sock" ] && echo yes || echo no)"
 check "serve socket is private to its owner" "600" "$(stat -c %a "$serve_sock" 2>/dev/null)"
 
-out="$("$sumi" run --socket "$serve_sock" --shell /bin/bash 'printf "a=%s b=%s\n" "Tr0ub4dor" "s3rv3-d3c0y"')"
+out="$("$sumi" run --server "$serve_sock" --shell /bin/bash 'printf "a=%s b=%s\n" "Tr0ub4dor" "s3rv3-d3c0y"')"
 record_success_status "run over serve" "$?"
 check "run over serve masks a listed value and a decoded base64 line" 'a=********* b=***********' "$out"
 
 out="$(printf '%s' "$(jq -nc --arg v "$current" '{tool_name:"Bash",tool_input:{command:"cat .env"},tool_response:{stdout:("pw=" + $v),stderr:""}}')" \
-  | "$sumi" hook --agent claude post-tool --socket "$serve_sock" | delivered; exit "${PIPESTATUS[1]}")"
+  | "$sumi" hook --agent claude post-tool --server "$serve_sock" | delivered; exit "${PIPESTATUS[1]}")"
 record_success_status "post-tool over serve" "$?"
 check "post-tool over serve masks the output" 'pw=*********' "$(jq -nr --arg o "$out" '$o | fromjson | .stdout')"
+
+out="$("$sumi" run --server "unix://$serve_sock" --shell /bin/bash 'printf "a=%s\n" "Tr0ub4dor"')"
+record_success_status "run over serve via unix://" "$?"
+check "run accepts a unix:// server address" 'a=*********' "$out"
 
 kill "$serve_pid" 2>/dev/null
 wait "$serve_pid" 2>/dev/null
@@ -197,7 +203,7 @@ nested_sock="$serve_dir/made/by-serve/mask.sock"
 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$nested_sock" 2>/dev/null &
 serve_pid=$!
 for _ in $(seq 50); do
-  "$sumi" run --socket "$nested_sock" true >/dev/null 2>&1 && break
+  "$sumi" run --server "$nested_sock" true >/dev/null 2>&1 && break
   sleep 0.1
 done
 check "serve creates a missing socket directory" "yes" "$([ -S "$nested_sock" ] && echo yes || echo no)"
@@ -220,6 +226,198 @@ fi
 
 timeout 5 "$sumi" serve --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "serve without --listen exits 2" "2" "$?"
+
+# --- serve over loopback TCP -------------------------------------------------
+
+# The client picks its route from these variables, so one inherited from the
+# environment running the tests would send the "direct" checks through that
+# proxy. Each proxy check below sets only the variable it means to test.
+unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+
+# serve rejects port 0, so pick a free port up front. Another process could take
+# it before serve binds; the readiness loop below then fails the checks loudly.
+tcp_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+tcp_server="tcp://127.0.0.1:$tcp_port"
+
+"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$tcp_server" 2>"$work/serve-tcp.err" &
+serve_pid=$!
+for _ in $(seq 50); do
+  "$sumi" run --server "$tcp_server" true >/dev/null 2>&1 && break
+  sleep 0.1
+done
+
+out="$("$sumi" run --server "$tcp_server" --shell /bin/bash 'printf "a=%s b=%s\n" "Tr0ub4dor" "s3rv3-d3c0y"')"
+record_success_status "run over TCP serve" "$?"
+check "run over TCP serve masks a listed value and a decoded base64 line" 'a=********* b=***********' "$out"
+
+out="$(printf '%s' "$(jq -nc --arg v "$current" '{tool_name:"Bash",tool_input:{command:"cat .env"},tool_response:{stdout:("pw=" + $v),stderr:""}}')" \
+  | "$sumi" hook --agent claude post-tool --server "$tcp_server" | delivered; exit "${PIPESTATUS[1]}")"
+record_success_status "post-tool over TCP serve" "$?"
+check "post-tool over TCP serve masks the output" 'pw=*********' "$(jq -nr --arg o "$out" '$o | fromjson | .stdout')"
+
+# A minimal CONNECT proxy like the one srt runs: it answers the CONNECT, then
+# copies bytes both ways and closes both sides as soon as either side ends. It
+# never forwards a half-close, since srt's proxy does not either. Each CONNECT
+# target is logged so the checks can tell the proxy was really used; with
+# "deny" it answers 403 instead of connecting.
+cat > "$work/connect-proxy.py" <<'PY_PROXY'
+import os
+import select
+import socket
+import sys
+import threading
+
+mode, port_file, log_file = sys.argv[1:4]
+log_lock = threading.Lock()
+
+
+def relay(client, upstream):
+    peers = {client: upstream, upstream: client}
+    try:
+        while True:
+            readable, _, _ = select.select(list(peers), [], [], 30)
+            if not readable:
+                return
+            for sock in readable:
+                data = sock.recv(65536)
+                if not data:
+                    return
+                peers[sock].sendall(data)
+    except OSError:
+        return
+
+
+def handle(client):
+    upstream = None
+    try:
+        head = b""
+        while b"\r\n\r\n" not in head:
+            data = client.recv(4096)
+            if not data or len(head) > 8192:
+                return
+            head += data
+        head, rest = head.split(b"\r\n\r\n", 1)
+        words = head.split(b"\r\n", 1)[0].decode("latin-1").split()
+        if len(words) != 3 or words[0] != "CONNECT":
+            client.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            return
+        target = words[1]
+        with log_lock, open(log_file, "a") as log:
+            log.write(target + "\n")
+        if mode == "deny":
+            client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            return
+        host, _, port = target.rpartition(":")
+        try:
+            upstream = socket.create_connection((host.strip("[]"), int(port)), timeout=5)
+        except (OSError, ValueError):
+            client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            return
+        upstream.settimeout(None)
+        client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        if rest:
+            upstream.sendall(rest)
+        relay(client, upstream)
+    except OSError:
+        pass
+    finally:
+        if upstream is not None:
+            upstream.close()
+        client.close()
+
+
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", 0))
+server.listen(16)
+with open(port_file + ".tmp", "w") as f:
+    f.write(str(server.getsockname()[1]))
+os.rename(port_file + ".tmp", port_file)
+while True:
+    conn, _ = server.accept()
+    threading.Thread(target=handle, args=(conn,), daemon=True).start()
+PY_PROXY
+
+# Starts the proxy in the given mode and sets proxy_port; empty on failure.
+start_proxy() {
+  rm -f "$work/proxy.port" "$work/proxy.log"
+  python3 "$work/connect-proxy.py" "$1" "$work/proxy.port" "$work/proxy.log" 2>/dev/null &
+  proxy_pid=$!
+  proxy_port=""
+  for _ in $(seq 50); do
+    [ -s "$work/proxy.port" ] && { proxy_port="$(cat "$work/proxy.port")"; return; }
+    sleep 0.1
+  done
+}
+
+stop_proxy() {
+  kill "$proxy_pid" 2>/dev/null
+  wait "$proxy_pid" 2>/dev/null
+  proxy_pid=""
+}
+
+tcp_settings="$work/tcp-settings.json"
+"$sumi" init --agent claude --server "$tcp_server" --settings "$tcp_settings" --shell /bin/bash >/dev/null 2>"$work/tcp-init.err"
+check "init with a TCP server passes its self-check" "0" "$?"
+check "init writes the TCP server address into the hooks as given" "3" \
+  "$(jq --arg s "$tcp_server" '[.hooks[][]?.hooks[]? | select(.args[4:6] == ["--server", $s])] | length' "$tcp_settings")"
+check "init writes the TCP server address into the shell prefix" "yes" \
+  "$(jq -r '.env.CLAUDE_CODE_SHELL_PREFIX' "$tcp_settings" | grep -qF "'run' '--server' '$tcp_server'" && echo yes || echo no)"
+
+start_proxy allow
+out="$(HTTP_PROXY="http://127.0.0.1:$proxy_port" "$sumi" run --server "$tcp_server" --shell /bin/bash 'printf "a=%s\n" "Tr0ub4dor"')"
+record_success_status "run over TCP serve through a CONNECT proxy" "$?"
+check "run through a CONNECT proxy masks the output" 'a=*********' "$out"
+check "run through a CONNECT proxy asks the proxy for the server" "yes" "$(grep -qx "127.0.0.1:$tcp_port" "$work/proxy.log" 2>/dev/null && echo yes || echo no)"
+out="$(printf '%s' "$(jq -nc --arg v "$current" '{tool_name:"Bash",tool_input:{command:"cat .env"},tool_response:{stdout:("pw=" + $v),stderr:""}}')" \
+  | HTTP_PROXY="http://127.0.0.1:$proxy_port" "$sumi" hook --agent claude post-tool --server "$tcp_server" | delivered; exit "${PIPESTATUS[1]}")"
+record_success_status "post-tool over TCP serve through a CONNECT proxy" "$?"
+check "post-tool through a CONNECT proxy masks the output" 'pw=*********' "$(jq -nr --arg o "$out" '$o | fromjson | .stdout')"
+stop_proxy
+
+# A refusing proxy must not be bypassed: the server is reachable directly, so
+# masked output here would mean the client fell back to a direct connection.
+start_proxy deny
+out="$(HTTP_PROXY="http://127.0.0.1:$proxy_port" "$sumi" run --server "$tcp_server" --shell /bin/bash 'printf "a=%s\n" "Tr0ub4dor"' 2>"$work/run-proxy-deny.err")"
+check "run through a refusing proxy exits 121" "121" "$?"
+check "run through a refusing proxy prints no output" "" "$out"
+check "run through a refusing proxy asked the proxy" "yes" "$(grep -qx "127.0.0.1:$tcp_port" "$work/proxy.log" 2>/dev/null && echo yes || echo no)"
+check "run through a refusing proxy says only that the broker is unreachable" \
+  "sumi: cannot reach the mask broker; output suppressed" "$(cat "$work/run-proxy-deny.err")"
+stop_proxy
+
+kill "$serve_pid" 2>/dev/null
+wait "$serve_pid" 2>/dev/null
+serve_pid=""
+check "TCP serve writes nothing to stderr while serving" "0" "$(wc -c < "$work/serve-tcp.err" | tr -d ' ')"
+
+out="$("$sumi" run --server "$tcp_server" --shell /bin/bash 'printf "a=%s\n" "Tr0ub4dor"' 2>"$work/run-tcp-down.err")"
+check "run against a stopped TCP serve exits 121" "121" "$?"
+check "run against a stopped TCP serve prints no output" "" "$out"
+check "run against a stopped TCP serve says only that the broker is unreachable" \
+  "sumi: cannot reach the mask broker; output suppressed" "$(cat "$work/run-tcp-down.err")"
+
+out="$(printf '%s' "$(jq -nc --arg v "$current" '{tool_name:"Bash",tool_input:{command:"cat .env"},tool_response:{stdout:("pw=" + $v),stderr:""}}')" \
+  | "$sumi" hook --agent claude post-tool --server "$tcp_server" 2>"$work/post-tcp-down.err" | delivered; exit "${PIPESTATUS[1]}")"
+record_success_status "post-tool against a stopped TCP serve" "$?"
+check "post-tool against a stopped TCP serve withholds the output" \
+  "sumi: the mask broker could not be reached, so this output was withheld." "$out"
+check "post-tool against a stopped TCP serve writes nothing to stderr" "0" "$(wc -c < "$work/post-tcp-down.err" | tr -d ' ')"
+
+"$sumi" run --socket "$serve_sock" true </dev/null >/dev/null 2>&1
+check "run --socket is a usage error" "2" "$?"
+"$sumi" hook --agent claude post-tool --socket "$serve_sock" </dev/null >/dev/null 2>&1
+check "post-tool --socket is a usage error" "2" "$?"
+"$sumi" init --agent claude --socket "$serve_sock" --settings "$work/unused-socket-settings.json" --shell /bin/bash >/dev/null 2>&1
+check "init --socket is a usage error" "2" "$?"
+for bad in tcp://localhost:1 tcp://10.0.0.1:1 tcp://127.0.0.1:0 unix://relative.sock tpc://127.0.0.1:1; do
+  "$sumi" run --server "$bad" true </dev/null >/dev/null 2>&1
+  check "run --server $bad is a usage error" "2" "$?"
+  "$sumi" hook --agent claude post-tool --server "$bad" </dev/null >/dev/null 2>&1
+  check "post-tool --server $bad is a usage error" "2" "$?"
+  timeout 5 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$bad" </dev/null >/dev/null 2>&1
+  check "serve --listen $bad is a usage error" "2" "$?"
+done
 
 # --- post-tool ---------------------------------------------------------------
 

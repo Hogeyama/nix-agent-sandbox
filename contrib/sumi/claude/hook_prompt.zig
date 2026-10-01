@@ -343,10 +343,11 @@ test "parseArgs: prompt consumes all options and keeps repeated policy values" {
     var got = try parseArgs(testing.allocator, &.{ "--root", "/a", "--secrets-file", "/s", "--deny-path", "x", "--root", "/b" });
     defer got.deinit(testing.allocator);
     try testing.expectEqualStrings("/s", got.source.secrets_file);
-    var by_socket = try parseArgs(testing.allocator, &.{ "--socket", "/sock", "--root", "/a" });
-    defer by_socket.deinit(testing.allocator);
-    try testing.expectEqualStrings("/sock", by_socket.source.socket);
-    try testing.expectError(error.ConflictingSources, parseArgs(testing.allocator, &.{ "--socket", "/sock", "--secrets-file", "/s" }));
+    var by_server = try parseArgs(testing.allocator, &.{ "--server", "/sock", "--root", "/a" });
+    defer by_server.deinit(testing.allocator);
+    try testing.expectEqualStrings("/sock", by_server.source.server.text);
+    try testing.expectError(error.ConflictingSources, parseArgs(testing.allocator, &.{ "--server", "/sock", "--secrets-file", "/s" }));
+    try testing.expectError(error.InvalidServerAddress, parseArgs(testing.allocator, &.{ "--server", "tcp://localhost:1" }));
     try testing.expectEqualSlices([]const u8, &.{ "/a", "/b" }, got.roots);
     try testing.expectEqualSlices([]const u8, &.{"x"}, got.deny_paths);
 
@@ -457,7 +458,7 @@ test "Checker over a socket: file content is checked by the broker" {
     var broker = masker.TestBroker{ .values = &.{"Tr0ub4dor"} };
     try broker.start("prompt-file", 2);
     defer broker.stop();
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .socket = broker.path }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .server = .{ .unix = broker.path } }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.holds_value, try c.check("holds.java"));
     try testing.expectEqual(Verdict.clean, try c.check("clean.java"));
 }
@@ -468,7 +469,7 @@ test "Checker over a socket: an unreachable broker makes files unverifiable" {
     try tmp.dir.writeFile(.{ .sub_path = "clean.java", .data = "nothing\n" });
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
-    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .socket = "/nonexistent/sumi-prompt.sock" }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
+    const c = Checker{ .allocator = testing.allocator, .roots = &.{root}, .deny_paths = &.{}, .masker = .{ .server = .{ .unix = "/nonexistent/sumi-prompt.sock" } }, .deadline_ms = std.time.milliTimestamp() + 15_000 };
     try testing.expectEqual(Verdict.unverifiable, try c.check("clean.java"));
 }
 

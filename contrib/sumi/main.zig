@@ -8,13 +8,15 @@
 //!   sumi run    SOURCE [--shell PATH] COMMAND
 //!   sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
 //!   sumi filter --secrets-file F
-//!   sumi serve  --secrets-file F --listen SOCKET
+//!   sumi serve  --secrets-file F --listen ADDR
 //!   sumi --version
 //!   sumi --licenses
 //!
-//! SOURCE は `--secrets-file F` か `--socket SOCKET` のどちらか 1 つ。後者は値の一覧を
+//! SOURCE は `--secrets-file F` か `--server ADDR` のどちらか 1 つ。後者は値の一覧を
 //! 読まず、ブローカーへバイト列を送ってマスクさせる (masker.zig)。ブローカーは
 //! `sumi serve` か nas の `nas-mask-filter --serve` で、どちらも一覧をホスト側に持つ。
+//! ADDR は Unix ソケットのパス、`unix:///path`、`tcp://127.0.0.1:PORT`、
+//! `tcp://[::1]:PORT` のどれか (supervise.address)。
 //!
 //! 終了コード: 引数の解釈に失敗したときだけ 2。hook サブコマンドはそれ以降どの失敗でも
 //! 0 で決定 (withhold / block / deny) を返す。run は子の終了ステータスで終わり、マスク
@@ -48,11 +50,12 @@ const usage_text =
     \\       sumi run    SOURCE [--shell PATH] COMMAND
     \\       sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
     \\       sumi filter --secrets-file F
-    \\       sumi serve  --secrets-file F --listen SOCKET
+    \\       sumi serve  --secrets-file F --listen ADDR
     \\       sumi --version
     \\       sumi --licenses
     \\
-    \\SOURCE is exactly one of --secrets-file F or --socket SOCKET.
+    \\SOURCE is exactly one of --secrets-file F or --server ADDR.
+    \\ADDR is a Unix socket path, unix:///PATH, tcp://127.0.0.1:PORT or tcp://[::1]:PORT.
     \\
 ;
 
@@ -139,12 +142,17 @@ fn makeSocketDir(sock_path: []const u8) !void {
     };
 }
 
-/// serve は一覧をこのプロセスに持ち、`--socket` で接続してくる hook と run の
+/// serve は一覧をこのプロセスに持ち、`--server` で接続してくる hook と run の
 /// 問い合わせに答える。診断は定数の文言と利用者が渡した値だけにし、
 /// 接続から届いたバイトは混ぜない (supervise.serve の「出力の不変条件」)。
 fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
-    const parsed = parseServeArgs(args) catch return usage("serve takes --secrets-file F --listen SOCKET");
-    const listen = supervise.address.parse(parsed.listen) catch return usage("the --listen path must be 1 to 107 bytes");
+    const parsed = parseServeArgs(args) catch return usage("serve takes --secrets-file F --listen ADDR");
+    // 不正な ADDR は一覧を読む前に usage エラーにする。待ち受けられない値で
+    // 一覧を読み込んでから失敗しても意味が無い。
+    const listen = supervise.address.parse(parsed.listen) catch |err| return usage(switch (err) {
+        error.SocketPathTooLong => "the --listen socket path must be at most 107 bytes",
+        error.InvalidAddress => "--listen must be a socket path, unix:///PATH, tcp://127.0.0.1:PORT or tcp://[::1]:PORT (PORT 1-65535)",
+    });
     const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
         std.debug.print("sumi: {s}\n", .{secrets.describe(err)});
         return 1;
@@ -219,7 +227,7 @@ fn superviseDiagnostic(err: anyerror) []const u8 {
 }
 
 fn runSupervised(allocator: std.mem.Allocator, args: []const []const u8) u8 {
-    const parsed = parseRunArgs(args) catch return usage("run takes (--secrets-file F | --socket SOCKET) [--shell PATH] COMMAND, or [--argv0 NAME] -- PROGRAM [ARGS...]");
+    const parsed = parseRunArgs(args) catch return usage("run takes (--secrets-file F | --server ADDR) [--shell PATH] COMMAND, or [--argv0 NAME] -- PROGRAM [ARGS...]");
     const target: ExecTarget = switch (parsed.target) {
         .exec => |e| e,
         .command => |c| blk: {
@@ -256,7 +264,9 @@ fn runSupervised(allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 return EXIT_SUPPRESSED;
             };
         },
-        .socket => |path| return supervise.run(allocator, .{ .unix = path }, null, target.argv0, target.program, target.args, opts) catch |err| {
+        // proxy は TCP の ADDR のときだけ使われる (srt の sandbox の中から
+        // ホストのブローカーへ届く経路は proxy の CONNECT だけ)。
+        .server => |server| return supervise.run(allocator, server.addr, supervise.proxyFromEnv(), target.argv0, target.program, target.args, opts) catch |err| {
             std.debug.print("{s}", .{superviseDiagnostic(err)});
             return EXIT_SUPPRESSED;
         },
@@ -377,24 +387,33 @@ test "run arguments carry one complete command and optional shell" {
     try testing.expectEqualStrings("/s", defaulted.source.secrets_file);
     try testing.expectEqual(@as(?[]const u8, null), defaulted.target.command.shell_path);
     try testing.expectEqualStrings("echo 'a b'; exit 3", defaulted.target.command.command);
-    const selected = try parseRunArgs(&.{ "--socket", "/sock", "--shell", "/bin/zsh", "echo ok" });
-    try testing.expectEqualStrings("/sock", selected.source.socket);
+    const selected = try parseRunArgs(&.{ "--server", "/sock", "--shell", "/bin/zsh", "echo ok" });
+    try testing.expectEqualStrings("/sock", selected.source.server.addr.unix);
     try testing.expectEqualStrings("/bin/zsh", selected.target.command.shell_path.?);
     try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s" }));
     try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s", "true", "extra" }));
-    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s", "--socket", "/sock", "true" }));
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--secrets-file", "/s", "--server", "/sock", "true" }));
+}
+
+test "run takes --server ADDR and rejects --socket and invalid addresses" {
+    const tcp = try parseRunArgs(&.{ "--server", "tcp://127.0.0.1:47321", "true" });
+    try testing.expectEqual(@as(u16, 47321), tcp.source.server.addr.tcp.getPort());
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--socket", "/sock", "true" }));
+    try testing.expectError(error.InvalidServerAddress, parseRunArgs(&.{ "--server", "tcp://localhost:47321", "true" }));
+    try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "run", "--socket", "/sock", "true" }, unavailableSelfPath));
+    try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "run", "--server", "tcp://127.0.0.1:0", "true" }, unavailableSelfPath));
 }
 
 test "run arguments in exec form pass every argument through" {
-    const got = try parseRunArgs(&.{ "--socket", "/sock", "--argv0", "-bash", "--", "/bin/bash.real", "-c", "echo hi", "--socket" });
+    const got = try parseRunArgs(&.{ "--server", "/sock", "--argv0", "-bash", "--", "/bin/bash.real", "-c", "echo hi", "--server" });
     try testing.expectEqualStrings("-bash", got.target.exec.argv0);
     try testing.expectEqualStrings("/bin/bash.real", got.target.exec.program);
-    try testing.expectEqualSlices([]const u8, &.{ "-c", "echo hi", "--socket" }, got.target.exec.args);
-    const bare = try parseRunArgs(&.{ "--socket", "/sock", "--", "/bin/bash" });
+    try testing.expectEqualSlices([]const u8, &.{ "-c", "echo hi", "--server" }, got.target.exec.args);
+    const bare = try parseRunArgs(&.{ "--server", "/sock", "--", "/bin/bash" });
     try testing.expectEqualStrings("/bin/bash", bare.target.exec.argv0);
     try testing.expectEqual(@as(usize, 0), bare.target.exec.args.len);
-    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--socket", "/sock", "--" }));
-    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--socket", "/sock", "--argv0", "x", "echo" }));
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--server", "/sock", "--" }));
+    try testing.expectError(error.InvalidArguments, parseRunArgs(&.{ "--server", "/sock", "--argv0", "x", "echo" }));
 }
 
 test "takeAgent: claude is accepted and consumed" {
@@ -449,4 +468,15 @@ test "serve arguments reject missing, repeated and unknown options" {
 test "serve rejects a socket path that cannot be bound before reading the list" {
     const too_long = "/" ** (supervise.address.MAX_SOCKET_PATH + 1);
     try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "serve", "--secrets-file", "/nonexistent/sumi-secrets", "--listen", too_long }, unavailableSelfPath));
+}
+
+test "serve --listen accepts the three ADDR forms and rejects the rest as usage errors" {
+    // 一覧が無いので、ADDR を受け付ければ一覧の読み込みで 1、拒めば読む前に 2 になる。
+    // どちらも待ち受けまで進まないので、環境に ::1 が無くても結果は変わらない。
+    inline for (&.{ "/tmp/sumi-listen-test.sock", "unix:///tmp/sumi-listen-test.sock", "tcp://127.0.0.1:47321", "tcp://[::1]:47321" }) |good| {
+        try testing.expectEqual(@as(u8, 1), try dispatch(testing.allocator, &.{ "sumi", "serve", "--secrets-file", "/nonexistent/sumi-secrets", "--listen", good }, unavailableSelfPath));
+    }
+    inline for (&.{ "tcp://localhost:47321", "tcp://10.0.0.1:47321", "tcp://127.0.0.1:0", "tcp://127.0.0.1:65536", "tcp://127.0.0.1", "unix://relative.sock", "tpc://127.0.0.1:1" }) |bad| {
+        try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "serve", "--secrets-file", "/nonexistent/sumi-secrets", "--listen", bad }, unavailableSelfPath));
+    }
 }

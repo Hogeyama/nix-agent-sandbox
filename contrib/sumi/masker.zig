@@ -1,48 +1,66 @@
-//! 値の判定と置換を、手元の一覧で行うか、ブローカーの socket へ問い合わせるか。
+//! 値の判定と置換を、手元の一覧で行うか、ブローカーへ問い合わせるか。
 //!
-//! `--secrets-file F` は一覧をこのプロセスに読み込む。`--socket SOCKET` は一覧を
-//! 持たず、`nas-mask-filter --serve` と同じ 1 接続 = 1 ストリームのプロトコルで
-//! バイト列を送り、マスク済みのバイト列を受け取る。一覧をエージェントと同じ
-//! 環境へ置けないとき (コンテナ内の hook) に後者を使う。
+//! `--secrets-file F` は一覧をこのプロセスに読み込む。`--server ADDR` は一覧を
+//! 持たず、`sumi serve` / `nas-mask-filter --serve` と同じ 1 接続 = 1 ストリームの
+//! プロトコルでバイト列を送り、マスク済みのバイト列を受け取る。一覧をエージェントと
+//! 同じ環境へ置けないとき (コンテナ内の hook、srt の sandbox の中の run) に後者を使う。
+//! ADDR は Unix ソケットのパス、`unix:///path`、ループバックの `tcp://` のどれか
+//! (supervise.address)。
 //!
-//! socket では一覧を持たないので、「含むか」は送ったバイト列と返ってきたバイト列が
+//! ブローカーでは一覧を持たないので、「含むか」は送ったバイト列と返ってきたバイト列が
 //! 異なるかで判定する。`*` だけから成る値は一覧では「含む」だが、置換しても
-//! 変わらないので socket では「含まない」になる。
+//! 変わらないのでブローカーでは「含まない」になる。
 
 const std = @import("std");
 const mask = @import("masking").mask;
 const supervise = @import("supervise");
 const secrets = @import("secrets.zig");
+const address = supervise.address;
 
 pub const Error = error{ OutOfMemory, MaskUnavailable };
 
 /// ブローカーへ問い合わせられなかったときに利用者へ見せる理由文。
 pub const UNAVAILABLE_REASON = "the mask broker could not be reached";
 
+/// `--server` で選んだブローカー。
+pub const Server = struct {
+    /// 利用者が書いた ADDR そのもの。init はこれを hook と prefix へ書き戻す。
+    /// `addr` から組み立て直すと `unix://` の有無などの書き方が変わり、利用者が
+    /// 書いた値と settings の値が食い違って見えるので、文字列のまま持つ。
+    text: []const u8,
+    addr: address.Address,
+};
+
 /// コマンドラインで選んだ値の出どころ。
 pub const Source = union(enum) {
     secrets_file: []const u8,
-    socket: []const u8,
+    server: Server,
 };
 
-/// `--secrets-file` / `--socket` を 1 つだけ受け取るための状態。
+/// `--secrets-file` / `--server` を 1 つだけ受け取るための状態。
 /// 引数パーサはオプションを見つけるたびに `take` を呼び、最後に `finish` を呼ぶ。
 pub const SourceOption = struct {
     value: ?Source = null,
 
     pub fn isName(name: []const u8) bool {
-        return std.mem.eql(u8, name, "--secrets-file") or std.mem.eql(u8, name, "--socket");
+        return std.mem.eql(u8, name, "--secrets-file") or std.mem.eql(u8, name, "--server");
     }
 
+    /// `--server` の値はここで解釈する。不正な ADDR を接続の失敗 (hook は伏せる、
+    /// run は 121) まで持ち越すと、書き間違いが「ブローカーが落ちている」と
+    /// 区別できなくなるので、引数の誤り (usage エラー) として返す。
     pub fn take(self: *SourceOption, name: []const u8, value: []const u8) !void {
         if (self.value) |existing| {
             const same = switch (existing) {
                 .secrets_file => std.mem.eql(u8, name, "--secrets-file"),
-                .socket => std.mem.eql(u8, name, "--socket"),
+                .server => std.mem.eql(u8, name, "--server"),
             };
             return if (same) error.DuplicateOption else error.ConflictingSources;
         }
-        self.value = if (std.mem.eql(u8, name, "--socket")) .{ .socket = value } else .{ .secrets_file = value };
+        if (std.mem.eql(u8, name, "--server")) {
+            const addr = address.parse(value) catch return error.InvalidServerAddress;
+            self.value = .{ .server = .{ .text = value, .addr = addr } };
+        } else self.value = .{ .secrets_file = value };
     }
 
     pub fn finish(self: SourceOption) !Source {
@@ -52,14 +70,14 @@ pub const SourceOption = struct {
 
 pub const Masker = union(enum) {
     values: []const []const u8,
-    socket: []const u8,
+    server: address.Address,
 
     /// bytes が保護された値を含むか。
     pub fn contains(self: Masker, allocator: std.mem.Allocator, bytes: []const u8) Error!bool {
         switch (self) {
             .values => |values| return mask.containsAny(bytes, values),
-            .socket => |path| {
-                const masked = try roundTrip(allocator, path, bytes);
+            .server => |addr| {
+                const masked = try roundTrip(allocator, addr, bytes);
                 defer allocator.free(masked);
                 return !std.mem.eql(u8, masked, bytes);
             },
@@ -78,14 +96,18 @@ pub const Masker = union(enum) {
                 mask.maskAll(copy, values, null);
                 slot.* = copy;
             },
-            .socket => |path| try maskManyRemote(allocator, path, inputs, out),
+            .server => |addr| try maskManyRemote(allocator, addr, inputs, out),
         }
         return out;
     }
 };
 
-fn roundTrip(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) Error![]u8 {
-    return supervise.maskOnce(allocator, .{ .unix = path }, null, bytes) catch |err| switch (err) {
+/// proxy は TCP の ADDR のときだけ relay が見る (srt の sandbox の中では proxy の
+/// `CONNECT` でしかホストのブローカーへ届かない)。接続・proxy の失敗はどれも
+/// MaskUnavailable にまとめ、原因ごとの詳細は呼び出し側へ渡さない。hook の stderr は
+/// エージェントに見えうるからである。
+fn roundTrip(allocator: std.mem.Allocator, addr: address.Address, bytes: []const u8) Error![]u8 {
+    return supervise.maskOnce(allocator, addr, supervise.proxyFromEnv(), bytes) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.MaskUnavailable,
     };
@@ -95,7 +117,7 @@ fn roundTrip(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) 
 /// 数千になる。NUL で区切って 1 接続にまとめ、区切りがそのまま返ってきたときだけ
 /// 切り分けて使う。区切りが変わったのは値が区切りを跨いで一致したということで、
 /// 入力ごとのマスクとは結果が異なりうるので、そのときは入力ごとに問い合わせ直す。
-fn maskManyRemote(allocator: std.mem.Allocator, path: []const u8, inputs: []const []const u8, out: []?[]u8) Error!void {
+fn maskManyRemote(allocator: std.mem.Allocator, addr: address.Address, inputs: []const []const u8, out: []?[]u8) Error!void {
     if (inputs.len == 0) return;
     var total: usize = inputs.len - 1;
     for (inputs) |input| total += input.len;
@@ -111,7 +133,7 @@ fn maskManyRemote(allocator: std.mem.Allocator, path: []const u8, inputs: []cons
         at += input.len;
     }
 
-    const masked = try roundTrip(allocator, path, joined);
+    const masked = try roundTrip(allocator, addr, joined);
     defer allocator.free(masked);
 
     var separators_intact = true;
@@ -136,7 +158,7 @@ fn maskManyRemote(allocator: std.mem.Allocator, path: []const u8, inputs: []cons
     }
 
     for (inputs, out) |input, *slot| {
-        const piece = try roundTrip(allocator, path, input);
+        const piece = try roundTrip(allocator, addr, input);
         if (std.mem.eql(u8, piece, input)) allocator.free(piece) else slot.* = piece;
     }
 }
@@ -147,12 +169,12 @@ pub const Resolved = union(enum) {
     err: []const u8,
 };
 
-/// Source を Masker にする。secrets ファイルはここで読み、socket はまだ接続しない
+/// Source を Masker にする。secrets ファイルはここで読み、ブローカーへはまだ接続しない
 /// (接続の失敗は問い合わせのたびに MaskUnavailable として現れる)。
 pub fn resolve(allocator: std.mem.Allocator, source: Source) Resolved {
     return switch (source) {
         .secrets_file => |path| if (secrets.load(allocator, path)) |values| .{ .ok = .{ .values = values } } else |err| .{ .err = secrets.describe(err) },
-        .socket => |path| .{ .ok = .{ .socket = path } },
+        .server => |server| .{ .ok = .{ .server = server.addr } },
     };
 }
 
@@ -241,20 +263,49 @@ fn readExactly(fd: posix.socket_t, buf: []u8) bool {
     return true;
 }
 
-test "SourceOption: exactly one of --secrets-file and --socket" {
+test "SourceOption: exactly one of --secrets-file and --server" {
     var opt = SourceOption{};
-    try opt.take("--socket", "/s");
-    try testing.expectEqualStrings("/s", (try opt.finish()).socket);
+    try opt.take("--server", "/s");
+    const got = (try opt.finish()).server;
+    try testing.expectEqualStrings("/s", got.text);
+    try testing.expectEqualStrings("/s", got.addr.unix);
     try testing.expectError(error.ConflictingSources, opt.take("--secrets-file", "/f"));
-    try testing.expectError(error.DuplicateOption, opt.take("--socket", "/t"));
+    try testing.expectError(error.DuplicateOption, opt.take("--server", "/t"));
     try testing.expectError(error.MissingSource, (SourceOption{}).finish());
+}
+
+test "SourceOption: --server keeps the text and parses every ADDR form" {
+    var unix_url = SourceOption{};
+    try unix_url.take("--server", "unix:///run/mask.sock");
+    const u = (try unix_url.finish()).server;
+    try testing.expectEqualStrings("unix:///run/mask.sock", u.text);
+    try testing.expectEqualStrings("/run/mask.sock", u.addr.unix);
+
+    var tcp4 = SourceOption{};
+    try tcp4.take("--server", "tcp://127.0.0.1:47321");
+    const t4 = (try tcp4.finish()).server;
+    try testing.expectEqualStrings("tcp://127.0.0.1:47321", t4.text);
+    try testing.expectEqual(@as(u16, 47321), t4.addr.tcp.getPort());
+
+    var tcp6 = SourceOption{};
+    try tcp6.take("--server", "tcp://[::1]:47321");
+    try testing.expectEqual(posix.AF.INET6, (try tcp6.finish()).server.addr.tcp.any.family);
+}
+
+test "SourceOption: an invalid --server value is rejected, and --socket is not an option" {
+    inline for (&.{ "tcp://localhost:1", "tcp://10.0.0.1:1", "tcp://127.0.0.1:0", "unix://relative", "tpc://127.0.0.1:1", "" }) |bad| {
+        var opt = SourceOption{};
+        try testing.expectError(error.InvalidServerAddress, opt.take("--server", bad));
+        try testing.expectError(error.MissingSource, opt.finish());
+    }
+    try testing.expect(!SourceOption.isName("--socket"));
 }
 
 test "socket masker: contains compares the returned bytes" {
     var broker = TestBroker{ .values = &.{"Tr0ub4dor"} };
     try broker.start("contains", 2);
     defer broker.stop();
-    const m: Masker = .{ .socket = broker.path };
+    const m: Masker = .{ .server = .{ .unix = broker.path } };
     try testing.expect(try m.contains(testing.allocator, "pw=Tr0ub4dor"));
     try testing.expect(!(try m.contains(testing.allocator, "nothing here")));
 }
@@ -263,7 +314,7 @@ test "socket masker: many inputs share one connection" {
     var broker = TestBroker{ .values = &.{"Tr0ub4dor"} };
     try broker.start("many", 1);
     defer broker.stop();
-    const m: Masker = .{ .socket = broker.path };
+    const m: Masker = .{ .server = .{ .unix = broker.path } };
     const got = try m.maskMany(testing.allocator, &.{ "a", "x Tr0ub4dor y", "", "b" });
     defer freeMany(testing.allocator, got);
     try testing.expectEqual(@as(?[]u8, null), got[0]);
@@ -278,7 +329,7 @@ test "socket masker: a match across a separator falls back to one input per conn
     var broker = TestBroker{ .values = &.{ "ab\x00cd", "Tr0ub4dor" } };
     try broker.start("fallback", 4);
     defer broker.stop();
-    const m: Masker = .{ .socket = broker.path };
+    const m: Masker = .{ .server = .{ .unix = broker.path } };
     const got = try m.maskMany(testing.allocator, &.{ "ab", "cd", "Tr0ub4dor" });
     defer freeMany(testing.allocator, got);
     try testing.expectEqual(@as(?[]u8, null), got[0]);
@@ -287,7 +338,20 @@ test "socket masker: a match across a separator falls back to one input per conn
 }
 
 test "socket masker: an unreachable broker is MaskUnavailable" {
-    const m: Masker = .{ .socket = "/nonexistent/sumi-test.sock" };
+    const m: Masker = .{ .server = .{ .unix = "/nonexistent/sumi-test.sock" } };
+    try testing.expectError(error.MaskUnavailable, m.contains(testing.allocator, "x"));
+}
+
+test "tcp masker: a port with no listener is MaskUnavailable" {
+    // bind だけして listen しないポートは接続を拒む。閉じたポート番号を選ぶより、
+    // 他のプロセスに取られる心配が無い。
+    const fd = try posix.socket(posix.AF.INET, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    defer posix.close(fd);
+    var addr = try std.net.Address.parseIp4("127.0.0.1", 0);
+    try posix.bind(fd, &addr.any, addr.getOsSockLen());
+    var len = addr.getOsSockLen();
+    try posix.getsockname(fd, &addr.any, &len);
+    const m: Masker = .{ .server = .{ .tcp = addr } };
     try testing.expectError(error.MaskUnavailable, m.contains(testing.allocator, "x"));
 }
 

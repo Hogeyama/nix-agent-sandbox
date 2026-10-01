@@ -107,7 +107,8 @@ pub fn mergeHooks(allocator: std.mem.Allocator, settings: *std.json.Value, self_
 pub fn sourceArgs(source: masker.Source) [2][]const u8 {
     return switch (source) {
         .secrets_file => |path| .{ "--secrets-file", path },
-        .socket => |path| .{ "--socket", path },
+        // 利用者が書いた ADDR をそのまま書く (masker.Server.text)。
+        .server => |server| .{ "--server", server.text },
     };
 }
 
@@ -203,7 +204,7 @@ fn fail(message: []const u8) u8 {
 
 fn usage(message: []const u8) u8 {
     std.debug.print(
-        "sumi: {s}\nusage: sumi init --agent claude (--secrets-file F | --socket SOCKET) [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]\n",
+        "sumi: {s}\nusage: sumi init --agent claude (--secrets-file F | --server ADDR) [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]\n",
         .{message},
     );
     return cli.EXIT_USAGE;
@@ -276,12 +277,12 @@ fn selectProbe(values: []const []const u8) []const u8 {
     return values[0];
 }
 
-/// 値の一覧を持たない socket 版の自己検査。どの値が伏せられるかを知らないので、
+/// 値の一覧を持たない `--server` 版の自己検査。どの値が伏せられるかを知らないので、
 /// 無関係な文字列が素通しになること (= hook と run がブローカーへ届いていること) を確かめる。
 /// ブローカーへ届かなければ post-tool は withhold を、run は 121 を返すのでここで失敗する。
 const SOCKET_PROBE = "sumi-self-check";
 
-fn selfCheckSocket(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8) !void {
+fn selfCheckServer(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8) !void {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("CLAUDE_CODE_SHELL", shell_path);
@@ -402,8 +403,8 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
             if (mode != 0o600 and mode != 0o640 and mode != 0o400) warn("the secrets file is not mode 0600/0640/0400; other users may read it");
             break :blk .{ .secrets_file = secret_path };
         },
-        // socket はパスをそのまま hook に書く。存在は自己検査で確かめる。
-        .socket => |path| .{ .socket = path },
+        // ADDR はそのまま hook に書く。届くかは自己検査で確かめる。
+        .server => |server| .{ .server = server },
     };
     const home = std.posix.getenv("HOME") orelse return fail("HOME is not set");
     const downloads = try std.fs.path.join(allocator, &.{ home, "Downloads" });
@@ -438,7 +439,7 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     if (backup_path) |path| std.debug.print("sumi: backup at {s}\n", .{path});
     const checked = switch (source) {
         .secrets_file => selfCheck(allocator, commands, self_path, source, shell_path, prefix, selectProbe(values)),
-        .socket => selfCheckSocket(allocator, commands, self_path, source, shell_path, prefix),
+        .server => selfCheckServer(allocator, commands, self_path, source, shell_path, prefix),
     };
     checked catch |err| {
         std.debug.print("sumi: self-check failed ({s}); settings were written", .{@errorName(err)});
@@ -514,15 +515,35 @@ test "buildCommands: creates exec-form argv with the absolute secrets path" {
     try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--secrets-file", "/secret path/list" }, got.post_tool.args);
     try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", "/secret path/list", "--root", "/extra dir", "--deny-path", "app.properties" }, got.prompt.args);
 }
-test "buildCommands: a socket source is written into both hooks" {
-    const got = try buildCommands(testing.allocator, "/opt/s/sumi", .{ .socket = "/run/mask.sock" }, &.{}, &.{});
-    defer testing.allocator.free(got.post_tool.args);
-    defer testing.allocator.free(got.prompt.args);
-    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--socket", "/run/mask.sock" }, got.post_tool.args);
-    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--socket", "/run/mask.sock" }, got.prompt.args);
-    const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", .{ .socket = "/run/mask.sock" }, "/bin/bash");
-    defer testing.allocator.free(prefix);
-    try testing.expect(std.mem.indexOf(u8, prefix, "'run' '--socket' '/run/mask.sock'") != null);
+test "buildCommands: a server source is written into both hooks as given" {
+    inline for (&.{ "/run/mask.sock", "unix:///run/mask.sock", "tcp://127.0.0.1:47321" }) |text| {
+        var option = masker.SourceOption{};
+        try option.take("--server", text);
+        const source = try option.finish();
+        const got = try buildCommands(testing.allocator, "/opt/s/sumi", source, &.{}, &.{});
+        defer testing.allocator.free(got.post_tool.args);
+        defer testing.allocator.free(got.prompt.args);
+        try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--server", text }, got.post_tool.args);
+        try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--server", text }, got.prompt.args);
+        const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", source, "/bin/bash");
+        defer testing.allocator.free(prefix);
+        try testing.expect(std.mem.indexOf(u8, prefix, "'run' '--server' '" ++ text ++ "'") != null);
+    }
+}
+test "mergeHooks: a hook written with the removed --socket option is replaced as sumi's own" {
+    var parsed = try jsonio.parse(testing.allocator, "{\"hooks\":{\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/opt/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"post-tool\",\"--socket\",\"/run/mask.sock\"]}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/opt/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"prompt\",\"--socket\",\"/run/mask.sock\"]}]}]}}");
+    defer parsed.deinit();
+    const post_args = [_][]const u8{ "hook", "--agent", "claude", "post-tool", "--server", "/run/mask.sock" };
+    const prompt_args = [_][]const u8{ "hook", "--agent", "claude", "prompt", "--server", "/run/mask.sock" };
+    const commands = HookEntries{
+        .post_tool = .{ .command = "/opt/sumi", .args = &post_args },
+        .prompt = .{ .command = "/opt/sumi", .args = &prompt_args },
+    };
+    try testing.expectEqual(@as(usize, 2), try mergeHooks(parsed.arena.allocator(), &parsed.value, "/opt/sumi", commands));
+    const out = try jsonio.stringify(testing.allocator, parsed.value);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "--socket") == null);
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out, "\"--server\""));
 }
 test "environment install preserves unrelated keys and sets one supported shell" {
     var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"KEEP\":\"yes\",\"CLAUDE_CODE_SHELL_PREFIX\":\"/old/sumi run --secrets-file /s --shell /bin/zsh\"},\"permissions\":{\"deny\":[\"Bash(git:*)\"]}}");
@@ -591,7 +612,9 @@ test "parseArgs: accepts and collects every init option" {
 }
 test "parseArgs: rejects missing values and unknown options" {
     try testing.expectError(error.MissingSource, parseArgs(testing.allocator, &.{}));
-    try testing.expectError(error.ConflictingSources, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "--socket", "/sock" }));
+    try testing.expectError(error.ConflictingSources, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "--server", "/sock" }));
+    try testing.expectError(error.UnknownOption, parseArgs(testing.allocator, &.{ "--socket", "/sock" }));
+    try testing.expectError(error.InvalidServerAddress, parseArgs(testing.allocator, &.{ "--server", "tcp://localhost:1" }));
     inline for (&.{ "--secrets-file", "--root", "--deny-path", "--settings", "--shell" }) |option| {
         try testing.expectError(error.MissingOptionValue, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", option }));
     }

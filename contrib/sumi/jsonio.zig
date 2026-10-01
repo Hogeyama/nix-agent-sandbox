@@ -3,7 +3,7 @@
 //! JSON テキストではなく parse 後の値をマスクする。値が引用符やバックスラッシュ、
 //! `\uXXXX` を含んでいてもデコード後のバイト列で一致し、JSON の構造トークンや数値と
 //! 同じ綴りの値を secrets に置いても構造が壊れない。数値・真偽値・null のリーフは
-//! 対象にしない。値の判定と置換は Masker に任せる (手元の一覧か、ブローカーの socket)。
+//! 対象にしない。値の判定と置換は Masker に任せる (手元の一覧か、ブローカー)。
 
 const std = @import("std");
 const Masker = @import("masker.zig").Masker;

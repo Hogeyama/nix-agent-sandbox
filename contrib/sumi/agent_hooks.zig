@@ -92,7 +92,7 @@ pub fn main(a: std.mem.Allocator, comptime agent: cli.Agent, comptime event: Eve
     var i: usize = 0;
     while (i < args.len) : (i += 2) {
         if (!masker.SourceOption.isName(args[i]) or i + 1 == args.len or std.mem.startsWith(u8, args[i + 1], "--"))
-            return cli.usage("hook requires --socket SOCKET or --secrets-file FILE");
+            return cli.usage("hook requires --server ADDR or --secrets-file FILE");
         source.take(args[i], args[i + 1]) catch return cli.usage("hook requires exactly one masking source");
     }
     const selected = source.finish() catch return cli.usage("hook requires a masking source");

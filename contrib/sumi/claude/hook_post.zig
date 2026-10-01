@@ -307,8 +307,10 @@ fn decideText(text: []const u8, list: []const []const u8) !Decision {
 test "parseArgs: post-tool consumes exactly one secrets option" {
     const got = try parseArgs(&.{ "--secrets-file", "/s" });
     try testing.expectEqualStrings("/s", got.source.secrets_file);
-    try testing.expectEqualStrings("/sock", (try parseArgs(&.{ "--socket", "/sock" })).source.socket);
-    try testing.expectError(error.ConflictingSources, parseArgs(&.{ "--secrets-file", "/s", "--socket", "/sock" }));
+    try testing.expectEqualStrings("/sock", (try parseArgs(&.{ "--server", "/sock" })).source.server.text);
+    try testing.expectError(error.ConflictingSources, parseArgs(&.{ "--secrets-file", "/s", "--server", "/sock" }));
+    try testing.expectError(error.UnknownOption, parseArgs(&.{ "--socket", "/sock" }));
+    try testing.expectError(error.InvalidServerAddress, parseArgs(&.{ "--server", "tcp://localhost:1" }));
     try testing.expectError(error.MissingSource, parseArgs(&.{}));
     try testing.expectError(error.DuplicateOption, parseArgs(&.{ "--secrets-file", "/s", "--secrets-file", "/other" }));
     try testing.expectError(error.UnknownOption, parseArgs(&.{ "--secrets-file", "/s", "--wat", "x" }));
@@ -371,7 +373,7 @@ test "decide over a socket: a value that JSON-escapes is still masked" {
     var broker = masker.TestBroker{ .values = &.{"ab\"cd-decoy"} };
     try broker.start("post-escape", 1);
     defer broker.stop();
-    var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"pass=ab\\\"cd-decoy\"}}", .{ .ok = .{ .socket = broker.path } });
+    var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"pass=ab\\\"cd-decoy\"}}", .{ .ok = .{ .server = .{ .unix = broker.path } } });
     defer d.deinit(testing.allocator);
     try testing.expectEqualStrings("{\"stdout\":\"pass=***********\"}", d.replace.tool_response_json);
 }
@@ -379,15 +381,15 @@ test "decide over a socket: a failure carrying the value is reported" {
     var broker = masker.TestBroker{ .values = &.{decoy} };
     try broker.start("post-failure", 2);
     defer broker.stop();
-    var carrying = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"pw=Tr0ub4dor\"}", .{ .ok = .{ .socket = broker.path } });
+    var carrying = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"pw=Tr0ub4dor\"}", .{ .ok = .{ .server = .{ .unix = broker.path } } });
     defer carrying.deinit(testing.allocator);
     try testing.expect(carrying == .report);
-    var clean = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"no such file\"}", .{ .ok = .{ .socket = broker.path } });
+    var clean = try decide(testing.allocator, "{\"hook_event_name\":\"PostToolUseFailure\",\"error\":\"no such file\"}", .{ .ok = .{ .server = .{ .unix = broker.path } } });
     defer clean.deinit(testing.allocator);
     try testing.expectEqual(Decision.pass, clean);
 }
 test "decide over a socket: an unreachable broker withholds or reports" {
-    const gone: SecretsResult = .{ .ok = .{ .socket = "/nonexistent/sumi-post.sock" } };
+    const gone: SecretsResult = .{ .ok = .{ .server = .{ .unix = "/nonexistent/sumi-post.sock" } } };
     var d = try decide(testing.allocator, "{\"tool_response\":{\"stdout\":\"x\"}}", gone);
     defer d.deinit(testing.allocator);
     try testing.expectEqualStrings(masker.UNAVAILABLE_REASON, d.withhold.reason);
