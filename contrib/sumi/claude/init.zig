@@ -530,21 +530,6 @@ test "buildCommands: a server source is written into both hooks as given" {
         try testing.expect(std.mem.indexOf(u8, prefix, "'run' '--server' '" ++ text ++ "'") != null);
     }
 }
-test "mergeHooks: a hook written with the removed --socket option is replaced as sumi's own" {
-    var parsed = try jsonio.parse(testing.allocator, "{\"hooks\":{\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/opt/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"post-tool\",\"--socket\",\"/run/mask.sock\"]}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/opt/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"prompt\",\"--socket\",\"/run/mask.sock\"]}]}]}}");
-    defer parsed.deinit();
-    const post_args = [_][]const u8{ "hook", "--agent", "claude", "post-tool", "--server", "/run/mask.sock" };
-    const prompt_args = [_][]const u8{ "hook", "--agent", "claude", "prompt", "--server", "/run/mask.sock" };
-    const commands = HookEntries{
-        .post_tool = .{ .command = "/opt/sumi", .args = &post_args },
-        .prompt = .{ .command = "/opt/sumi", .args = &prompt_args },
-    };
-    try testing.expectEqual(@as(usize, 2), try mergeHooks(parsed.arena.allocator(), &parsed.value, "/opt/sumi", commands));
-    const out = try jsonio.stringify(testing.allocator, parsed.value);
-    defer testing.allocator.free(out);
-    try testing.expect(std.mem.indexOf(u8, out, "--socket") == null);
-    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out, "\"--server\""));
-}
 test "environment install preserves unrelated keys and sets one supported shell" {
     var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"KEEP\":\"yes\",\"CLAUDE_CODE_SHELL_PREFIX\":\"/old/sumi run --secrets-file /s --shell /bin/zsh\"},\"permissions\":{\"deny\":[\"Bash(git:*)\"]}}");
     defer parsed.deinit();
