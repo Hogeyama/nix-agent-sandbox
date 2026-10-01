@@ -172,7 +172,8 @@ record_success_status "run over serve" "$?"
 check "run over serve masks a listed value and a decoded base64 line" 'a=********* b=***********' "$out"
 
 out="$(printf '%s' "$(jq -nc --arg v "$current" '{tool_name:"Bash",tool_input:{command:"cat .env"},tool_response:{stdout:("pw=" + $v),stderr:""}}')" \
-  | "$sumi" hook --agent claude post-tool --socket "$serve_sock" | delivered)"
+  | "$sumi" hook --agent claude post-tool --socket "$serve_sock" | delivered; exit "${PIPESTATUS[1]}")"
+record_success_status "post-tool over serve" "$?"
 check "post-tool over serve masks the output" 'pw=*********' "$(jq -nr --arg o "$out" '$o | fromjson | .stdout')"
 
 kill "$serve_pid" 2>/dev/null
@@ -180,11 +181,11 @@ wait "$serve_pid" 2>/dev/null
 serve_pid=""
 check "serve writes nothing to stderr while serving" "0" "$(wc -c < "$work/serve.err" | tr -d ' ')"
 
-"$sumi" serve --secrets-file "$work/missing.txt" --listen "$serve_dir/missing.sock" >/dev/null 2>"$work/serve-missing.err"
+timeout 5 "$sumi" serve --secrets-file "$work/missing.txt" --listen "$serve_dir/missing.sock" >/dev/null 2>"$work/serve-missing.err"
 status=$?
 check "serve with a missing list exits 1" "1" "$status"
 printf keep > "$work/not-a-socket"
-"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$work/not-a-socket" >/dev/null 2>"$work/serve-nonsock.err"
+timeout 5 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$work/not-a-socket" >/dev/null 2>"$work/serve-nonsock.err"
 status=$?
 check "serve refuses a listen path that is not a socket" "1" "$status"
 check "serve leaves the non-socket file intact" "keep" "$(cat "$work/not-a-socket")"
@@ -192,11 +193,11 @@ check "serve explains the non-socket path" "yes" "$(grep -q 'not a socket' "$wor
 check "serve with a missing list creates no socket" "no" "$([ -e "$serve_dir/missing.sock" ] && echo yes || echo no)"
 check "serve with a missing list says why" "yes" "$(grep -q 'missing or unreadable' "$work/serve-missing.err" && echo yes || echo no)"
 
-"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_dir/no-such-dir/mask.sock" >/dev/null 2>"$work/serve-bind.err"
+timeout 5 "$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_dir/no-such-dir/mask.sock" >/dev/null 2>"$work/serve-bind.err"
 check "serve exits 1 when it cannot bind" "1" "$?"
 check "serve reports a bind failure" "yes" "$(grep -q 'serve failed' "$work/serve-bind.err" && echo yes || echo no)"
 
-"$sumi" serve --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
+timeout 5 "$sumi" serve --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
 check "serve without --listen exits 2" "2" "$?"
 
 # --- post-tool ---------------------------------------------------------------
