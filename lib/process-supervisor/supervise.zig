@@ -73,6 +73,8 @@ const Relay = relay_mod.Relay;
 /// ブローカーで 1 回分のバイト列をマスクする。hook のようにストリームではなく
 /// 手元の値を問い合わせる呼び出し元向け。
 pub const maskOnce = relay_mod.maskOnce;
+/// 環境変数から proxy の URL を選ぶ。run / maskOnce に渡す値の取得用。
+pub const proxyFromEnv = relay_mod.proxyFromEnv;
 const CHUNK_SIZE = relay_mod.CHUNK_SIZE;
 
 /// 子プロセスの終了を検知した後、パイプに追加データを待つアイドル時間 (ms)。
@@ -370,22 +372,25 @@ fn spawnChild(
     };
 }
 
-/// program を argv0/args で起動し、その出力を sock_path のブローカー経由で
+/// program を argv0/args で起動し、その出力を addr のブローカー経由で
 /// マスクして中継する。戻り値は子の終了ステータスに対応する終了コード。
+/// proxy の扱い (TCP のときだけ、ループバックの proxy だけを使う) は
+/// `Relay.connect` を参照。
 ///
 /// リレーは **fork の前に** 2 本とも張る。どちらか一方でも張れなければ子を
 /// 起動せずにエラーを返す (起動してしまうと、マスクできない出力を持つ
 /// プロセスが動き出す)。
 pub fn run(
     allocator: std.mem.Allocator,
-    sock_path: []const u8,
+    addr: address.Address,
+    proxy: ?[]const u8,
     argv0: []const u8,
     program: []const u8,
     args: []const []const u8,
     opts: Options,
 ) !u8 {
-    var out_relay = try Relay.connect(sock_path);
-    var err_relay = Relay.connect(sock_path) catch |err| {
+    var out_relay = try Relay.connect(addr, proxy);
+    var err_relay = Relay.connect(addr, proxy) catch |err| {
         out_relay.deinit(allocator);
         return err;
     };

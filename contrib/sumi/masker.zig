@@ -85,7 +85,7 @@ pub const Masker = union(enum) {
 };
 
 fn roundTrip(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) Error![]u8 {
-    return supervise.maskOnce(allocator, path, bytes) catch |err| switch (err) {
+    return supervise.maskOnce(allocator, .{ .unix = path }, null, bytes) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.MaskUnavailable,
     };

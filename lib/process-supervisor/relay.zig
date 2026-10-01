@@ -1,5 +1,8 @@
 //! supervise モードがホスト側ブローカー (`--serve`) へ生バイトを送り、
-//! マスク済みバイトを受け取るための Unix socket リレー。
+//! マスク済みバイトを受け取るためのリレー。ブローカーへは Unix socket か
+//! ループバックの TCP でつなぐ。TCP はループバックの HTTP proxy があれば
+//! `CONNECT` で必ずそれを経由する (経路の規則は `routeFor`)。sandbox の中からは
+//! ホストのループバックへ直接は届かず、proxy だけが届くため。
 //!
 //! 1 接続 = 1 ストリームなので、スーパーバイザは stdout 用と stderr 用に
 //! 2 本張る。サーバはチャンク境界を跨ぐシークレットを取りこぼさないため
@@ -22,7 +25,8 @@ const posix = std.posix;
 /// パイプ / socket の 1 回の read で受け取る最大バイト数。
 pub const CHUNK_SIZE: usize = 64 * 1024;
 
-const MAX_SOCKET_PATH = @import("address.zig").MAX_SOCKET_PATH;
+const address = @import("address.zig");
+const MAX_SOCKET_PATH = address.MAX_SOCKET_PATH;
 
 /// connect の再試行回数と間隔。デーモンは起動済みのはずなので、これは
 /// 「起動直後にわずかにずれた」「backlog が一瞬詰まった」を吸収するための
@@ -94,6 +98,268 @@ fn writeAllToDest(fd: posix.fd_t, bytes: []const u8) DestError!void {
     }
 }
 
+fn connectUnix(sock_path: []const u8) RelayError!posix.socket_t {
+    if (sock_path.len == 0 or sock_path.len > MAX_SOCKET_PATH) {
+        return error.SocketPathInvalid;
+    }
+    var un = posix.sockaddr.un{ .family = posix.AF.UNIX, .path = undefined };
+    @memset(&un.path, 0);
+    @memcpy(un.path[0..sock_path.len], sock_path);
+    return connectRetrying(posix.AF.UNIX, @ptrCast(&un), @sizeOf(posix.sockaddr.un));
+}
+
+fn connectTcp(target: std.net.Address) RelayError!posix.socket_t {
+    return connectRetrying(target.any.family, &target.any, target.getOsSockLen());
+}
+
+/// connect(2) の失敗だけを CONNECT_ATTEMPTS まで再試行する。proxy が返した拒否
+/// (403 など) はここには来ない: 拒否は設定で決まるもので、待っても変わらない。
+fn connectRetrying(
+    family: u32,
+    sa: *const posix.sockaddr,
+    len: posix.socklen_t,
+) RelayError!posix.socket_t {
+    var attempt: usize = 0;
+    while (attempt < CONNECT_ATTEMPTS) : (attempt += 1) {
+        if (attempt > 0) std.Thread.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
+
+        const fd = posix.socket(family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0) catch continue;
+        posix.connect(fd, sa, len) catch {
+            // 失敗した socket は状態が未規定なので使い回さず作り直す。
+            posix.close(fd);
+            continue;
+        };
+        return fd;
+    }
+    return error.RelayConnectFailed;
+}
+
+// ---------------------------------------------------------------------------
+// proxy
+// ---------------------------------------------------------------------------
+
+/// 参照する環境変数。この順に最初の空でない値を使う。`NO_PROXY` は見ない:
+/// srt は `NO_PROXY` に localhost などを入れるので、従うと proxy を通らずに
+/// 直接つなぎに行き、sandbox の中からは届かなくなる。
+const PROXY_ENV = [_][]const u8{ "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy" };
+
+/// 環境変数から proxy の URL を選ぶ。使うかどうか (ループバックか) は
+/// `Relay.connect` が決めるので、ここでは選ぶだけ。
+pub fn proxyFromEnv() ?[]const u8 {
+    return selectProxy(getenv);
+}
+
+fn getenv(name: []const u8) ?[]const u8 {
+    return posix.getenv(name);
+}
+
+/// テストで環境変数を書き換えずに済むよう、参照先を引数で受ける。
+fn selectProxy(lookup: *const fn ([]const u8) ?[]const u8) ?[]const u8 {
+    for (PROXY_ENV) |name| {
+        const v = lookup(name) orelse continue;
+        if (v.len > 0) return v;
+    }
+    return null;
+}
+
+/// proxy の URL のユーザー情報の上限。srt のトークン程度を想定し、要求を
+/// スタック上の固定長バッファで組み立てるために上限を置く。
+const MAX_PROXY_USERINFO: usize = 512;
+/// proxy の応答ヘッダの上限。CONNECT の応答はふつう 1 行と空行だけなので、
+/// これを越えるのは proxy ではない何かとみなす。
+const MAX_PROXY_RESPONSE: usize = 8 * 1024;
+/// proxy の応答を待つ上限 (秒)。proxy が黙ると hook や run がいつまでも止まるため。
+const PROXY_RESPONSE_TIMEOUT_S = 5;
+
+const ProxyRoute = union(enum) {
+    direct,
+    connect: struct {
+        addr: std.net.Address,
+        /// URL のユーザー情報 (パーセントエンコードのまま)。無ければ null。
+        userinfo: ?[]const u8,
+    },
+};
+
+/// TCP の ADDR へどう接続するかを決める。
+///
+/// `http://` でホストがループバック (`127.0.0.1`、`[::1]`、`localhost`) の proxy
+/// だけを使い、それ以外 (proxy 無し、他のホスト、`https://` など) は直接つなぐ。
+///
+/// ループバックに限る理由: 社内 proxy に `CONNECT 127.0.0.1:PORT` を送ると、
+/// proxy は proxy 自身のホストのループバックへつなぎに行き、そこで待ち受けている
+/// 何かへツールの出力が流れうる。srt の proxy はループバックで見えるので困らない。
+///
+/// 「直接 → 失敗したら proxy」としない理由: sandbox の network namespace では
+/// 127.0.0.1:PORT が空いていて、エージェントが自前の待ち受けを立てられる。直接を
+/// 先に試すと、出力をその待ち受けへ送り、返ってきた未マスクのバイトを流してしまう。
+///
+/// 同じ理由で、ループバックの `http://` proxy なのに URL が壊れている (ポートや
+/// ユーザー情報が不正) ときは直接へ回さず `RelayConnectFailed` にする。
+fn routeFor(proxy: ?[]const u8) RelayError!ProxyRoute {
+    const url = proxy orelse return .direct;
+    const scheme = "http://";
+    // スキームは大文字小文字を区別しない (RFC 3986)。`HTTP://` を直接扱いにすると
+    // 上の差し替えの穴になる。
+    if (url.len < scheme.len or !std.ascii.eqlIgnoreCase(url[0..scheme.len], scheme)) return .direct;
+    const rest = url[scheme.len..];
+    const authority = rest[0 .. std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len];
+
+    // パスワードに `@` が素で入っていても host を取り違えないよう、最後の `@` で切る。
+    const at = std.mem.lastIndexOfScalar(u8, authority, '@');
+    const userinfo: ?[]const u8 = if (at) |i| authority[0..i] else null;
+    const hostport = if (at) |i| authority[i + 1 ..] else authority;
+
+    var host: []const u8 = undefined;
+    var port_text: ?[]const u8 = null;
+    if (hostport.len > 0 and hostport[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, hostport, ']') orelse return .direct;
+        host = hostport[0 .. close + 1];
+        const after = hostport[close + 1 ..];
+        if (!std.mem.eql(u8, host, "[::1]")) return .direct;
+        if (after.len > 0) {
+            if (after[0] != ':') return error.RelayConnectFailed;
+            port_text = after[1..];
+        }
+    } else {
+        const colon = std.mem.indexOfScalar(u8, hostport, ':');
+        host = hostport[0 .. colon orelse hostport.len];
+        if (colon) |c| port_text = hostport[c + 1 ..];
+    }
+
+    const ip: []const u8 = if (std.mem.eql(u8, host, "127.0.0.1"))
+        "127.0.0.1"
+    else if (std.mem.eql(u8, host, "[::1]"))
+        "::1"
+    else if (std.ascii.eqlIgnoreCase(host, "localhost"))
+        // 名前解決は持ち込まない。srt の proxy は 127.0.0.1 で待ち受ける。
+        "127.0.0.1"
+    else
+        return .direct;
+
+    // ここから先はループバックの proxy と決まっている。壊れていても直接へは回さない。
+    const port: u16 = if (port_text) |t| parseProxyPort(t) orelse return error.RelayConnectFailed else 80;
+    if (userinfo) |u| {
+        if (u.len > MAX_PROXY_USERINFO) return error.RelayConnectFailed;
+        if (!validPercentEncoding(u)) return error.RelayConnectFailed;
+    }
+    const addr = std.net.Address.parseIp(ip, port) catch return error.RelayConnectFailed;
+    return .{ .connect = .{ .addr = addr, .userinfo = userinfo } };
+}
+
+/// 10 進の数字だけを受け付ける (address.zig の parsePort と同じ方針)。
+fn parseProxyPort(s: []const u8) ?u16 {
+    if (s.len == 0) return null;
+    var v: u32 = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return null;
+        v = v * 10 + (c - '0');
+        if (v > 65535) return null;
+    }
+    if (v == 0) return null;
+    return @intCast(v);
+}
+
+/// `%` の後に 16 進 2 桁が続くこと。`percentDecodeInPlace` は不正な並びを
+/// そのまま残すので、黙って違う資格情報を送らないよう先に弾く。
+fn validPercentEncoding(s: []const u8) bool {
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (s[i] != '%') continue;
+        if (i + 2 >= s.len) return false;
+        if (!std.ascii.isHex(s[i + 1]) or !std.ascii.isHex(s[i + 2])) return false;
+        i += 2;
+    }
+    return true;
+}
+
+/// proxy に CONNECT を送り、200 が返ることを確かめる。失敗はすべて
+/// `RelayConnectFailed` (呼び出し元ではブローカーに接続できないのと同じ扱い)。
+/// 再試行はしない: 拒否は設定で決まり、待っても変わらない。
+///
+/// 資格情報を含むので、要求も応答もどこにも出力しない。
+fn proxyHandshake(fd: posix.socket_t, target: std.net.Address, userinfo: ?[]const u8) RelayError!void {
+    const tv = posix.timeval{ .sec = PROXY_RESPONSE_TIMEOUT_S, .usec = 0 };
+    posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&tv)) catch
+        return error.RelayConnectFailed;
+
+    var req_buf: [256 + std.base64.standard.Encoder.calcSize(MAX_PROXY_USERINFO)]u8 = undefined;
+    defer std.crypto.secureZero(u8, &req_buf);
+    const req = buildConnectRequest(&req_buf, target, userinfo) catch return error.RelayConnectFailed;
+    var off: usize = 0;
+    while (off < req.len) {
+        // proxy が先に閉じても SIGPIPE で死なず失敗を返すため NOSIGNAL で送る。
+        const n = posix.send(fd, req[off..], posix.MSG.NOSIGNAL) catch return error.RelayConnectFailed;
+        if (n == 0) return error.RelayConnectFailed;
+        off += n;
+    }
+
+    var resp: [MAX_PROXY_RESPONSE]u8 = undefined;
+    var len: usize = 0;
+    const end = while (true) {
+        if (len == resp.len) return error.RelayConnectFailed;
+        // 受信タイムアウトは WouldBlock として返る。どちらも致命。
+        const n = posix.read(fd, resp[len..]) catch return error.RelayConnectFailed;
+        if (n == 0) return error.RelayConnectFailed;
+        const from = len -| 3;
+        len += n;
+        if (std.mem.indexOfPos(u8, resp[0..len], from, "\r\n\r\n")) |i| break i + 4;
+    };
+    // ブローカーは自分からは何も送らないので、ヘッダの後ろにバイトがあるのは
+    // 相手が CONNECT を素通しする proxy ではないということ。ストリームの頭に
+    // 混ざったまま出力へ流さないため失敗にする。
+    if (end != len) return error.RelayConnectFailed;
+    if (!isConnectEstablished(resp[0..len])) return error.RelayConnectFailed;
+}
+
+fn isConnectEstablished(header: []const u8) bool {
+    for ([_][]const u8{ "HTTP/1.0 200", "HTTP/1.1 200" }) |prefix| {
+        if (!std.mem.startsWith(u8, header, prefix)) continue;
+        // `HTTP/1.1 2000` のような別の状態コードを 200 と取り違えない。
+        const next = header[prefix.len];
+        return next == ' ' or next == '\r';
+    }
+    return false;
+}
+
+fn buildConnectRequest(buf: []u8, target: std.net.Address, userinfo: ?[]const u8) ![]const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    // std.net.Address の書式は IPv6 を `[::1]:PORT` と角括弧付きで書く。
+    try w.print("CONNECT {f} HTTP/1.1\r\nHost: {f}\r\n", .{ target, target });
+    if (userinfo) |u| {
+        var cred_buf: [MAX_PROXY_USERINFO]u8 = undefined;
+        defer std.crypto.secureZero(u8, &cred_buf);
+        const cred = decodeUserinfo(&cred_buf, u);
+        var b64_buf: [std.base64.standard.Encoder.calcSize(MAX_PROXY_USERINFO)]u8 = undefined;
+        defer std.crypto.secureZero(u8, &b64_buf);
+        const b64 = std.base64.standard.Encoder.encode(&b64_buf, cred);
+        try w.print("Proxy-Authorization: Basic {s}\r\n", .{b64});
+    }
+    try w.writeAll("\r\n");
+    return w.buffered();
+}
+
+/// `user[:pass]` をそれぞれパーセントデコードし、`user:pass` にして返す。
+/// デコード前に `:` で区切るのは、パスワード中の `%3A` を区切りと取り違えないため。
+fn decodeUserinfo(buf: []u8, userinfo: []const u8) []const u8 {
+    const colon = std.mem.indexOfScalar(u8, userinfo, ':');
+    var len = percentDecodeInto(buf, userinfo[0 .. colon orelse userinfo.len]);
+    if (colon) |c| {
+        buf[len] = ':';
+        len += 1;
+        len += percentDecodeInto(buf[len..], userinfo[c + 1 ..]);
+    }
+    return buf[0..len];
+}
+
+/// raw をデコードして dst の先頭に置き、長さを返す。`percentDecodeInPlace` は
+/// 結果を渡した領域の**末尾**に寄せて返すので、先頭へ詰め直す。
+fn percentDecodeInto(dst: []u8, raw: []const u8) usize {
+    @memcpy(dst[0..raw.len], raw);
+    const decoded = std.Uri.percentDecodeInPlace(dst[0..raw.len]);
+    std.mem.copyForwards(u8, dst[0..decoded.len], decoded);
+    return decoded.len;
+}
+
 /// ブローカーへの 1 接続。生バイトを送り、マスク済みバイトを出力先 fd へ流す。
 pub const Relay = struct {
     fd: posix.socket_t,
@@ -107,46 +373,39 @@ pub const Relay = struct {
     /// 切り捨てであって完了ではない — 呼び出し側で致命扱いにすること。
     read_eof: bool = false,
 
-    /// sock_path のブローカーへ接続する。
+    /// addr のブローカーへ接続する。
     ///
     /// **ブロッキングの connect(2) を使い、成功してから非ブロッキングに切り替える**。
     /// AF_UNIX の非ブロッキング connect は「backlog が一杯でまだ繋がっていない」を
     /// EAGAIN で返すが、TCP と違って完了を知らせる POLLOUT が来ない。EAGAIN を
-    /// 成功扱いにすると、1 バイトも届かないリレーが黙って出来上がる。
+    /// 成功扱いにすると、1 バイトも届かないリレーが黙って出来上がる。TCP も同じ
+    /// 手順に揃え、proxy との CONNECT のやりとりもブロッキングのうちに済ませる。
     ///
-    /// fd は SOCK_CLOEXEC で作る。子へ漏れると単なる情報漏れではなく**注入
-    /// オラクル**になる: ストリーム途中に 1 バイト差し込むとサーバ側のマッチが
-    /// 崩れて原文がそのまま返るため、差し込んだ値を知っていれば原文を復元できる。
-    pub fn connect(sock_path: []const u8) RelayError!Relay {
-        if (sock_path.len == 0 or sock_path.len > MAX_SOCKET_PATH) {
-            return error.SocketPathInvalid;
-        }
-
-        var addr = posix.sockaddr.un{ .family = posix.AF.UNIX, .path = undefined };
-        @memset(&addr.path, 0);
-        @memcpy(addr.path[0..sock_path.len], sock_path);
-
-        var attempt: usize = 0;
-        while (attempt < CONNECT_ATTEMPTS) : (attempt += 1) {
-            if (attempt > 0) std.Thread.sleep(CONNECT_RETRY_MS * std.time.ns_per_ms);
-
-            const fd = posix.socket(
-                posix.AF.UNIX,
-                posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
-                0,
-            ) catch continue;
-            posix.connect(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
-                // 失敗した socket は状態が未規定なので使い回さず作り直す。
-                posix.close(fd);
-                continue;
-            };
-            setNonBlocking(fd) catch {
-                posix.close(fd);
-                return error.RelayConnectFailed;
-            };
-            return .{ .fd = fd };
-        }
-        return error.RelayConnectFailed;
+    /// fd は SOCK_CLOEXEC で作る (proxy への socket も同じ)。子へ漏れると単なる
+    /// 情報漏れではなく**注入オラクル**になる: ストリーム途中に 1 バイト差し込むと
+    /// サーバ側のマッチが崩れて原文がそのまま返るため、差し込んだ値を知っていれば
+    /// 原文を復元できる。
+    ///
+    /// `proxy` は TCP のときだけ見る (Unix では無視)。経路は `routeFor` の規則
+    /// 1 つで決め、直接と proxy の間でフォールバックしない。
+    pub fn connect(addr: address.Address, proxy: ?[]const u8) RelayError!Relay {
+        const fd = switch (addr) {
+            .unix => |path| try connectUnix(path),
+            .tcp => |target| switch (try routeFor(proxy)) {
+                .direct => try connectTcp(target),
+                .connect => |p| blk: {
+                    const fd = try connectTcp(p.addr);
+                    errdefer posix.close(fd);
+                    try proxyHandshake(fd, target, p.userinfo);
+                    break :blk fd;
+                },
+            },
+        };
+        setNonBlocking(fd) catch {
+            posix.close(fd);
+            return error.RelayConnectFailed;
+        };
+        return .{ .fd = fd };
     }
 
     pub fn deinit(self: *Relay, gpa: std.mem.Allocator) void {
@@ -227,8 +486,13 @@ const ROUND_TRIP_IDLE_MS: i64 = 5000;
 ///
 /// マスクは長さを保存するので、応答が入力と同じ長さでなければ失敗とする。
 /// 途中で切れた応答を「マスク済み」として返さないため。
-pub fn maskOnce(gpa: std.mem.Allocator, sock_path: []const u8, input: []const u8) (RelayError || error{OutOfMemory})![]u8 {
-    var relay = try Relay.connect(sock_path);
+pub fn maskOnce(
+    gpa: std.mem.Allocator,
+    addr: address.Address,
+    proxy: ?[]const u8,
+    input: []const u8,
+) (RelayError || error{OutOfMemory})![]u8 {
+    var relay = try Relay.connect(addr, proxy);
     defer relay.deinit(gpa);
 
     const out = try gpa.alloc(u8, input.len);
@@ -295,12 +559,12 @@ pub fn maskOnce(gpa: std.mem.Allocator, sock_path: []const u8, input: []const u8
 const testing = std.testing;
 
 test "Relay.connect: empty path is rejected" {
-    try testing.expectError(error.SocketPathInvalid, Relay.connect(""));
+    try testing.expectError(error.SocketPathInvalid, Relay.connect(.{ .unix = "" }, null));
 }
 
 test "Relay.connect: path longer than sun_path is rejected" {
     const too_long = "/" ** (MAX_SOCKET_PATH + 1);
-    try testing.expectError(error.SocketPathInvalid, Relay.connect(too_long));
+    try testing.expectError(error.SocketPathInvalid, Relay.connect(.{ .unix = too_long }, null));
 }
 
 test "Relay.connect: a missing broker fails closed" {
@@ -311,7 +575,7 @@ test "Relay.connect: a missing broker fails closed" {
         .{std.c.getpid()},
     );
     std.fs.cwd().deleteFile(path) catch {};
-    try testing.expectError(error.RelayConnectFailed, Relay.connect(path));
+    try testing.expectError(error.RelayConnectFailed, Relay.connect(.{ .unix = path }, null));
 }
 
 /// テスト用の listener を張る (ブロッキング、backlog 1)。
@@ -347,7 +611,7 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
         posix.unlink(path) catch {};
     }
 
-    var relay = try Relay.connect(path);
+    var relay = try Relay.connect(.{ .unix = path }, null);
     defer relay.deinit(testing.allocator);
 
     const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
@@ -415,7 +679,7 @@ test "Relay.pumpReadable: a closed destination is reported apart from mask failu
         posix.unlink(path) catch {};
     }
 
-    var relay = try Relay.connect(path);
+    var relay = try Relay.connect(.{ .unix = path }, null);
     defer relay.deinit(testing.allocator);
     const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
     defer posix.close(peer);
@@ -439,6 +703,10 @@ test "Relay.pumpReadable: a closed destination is reported apart from mask failu
 /// 読み終える前に書き始めるので、背圧のかかる大きな入力でも止まらないことを確かめられる。
 const StarServer = struct {
     fn run(listener: posix.socket_t, truncate: bool) void {
+        // クライアントが接続に失敗したときにテストが join で止まらないよう、待つ時間を区切る。
+        var lp = [_]posix.pollfd{.{ .fd = listener, .events = posix.POLL.IN, .revents = 0 }};
+        const ready = posix.poll(&lp, 5000) catch return;
+        if (ready == 0) return;
         const peer = posix.accept(listener, null, null, posix.SOCK.CLOEXEC) catch return;
         defer posix.close(peer);
         var buf: [4096]u8 = undefined;
@@ -469,7 +737,7 @@ test "maskOnce: a large input round-trips through the broker" {
     const input = try testing.allocator.alloc(u8, 2 * 1024 * 1024);
     defer testing.allocator.free(input);
     for (input, 0..) |*b, i| b.* = if (i % 3 == 0) 'x' else 'a';
-    const got = try maskOnce(testing.allocator, path, input);
+    const got = try maskOnce(testing.allocator, .{ .unix = path }, null, input);
     defer testing.allocator.free(got);
     try testing.expectEqual(input.len, got.len);
     for (got, 0..) |b, i| try testing.expectEqual(@as(u8, if (i % 3 == 0) '*' else 'a'), b);
@@ -486,14 +754,14 @@ test "maskOnce: a response cut short by the broker is a failure" {
     const server = try std.Thread.spawn(.{}, StarServer.run, .{ listener, true });
     defer server.join();
 
-    try testing.expectError(error.RelayFailed, maskOnce(testing.allocator, path, "xxxx"));
+    try testing.expectError(error.RelayFailed, maskOnce(testing.allocator, .{ .unix = path }, null, "xxxx"));
 }
 
 test "maskOnce: a missing broker fails" {
     var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/tmp/nas-mf-once-absent-{d}.sock", .{std.c.getpid()});
     std.fs.cwd().deleteFile(path) catch {};
-    try testing.expectError(error.RelayConnectFailed, maskOnce(testing.allocator, path, "x"));
+    try testing.expectError(error.RelayConnectFailed, maskOnce(testing.allocator, .{ .unix = path }, null, "x"));
 }
 
 test "Relay.pumpWritable: a short write leaves the remainder queued" {
@@ -510,7 +778,7 @@ test "Relay.pumpWritable: a short write leaves the remainder queued" {
         posix.unlink(path) catch {};
     }
 
-    var relay = try Relay.connect(path);
+    var relay = try Relay.connect(.{ .unix = path }, null);
     defer relay.deinit(testing.allocator);
     const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
     defer posix.close(peer);
@@ -543,4 +811,336 @@ test "Relay.pumpWritable: a short write leaves the remainder queued" {
     }
     try testing.expect(relay.pendingLen() == 0);
     try testing.expect(drained > 0);
+}
+
+// --- TCP / proxy -----------------------------------------------------------
+
+/// テスト用の TCP listener を 127.0.0.1 の空きポートに張る。
+fn listenTcp() !struct { fd: posix.socket_t, addr: std.net.Address } {
+    var addr = try std.net.Address.parseIp4("127.0.0.1", 0);
+    const fd = try posix.socket(posix.AF.INET, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    errdefer posix.close(fd);
+    try posix.bind(fd, &addr.any, addr.getOsSockLen());
+    try posix.listen(fd, 4);
+    var len: posix.socklen_t = addr.getOsSockLen();
+    try posix.getsockname(fd, &addr.any, &len);
+    return .{ .fd = fd, .addr = addr };
+}
+
+/// listener に未 accept の接続が積まれていないこと (= 誰もつないでこなかった) を確かめる。
+fn expectNoPendingConnection(listener: posix.socket_t) !void {
+    var pfd = [_]posix.pollfd{.{ .fd = listener, .events = posix.POLL.IN, .revents = 0 }};
+    try testing.expectEqual(@as(usize, 0), try posix.poll(&pfd, 0));
+}
+
+/// テスト用の CONNECT proxy。1 接続だけ受け、要求ヘッダを記録する。
+/// `reply` が null なら要求行の宛先へ実際につなぎ、200 を返してから両方向を中継する
+/// (half-close も相手側へ伝える。プロトコルは half-close をストリームの終わりに使う)。
+/// null でなければ `reply` をそのまま 1 回の write で返し、相手が閉じるまで待つ。
+const TestProxy = struct {
+    listener: posix.socket_t,
+    addr: std.net.Address,
+    reply: ?[]const u8,
+    request: [4096]u8 = undefined,
+    request_len: usize = 0,
+    accepted: usize = 0,
+
+    fn init(reply: ?[]const u8) !TestProxy {
+        const l = try listenTcp();
+        return .{ .listener = l.fd, .addr = l.addr, .reply = reply };
+    }
+
+    fn deinit(self: *TestProxy) void {
+        posix.close(self.listener);
+    }
+
+    fn url(self: *const TestProxy, buf: []u8, userinfo: []const u8) ![]const u8 {
+        return std.fmt.bufPrint(buf, "http://{s}127.0.0.1:{d}", .{ userinfo, self.addr.getPort() });
+    }
+
+    fn requestText(self: *const TestProxy) []const u8 {
+        return self.request[0..self.request_len];
+    }
+
+    fn run(self: *TestProxy) void {
+        self.serve() catch {};
+    }
+
+    fn serve(self: *TestProxy) !void {
+        // クライアントの不具合でテストが止まらないよう、accept は時間を区切る。
+        var lp = [_]posix.pollfd{.{ .fd = self.listener, .events = posix.POLL.IN, .revents = 0 }};
+        if (try posix.poll(&lp, 5000) == 0) return;
+        const client = try posix.accept(self.listener, null, null, posix.SOCK.CLOEXEC);
+        defer posix.close(client);
+        self.accepted += 1;
+
+        while (std.mem.indexOf(u8, self.requestText(), "\r\n\r\n") == null) {
+            if (self.request_len == self.request.len) return;
+            const n = try posix.read(client, self.request[self.request_len..]);
+            if (n == 0) return;
+            self.request_len += n;
+        }
+
+        if (self.reply) |r| {
+            try writeAllBlocking(client, r);
+            var sink: [4096]u8 = undefined;
+            var cp = [_]posix.pollfd{.{ .fd = client, .events = posix.POLL.IN, .revents = 0 }};
+            while (try posix.poll(&cp, 5000) > 0) {
+                if (try posix.read(client, &sink) == 0) break;
+            }
+            return;
+        }
+
+        // "CONNECT host:port HTTP/1.1"
+        const line_end = std.mem.indexOf(u8, self.requestText(), "\r\n").?;
+        var it = std.mem.splitScalar(u8, self.request[0..line_end], ' ');
+        _ = it.next();
+        const target = try std.net.Address.parseIpAndPort(it.next() orelse return);
+        const upstream = try posix.socket(target.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+        defer posix.close(upstream);
+        try posix.connect(upstream, &target.any, target.getOsSockLen());
+        try writeAllBlocking(client, "HTTP/1.1 200 Connection established\r\n\r\n");
+        try splice(client, upstream);
+    }
+
+    fn splice(a: posix.socket_t, b: posix.socket_t) !void {
+        var open = [2]bool{ true, true };
+        var buf: [16 * 1024]u8 = undefined;
+        while (open[0] or open[1]) {
+            var pfd = [_]posix.pollfd{
+                .{ .fd = if (open[0]) a else -1, .events = posix.POLL.IN, .revents = 0 },
+                .{ .fd = if (open[1]) b else -1, .events = posix.POLL.IN, .revents = 0 },
+            };
+            if (try posix.poll(&pfd, 5000) == 0) return;
+            const ends = [2][2]posix.socket_t{ .{ a, b }, .{ b, a } };
+            for (0..2) |i| {
+                if (!open[i] or pfd[i].revents == 0) continue;
+                const n = try posix.read(ends[i][0], &buf);
+                if (n == 0) {
+                    open[i] = false;
+                    posix.shutdown(ends[i][1], .send) catch {};
+                } else {
+                    try writeAllBlocking(ends[i][1], buf[0..n]);
+                }
+            }
+        }
+    }
+};
+
+fn writeAllBlocking(fd: posix.socket_t, bytes: []const u8) !void {
+    var off: usize = 0;
+    while (off < bytes.len) off += try posix.send(fd, bytes[off..], posix.MSG.NOSIGNAL);
+}
+
+fn expectStarred(input: []const u8, got: []const u8) !void {
+    try testing.expectEqual(input.len, got.len);
+    for (input, got) |i, g| try testing.expectEqual(if (i == 'x') @as(u8, '*') else i, g);
+}
+
+test "maskOnce: loopback TCP round-trips directly" {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, false });
+    defer server.join();
+
+    const got = try maskOnce(testing.allocator, .{ .tcp = l.addr }, null, "axbxc");
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("a*b*c", got);
+}
+
+test "maskOnce: a large input round-trips through a loopback CONNECT proxy" {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    const server = try std.Thread.spawn(.{}, StarServer.run, .{ l.fd, false });
+    defer server.join();
+    var proxy = try TestProxy.init(null);
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+    defer pt.join();
+
+    const input = try testing.allocator.alloc(u8, 1024 * 1024);
+    defer testing.allocator.free(input);
+    for (input, 0..) |*b, i| b.* = if (i % 3 == 0) 'x' else 'a';
+
+    var url_buf: [64]u8 = undefined;
+    const got = try maskOnce(testing.allocator, .{ .tcp = l.addr }, try proxy.url(&url_buf, ""), input);
+    defer testing.allocator.free(got);
+    try expectStarred(input, got);
+
+    var want_buf: [128]u8 = undefined;
+    const want = try std.fmt.bufPrint(&want_buf, "CONNECT 127.0.0.1:{d} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\n", .{ l.addr.getPort(), l.addr.getPort() });
+    try testing.expect(std.mem.startsWith(u8, proxy.requestText(), want));
+    // ユーザー情報の無い URL では認証ヘッダを付けない。
+    try testing.expect(std.mem.indexOf(u8, proxy.requestText(), "Proxy-Authorization") == null);
+}
+
+test "Relay.connect: an IPv6 target is written in brackets on the CONNECT line" {
+    var proxy = try TestProxy.init("HTTP/1.1 403 Forbidden\r\n\r\n");
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+    var url_buf: [64]u8 = undefined;
+    const target = try std.net.Address.parseIp6("::1", 4242);
+    const res = Relay.connect(.{ .tcp = target }, try proxy.url(&url_buf, ""));
+    pt.join();
+    try testing.expectError(error.RelayConnectFailed, res);
+    try testing.expect(std.mem.startsWith(u8, proxy.requestText(), "CONNECT [::1]:4242 HTTP/1.1\r\nHost: [::1]:4242\r\n"));
+}
+
+/// proxy に `reply` を返させ、接続が RelayConnectFailed になること、proxy には 1 回だけ
+/// つないだこと、宛先へ直接はつながなかったこと (フォールバックしない) を確かめる。
+fn expectProxyRejects(reply: []const u8) !void {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    var proxy = try TestProxy.init(reply);
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+
+    var url_buf: [64]u8 = undefined;
+    const started = std.time.milliTimestamp();
+    const res = Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, ""));
+    const elapsed = std.time.milliTimestamp() - started;
+    pt.join();
+    try testing.expectError(error.RelayConnectFailed, res);
+    try testing.expectEqual(@as(usize, 1), proxy.accepted);
+    try expectNoPendingConnection(l.fd);
+    // 受信タイムアウト (5 秒) で落ちたのではなく、応答を見て即座に断ったこと。
+    try testing.expect(elapsed < 2000);
+}
+
+test "Relay.connect: a 403 from the proxy fails without retrying or going direct" {
+    try expectProxyRejects("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+}
+
+test "Relay.connect: a proxy response header over 8 KiB fails" {
+    const reply = "HTTP/1.1 200 OK\r\nX-Pad: " ++ ("a" ** (9 * 1024));
+    try expectProxyRejects(reply);
+}
+
+test "Relay.connect: bytes after the proxy's response header fail" {
+    try expectProxyRejects("HTTP/1.1 200 OK\r\n\r\nunexpected");
+}
+
+test "Relay.connect: a status line that is not HTTP/1.x 200 fails" {
+    try expectProxyRejects("HTTP/1.1 2000 OK\r\n\r\n");
+    try expectProxyRejects("HTTP/2 200\r\n\r\n");
+    try expectProxyRejects("ICY 200 OK\r\n\r\n");
+}
+
+test "Relay.connect: HTTP/1.0 200 from the proxy is accepted" {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    var proxy = try TestProxy.init("HTTP/1.0 200 Connection established\r\n\r\n");
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+    defer pt.join();
+    var url_buf: [64]u8 = undefined;
+    var relay = try Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, ""));
+    relay.deinit(testing.allocator);
+}
+
+test "Relay.connect: userinfo in the proxy URL becomes Proxy-Authorization" {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    var proxy = try TestProxy.init("HTTP/1.1 200 OK\r\n\r\n");
+    defer proxy.deinit();
+    const pt = try std.Thread.spawn(.{}, TestProxy.run, .{&proxy});
+    defer pt.join();
+
+    // パスワード中の `@` はパーセントエンコードで渡される。デコードしてから base64 にする。
+    var url_buf: [96]u8 = undefined;
+    var relay = try Relay.connect(.{ .tcp = l.addr }, try proxy.url(&url_buf, "srt:p%40ss:w@"));
+    relay.deinit(testing.allocator);
+
+    var b64: [64]u8 = undefined;
+    const enc = std.base64.standard.Encoder.encode(&b64, "srt:p@ss:w");
+    var want_buf: [128]u8 = undefined;
+    const want = try std.fmt.bufPrint(&want_buf, "\r\nProxy-Authorization: Basic {s}\r\n", .{enc});
+    try testing.expect(std.mem.indexOf(u8, proxy.requestText(), want) != null);
+}
+
+test "Relay.connect: a non-loopback or non-http proxy is ignored and the target is dialed directly" {
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    var https_buf: [64]u8 = undefined;
+    const https = try std.fmt.bufPrint(&https_buf, "https://127.0.0.1:{d}", .{l.addr.getPort()});
+    const proxies = [_][]const u8{ "http://10.0.0.1:3128", https, "socks5://127.0.0.1:1080", "http://localhost.evil:1", "http://127.0.0.1.nip.io:1" };
+    for (proxies) |p| {
+        var relay = try Relay.connect(.{ .tcp = l.addr }, p);
+        defer relay.deinit(testing.allocator);
+        const peer = try posix.accept(l.fd, null, null, posix.SOCK.CLOEXEC);
+        posix.close(peer);
+    }
+}
+
+test "Relay.connect: a malformed loopback proxy URL fails instead of going direct" {
+    const bad = [_][]const u8{
+        "http://127.0.0.1:x",
+        "http://127.0.0.1:",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:99999",
+        "http://127.0.0.1:3128x",
+        "http://[::1]x:1",
+        "http://[::1]:",
+        "http://localhost:1a",
+        "http://u:%zz@127.0.0.1:1",
+        "http://u:%4@127.0.0.1:1",
+        "http://" ++ ("u" ** (MAX_PROXY_USERINFO + 1)) ++ "@127.0.0.1:1",
+    };
+    // 経路の判定で弾かれること (接続を試してから失敗したのではないこと)。
+    for (bad) |p| try testing.expectError(error.RelayConnectFailed, routeFor(p));
+
+    // Relay.connect でも、宛先へ直接つなぎに行かない。
+    const l = try listenTcp();
+    defer posix.close(l.fd);
+    for (bad) |p| {
+        try testing.expectError(error.RelayConnectFailed, Relay.connect(.{ .tcp = l.addr }, p));
+    }
+    try expectNoPendingConnection(l.fd);
+}
+
+test "routeFor: loopback http proxies are used" {
+    const cases = [_]struct { url: []const u8, port: u16, family: posix.sa_family_t }{
+        .{ .url = "http://127.0.0.1:3128", .port = 3128, .family = posix.AF.INET },
+        .{ .url = "http://127.0.0.1:3128/", .port = 3128, .family = posix.AF.INET },
+        .{ .url = "http://localhost:8080", .port = 8080, .family = posix.AF.INET },
+        .{ .url = "HTTP://LocalHost:8080", .port = 8080, .family = posix.AF.INET },
+        .{ .url = "http://[::1]:9000", .port = 9000, .family = posix.AF.INET6 },
+        .{ .url = "http://127.0.0.1", .port = 80, .family = posix.AF.INET },
+        .{ .url = "http://[::1]", .port = 80, .family = posix.AF.INET6 },
+        .{ .url = "http://u:p@[::1]:7/x?y", .port = 7, .family = posix.AF.INET6 },
+        .{ .url = "http://a:b@127.0.0.1:1", .port = 1, .family = posix.AF.INET },
+    };
+    for (cases) |c| {
+        const r = try routeFor(c.url);
+        try testing.expect(r == .connect);
+        try testing.expectEqual(c.port, r.connect.addr.getPort());
+        try testing.expectEqual(c.family, r.connect.addr.any.family);
+    }
+    try testing.expect(try routeFor(null) == .direct);
+    try testing.expect(try routeFor("") == .direct);
+    try testing.expect(try routeFor("http://[::2]:1") == .direct);
+    try testing.expect(try routeFor("http://127.0.0.1@10.0.0.1:1") == .direct);
+}
+
+fn fakeEnv(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "HTTPS_PROXY")) return "";
+    if (std.mem.eql(u8, name, "https_proxy")) return null;
+    if (std.mem.eql(u8, name, "HTTP_PROXY")) return "http://127.0.0.1:1";
+    if (std.mem.eql(u8, name, "http_proxy")) return "http://127.0.0.1:2";
+    return null;
+}
+
+fn fakeEnvHttps(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "HTTPS_PROXY")) return "http://127.0.0.1:3";
+    return "http://127.0.0.1:4";
+}
+
+fn emptyEnv(_: []const u8) ?[]const u8 {
+    return null;
+}
+
+test "selectProxy: the first non-empty variable wins, in HTTPS_PROXY > https_proxy > HTTP_PROXY > http_proxy order" {
+    try testing.expectEqualStrings("http://127.0.0.1:1", selectProxy(fakeEnv).?);
+    try testing.expectEqualStrings("http://127.0.0.1:3", selectProxy(fakeEnvHttps).?);
+    try testing.expect(selectProxy(emptyEnv) == null);
 }

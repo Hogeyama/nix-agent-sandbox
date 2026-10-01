@@ -256,7 +256,7 @@ fn runSupervised(allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 return EXIT_SUPPRESSED;
             };
         },
-        .socket => |path| return supervise.run(allocator, path, target.argv0, target.program, target.args, opts) catch |err| {
+        .socket => |path| return supervise.run(allocator, .{ .unix = path }, null, target.argv0, target.program, target.args, opts) catch |err| {
             std.debug.print("{s}", .{superviseDiagnostic(err)});
             return EXIT_SUPPRESSED;
         },
