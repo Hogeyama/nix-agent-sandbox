@@ -74,10 +74,16 @@ pub const Masker = union(enum) {
 
     /// bytes が保護された値を含むか。
     pub fn contains(self: Masker, allocator: std.mem.Allocator, bytes: []const u8) Error!bool {
+        return self.containsVia(allocator, supervise.proxyFromEnv(), bytes);
+    }
+
+    /// contains の proxy を呼び出し側が決める版。環境変数に左右されない経路を
+    /// テストで取るために分けてある。
+    fn containsVia(self: Masker, allocator: std.mem.Allocator, proxy: ?[]const u8, bytes: []const u8) Error!bool {
         switch (self) {
             .values => |values| return mask.containsAny(bytes, values),
             .server => |addr| {
-                const masked = try roundTrip(allocator, addr, bytes);
+                const masked = try roundTrip(allocator, addr, proxy, bytes);
                 defer allocator.free(masked);
                 return !std.mem.eql(u8, masked, bytes);
             },
@@ -87,6 +93,10 @@ pub const Masker = union(enum) {
     /// 各入力をマスクした新しいバッファを返す。変化の無い入力は null。
     /// 返すスライスとバッファは allocator の所有になる。
     pub fn maskMany(self: Masker, allocator: std.mem.Allocator, inputs: []const []const u8) Error![]?[]u8 {
+        return self.maskManyVia(allocator, supervise.proxyFromEnv(), inputs);
+    }
+
+    fn maskManyVia(self: Masker, allocator: std.mem.Allocator, proxy: ?[]const u8, inputs: []const []const u8) Error![]?[]u8 {
         const out = try allocator.alloc(?[]u8, inputs.len);
         @memset(out, null);
         switch (self) {
@@ -96,7 +106,7 @@ pub const Masker = union(enum) {
                 mask.maskAll(copy, values, null);
                 slot.* = copy;
             },
-            .server => |addr| try maskManyRemote(allocator, addr, inputs, out),
+            .server => |addr| try maskManyRemote(allocator, addr, proxy, inputs, out),
         }
         return out;
     }
@@ -106,8 +116,8 @@ pub const Masker = union(enum) {
 /// `CONNECT` でしかホストのブローカーへ届かない)。接続・proxy の失敗はどれも
 /// MaskUnavailable にまとめ、原因ごとの詳細は呼び出し側へ渡さない。hook の stderr は
 /// エージェントに見えうるからである。
-fn roundTrip(allocator: std.mem.Allocator, addr: address.Address, bytes: []const u8) Error![]u8 {
-    return supervise.maskOnce(allocator, addr, supervise.proxyFromEnv(), bytes) catch |err| switch (err) {
+fn roundTrip(allocator: std.mem.Allocator, addr: address.Address, proxy: ?[]const u8, bytes: []const u8) Error![]u8 {
+    return supervise.maskOnce(allocator, addr, proxy, bytes) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.MaskUnavailable,
     };
@@ -117,7 +127,7 @@ fn roundTrip(allocator: std.mem.Allocator, addr: address.Address, bytes: []const
 /// 数千になる。NUL で区切って 1 接続にまとめ、区切りがそのまま返ってきたときだけ
 /// 切り分けて使う。区切りが変わったのは値が区切りを跨いで一致したということで、
 /// 入力ごとのマスクとは結果が異なりうるので、そのときは入力ごとに問い合わせ直す。
-fn maskManyRemote(allocator: std.mem.Allocator, addr: address.Address, inputs: []const []const u8, out: []?[]u8) Error!void {
+fn maskManyRemote(allocator: std.mem.Allocator, addr: address.Address, proxy: ?[]const u8, inputs: []const []const u8, out: []?[]u8) Error!void {
     if (inputs.len == 0) return;
     var total: usize = inputs.len - 1;
     for (inputs) |input| total += input.len;
@@ -133,7 +143,7 @@ fn maskManyRemote(allocator: std.mem.Allocator, addr: address.Address, inputs: [
         at += input.len;
     }
 
-    const masked = try roundTrip(allocator, addr, joined);
+    const masked = try roundTrip(allocator, addr, proxy, joined);
     defer allocator.free(masked);
 
     var separators_intact = true;
@@ -158,7 +168,7 @@ fn maskManyRemote(allocator: std.mem.Allocator, addr: address.Address, inputs: [
     }
 
     for (inputs, out) |input, *slot| {
-        const piece = try roundTrip(allocator, addr, input);
+        const piece = try roundTrip(allocator, addr, proxy, input);
         if (std.mem.eql(u8, piece, input)) allocator.free(piece) else slot.* = piece;
     }
 }
@@ -352,7 +362,8 @@ test "tcp masker: a port with no listener is MaskUnavailable" {
     var len = addr.getOsSockLen();
     try posix.getsockname(fd, &addr.any, &len);
     const m: Masker = .{ .server = .{ .tcp = addr } };
-    try testing.expectError(error.MaskUnavailable, m.contains(testing.allocator, "x"));
+    // proxy は null で固定する。環境の HTTPS_PROXY が経路を決めないようにするため。
+    try testing.expectError(error.MaskUnavailable, m.containsVia(testing.allocator, null, "x"));
 }
 
 test "values masker: keeps the in-process behaviour" {
