@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - `--socket PATH` of `hook`, `run` and `init` is replaced by `--server ADDR`, which takes the same forms as `--listen`. Replace `--socket PATH` with `--server PATH`.
+- The protocol between `sumi serve` and the `hook` and `run` that talk to it has changed. Use the same sumi version on both sides, such as on the host and in a Dev Container; with different versions, masking fails closed.
 
 ## [0.4.1] - 2026-09-30
 
