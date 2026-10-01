@@ -144,9 +144,11 @@ CLAUDE_CONFIG_DIR=$PWD/.claude-state \
 strait review k3f9          # 指定したセッションのみ
 strait review --all         # すべてのセッション
 strait review --json        # 保留中の要求を JSON で出力
-strait review approve k3f9-2
-strait review deny k3f9-2
+strait review approve k3f9-2.x7mq4ndp
+strait review deny k3f9-2.x7mq4ndp
 ```
+
+要求の ID（`k3f9-2.x7mq4ndp`）の末尾は strait の起動ごとに変わります。同じ名前でセッションを再起動しても、再起動前の ID で新しい要求を承認することはありません。
 
 同じディレクトリで複数のセッションを実行する場合は、statusline の `[strait:<ID>]` と一覧の `[<ID>]` を照合してください。`strait --name release -- claude` のように、名前を指定することもできます。`notify-send` があれば、要求の保留時にデスクトップ通知も表示されます。
 

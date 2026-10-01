@@ -24,7 +24,7 @@ export interface SessionInfo {
   startedAt: number;
 }
 
-/** A name given with --name. No `-` at the end, so `<id>-<n>` stays unambiguous. */
+/** A name given with --name. No `-` at the end, so `<id>-<request>` stays unambiguous. */
 const SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,30}[A-Za-z0-9_])?$/;
 
 export function isSessionId(s: string): boolean {
@@ -32,12 +32,16 @@ export function isSessionId(s: string): boolean {
 }
 
 // Lowercase letters and digits without the ones easy to misread (0 o 1 l).
-const ALPHABET = "23456789abcdefghijkmnpqrstuvwxyz";
+export const ALPHABET = "23456789abcdefghijkmnpqrstuvwxyz";
+
+export function randomWord(length: number): string {
+  let w = "";
+  for (let i = 0; i < length; i++) w += ALPHABET[randomInt(ALPHABET.length)];
+  return w;
+}
 
 export function newSessionId(): string {
-  let id = "";
-  for (let i = 0; i < 4; i++) id += ALPHABET[randomInt(ALPHABET.length)];
-  return id;
+  return randomWord(4);
 }
 
 export function sessionInfo(

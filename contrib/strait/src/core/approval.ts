@@ -12,13 +12,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecRequest } from "./hostexec.ts";
 import type { FinalDecision } from "./policy.ts";
-import type { SessionInfo } from "./session.ts";
+import { ALPHABET, randomWord, type SessionInfo } from "./session.ts";
 
 /**
  * How long a request waits. Below node:http's default requestTimeout (300 s),
  * which can end a held request whose body is not yet consumed.
  */
 export const HOLD_MS = 240_000;
+
+/**
+ * A request ID is `<n>.<incarnation>`. The incarnation is drawn once per
+ * strait process: a session restarted under the same --name counts from 1
+ * again, and without it a ref read before the restart would name, and could
+ * approve, an unrelated request of the new process.
+ */
+const INCARNATION_LENGTH = 8;
+export const REQUEST_ID = new RegExp(
+  `^\\d+\\.[${ALPHABET}]{${INCARNATION_LENGTH}}$`,
+);
 
 export interface Pending {
   id: string;
@@ -49,6 +60,7 @@ export class Approvals {
     { pending: Pending; settle: (d: FinalDecision) => void }
   >();
   private next = 1;
+  private readonly incarnation = randomWord(INCARNATION_LENGTH);
 
   constructor(
     private readonly session: SessionInfo,
@@ -61,7 +73,7 @@ export class Approvals {
     request: Omit<Pending, "id" | "since">,
     signal?: AbortSignal,
   ): Promise<FinalDecision> {
-    const id = String(this.next++);
+    const id = `${this.next++}.${this.incarnation}`;
     const pending: Pending = { ...request, id, since: Date.now() };
     return new Promise<FinalDecision>((resolve) => {
       const done = (d: FinalDecision) => {

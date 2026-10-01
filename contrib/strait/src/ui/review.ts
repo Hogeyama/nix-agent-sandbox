@@ -9,9 +9,11 @@
 //   strait review deny REF...
 //
 // Without SESSION, only the sessions started in the current directory are
-// shown; --all shows every session. A REF is `<session>-<n>`: the session ID
-// (statusline.ts shows it in Claude Code) and the request's number. Every
-// approval covers that one request only.
+// shown; --all shows every session. A REF is `<session>-<n>.<incarnation>`:
+// the session ID (statusline.ts shows it in Claude Code), the request's
+// number, and a random word that strait draws each time it starts, so a REF
+// never outlives the process that issued it. Every approval covers that one
+// request only.
 
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
@@ -22,12 +24,12 @@ import type {
   ApprovalResponse,
   Pending,
 } from "../core/approval.ts";
-import { socketDir } from "../core/approval.ts";
+import { REQUEST_ID, socketDir } from "../core/approval.ts";
 import { type ExecRequest, INHERITED_ENV } from "../core/hostexec.ts";
 import { isSessionId, type SessionInfo, socketFor } from "../core/session.ts";
 
 export interface Held extends Pending {
-  /** `<session>-<n>`, unique across sessions. */
+  /** `<session>-<n>.<incarnation>`, unique across sessions and restarts. */
   ref: string;
   session: SessionInfo;
 }
@@ -87,12 +89,12 @@ export async function collect(dir: string, scope: Scope): Promise<Held[]> {
   return held.sort((a, b) => a.since - b.since);
 }
 
-/** `<session>-<n>` split at the last `-`; a session ID never ends in one. */
+/** A REF split at the last `-`; a session ID never ends in one. */
 export function parseRef(ref: string): { session: string; id: string } | null {
   const i = ref.lastIndexOf("-");
   const session = ref.slice(0, i);
   const id = ref.slice(i + 1);
-  return i > 0 && isSessionId(session) && /^\d+$/.test(id)
+  return i > 0 && isSessionId(session) && REQUEST_ID.test(id)
     ? { session, id }
     : null;
 }

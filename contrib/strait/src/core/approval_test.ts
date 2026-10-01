@@ -13,7 +13,7 @@ import {
   structured,
   tuiArgs,
 } from "../ui/review.ts";
-import { Approvals, serve } from "./approval.ts";
+import { Approvals, type Pending, REQUEST_ID, serve } from "./approval.ts";
 import { claimNewSocket, claimSocket, type SessionInfo } from "./session.ts";
 
 const req = {
@@ -128,11 +128,12 @@ describe("socket", () => {
           body: '{"query":"{ viewer { login } }"}',
         });
         const [h] = await collect(dir, { session: "s1" });
-        expect(h?.ref).toBe("s1-1");
+        expect(h?.ref).toMatch(/^s1-1\.[a-z2-9]{8}$/);
+        expect(h?.ref).toBe(`s1-${a.list()[0]?.id}`);
         expect(h?.body).toContain("viewer");
         const res = await ask(join(dir, "s1.sock"), {
           op: "decide",
-          id: "1",
+          id: h?.id as string,
           approve: true,
         });
         expect(res).toEqual({ ok: true });
@@ -153,11 +154,11 @@ describe("socket", () => {
       try {
         here.hold(req);
         there.hold(req);
-        const refs = async (scope: Parameters<typeof collect>[1]) =>
-          (await collect(dir, scope)).map((h) => h.ref).sort();
-        expect(await refs({ cwd: "/w" })).toEqual(["here-1"]);
-        expect(await refs({ session: "there" })).toEqual(["there-1"]);
-        expect(await refs({ all: true })).toEqual(["here-1", "there-1"]);
+        const sessions = async (scope: Parameters<typeof collect>[1]) =>
+          (await collect(dir, scope)).map((h) => h.session.id).sort();
+        expect(await sessions({ cwd: "/w" })).toEqual(["here"]);
+        expect(await sessions({ session: "there" })).toEqual(["there"]);
+        expect(await sessions({ all: true })).toEqual(["here", "there"]);
       } finally {
         for (const p of here.list()) here.decide(p.id, false);
         for (const p of there.list()) there.decide(p.id, false);
@@ -182,13 +183,51 @@ describe("socket", () => {
       const server = await serve(current, join(dir, "cur.sock"));
       try {
         current.hold(req);
-        expect((await collect(dir, { cwd: "/w" })).map((h) => h.ref)).toEqual([
-          "cur-1",
-        ]);
+        expect(
+          (await collect(dir, { cwd: "/w" })).map((h) => h.session.id),
+        ).toEqual(["cur"]);
       } finally {
         for (const p of current.list()) current.decide(p.id, false);
         server.close();
         old.close();
+      }
+    },
+  );
+
+  test.skipIf(!unixSockets)(
+    "a ref from before a named restart cannot settle the new session's request",
+    async () => {
+      const close = (s: Awaited<ReturnType<typeof serve>>) =>
+        new Promise<void>((r) => s.close(() => r()));
+      const path = await claimSocket(dir, "work");
+      const before = new Approvals(session({ id: "work" }), 10_000);
+      const s1 = await serve(before, path);
+      const old = before.hold(req);
+      const [a] = await collect(dir, { session: "work" });
+      before.decide(a?.id as string, false);
+      await old;
+      await close(s1);
+
+      const after = new Approvals(session({ id: "work" }), 10_000);
+      const s2 = await serve(after, await claimSocket(dir, "work"));
+      try {
+        const held = after.hold(req);
+        const [b] = await collect(dir, { session: "work" });
+        expect(b?.ref).not.toBe(a?.ref);
+        const decide = (id: string) =>
+          ask(path, { op: "decide", id, approve: true });
+        expect(await decide(parseRef(a?.ref as string)?.id ?? "")).toEqual({
+          ok: false,
+        });
+        expect(await decide("1")).toEqual({ ok: false });
+        expect(after.list()).toHaveLength(1);
+        expect(await decide(parseRef(b?.ref as string)?.id as string)).toEqual({
+          ok: true,
+        });
+        expect(await held).toEqual({ action: "allow" });
+      } finally {
+        for (const p of after.list()) after.decide(p.id, false);
+        await close(s2);
       }
     },
   );
@@ -240,13 +279,46 @@ describe("socket", () => {
 
 describe("refs", () => {
   test("split at the last dash", () => {
-    expect(parseRef("my-name-12")).toEqual({ session: "my-name", id: "12" });
-    expect(parseRef("k3f9-1")).toEqual({ session: "k3f9", id: "1" });
+    expect(parseRef("my-name-12.x7mq4ndp")).toEqual({
+      session: "my-name",
+      id: "12.x7mq4ndp",
+    });
+    expect(parseRef("k3f9-1.x7mq4ndp")).toEqual({
+      session: "k3f9",
+      id: "1.x7mq4ndp",
+    });
   });
   test("reject what is not a ref", () => {
-    for (const r of ["k3f9", "-1", "k3f9-", "k3f9-x", "a/b-1", ""]) {
+    for (const r of [
+      "k3f9",
+      "-1.x7mq4ndp",
+      "k3f9-",
+      "k3f9-x",
+      "a/b-1.x7mq4ndp",
+      "",
+      // Before incarnations: a bare number names a request of whichever
+      // process holds the name now.
+      "k3f9-1",
+      "k3f9-1.",
+      "k3f9-1.x7mq4nd",
+      "k3f9-1.x7mq4ndp0",
+      "k3f9-1.X7MQ4NDP",
+    ]) {
       expect(parseRef(r)).toBeNull();
     }
+  });
+  test("each broker issues its own refs", () => {
+    const id = () => {
+      const a = new Approvals(session(), 10_000);
+      a.hold(req);
+      const p = a.list()[0] as Pending;
+      a.decide(p.id, false);
+      return p.id;
+    };
+    const first = id();
+    expect(first).toMatch(REQUEST_ID);
+    expect(first.startsWith("1.")).toBe(true);
+    expect(id()).not.toBe(first);
   });
 });
 
