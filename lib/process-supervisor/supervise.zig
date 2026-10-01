@@ -915,10 +915,9 @@ test "run: a broker that closes after the end frame without returning the tail f
     for (CHILD_RESET_SIGNALS) |sig| setDisposition(sig, posix.SIG.DFL);
     g_sig_write_fd.store(-1, .monotonic);
     g_child_pid.store(0, .monotonic);
-    if (res) |code| {
-        std.debug.print("run returned {d} instead of failing\n", .{code});
-        return error.TestUnexpectedResult;
-    } else |_| {}
+    // 完了確認 (Relay.checkComplete) が出すエラーに限る。RelayDrainTimeout や
+    // RelayFailed でも失敗にはなるが、それではこのテストの主張を確かめていない。
+    try testing.expectError(error.RelayClosedEarly, res);
 }
 
 // Keep relay tests in the shared supervisor suite.
