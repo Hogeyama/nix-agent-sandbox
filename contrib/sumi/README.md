@@ -67,22 +67,49 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 変更前の設定は同ディレクトリ内にバックアップされるようになっています。
 設定が完了したら、Claude Code を起動すると、マスクが有効になります。
 
-### 秘密一覧を手元に置かない（`--socket`）
+## 発展的な使い方
 
-`--secrets-file F` の代わりに `--socket SOCKET` を渡すと、sumi は秘密一覧を読みません。値の判定と置き換えは、`SOCKET` で待ち受けるブローカーに問い合わせます。エージェントと同じ環境に一覧を置けない場合（コンテナ内の hook など）に使います。
+### シークレットファイルを隠す構成
 
-ブローカーは `sumi serve` で起動します。秘密ファイルを読み、`--listen` のパスで待ち受けます。kill するまで動き続けます。ソケットを置くディレクトリは自動では作らないので、先に作ってください。
+クイックスタートの方法では、`sumi` の実行時にシークレットファイルが読み込み可能である必要があり、敵対的なエージェントはシークレットファイル自体を盗むことができてしまいます。
+`sumi` は、Dev Container等の隔離環境と組み合わせてシークレットファイルを隠す構成をサポートしています。
+
+```mermaid
+flowchart LR
+  subgraph container["Dev Container など"]
+    subgraph agent["Claude Code"]
+      hook["sumi hook"]
+    end
+    sock(["mask.sock<br/>（ソケットのみmount）"])
+  end
+  subgraph host["ホスト"]
+    serve["sumi serve"]
+    secrets[("secrets.txt")]
+  end
+
+  hook -- "マスクを依頼" --> sock --> serve
+  serve -- "マスク結果を返却" --> sock --> hook
+  serve -- "読む" --> secrets
+  agent -. "読めない" .-x secrets
+```
+
+ホストで `sumi serve` を起動してシークレットファイルを読ませ、コンテナにはソケットのあるディレクトリだけを mount します。
+コンテナ内の hook は、シークレットファイルの代わりにソケット越しに `sumi serve` へマスクを依頼します。
+シークレットファイルはコンテナに mount しないので、エージェントからは読めません。
+
+#### 1. ホストで `sumi serve` を起動する
 
 ```
-mkdir -p -m 700 "$XDG_RUNTIME_DIR/sumi"
 sumi serve --secrets-file ~/.claude/sumi/secrets.txt --listen "$XDG_RUNTIME_DIR/sumi/mask.sock"
 ```
 
-nas は `mask.filter` が有効なとき、自前のブローカー（`nas-mask-filter --serve`）を起動し、この形で sumi を設定します。
+`sumi serve` は kill するまで動き続けます。
+ソケットを置くディレクトリ（ここでは `$XDG_RUNTIME_DIR/sumi`）が無ければ、権限 0700 で作ります。既にあるディレクトリの権限は変えません。
 
-#### Dev Container で使う
+> [!NOTE]
+> * シークレットファイルを変更したら `sumi serve` を再起動してください。起動後に読み直すことはしません。
 
-ホストで `sumi serve` を起動し、ソケットのあるディレクトリをコンテナに mount します。秘密ファイルのあるディレクトリは mount しません。
+#### 2. ソケットのディレクトリをコンテナに mount する
 
 ```jsonc
 // devcontainer.json
@@ -93,24 +120,18 @@ nas は `mask.filter` が有効なとき、自前のブローカー（`nas-mask-
 }
 ```
 
-コンテナ内で次を実行します。
+> [!NOTE]
+> * ソケットファイルではなく、ディレクトリを mount してください。`sumi serve` を再起動するとソケットが作り直され、ファイル単体の mount は古いソケットを指したままになります。
+> * ディレクトリは読み取り専用で mount します。コンテナ内のエージェントが `mask.sock` を消して、マスクしない自前の待ち受けに差し替えるのを防ぐためです。
+> * ソケットは 0600 で作られます。コンテナのユーザーの UID を、`sumi serve` を起動したホストのユーザーと合わせてください。
+
+#### 3. コンテナ内で Claude Code の設定を生成する
+
+コンテナ内にも[インストール](#インストール)の手順で sumi を入れ、`--secrets-file` の代わりに `--socket` を指定して `sumi init` を実行します。
 
 ```
 sumi init --agent claude --socket /run/sumi/mask.sock
 ```
-
-* ソケットファイルではなく、ディレクトリを mount してください。`sumi serve` を再起動するとソケットが作り直され、ファイル単体の mount は古いソケットを指したままになります。
-* ディレクトリは読み取り専用で mount します。コンテナ内のエージェントが `mask.sock` を消して、マスクしない自前の待ち受けに差し替えるのを防ぐためです。読み取り専用の mount 上のソケットにも、接続はできます。
-* ソケットの権限は 0600 です。コンテナのユーザーの UID を、`sumi serve` を起動したホストのユーザーと合わせてください。
-* `sumi serve` は起動時に、同じパスにある古いソケットを消します。ソケット以外（通常ファイルやディレクトリなど）がそのパスにあるときは消さずに、エラーで終了します。同じパスで 2 つ起動すると、後から起動した方だけが応答します。
-* 秘密ファイルを変更したら `sumi serve` を再起動してください。起動後に読み直すことはしません。
-
-#### 注意
-
-* `--secrets-file` と `--socket` は同時に指定できません。
-* socket に接続できない場合、hook は出力を差し替えて伏せ、プロンプトを止めます。`run` は出力を捨てて終了コード 121 で終わります。
-* socket へ届く値を推測して送れば、伏せられるかどうかで答え合わせができます。socket はエージェントから到達できる前提で、接続数などの上限はサーバー側で持ちます。
-* 伏せた結果が元と同じになる値（`*` だけから成る値）は「含まない」と判定します。
 
 ## リミテーション
 
@@ -135,7 +156,7 @@ sumi は下記の限界があります。これが許容できない場合はよ
   * Claude Codeが `settings.json` を編集するケース
 * HTTP MCPがシークレットを出力しながら失敗したとき
 
-## sumi を外す
+## sumi の設定を削除する
 
 Claude Code を終了し、`init` が更新した設定ファイルを編集します。通常は `~/.claude/settings.json`、`CLAUDE_CONFIG_DIR` を設定していた場合はそのディレクトリの `settings.json` です。`--settings` を指定していた場合は指定したファイルを編集します。`hooks` 内の `PostToolUse`、`PostToolUseFailure`、`UserPromptSubmit` から、sumi を実行する hook を削除してください。
 
