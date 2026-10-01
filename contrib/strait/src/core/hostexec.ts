@@ -131,7 +131,8 @@ export function runOnHost(
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
-    let stopped: Promise<void> = Promise.resolve();
+    own(child.pid);
+    let stopped: Promise<void> | undefined;
     const stop = () => {
       stopped = stopGroup(child.pid, graceMs);
     };
@@ -146,7 +147,11 @@ export function runOnHost(
       signal?.removeEventListener("abort", stop);
       // The leader's exit does not end a stop: the rest of its group may
       // still be running.
-      void stopped.then(() =>
+      void (stopped ?? Promise.resolve()).then(() => {
+        // Before then, strait's exit still kills the group; a run that ended
+        // by itself leaves anything it put in the background alone, as a
+        // shell would.
+        if (child.pid !== undefined) owned.delete(child.pid);
         resolve({
           ...r,
           stdout: mask(Buffer.concat(out), secrets).toString("base64"),
@@ -154,13 +159,37 @@ export function runOnHost(
             Buffer.concat([...err, Buffer.from(extra)]),
             secrets,
           ).toString("base64"),
-        }),
-      );
+        });
+      });
     };
     child.on("error", (e) =>
       finish({ exitCode: 127, signal: null }, `strait: ${e.message}\n`),
     );
     child.on("close", (code, sig) => finish({ exitCode: code, signal: sig }));
+  });
+}
+
+/** Groups of runs not yet over, by process group ID. */
+const owned = new Set<number>();
+let exitHook = false;
+
+/**
+ * Have strait's own exit SIGKILL the group. A stop's grace period is a timer,
+ * and process.exit does not wait for timers, so a group still running or
+ * still being stopped would otherwise outlive strait: it no longer shares the
+ * terminal's process group, so a Ctrl-C does not reach it either.
+ */
+function own(pgid: number | undefined): void {
+  if (pgid === undefined) return;
+  owned.add(pgid);
+  if (exitHook) return;
+  exitHook = true;
+  process.on("exit", () => {
+    for (const g of owned) {
+      try {
+        process.kill(-g, "SIGKILL");
+      } catch {}
+    }
   });
 }
 

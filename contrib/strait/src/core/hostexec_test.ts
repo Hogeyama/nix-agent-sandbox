@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -198,6 +204,53 @@ describe("runOnHost", () => {
           rmSync(dir, { recursive: true, force: true });
         }
         // Above every wait in the test, so a failure still reaches finally.
+      }, 20_000);
+    }
+
+    // strait exiting does not wait for a stop's SIGKILL, so its own exit
+    // has to take the groups down.
+    for (const how of ["exit", "abort then exit"]) {
+      test(`when strait itself exits (${how})`, async () => {
+        const dir = mkdtempSync(join(tmpdir(), "strait-hostexec-test-"));
+        const pids = () =>
+          ["leader", "stubborn", "plain"].flatMap((n) => {
+            const f = join(dir, `${n}.pid`);
+            return existsSync(f) ? [Number(readFileSync(f, "utf8"))] : [];
+          });
+        const main = join(dir, "main.ts");
+        writeFileSync(
+          main,
+          `import { existsSync } from "node:fs";
+           import { runOnHost } from ${JSON.stringify(join(import.meta.dir, "hostexec.ts"))};
+           const ac = new AbortController();
+           void runOnHost(${JSON.stringify({
+             argv: ["sh", "-c", cases[0]?.[1]],
+             cwd: "/",
+             env: { D: dir },
+           })}, [], ac.signal);
+           while (!existsSync(${JSON.stringify(join(dir, "ready"))})) await Bun.sleep(10);
+           if (${JSON.stringify(how)} !== "exit") ac.abort();
+           process.exit(0);`,
+        );
+        const strait = Bun.spawn([process.execPath, main], {
+          stdio: ["ignore", "inherit", "inherit"],
+        });
+        try {
+          await within(strait.exited);
+          expect(pids().length).toBe(3);
+          await waitFor(() => pids().filter(alive).length === 0, 2000).catch(
+            () => {},
+          );
+          expect(pids().filter(alive)).toEqual([]);
+        } finally {
+          strait.kill("SIGKILL");
+          for (const pid of pids()) {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {}
+          }
+          rmSync(dir, { recursive: true, force: true });
+        }
       }, 20_000);
     }
   });
