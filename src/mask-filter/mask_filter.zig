@@ -210,7 +210,7 @@ pub fn main() !u8 {
             // バイトは含まない。serve モードの stdout/stderr はホスト上の
             // ログファイルに向くので、平文が混じってはならない
             // (lib/process-supervisor/serve.zig の「出力の不変条件」を参照)。
-            return serve.run(allocator, secrets, sock_path) catch |err| {
+            return serve.run(allocator, secrets, .{ .unix = sock_path }) catch |err| {
                 std.debug.print("nas-mask-filter: serve failed: {}\n", .{err});
                 return 1;
             };

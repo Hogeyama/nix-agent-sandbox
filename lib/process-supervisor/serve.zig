@@ -1,5 +1,10 @@
-//! serve モード: ホスト側で Unix domain socket を待ち受け、接続ごとに
-//! ストリームをマスクして返す常駐サーバ。
+//! serve モード: ホスト側で Unix domain socket か、ループバックの TCP を待ち受け、
+//! 接続ごとにストリームをマスクして返す常駐サーバ。
+//!
+//! TCP は他のユーザーがログインしない、一人で使うホスト専用である。
+//! `127.0.0.1:PORT` には所有者がなく、Unix ソケットの 0700 ディレクトリ + 0600 の
+//! ような接続元の制限が効かないため、同じホストの他のユーザーが接続したり、
+//! 停止中に同じポートで偽のサーバを立てたりできる。
 //!
 //! なぜホスト側なのか
 //! ------------------
@@ -138,13 +143,6 @@ pub const ServeError = error{
     ListenPathNotSocket,
 };
 
-/// bind する前に AF_UNIX のパス長制限を検査する。
-/// 越えていると bind が難解な失敗をするだけなので、起動時に弾く。
-pub fn validateSocketPath(path: []const u8) ServeError!void {
-    if (path.len == 0) return error.EmptySocketPath;
-    if (path.len > MAX_SOCKET_PATH) return error.SocketPathTooLong;
-}
-
 /// マスク済みバイトを接続の送信キューへ積む writer。
 /// MaskStream.push / finish に渡す。
 const QueueWriter = struct {
@@ -271,7 +269,12 @@ fn raiseFileLimit() void {
     } else |_| {}
 }
 
-fn bindListener(sock_path: []const u8) !posix.socket_t {
+fn bindUnixListener(sock_path: []const u8) !posix.socket_t {
+    // address.parse を通らない呼び出し元 (nas-mask-filter の --serve) もあるので、
+    // 越えていると bind が難解な失敗をするだけの AF_UNIX のパス長制限はここで弾く。
+    if (sock_path.len == 0) return error.EmptySocketPath;
+    if (sock_path.len > MAX_SOCKET_PATH) return error.SocketPathTooLong;
+
     var addr = posix.sockaddr.un{ .family = posix.AF.UNIX, .path = undefined };
     @memset(&addr.path, 0);
     @memcpy(addr.path[0..sock_path.len], sock_path);
@@ -309,13 +312,36 @@ fn bindListener(sock_path: []const u8) !posix.socket_t {
     return fd;
 }
 
-/// sock_path で待ち受け、kill されるまで接続をマスクし続ける。
+fn bindTcpListener(addr: std.net.Address) !posix.socket_t {
+    const fd = try posix.socket(
+        addr.any.family,
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK,
+        0,
+    );
+    errdefer posix.close(fd);
+
+    // serve を再起動した直後は、前回の接続が TIME_WAIT に残っていて同じポートへの
+    // bind が EADDRINUSE になる。利用者が設定したポートを変えずに済ませるため。
+    try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    try posix.bind(fd, &addr.any, addr.getOsSockLen());
+    try posix.listen(fd, LISTEN_BACKLOG);
+    return fd;
+}
+
+fn bindListener(listen: address.Address) !posix.socket_t {
+    return switch (listen) {
+        .unix => |path| bindUnixListener(path),
+        .tcp => |addr| bindTcpListener(addr),
+    };
+}
+
+/// listen で待ち受け、kill されるまで接続をマスクし続ける。
 /// 正常には返らない (戻り値の型は main の他モードと揃えるためのもの)。
-pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []const u8) !u8 {
-    try validateSocketPath(sock_path);
+/// accept 以降は fd の種類 (AF_UNIX / AF_INET) に依存しない。
+pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, listen: address.Address) !u8 {
     raiseFileLimit();
 
-    const listener = try bindListener(sock_path);
+    const listener = try bindListener(listen);
     defer posix.close(listener);
 
     // MaskStream 未初期化の接続の最初の read 先。全接続で使い回す
@@ -448,23 +474,62 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
 
 const testing = std.testing;
 
-test "validateSocketPath: ordinary path is accepted" {
-    try validateSocketPath("/run/user/1000/nas/abc-sock/mask.sock");
+test "run: an empty unix path is rejected" {
+    try testing.expectError(error.EmptySocketPath, run(testing.allocator, &.{"secret-value"}, .{ .unix = "" }));
 }
 
-test "validateSocketPath: empty path is an error" {
-    try testing.expectError(error.EmptySocketPath, validateSocketPath(""));
-}
-
-test "validateSocketPath: 107 bytes is the maximum accepted length" {
-    const ok = "/" ** MAX_SOCKET_PATH;
-    try testing.expectEqual(@as(usize, 107), ok.len);
-    try validateSocketPath(ok);
-}
-
-test "validateSocketPath: 108 bytes is too long" {
+test "run: a unix path over the sun_path limit is rejected" {
     const too_long = "/" ** (MAX_SOCKET_PATH + 1);
-    try testing.expectError(error.SocketPathTooLong, validateSocketPath(too_long));
+    try testing.expectError(error.SocketPathTooLong, run(testing.allocator, &.{"secret-value"}, .{ .unix = too_long }));
+}
+
+/// port 0 で bind して割り当て番号を読み、閉じてから返す。run に渡す番号の確保用。
+fn freeLoopbackPort() !u16 {
+    var addr = try std.net.Address.parseIp4("127.0.0.1", 0);
+    const fd = try posix.socket(posix.AF.INET, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    defer posix.close(fd);
+    try posix.bind(fd, &addr.any, addr.getOsSockLen());
+    var len: posix.socklen_t = addr.getOsSockLen();
+    try posix.getsockname(fd, &addr.any, &len);
+    return addr.getPort();
+}
+
+/// run は返らないので、テストはスレッドを detach したまま終わる。
+/// 終了時はプロセスごと落ちる。確保は leak 検査のない page_allocator で行う。
+fn runDetached(addr: address.Address) void {
+    _ = run(std.heap.page_allocator, &.{"secret-value"}, addr) catch {};
+}
+
+test "run: a loopback TCP listener masks a connection" {
+    const port = try freeLoopbackPort();
+    const addr = try std.net.Address.parseIp4("127.0.0.1", port);
+    const thread = try std.Thread.spawn(.{}, runDetached, .{address.Address{ .tcp = addr }});
+    thread.detach();
+
+    // listener が立つまで待つ。
+    var stream: ?std.net.Stream = null;
+    var attempt: usize = 0;
+    while (attempt < 100) : (attempt += 1) {
+        stream = std.net.tcpConnectToAddress(addr) catch {
+            std.Thread.sleep(20 * std.time.ns_per_ms);
+            continue;
+        };
+        break;
+    }
+    const conn = stream orelse return error.ConnectFailed;
+    defer conn.close();
+
+    try conn.writeAll("a secret-value b");
+    try posix.shutdown(conn.handle, .send);
+
+    var got: [64]u8 = undefined;
+    var total: usize = 0;
+    while (true) {
+        const n = try conn.read(got[total..]);
+        if (n == 0) break;
+        total += n;
+    }
+    try testing.expectEqualStrings("a ************ b", got[0..total]);
 }
 
 test "run: a non-socket at the listen path is left alone" {
@@ -475,7 +540,7 @@ test "run: a non-socket at the listen path is left alone" {
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = "original" });
     defer std.fs.cwd().deleteFile(path) catch {};
 
-    try testing.expectError(error.ListenPathNotSocket, run(testing.allocator, &.{"secret-value"}, path));
+    try testing.expectError(error.ListenPathNotSocket, run(testing.allocator, &.{"secret-value"}, .{ .unix = path }));
 
     var content: [16]u8 = undefined;
     const got = try std.fs.cwd().readFile(path, &content);

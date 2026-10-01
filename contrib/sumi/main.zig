@@ -144,17 +144,17 @@ fn makeSocketDir(sock_path: []const u8) !void {
 /// 接続から届いたバイトは混ぜない (supervise.serve の「出力の不変条件」)。
 fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const parsed = parseServeArgs(args) catch return usage("serve takes --secrets-file F --listen SOCKET");
-    supervise.serve.validateSocketPath(parsed.listen) catch return usage("the --listen path must be 1 to 107 bytes");
+    const listen = supervise.address.parse(parsed.listen) catch return usage("the --listen path must be 1 to 107 bytes");
     const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
         std.debug.print("sumi: {s}\n", .{secrets.describe(err)});
         return 1;
     };
-    makeSocketDir(parsed.listen) catch |err| {
+    if (listen == .unix) makeSocketDir(listen.unix) catch |err| {
         std.debug.print("sumi: cannot create the directory of the --listen path: {s}\n", .{@errorName(err)});
         return 1;
     };
     // 接続ごとに確保と解放を繰り返すので、arena ではなく解放できるアロケータを渡す。
-    return supervise.serve.run(std.heap.page_allocator, list, parsed.listen) catch |err| {
+    return supervise.serve.run(std.heap.page_allocator, list, listen) catch |err| {
         if (err == error.ListenPathNotSocket) {
             std.debug.print("sumi: the --listen path exists and is not a socket\n", .{});
             return 1;
