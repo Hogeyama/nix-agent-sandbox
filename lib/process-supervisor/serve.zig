@@ -688,7 +688,9 @@ const ConnPair = struct {
     /// 1 回だけ readable を呼ぶ (読めるまで待つ)。
     fn readOnce(self: *ConnPair) ConnError!void {
         var pfd = [_]posix.pollfd{.{ .fd = self.conn.fd, .events = posix.POLL.IN, .revents = 0 }};
-        _ = posix.poll(&pfd, 5000) catch return error.Failed;
+        // 待ちが時間切れなら失敗にする。呼び出し側のループが無限に回らないように。
+        const ready = posix.poll(&pfd, 5000) catch return error.Failed;
+        if (ready == 0) return error.Failed;
         return self.conn.readable(testing.allocator, TEST_SECRETS, self.scratch);
     }
 
