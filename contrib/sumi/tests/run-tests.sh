@@ -10,7 +10,14 @@ command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+serve_pid=""
+serve_dir=""
+cleanup() {
+  [ -n "$serve_pid" ] && kill "$serve_pid" 2>/dev/null
+  rm -rf "$work"
+  [ -n "$serve_dir" ] && rm -rf "$serve_dir"
+}
+trap cleanup EXIT
 
 current="Tr0ub4dor"
 retired="hunter2xyz"
@@ -143,6 +150,43 @@ check "non-executable shell does not execute the command" "no" "$([ -e "$work/no
 
 "$sumi" run --secrets-file "$work/secrets.txt" --shell /bin/bash 'true' extra >/dev/null 2>&1
 check "prefix run rejects extra command operands" "2" "$?"
+
+# --- serve -------------------------------------------------------------------
+
+serve_dir="$(mktemp -d /tmp/sumi-serve.XXXXXX)"
+serve_sock="$serve_dir/mask.sock"
+decoded="s3rv3-d3c0y"
+printf '%s\n%s\n' "$current" "$(printf %s "$decoded" | base64)" > "$work/serve-secrets.txt"
+
+"$sumi" serve --secrets-file "$work/serve-secrets.txt" --listen "$serve_sock" 2>"$work/serve.err" &
+serve_pid=$!
+for _ in $(seq 50); do
+  "$sumi" run --socket "$serve_sock" true >/dev/null 2>&1 && break
+  sleep 0.1
+done
+check "serve creates its socket" "yes" "$([ -S "$serve_sock" ] && echo yes || echo no)"
+check "serve socket is private to its owner" "600" "$(stat -c %a "$serve_sock" 2>/dev/null)"
+
+out="$("$sumi" run --socket "$serve_sock" --shell /bin/bash 'printf "a=%s b=%s\n" "Tr0ub4dor" "s3rv3-d3c0y"')"
+record_success_status "run over serve" "$?"
+check "run over serve masks a listed value and a decoded base64 line" 'a=********* b=***********' "$out"
+
+out="$(printf '%s' "$(jq -nc --arg v "$current" '{tool_name:"Bash",tool_input:{command:"cat .env"},tool_response:{stdout:("pw=" + $v),stderr:""}}')" \
+  | "$sumi" hook --agent claude post-tool --socket "$serve_sock" | delivered)"
+check "post-tool over serve masks the output" 'pw=*********' "$(jq -nr --arg o "$out" '$o | fromjson | .stdout')"
+
+kill "$serve_pid" 2>/dev/null
+wait "$serve_pid" 2>/dev/null
+serve_pid=""
+
+"$sumi" serve --secrets-file "$work/missing.txt" --listen "$serve_dir/missing.sock" >/dev/null 2>"$work/serve-missing.err"
+status=$?
+check "serve with a missing list exits 1" "1" "$status"
+check "serve with a missing list creates no socket" "no" "$([ -e "$serve_dir/missing.sock" ] && echo yes || echo no)"
+check "serve with a missing list says why" "yes" "$(grep -q 'missing or unreadable' "$work/serve-missing.err" && echo yes || echo no)"
+
+"$sumi" serve --secrets-file "$work/secrets.txt" </dev/null >/dev/null 2>&1
+check "serve without --listen exits 2" "2" "$?"
 
 # --- post-tool ---------------------------------------------------------------
 

@@ -69,11 +69,43 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 
 ### 秘密一覧を手元に置かない（`--socket`）
 
-`--secrets-file F` の代わりに `--socket SOCKET` を渡すと、sumi は秘密一覧を読みません。値の判定と置き換えは、`SOCKET` で待ち受ける `nas-mask-filter --serve` に問い合わせます。エージェントと同じ環境に一覧を置けない場合（コンテナ内の hook など）に使います。nas は `mask.filter` が有効なとき、この形で sumi を設定します。
+`--secrets-file F` の代わりに `--socket SOCKET` を渡すと、sumi は秘密一覧を読みません。値の判定と置き換えは、`SOCKET` で待ち受けるブローカーに問い合わせます。エージェントと同じ環境に一覧を置けない場合（コンテナ内の hook など）に使います。
+
+ブローカーは `sumi serve` で起動します。秘密ファイルを読み、`--listen` のパスで待ち受けます。kill するまで動き続けます。ソケットを置くディレクトリは自動では作らないので、先に作ってください。
 
 ```
-sumi init --agent claude --socket /run/user/1000/nas/mask-filter/<session>-sock/mask.sock
+mkdir -p -m 700 "$XDG_RUNTIME_DIR/sumi"
+sumi serve --secrets-file ~/.claude/sumi/secrets.txt --listen "$XDG_RUNTIME_DIR/sumi/mask.sock"
 ```
+
+nas は `mask.filter` が有効なとき、自前のブローカー（`nas-mask-filter --serve`）を起動し、この形で sumi を設定します。
+
+#### Dev Container で使う
+
+ホストで `sumi serve` を起動し、ソケットのあるディレクトリをコンテナに mount します。秘密ファイルのあるディレクトリは mount しません。
+
+```jsonc
+// devcontainer.json
+{
+  "mounts": [
+    "source=${localEnv:XDG_RUNTIME_DIR}/sumi,target=/run/sumi,type=bind,readonly"
+  ]
+}
+```
+
+コンテナ内で次を実行します。
+
+```
+sumi init --agent claude --socket /run/sumi/mask.sock
+```
+
+* ソケットファイルではなく、ディレクトリを mount してください。`sumi serve` を再起動するとソケットが作り直され、ファイル単体の mount は古いソケットを指したままになります。
+* ディレクトリは読み取り専用で mount します。コンテナ内のエージェントが `mask.sock` を消して、マスクしない自前の待ち受けに差し替えるのを防ぐためです。読み取り専用の mount 上のソケットにも、接続はできます。
+* ソケットの権限は 0600 です。コンテナのユーザーの UID を、`sumi serve` を起動したホストのユーザーと合わせてください。
+* `sumi serve` は起動時に、同じパスにある古いソケットを消します。同じパスで 2 つ起動すると、後から起動した方だけが応答します。
+* 秘密ファイルを変更したら `sumi serve` を再起動してください。起動後に読み直すことはしません。
+
+#### 注意
 
 * 2 つのオプションを同時には指定できません。
 * socket に接続できない場合、hook は出力を差し替えて伏せ、プロンプトを止めます。`run` は出力を捨てて終了コード 121 で終わります。

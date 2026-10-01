@@ -13,7 +13,7 @@ nas を使わない利用者は `--socket` を使えない。
 # ホスト
 sumi serve --secrets-file ~/.claude/sumi/secrets.txt --listen "$XDG_RUNTIME_DIR/sumi/mask.sock"
 
-# devcontainer.json で "$XDG_RUNTIME_DIR/sumi" を /run/sumi に bind mount し、コンテナ内で
+# devcontainer.json で "$XDG_RUNTIME_DIR/sumi" を /run/sumi に読み取り専用 (readonly) で bind mount し、コンテナ内で
 sumi init --agent claude --socket /run/sumi/mask.sock
 ```
 
@@ -70,6 +70,7 @@ checkPhase も `lib/process-supervisor` の `zig build test` を実行してい�
 
 ## README に書く Dev Container の注意
 
+- ディレクトリは readonly で mount する。コンテナ内のエージェントが mask.sock を消して自前の待ち受けに差し替えるのを防ぐ。読み取り専用 mount 上のソケットへの connect はできる。
 - ソケットファイルではなくディレクトリを mount する。serve を再起動するとソケットが作り直され、ファイル単体の bind mount は古い inode を指したままになる。
 - ソケットは 0600 なので、コンテナのユーザーの UID をホストの serve と合わせる。
 - secrets ファイルを置いたディレクトリはコンテナに mount しない。

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- `sumi serve --secrets-file FILE --listen SOCKET` runs a mask broker on the host, so hooks and `run` inside a Dev Container can use `--socket` without the secrets file being mounted.
+
 ## [0.4.1] - 2026-09-30
 
 ### Changed

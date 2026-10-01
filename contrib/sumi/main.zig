@@ -8,12 +8,13 @@
 //!   sumi run    SOURCE [--shell PATH] COMMAND
 //!   sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
 //!   sumi filter --secrets-file F
+//!   sumi serve  --secrets-file F --listen SOCKET
 //!   sumi --version
 //!   sumi --licenses
 //!
 //! SOURCE は `--secrets-file F` か `--socket SOCKET` のどちらか 1 つ。後者は値の一覧を
-//! 読まず、`nas-mask-filter --serve` のブローカーへバイト列を送ってマスクさせる
-//! (masker.zig)。
+//! 読まず、ブローカーへバイト列を送ってマスクさせる (masker.zig)。ブローカーは
+//! `sumi serve` か nas の `nas-mask-filter --serve` で、どちらも一覧をホスト側に持つ。
 //!
 //! 終了コード: 引数の解釈に失敗したときだけ 2。hook サブコマンドはそれ以降どの失敗でも
 //! 0 で決定 (withhold / block / deny) を返す。run は子の終了ステータスで終わり、マスク
@@ -47,6 +48,7 @@ const usage_text =
     \\       sumi run    SOURCE [--shell PATH] COMMAND
     \\       sumi run    SOURCE [--argv0 NAME] -- PROGRAM [ARGS...]
     \\       sumi filter --secrets-file F
+    \\       sumi serve  --secrets-file F --listen SOCKET
     \\       sumi --version
     \\       sumi --licenses
     \\
@@ -94,6 +96,46 @@ fn runFilter(allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 1;
     };
     return 0;
+}
+
+const ServeArgs = struct { secrets_file: []const u8, listen: []const u8 };
+
+fn parseServeArgs(args: []const []const u8) error{InvalidArguments}!ServeArgs {
+    var secrets_file: ?[]const u8 = null;
+    var listen: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 2) {
+        if (i + 1 >= args.len or !isOptionValue(args[i + 1])) return error.InvalidArguments;
+        const slot = if (std.mem.eql(u8, args[i], "--secrets-file"))
+            &secrets_file
+        else if (std.mem.eql(u8, args[i], "--listen"))
+            &listen
+        else
+            return error.InvalidArguments;
+        if (slot.* != null) return error.InvalidArguments;
+        slot.* = args[i + 1];
+    }
+    return .{
+        .secrets_file = secrets_file orelse return error.InvalidArguments,
+        .listen = listen orelse return error.InvalidArguments,
+    };
+}
+
+/// serve は一覧をこのプロセスに持ち、`--socket` で接続してくる hook と run の
+/// 問い合わせに答える。診断は定数の文言と利用者が渡した値だけにし、
+/// 接続から届いたバイトは混ぜない (supervise.serve の「出力の不変条件」)。
+fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+    const parsed = parseServeArgs(args) catch return usage("serve takes --secrets-file F --listen SOCKET");
+    supervise.serve.validateSocketPath(parsed.listen) catch return usage("the --listen path must be 1 to 107 bytes");
+    const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
+        std.debug.print("sumi: {s}\n", .{secrets.describe(err)});
+        return 1;
+    };
+    // 接続ごとに確保と解放を繰り返すので、arena ではなく解放できるアロケータを渡す。
+    return supervise.serve.run(std.heap.page_allocator, list, parsed.listen) catch |err| {
+        std.debug.print("sumi: serve failed: {s}\n", .{@errorName(err)});
+        return 1;
+    };
 }
 
 const ExecTarget = struct { argv0: []const u8, program: []const u8, args: []const []const u8 };
@@ -225,6 +267,7 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
     }
     if (std.mem.eql(u8, sub, "filter")) return runFilter(allocator, args);
     if (std.mem.eql(u8, sub, "run")) return runSupervised(allocator, args);
+    if (std.mem.eql(u8, sub, "serve")) return runServe(allocator, args);
 
     if (std.mem.eql(u8, sub, "hook") or std.mem.eql(u8, sub, "init") or std.mem.eql(u8, sub, "scan")) {
         const taken = takeAgent(args) catch return usage("unsupported --agent value (expected claude, codex or copilot)");
@@ -355,4 +398,29 @@ test "filter arguments have one fixed form" {
     try testing.expectEqual(@as(?[]const u8, null), filterPath(&.{}));
     try testing.expectEqual(@as(?[]const u8, null), filterPath(&.{ "--secrets-file", "/x", "--unsupported" }));
     try testing.expectEqualStrings("/x", filterPath(&.{ "--secrets-file", "/x" }).?);
+}
+
+test "serve arguments need both options once, in either order" {
+    const got = try parseServeArgs(&.{ "--secrets-file", "/s", "--listen", "/sock" });
+    try testing.expectEqualStrings("/s", got.secrets_file);
+    try testing.expectEqualStrings("/sock", got.listen);
+    const swapped = try parseServeArgs(&.{ "--listen", "/sock", "--secrets-file", "/s" });
+    try testing.expectEqualStrings("/s", swapped.secrets_file);
+    try testing.expectEqualStrings("/sock", swapped.listen);
+}
+
+test "serve arguments reject missing, repeated and unknown options" {
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{}));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--secrets-file", "/s" }));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--listen", "/sock" }));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--secrets-file", "/s", "--listen" }));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--secrets-file", "--listen", "/sock" }));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--secrets-file", "/s", "--secrets-file", "/t", "--listen", "/sock" }));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--socket", "/b", "--listen", "/sock" }));
+    try testing.expectError(error.InvalidArguments, parseServeArgs(&.{ "--secrets-file", "/s", "--listen", "/sock", "stray" }));
+}
+
+test "serve rejects a socket path that cannot be bound before reading the list" {
+    const too_long = "/" ** (supervise.serve.MAX_SOCKET_PATH + 1);
+    try testing.expectEqual(@as(u8, EXIT_USAGE), try dispatch(testing.allocator, &.{ "sumi", "serve", "--secrets-file", "/nonexistent/sumi-secrets", "--listen", too_long }, unavailableSelfPath));
 }
