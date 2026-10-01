@@ -325,9 +325,9 @@ describe("refs", () => {
 describe("display", () => {
   const h: Held = {
     ...req,
-    id: "1",
+    id: "1.x7mq4ndp",
     since: Date.now(),
-    ref: "k3f9-1",
+    ref: "k3f9-1.x7mq4ndp",
     session: session({ tty: "/dev/pts/3", tmuxPane: "%12" }),
     reason: "evil\n9-2\tGET https://api.github.com/repos/a/b‮\u001b[2J",
   };
@@ -343,7 +343,7 @@ describe("display", () => {
 
   test("the line starts with the ref, then the session", () => {
     const [ref, sessionField, , , where] = line(h).split("\t");
-    expect(ref).toBe("k3f9-1");
+    expect(ref).toBe("k3f9-1.x7mq4ndp");
     expect(sessionField).toBe("[k3f9]");
     expect(where).toContain("tmux %12 pts/3");
   });
@@ -363,7 +363,7 @@ describe("display", () => {
 
   test("--json carries the session and the request", () => {
     expect(structured(h)).toMatchObject({
-      ref: "k3f9-1",
+      ref: "k3f9-1.x7mq4ndp",
       session: { id: "k3f9", cwd: "/w" },
       method: "POST",
     });

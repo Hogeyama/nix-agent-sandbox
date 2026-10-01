@@ -6,11 +6,10 @@
 // gets it as STRAIT_SESSION, and the wrapped Claude Code status line shows it
 // (statusline.ts).
 
-import { randomInt } from "node:crypto";
 import { existsSync, readlinkSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { removeSocket } from "./approval.ts";
+import { randomWord, removeSocket } from "./approval.ts";
 
 export interface SessionInfo {
   id: string;
@@ -29,15 +28,6 @@ const SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,30}[A-Za-z0-9_])?$/;
 
 export function isSessionId(s: string): boolean {
   return SESSION_ID.test(s);
-}
-
-// Lowercase letters and digits without the ones easy to misread (0 o 1 l).
-export const ALPHABET = "23456789abcdefghijkmnpqrstuvwxyz";
-
-export function randomWord(length: number): string {
-  let w = "";
-  for (let i = 0; i < length; i++) w += ALPHABET[randomInt(ALPHABET.length)];
-  return w;
 }
 
 export function newSessionId(): string {

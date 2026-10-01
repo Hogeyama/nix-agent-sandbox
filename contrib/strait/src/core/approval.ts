@@ -6,19 +6,30 @@
 // denyRead, and srt's seccomp filter blocks AF_UNIX inside the sandbox on
 // Linux, so only the host can reach it.
 
+import { randomInt } from "node:crypto";
 import { lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecRequest } from "./hostexec.ts";
 import type { FinalDecision } from "./policy.ts";
-import { ALPHABET, randomWord, type SessionInfo } from "./session.ts";
+import type { SessionInfo } from "./session.ts";
 
 /**
  * How long a request waits. Below node:http's default requestTimeout (300 s),
  * which can end a held request whose body is not yet consumed.
  */
 export const HOLD_MS = 240_000;
+
+// Lowercase letters and digits without the ones easy to misread (0 o 1 l).
+// Session IDs (session.ts) use it too.
+const ALPHABET = "23456789abcdefghijkmnpqrstuvwxyz";
+
+export function randomWord(length: number): string {
+  let w = "";
+  for (let i = 0; i < length; i++) w += ALPHABET[randomInt(ALPHABET.length)];
+  return w;
+}
 
 /**
  * A request ID is `<n>.<incarnation>`. The incarnation is drawn once per

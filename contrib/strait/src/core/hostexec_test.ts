@@ -326,8 +326,8 @@ describe("client arguments", () => {
 describe("review display", () => {
   test("shows the command and its directory", () => {
     const l = line({
-      id: "1",
-      ref: "k3f9-1",
+      id: "1.x7mq4ndp",
+      ref: "k3f9-1.x7mq4ndp",
       session: { id: "k3f9", cwd: "/w", command: ["claude"], startedAt: 0 },
       since: Date.now(),
       method: "POST",
