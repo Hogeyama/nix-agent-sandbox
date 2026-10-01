@@ -87,7 +87,7 @@ test("only Codex masking installs executable shims, even with lifecycle hooks of
               if (agents[0] === "codex" && maskSocketPath) {
                 expect(file?.mode).toBe(0o755);
                 expect(file?.content).toContain(
-                  `--agent codex ${action} --socket '/run/mask.sock'`,
+                  `--agent codex ${action} --server '/run/mask.sock'`,
                 );
               } else {
                 expect(file).toBeUndefined();

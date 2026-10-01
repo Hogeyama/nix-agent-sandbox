@@ -18,7 +18,7 @@ export function buildCodexMaskHookScript(
   // Use the real interpreter even when /bin/sh points to the Bash wrapper;
   // -p also prevents BASH_ENV and exported functions from running in this path.
   return `#!/tmp/nas-bash-override/bash.real -p
-exec ${SUMI_CONTAINER_PATH} hook --agent codex ${event} --socket ${socket}
+exec ${SUMI_CONTAINER_PATH} hook --agent codex ${event} --server ${socket}
 `;
 }
 
@@ -46,7 +46,7 @@ export function buildAgentHookSettings(
         "--agent",
         agent,
         event,
-        "--socket",
+        "--server",
         options.maskSocketPath,
       ],
       timeoutSec: 20,

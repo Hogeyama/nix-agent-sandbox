@@ -277,7 +277,7 @@ describe("buildClaudeHookSettings", () => {
           "--agent",
           "claude",
           "post-tool",
-          "--socket",
+          "--server",
           "/run/s/mask.sock",
         ],
         timeout: 20,
@@ -289,7 +289,7 @@ describe("buildClaudeHookSettings", () => {
       "--agent",
       "claude",
       "prompt",
-      "--socket",
+      "--server",
       "/run/s/mask.sock",
     ]);
   });

@@ -85,7 +85,7 @@ async function makeTempDir(prefix: string): Promise<string> {
 // 実装するのは 3 モード:
 //   --serve <sock>  ホスト側ブローカー。1 接続 = 1 ストリームでマスクして返す。
 //                   シークレットフレームを読むのは**このモードだけ**。
-//   run ...         コンテナ側の中継クライアント (sumi run --socket)。子を起動し、その stdout/stderr を
+//   run ...         コンテナ側の中継クライアント (sumi run --server)。子を起動し、その stdout/stderr を
 //                   socket 経由でマスクして書き戻す。フレームは読まない。
 //   (引数なし)      素の stdin→stdout フィルタ。
 //
@@ -283,7 +283,7 @@ def supervise(argv):
         if argv[0] == "--argv0":
             argv0 = argv[1]
             argv = argv[2:]
-        elif argv[0] == "--socket":
+        elif argv[0] == "--server":
             sock_path = argv[1]
             argv = argv[2:]
         elif argv[0] == "--":

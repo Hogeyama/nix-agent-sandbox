@@ -58,7 +58,7 @@ async function buildForDev(relativeSrcDir: string): Promise<void> {
  * 前提は 4 つ:
  * - `binaryPath`: `src/mask-filter` の生成物。dev では直前にビルドしてから解決する。
  * - `sumiPath`: `contrib/sumi` の生成物。コンテナ内の bash ラッパーが起動する
- *   `sumi run --socket` と Claude Code の hook を、本物のブローカーに対して検証する。
+ *   `sumi run --server` と Claude Code の hook を、本物のブローカーに対して検証する。
  * - `hasPython3`: 「読まずに書き続ける」クライアント (STALLING_CLIENT_PY) は
  *   TypeScript では書けないので python3 で用意する。flake.nix の devShell で
  *   宣言してあるが、devShell の外で走らせる場合もあるので存在を確かめる。
@@ -1545,7 +1545,7 @@ describe("nas-mask-filter --serve", () => {
 });
 
 /**
- * コンテナ内の Claude Code が呼ぶ `sumi hook --socket` を本物のブローカーに向けて
+ * コンテナ内の Claude Code が呼ぶ `sumi hook --server` を本物のブローカーに向けて
  * 走らせる。秘密一覧のファイルは sumi に渡さない (env にも引数にも無い)。
  *
  * 出力に値が残っていないかは、値をテスト出力へ出さずにバイト列として照合する。
@@ -1629,7 +1629,7 @@ describe("sumi hooks over the mask broker", () => {
     agent: "claude" | "codex" | "copilot" = "claude",
   ): Promise<{ stdout: string; exitCode: number }> {
     const proc = Bun.spawn(
-      [sumiPath!, "hook", "--agent", agent, hook, "--socket", sockPath],
+      [sumiPath!, "hook", "--agent", agent, hook, "--server", sockPath],
       {
         stdin: new TextEncoder().encode(JSON.stringify(payload)),
         stdout: "pipe",

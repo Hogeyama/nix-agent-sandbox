@@ -118,7 +118,7 @@ test("Copilot installs result and transformed-prompt masking independently of li
           "--agent",
           "copilot",
           action,
-          "--socket",
+          "--server",
           "/run/mask.sock",
         ],
         timeoutSec: 20,
@@ -162,7 +162,7 @@ test("mask socket paths survive exec arguments and the Codex shim literally", as
       "--agent",
       "codex",
       action,
-      "--socket",
+      "--server",
       socket,
     ]);
   }

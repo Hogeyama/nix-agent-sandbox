@@ -4,8 +4,8 @@
  *
  * 解決済みシークレットのフレームはホスト専用ディレクトリに書き、コンテナへは
  * マウントしない (C1 / S1)。コンテナ内では sumi が 2 つの経路でこの socket を使う:
- * bash ラッパーが起動する `sumi run --socket` はシェルの出力を中継し、
- * Claude Code の hook (`sumi hook --socket`) は Read などのツール結果とプロンプトを
+ * bash ラッパーが起動する `sumi run --server` はシェルの出力を中継し、
+ * Claude Code の hook (`sumi hook --server`) は Read などのツール結果とプロンプトを
  * 問い合わせる。どちらもフレームを読まない。
  *
  * hook の設定は managed settings のドロップイン
@@ -144,7 +144,7 @@ export function buildClaudeHookSettings(socketPath: string): string {
         {
           type: "command",
           command: SUMI_CONTAINER_PATH,
-          args: ["hook", "--agent", "claude", ...args, "--socket", socketPath],
+          args: ["hook", "--agent", "claude", ...args, "--server", socketPath],
           timeout: CLAUDE_HOOK_TIMEOUT_SECONDS,
         },
       ],

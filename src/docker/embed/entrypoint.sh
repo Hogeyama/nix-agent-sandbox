@@ -447,7 +447,7 @@ fi
 if [ ! -S "$nas_mask_socket_path" ]; then
   exit 121
 fi
-exec "$nas_mask_filter_path" run --socket "$nas_mask_socket_path" \
+exec "$nas_mask_filter_path" run --server "$nas_mask_socket_path" \
   --argv0 "$0" -- \
   /tmp/nas-bash-override/bash.real "$@"
 MASK_WRAPPER_BODY
