@@ -15,7 +15,7 @@ spec: `docs/superpowers/specs/2026-10-02-sumi-serve-tcp-design.md`
 
 ## nas が同梱する sumi
 
-`flake.nix` は `contrib/sumi` を同じソースからビルドし、`$out/sumi/` にコピーする (`cp ${sumi}/bin/sumi $out/sumi/`)。nas が別のバージョンの sumi を取ってくることはないので、`--socket` の削除と nas 側の置き換えは同じブランチでそろえればよい (Task 5)。
+`flake.nix` は `contrib/sumi` を同じソースからビルドし、`$out/sumi/` にコピーする (`cp ${sumi}/bin/sumi $out/sumi/`)。nas が別のバージョンの sumi を取ってくることはないので、`--socket` の削除と nas 側の置き換えは同じブランチでそろえればよい (Task 6)。
 
 ## Task 1: ADDR の解釈 (`lib/process-supervisor/address.zig`)
 
@@ -49,7 +49,7 @@ pub fn parse(text: []const u8) ParseError!Address
 - TCP は `socket(AF_INET/AF_INET6, SOCK_STREAM|CLOEXEC|NONBLOCK)`、`SO_REUSEADDR`、bind、listen。`SO_REUSEADDR` は、再起動直後に TIME_WAIT で bind が失敗しないようにするため。
 - accept 以降のループは変えない (fd の種類に依存していないことを読んで確かめる)。
 - ファイル冒頭の説明を「Unix domain socket か ループバックの TCP」に直す。TCP は一人で使うホスト専用である理由を一文添える (spec の「対象にするホスト」)。
-- 呼び出し元: `src/mask-filter/mask_filter.zig` は `--serve PATH` を `.{ .unix = PATH }` で渡す (パス長の検査が今と同じに働くこと)。`contrib/sumi/main.zig` の `runServe` は Task 4 で直すので、ここではコンパイルが通る最小の変更 (`.{ .unix = parsed.listen }` と、長さ検査を `address.parse` に置き換え) に留める。
+- 呼び出し元: `src/mask-filter/mask_filter.zig` は `--serve PATH` を `.{ .unix = PATH }` で渡す (パス長の検査が今と同じに働くこと)。`contrib/sumi/main.zig` の `runServe` は Task 5 で直すので、ここではコンパイルが通る最小の変更 (`.{ .unix = parsed.listen }` と、長さ検査を `address.parse` に置き換え) に留める。
 
 テスト (serve.zig): テスト内で `127.0.0.1` のポートを 1 つ確保し (port 0 で bind して番号を読み、閉じてから使う)、別スレッドで `run` を起動し、接続して既存と同じマスクが返ることを確かめる。`run` は返らないので、テストは既存のテストと同じく、スレッドを detach したまま終わってよいかを既存のテスト (`relay.zig` の TestBroker 等) を見て判断する。
 
@@ -67,13 +67,31 @@ pub fn parse(text: []const u8) ParseError!Address
   - 接続は今と同じく、ブロッキングで済ませてから非ブロッキングにする。CONNECT の読み書きもブロッキングで行い、5 秒の受信タイムアウト (`SO_RCVTIMEO`) を付ける。
   - 再試行 (`CONNECT_ATTEMPTS`) は直接接続にも proxy 接続にも今と同じく適用する。proxy の 403 は再試行しない。
 - `maskOnce(gpa, addr, proxy, input)` と `supervise.run(..., addr, proxy, ...)` を合わせて変える。
-- 呼び出し元: nas-mask-filter の `--supervise --socket` は `.{ .unix = path }` と `null` を渡す (nas は proxy を使わない)。sumi の呼び出し元は Task 4 で直すので、ここではコンパイルが通る最小の変更に留める。
+- 呼び出し元: nas-mask-filter の `--supervise --socket` は `.{ .unix = path }` と `null` を渡す (nas は proxy を使わない)。sumi の呼び出し元は Task 5 で直すので、ここではコンパイルが通る最小の変更に留める。
 
 テスト (relay.zig): TCP の直接接続でマスクが往復する。テスト内に最小の CONNECT proxy (スレッド) を立て、proxy 経由で往復する。403 で `RelayConnectFailed`。ヘッダが 8 KiB を越えると `RelayConnectFailed`。ユーザー情報付きの URL で `Proxy-Authorization` が正しく付く。ループバック以外の proxy (`http://10.0.0.1:3128`) と `https://` の proxy は無視して直接つなぐ。
 
 確認: `bun run test:process-supervisor-unit`、`bun run test:mask-filter-unit`
 
-## Task 4: sumi の CLI (`--server`、`serve --listen ADDR`)
+## Task 4: 入力の終わりをフレームで伝える (`serve.zig`、`relay.zig`、`supervise.zig`)
+
+srt の proxy は half-close を通さない (spec の「ブローカーのプロトコル」の実測)。Unix ソケットと TCP の両方で、入力をフレームで送るプロトコルに替える。spec の「新しいプロトコル」を正とする。
+
+- フレーム: `[u32 ビッグエンディアンの長さ][バイト列]`。長さは 1..`relay.CHUNK_SIZE` (64 KiB)。長さ 0 が入力の終わり。上限の定数はクライアントとサーバーで同じものを使う (置き場所は `address.zig` と同じく両者が参照できる場所にする)。
+- serve.zig: 接続ごとにフレームの読み取り状態 (ヘッダの残りバイト数、本文の残りバイト数、終わりを受け取ったか) を持つ。本文を MaskStream に渡す。終わりのフレームで今の EOF と同じ処理 (`stream.finish`) をする。次の場合は末尾を送らずに閉じる: 長さが上限越え、終わりのフレームの前に EOF。終わりのフレームを読んだ後はその接続から読まず (POLLIN を待たない)、後から届いたバイトは捨て、末尾を送り切ったら閉じる。終わりのフレームと余分なバイトが 1 回の read で同時に届いた場合も、余分なバイトは MaskStream に渡さない。MaskStream を最初の本文のバイトで初期化するという今の方針 (accept しただけの接続にメモリを確保しない) を保つ。シークレットがフレームの境界をまたいでもマスクされること。
+- relay.zig: `queueWrite` はバイト列をフレームに包んでキューに積む (`CHUNK_SIZE` を越えるときは分ける)。`halfClose` を「終わりのフレームを積む」に替える (名前も実態に合わせる)。`shutdown(SHUT_WR)` は使わない。`Relay` に送った本文の合計バイト数と受け取ったバイト数を持たせ、サーバーが閉じたとき「終わりのフレームを送り切っていない」か「両者が一致しない」なら失敗にする判定を `Relay` に置く。`maskOnce` の今の長さの照合はこれに置き換え、`supervise.run` もこの判定を使う (子が 0 で終わっても、判定が失敗なら 121)。理由は spec の「応答が最後まで届いたかの判定」。
+- supervise.zig: `halfClose` を呼んでいる箇所を新しい関数に替える。ファイル冒頭とコメントの half-close の説明を直す。
+- serve.zig と relay.zig の冒頭の「プロトコル」の説明を新しいものに書き換え、half-close をやめた理由 (srt の proxy) を一文添える。
+- プロトコルを直接話すテストを合わせる: relay.zig のテスト用ブローカー、`contrib/sumi/masker.zig` の `TestBroker`、`src/stages/maskfs/mask_filter_integration_test.ts`、`src/stages/launch/integration_test.ts` の偽 sumi。ほかに `rg -n 'SHUT_WR|shutdown\(' lib contrib/sumi src tests` で見つかる、ブローカーのプロトコルを話すもの (hostexec など無関係なものは除く)。
+- 同じタスクで、Task 3 のレビューの警告 2 件を直す:
+  - proxy 経由の接続で、403 以外の 200 でない応答 (502 など)、早すぎる close、受信タイムアウトでも、直接接続と同じ回数・間隔で再試行する。403 だけは再試行しない (`relay.zig` の proxy 接続)。
+  - URL のユーザー情報に `:` が無い (`http://user@127.0.0.1:P`) ときは `user:` を base64 にする (RFC 7617)。
+
+テスト: spec の「テスト」の serve.zig と relay.zig / supervise.zig の項目。特に「終わりのフレームを受け取った後に末尾を返さず閉じるテスト用ブローカー」で、`maskOnce` と `supervise.run` (子は 0 で終わる) の両方が失敗することを確かめる。再試行とユーザー情報の 2 件にもテストを足す。
+
+確認: `bun run test:process-supervisor-unit`、`bun run test:mask-filter-unit`、`bun run test:sumi`、`bun test src/stages/maskfs/mask_filter_integration_test.ts`、`bun test src/stages/launch/integration_test.ts` (Docker が要るものは skip されうるので skip の件数を報告する)。
+
+## Task 5: sumi の CLI (`--server`、`serve --listen ADDR`)
 
 - `masker.zig`: `Source.socket` を `Source.server: address.Address` に、`SourceOption` の `--socket` を `--server` に替える。`--server` の値は `address.parse` し、不正なら usage エラー (終了コード 2)。`Masker` の接続は `relay.proxyFromEnv()` を渡す。
 - `main.zig`: `runServe` の `--listen` を `address.parse` で解釈する。`makeSocketDir` は Unix のときだけ呼ぶ。usage 文と冒頭コメントの `--socket SOCKET` を `--server ADDR` に、`--listen SOCKET` を `--listen ADDR` に直す。`run` の経路も `--server` に替える。
@@ -83,7 +101,7 @@ pub fn parse(text: []const u8) ParseError!Address
 
 確認: `bun run test:sumi`
 
-## Task 5: nas 側の `--socket` を `--server` に替える
+## Task 6: nas 側の `--socket` を `--server` に替える
 
 - `src/stages/maskfs/mask_filter_service.ts` の `buildClaudeHookSettings`。
 - `src/stages/agent_hooks/settings.ts` (codex の hook スクリプトと copilot の設定)。
@@ -92,7 +110,7 @@ pub fn parse(text: []const u8) ParseError!Address
 
 確認: `bun run test:unit`、`bun run test:nas-integration` の該当ファイル (`bun test src/stages/maskfs src/stages/agent_hooks src/stages/launch`。Docker が要るものは skip されうるので、skip の件数を報告する)。
 
-## Task 6: 文書
+## Task 7: 文書
 
 - `contrib/sumi/CHANGELOG.md` の Unreleased:
   - Added: `sumi serve --listen` が `tcp://127.0.0.1:PORT` を受け付け、Claude Code の Bash sandbox (srt) の中から proxy 経由で使えること。一人で使うホスト向けであること。既存の `sumi serve` の行と矛盾しないように直す。
@@ -104,5 +122,5 @@ pub fn parse(text: []const u8) ParseError!Address
 
 ## 最後に
 
-- `bun run test:sumi`、`bun run test:process-supervisor-unit`、`bun run test:mask-filter-unit`、`bun run test:unit` を流す。CLAUDE.md の終了時の検証 (`bun run test` と `hostexec bun run test`) は、利用者に確認してから行う。
+- `bun run test:sumi`、`bun run test:process-supervisor-unit`、`bun run test:mask-filter-unit`、`bun run test:unit` を流す。その後、CLAUDE.md の終了時の検証として、リポジトリのルートで `bun run test` と `hostexec bun run test` を順に 1 回ずつ実行する。1 つ目が失敗しても 2 つ目を実行し、利用者に改めて確認はしない。両環境の結果と skip を別々に報告する。
 - 手動の検証 (ホストで本物の `sumi serve --listen tcp://…` と Claude Code の sandbox) は `.local/srt-tcp-probe/claude.sh` を元に別に行い、`contrib/sumi/tests/manual-validation.md` に記録する。これは利用者の承認 (hostexec) が要るので、実装の後に利用者と行う。

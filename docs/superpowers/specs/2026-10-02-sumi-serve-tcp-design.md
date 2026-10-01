@@ -141,14 +141,65 @@ proxy があるときは proxy だけを使えば、`sumi run` が sandbox の�
 TCP の接続失敗と、proxy の拒否 (403 など) もここに入る。
 `masker.UNAVAILABLE_REASON` の文言は変えない。原因ごとの詳細は stderr に出さない。hook の stderr はエージェントに見えうるからである。
 
+## ブローカーのプロトコル: 入力の終わりを区切りで伝える
+
+今のプロトコルは、クライアントが `shutdown(SHUT_WR)` (half-close) で入力の終わりを伝え、サーバーが保持中の末尾をマスクして返してから閉じる。
+srt の proxy はこの half-close を通さない。
+
+### 実測 (2026-10-02, Linux, srt 0.0.77)
+
+`.local/srt-tcp-probe/halfclose.sh` で、srt の中から proxy 経由でホストのサーバーへつなぎ、`hello` を送って half-close した。
+
+- サーバーは `hello` と EOF を受け取り、1 ms 後に返事を送った (サーバー側のログ)。
+- クライアントには何も届かず、EOF で終わった。
+
+クライアントが half-close せずに待つ場合は、返事が届き、サーバーの close も EOF として届く (最初の実測)。
+proxy の経路では、クライアントが half-close した時点で逆向きも閉じられる。
+
+### 新しいプロトコル
+
+Unix ソケットと TCP で同じものを使う。
+
+- **クライアント → サーバー**: `[長さ: 4 バイト、ビッグエンディアン][その長さのバイト列]` を繰り返す。長さは 1 以上、上限は relay の `CHUNK_SIZE` (64 KiB)。**長さ 0 のフレームが入力の終わり**。クライアントは half-close しない。
+- **サーバー → クライアント**: 今と同じく、マスク済みのバイト列を区切りなしで流す。終わりのフレームを受け取ったら保持中の末尾をマスクして送り、送り切ったら閉じる。**サーバーの close が出力の終わり**。
+
+サーバーは次の場合、保持中の末尾を送らずに接続を閉じる。
+
+- 長さが上限を越えている。
+- 終わりのフレームの前に EOF になった (クライアントが落ちた)。
+
+終わりのフレームを読んだ後は、その接続から読まない。後から届いたバイトは捨て、末尾をマスクして送り切ったら閉じる。
+送る末尾はマスク済みなので、余分なバイトがあっても漏れは起きない。余分なバイトを送るのはクライアントの不具合である。本文として数えたデータが捨てられた場合は、次の長さの照合で検出できる。本文の長さが変わらない余分なバイト (終わりのフレームを 2 回送った場合など) は検出しない。
+
+### 応答が最後まで届いたかの判定
+
+マスクは長さを変えない。クライアントは、送ったフレームの本文の合計バイト数と、受け取ったバイト数を数える。
+サーバーが閉じたとき、次のどちらかなら失敗にする (hook は伏せて止め、`run` は 121)。
+
+- 終わりのフレームを送り切っていない (今の「half-close より前にサーバーが閉じたのは切り捨て」と同じ)。
+- 受け取ったバイト数が、送った本文の合計と一致しない。
+
+終わりのフレームを送ったことは、サーバーが処理を終えたことを意味しない。サーバーが末尾を返さずに閉じても、送信の完了だけを見ていると出力が欠けたまま成功になる。
+長さの照合は今の `maskOnce` が行っているもので、これを `Relay` に持たせ、`supervise.run` も同じ判定を使う。
+half-close のプロトコルにも同じ穴 (サーバーが途中で落ちると `run` が欠けた出力で 0 を返しうる) があり、これで併せて塞がる。
+
+サーバーは、フレームの境界とマスクの境界を関係づけない。フレームの中身をつなげたバイト列を今と同じストリームとして扱うので、シークレットがフレームをまたいでもマスクされる。
+
+### 誰が変わるか
+
+プロトコルの両端は `lib/process-supervisor` にある (サーバーは serve.zig、クライアントは relay.zig の `Relay` と `maskOnce`、それを使う `supervise.run`)。
+テストの中には、プロトコルを直接話すものがある (relay.zig と masker.zig のテスト用ブローカー、`src/stages/maskfs/mask_filter_integration_test.ts`、`src/stages/launch/integration_test.ts` の偽 sumi など)。これらも新しいプロトコルに合わせる。
+
+nas-mask-filter と、nas が同梱する sumi は同じソースからビルドされる (`flake.nix`)。古いクライアントと新しいサーバーが組み合わさることはないので、互換性のための切り替えは持たない。
+
 ## コード構成
 
 | 変更 | 内容 |
 |---|---|
 | `lib/process-supervisor/address.zig` (新規) | ADDR の解釈 (`/path`、`unix://`、`tcp://`)。serve と relay の両方が使う |
-| `lib/process-supervisor/serve.zig` | `run` が Unix のパスの代わりに ADDR を受け取る。TCP の listener を足す。接続を受けた後のストリームの扱いと、Unix ソケットの扱いは変えない |
-| `lib/process-supervisor/relay.zig` | `Relay.connect` が ADDR を受け取る。TCP の直接接続と、proxy の `CONNECT` を足す |
-| `lib/process-supervisor/supervise.zig` | `run` の引数を ADDR に替える |
+| `lib/process-supervisor/serve.zig` | `run` が Unix のパスの代わりに ADDR を受け取る。TCP の listener を足す。入力をフレームとして読む |
+| `lib/process-supervisor/relay.zig` | `Relay.connect` が ADDR を受け取る。TCP の直接接続と、proxy の `CONNECT` を足す。入力をフレームで送り、half-close の代わりに終わりのフレームを送る |
+| `lib/process-supervisor/supervise.zig` | `run` の引数を ADDR に替える。half-close の呼び出しを終わりのフレームに替える |
 | `contrib/sumi/masker.zig` | `Source.socket` を `Source.server` (ADDR) に替える。`--socket` を受け付けなくする |
 | `contrib/sumi/main.zig` | `serve` の `--listen` の解釈 |
 | `contrib/sumi/claude/init.zig` ほか | `--server` を書き出す |
@@ -165,11 +216,12 @@ nas は同じリポジトリの sumi を同梱して使うので、sumi の `--s
 ## テスト
 
 - unit (`address.zig`): 受け付ける形と、拒否する形 (ホスト名、`localhost`、ループバック以外、ポート 0・範囲外・欠落、`unix://` の相対パス、未知のスキーム)。
-- unit (`serve.zig`): TCP で待ち受けたときも、Unix ソケットと同じマスクが返る。Unix ソケットの既存のテストがそのまま通る。
-- unit (`relay.zig`): proxy の規則 (変数の優先順、ループバックの判定、`http://` 以外は直接)、`CONNECT` の応答の解釈 (200、403、ヘッダの上限越え)、`Proxy-Authorization` の付与。テスト用の proxy はテスト内で立てる。
+- unit (`serve.zig`): TCP で待ち受けたときも、Unix ソケットと同じマスクが返る。シークレットがフレームの境界をまたいでもマスクされる。長さの上限越えと、終わりのフレームの前の EOF で、末尾を送らずに閉じる。終わりのフレームと余分なバイトが同時に届いても、遅れて届いても、末尾を送り切ってから閉じる (余分なバイトは処理しない)。
+- unit (`relay.zig`、`supervise.zig`): 入力がフレームで送られ、終わりのフレームで出力が閉じられる。half-close を使わない。サーバーが終わりのフレームを受け取った後、末尾を返さずに閉じると、`maskOnce` も `supervise.run` も失敗する (`run` は子が 0 で終わっても 121)。proxy の規則 (変数の優先順、ループバックの判定、`http://` 以外は直接)、`CONNECT` の応答の解釈 (200、403、ヘッダの上限越え)、`Proxy-Authorization` の付与。テスト用の proxy はテスト内で立てる。
 - unit (`main.zig`): `serve` の `--listen` が 3 つの形を受け付け、不正な形を usage エラーにする。
 - black-box (`contrib/sumi/tests/run-tests.sh`): TCP の `sumi serve` に対して `run` と hook がマスクできる。サーバーが止まっていると、`run` は 121、hook は伏せて止める。最小の CONNECT proxy をスクリプト内で立て、`HTTP_PROXY` 経由でも通ることを確かめる。`--socket` が usage エラーになる。
 - nas: `--socket` を `--server` に替えた既存のテスト (`mask_filter_service_test.ts`、`agent_hooks` のテスト、`launch/integration_test.ts` の偽 sumi) が通る。
+- nas: プロトコルを直接話すテスト (`mask_filter_integration_test.ts`、`launch/integration_test.ts` の偽 sumi ほか) を新しいプロトコルに合わせて通す。
 - 手動 (ホスト): `.local/srt-tcp-probe/claude.sh` と同じ形で、本物の `sumi serve` と `sumi init --server tcp://…` を使い、Claude Code の sandbox で Bash の出力が伏せられることを確かめる。結果は `contrib/sumi/tests/manual-validation.md` に記録する。
 
 ## 範囲外
@@ -190,6 +242,9 @@ ADDR の形式を Docker 式にしたのは、待ち受け側と接続側で同�
 接続側の名前を `--server` にしたのは、`sumi serve` と対で読め、kubectl の `--server URL` のように「つなぐ先」を指す名前として通りがよいからである。
 `--socket` は MySQL の `--socket` のように Unix ソケットを連想させるので、TCP を受け付ける名前としては残さない。リリース済みの `--socket` を実際に使っていたのはほぼ nas 自身で、README の例も nas 内部のパスだったので、別名も残さない。
 
+入力の終わりを half-close ではなくフレームで伝えるのは、srt の proxy が half-close を通さないからである (実測)。
+Unix ソケットも同じプロトコルにそろえたのは、開発途中のいまは、変更の小ささより、プロトコルが 1 つで済む全体の小ささを優先するからである。
+
 TCP の構成を一人で使うホストに限ったのは、他のユーザーから守るには相互認証が要り、その費用が一人で使うホストでの利点に見合わないからである。他のユーザーがいるホストには、Unix ソケットの構成がすでにある。
 
 ## Why Not — なぜ他の案を選ばなかったか
@@ -202,4 +257,6 @@ TCP の構成を一人で使うホストに限ったのは、他のユーザー�
 - **チャレンジレスポンスで相互に確かめる** — 他のユーザーがいるホストでも両方の脅威を防げるが、プロトコル、鍵ファイルの管理、テストが大きく増える。他のユーザーがいるホストには Unix ソケットの構成で足りる。
 - **直接接続を先に試し、失敗したら proxy へ** — sandbox の中でエージェントが立てた待ち受けに、`sumi run` がつないでしまう (上の「proxy 経由の接続」)。
 - **proxy を使うかを明示するオプション (`--via-proxy` など) を足す** — 規則が決定的になる利点はあるが、hook (sandbox の外) と prefix (sandbox の中) で別の引数を `init` が書き分けることになり、利用者が手で設定するときの誤りも増える。ループバックの proxy の有無で決まる規則なら、同じ引数で両方が正しく動く。
+- **TCP の接続だけフレームにし、Unix ソケットは half-close のまま** — nas に触れずに済むが、サーバーとクライアントが 2 つのプロトコルを持ち続けることになる。
+- **出力の側に区切りを付け、クライアントが自分で終わりを判断する** — サーバーは入力の終わりが分からないと保持中の末尾を出せないので、入力の終わりを伝える仕組みは結局要る。
 - **`--socket` を TCP にも広げる** — MySQL などで Unix ソケット専用の名前として定着しており、`--socket tcp://…` は読み違えられやすい。
