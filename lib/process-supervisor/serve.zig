@@ -53,6 +53,19 @@
 //! 1 接続を完了まで処理してから次を accept する実装だと、長時間走るシェル 1 本が
 //! 他の全シェルをブロックしてしまう。
 //!
+//! 一覧の世代
+//! ----------
+//! 一覧は世代 (Generation) ごとに参照を数える。serve は現在の世代を 1 つ参照し、
+//! 接続は accept した時点の世代を閉じるまで参照する。MaskStream は一覧のスライスを
+//! 参照し続け、保持する overlap の長さも一覧の最長値で決まるので、接続の途中で
+//! 一覧を替えることはできない。
+//!
+//! runWithSource に Source を渡すと、listener が readable になった周回で accept の
+//! 前に新しい世代を問い合わせ、それ以降に accept した接続に新しい世代を渡す。
+//! 古い世代は、それを参照する接続がすべて閉じたときに呼び出し元の destroyFn で
+//! 解放される。世代の確保と解放は呼び出し元が受け持ち、ここではファイル形式も
+//! 確保の仕方も扱わない。
+//!
 //! 資源上限
 //! --------
 //! このサーバはホストで動くので、消費する資源はコンテナの cgroup の外にある。
@@ -171,6 +184,40 @@ pub const ServeError = error{
     ListenPathNotSocket,
 };
 
+/// 一覧の 1 世代。
+///
+/// MaskStream は一覧のスライスを参照し続けるので、接続が使っている世代は
+/// その接続が閉じるまで解放できない。serve は現在の世代と、各接続が accept 時に
+/// 受け取った世代の参照を数え、最後の参照が外れたときに destroyFn を呼ぶ。
+/// 世代は呼び出し元が確保する。差し替えのときに serve が確保しないので、
+/// 差し替えには失敗する経路が無い。
+pub const Generation = struct {
+    values: []const []const u8,
+    /// 参照の数。serve だけが触る。poll ループは単一スレッドなので atomic にしない。
+    refs: usize = 0,
+    /// refs が 0 になったときに呼ぶ。null なら呼び出し元が寿命を持つ。
+    destroyFn: ?*const fn (gen: *Generation) void = null,
+
+    fn retain(self: *Generation) void {
+        self.refs += 1;
+    }
+
+    fn release(self: *Generation) void {
+        self.refs -= 1;
+        if (self.refs == 0) if (self.destroyFn) |destroy| destroy(self);
+    }
+};
+
+/// 一覧の新しい世代の提供元。
+pub const Source = struct {
+    ctx: *anyopaque,
+    /// listener が readable になった周回で、accept の前に 1 回呼ぶ。新しい世代が
+    /// あれば refs = 0 のまま返し、無ければ null を返す。返した世代はそれ以降の
+    /// accept で使われる。poll ループの中で同期的に呼ぶので、時間のかかる処理を
+    /// してはならない。
+    refreshFn: *const fn (ctx: *anyopaque) ?*Generation,
+};
+
 /// マスク済みバイトを接続の送信キューへ積む writer。
 /// MaskStream.push / finish に渡す。
 const QueueWriter = struct {
@@ -188,6 +235,9 @@ const ConnError = error{Failed};
 
 const Conn = struct {
     fd: posix.fd_t,
+    /// accept 時の一覧の世代。run のループが参照を持ち、接続を閉じたら外す。
+    /// Conn 自身は触らない。
+    gen: ?*Generation = null,
     /// MaskStream は ~192KiB を確保するため、accept 時ではなく
     /// **本文の最初の 1 バイトを受け取った時点** で初期化する。accept 時や
     /// ヘッダの時点で確保すると、connect(2) 1 回 (とヘッダ 4 バイト) が
@@ -434,6 +484,21 @@ fn bindListener(listen: address.Address) !posix.socket_t {
 /// 正常には返らない (戻り値の型は main の他モードと揃えるためのもの)。
 /// accept 以降は fd の種類 (AF_UNIX / AF_INET) に依存しない。
 pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, listen: address.Address) !u8 {
+    var gen: Generation = .{ .values = secrets };
+    return runWithSource(gpa, &gen, null, listen);
+}
+
+/// run と同じだが、一覧を source から差し替えられる。
+/// initial は呼んだ時点から serve が参照し、返るときに参照を外す。
+/// source が新しい世代を返すと、それ以降に accept した接続はその世代を使い、
+/// それより前の接続は自分の世代を閉じるまで使い続ける。
+pub fn runWithSource(gpa: std.mem.Allocator, initial: *Generation, source: ?Source, listen: address.Address) !u8 {
+    // bind の失敗で返るときも initial の参照を外すよう、最初に参照する。
+    // defer は scope を出る時点の current を外すので、差し替え後の世代が外れる。
+    var current = initial;
+    current.retain();
+    defer current.release();
+
     raiseFileLimit();
 
     const listener = try bindListener(listen);
@@ -446,7 +511,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, listen: address.
 
     var conns: std.ArrayList(Conn) = .empty;
     defer {
-        for (conns.items) |*c| c.deinit(gpa);
+        for (conns.items) |*c| closeConn(gpa, c);
         conns.deinit(gpa);
     }
 
@@ -492,7 +557,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, listen: address.
 
             var failed = false;
             if (revents & posix.POLL.IN != 0) {
-                conn.readable(gpa, secrets, scratch) catch {
+                conn.readable(gpa, conn.gen.?.values, scratch) catch {
                     failed = true;
                 };
             } else if (revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
@@ -507,11 +572,19 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, listen: address.
 
             if (failed or conn.finished()) {
                 var dead = conns.swapRemove(i);
-                dead.deinit(gpa);
+                closeConn(gpa, &dead);
             }
         }
 
         if (listener_armed and pollfds[listener_idx].revents != 0) {
+            // この周回で accept する接続には、変更があれば新しい世代を渡す。
+            // 同じ世代が返っても解放しないよう、外す前に参照する。
+            if (source) |s| if (s.refreshFn(s.ctx)) |next| {
+                next.retain();
+                current.release();
+                current = next;
+            };
+
             while (true) {
                 const fd = posix.accept(
                     listener,
@@ -553,14 +626,22 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, listen: address.
                 // 上に、accept 済みでない接続が backlog に残っていれば listener は
                 // readable のままなので、バックオフを張らないと EMFILE と同じ
                 // 100% CPU スピンになる。
-                conns.append(gpa, .{ .fd = fd }) catch {
+                conns.append(gpa, .{ .fd = fd, .gen = current }) catch {
                     posix.close(fd);
                     listener_backoff_until = std.time.milliTimestamp() + LISTENER_BACKOFF_MS;
                     break;
                 };
+                current.retain();
             }
         }
     }
+}
+
+/// 接続を閉じ、accept 時に受け取った世代の参照を外す。
+fn closeConn(gpa: std.mem.Allocator, conn: *Conn) void {
+    const gen = conn.gen;
+    conn.deinit(gpa);
+    if (gen) |g| g.release();
 }
 
 // ---------------------------------------------------------------------------
@@ -642,6 +723,156 @@ test "run: a non-socket at the listen path is left alone" {
     var content: [16]u8 = undefined;
     const got = try std.fs.cwd().readFile(path, &content);
     try testing.expectEqualStrings("original", got);
+}
+
+// --- 一覧の世代 ----------------------------------------------------------------
+
+/// destroyFn が呼ばれたかを記録する世代。別スレッドの run から呼ばれるので atomic にする。
+const TestGeneration = struct {
+    gen: Generation,
+    destroyed: std.atomic.Value(bool) = .init(false),
+
+    fn init(values: []const []const u8) TestGeneration {
+        return .{ .gen = .{ .values = values, .destroyFn = markDestroyed } };
+    }
+
+    fn markDestroyed(gen: *Generation) void {
+        const self: *TestGeneration = @fieldParentPtr("gen", gen);
+        self.destroyed.store(true, .release);
+    }
+
+    fn isDestroyed(self: *TestGeneration) bool {
+        return self.destroyed.load(.acquire);
+    }
+};
+
+test "Generation: only the last release destroys it" {
+    var t = TestGeneration.init(&.{"secret-value"});
+    t.gen.retain();
+    t.gen.retain();
+    t.gen.release();
+    try testing.expect(!t.isDestroyed());
+    t.gen.release();
+    try testing.expect(t.isDestroyed());
+}
+
+test "Generation: a generation without destroyFn is left to its owner" {
+    var gen: Generation = .{ .values = &.{"secret-value"} };
+    gen.retain();
+    gen.release();
+    try testing.expectEqual(@as(usize, 0), gen.refs);
+}
+
+/// listener が立つまで待って接続する。
+fn connectLoopback(addr: std.net.Address) !std.net.Stream {
+    var attempt: usize = 0;
+    while (attempt < 100) : (attempt += 1) {
+        return std.net.tcpConnectToAddress(addr) catch {
+            std.Thread.sleep(20 * std.time.ns_per_ms);
+            continue;
+        };
+    }
+    return error.ConnectFailed;
+}
+
+/// サーバが閉じるまで読み、読んだバイト列を返す。
+fn readToEnd(conn: std.net.Stream, buf: []u8) ![]const u8 {
+    var total: usize = 0;
+    while (true) {
+        const n = try conn.read(buf[total..]);
+        if (n == 0) return buf[0..total];
+        total += n;
+    }
+}
+
+/// テストのスレッドから差し替える世代を渡す Source。
+const SwapSource = struct {
+    mutex: std.Thread.Mutex = .{},
+    next: ?*Generation = null,
+
+    fn set(self: *SwapSource, gen: *Generation) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.next = gen;
+    }
+
+    fn refresh(ctx: *anyopaque) ?*Generation {
+        const self: *SwapSource = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const gen = self.next;
+        self.next = null;
+        return gen;
+    }
+
+    fn source(self: *SwapSource) Source {
+        return .{ .ctx = self, .refreshFn = refresh };
+    }
+};
+
+fn runWithSourceDetached(initial: *Generation, source: Source, addr: address.Address) void {
+    _ = runWithSource(std.heap.page_allocator, initial, source, addr) catch {};
+}
+
+test "runWithSource: a refreshed list applies to later connections only" {
+    // run は返らないので、スレッドが参照する値はテストの終了後も残るよう static に置く。
+    const S = struct {
+        var old = TestGeneration.init(&.{"secret-one"});
+        var new = TestGeneration.init(&.{"secret-two"});
+        var swap: SwapSource = .{};
+    };
+    const port = try freeLoopbackPort();
+    const addr = try std.net.Address.parseIp4("127.0.0.1", port);
+    const thread = try std.Thread.spawn(.{}, runWithSourceDetached, .{ &S.old.gen, S.swap.source(), address.Address{ .tcp = addr } });
+    thread.detach();
+
+    // 先に始めた接続。overlap (最長値 - 1 バイト) より長く送り、最初の出力が
+    // 届いたことで、差し替えの前に accept されて MaskStream ができたことを確かめる。
+    const early = try connectLoopback(addr);
+    defer early.close();
+    const first = "secret-one" ++ "x" ** 64;
+    try early.writeAll(&frame.header(first.len));
+    try early.writeAll(first);
+    var early_buf: [256]u8 = undefined;
+    var early_len: usize = 0;
+    while (early_len < "secret-one".len) {
+        const n = try early.read(early_buf[early_len..]);
+        if (n == 0) return error.UnexpectedEof;
+        early_len += n;
+    }
+
+    S.swap.set(&S.new.gen);
+
+    // 差し替えの後に始めた接続は新しい一覧で伏せる。
+    const late = try connectLoopback(addr);
+    defer late.close();
+    const late_body = "secret-one secret-two";
+    try late.writeAll(&frame.header(late_body.len));
+    try late.writeAll(late_body);
+    try late.writeAll(&frame.header(0));
+    var late_buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("secret-one **********", try readToEnd(late, &late_buf));
+
+    // 古い世代は、先に始めた接続が使っている間は解放されない。
+    try testing.expect(!S.old.isDestroyed());
+
+    // 先に始めた接続は、差し替えの後も古い一覧で伏せる。
+    const rest = " secret-two secret-one";
+    try early.writeAll(&frame.header(rest.len));
+    try early.writeAll(rest);
+    try early.writeAll(&frame.header(0));
+    const tail = try readToEnd(early, early_buf[early_len..]);
+    try testing.expectEqualStrings(
+        "**********" ++ "x" ** 64 ++ " secret-two **********",
+        early_buf[0 .. early_len + tail.len],
+    );
+
+    // 先に始めた接続が閉じると、古い世代を参照するものが無くなる。
+    // サーバは fd を閉じてから参照を外すので、EOF の直後はまだ外れていないことがある。
+    var waited: usize = 0;
+    while (!S.old.isDestroyed() and waited < 100) : (waited += 1) std.Thread.sleep(20 * std.time.ns_per_ms);
+    try testing.expect(S.old.isDestroyed());
+    try testing.expect(!S.new.isDestroyed());
 }
 
 // --- フレームの読み取り (Conn 単体) -----------------------------------------

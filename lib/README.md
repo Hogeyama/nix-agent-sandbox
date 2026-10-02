@@ -16,7 +16,8 @@ Product code remains in `src/mask-filter/`, `src/hostexec/intercept/`,
 `contrib/maskfs/`, and `contrib/sumi/`. The broker server (`serve.zig`), its client (`relay.zig`), the address parser
 (`address.zig`) and the frame codec (`frame.zig`) all live in
 `process-supervisor/`; each product reads its own secrets format and passes
-the values to `supervise.serve.run`.
+the values to `supervise.serve.run`, or passes a `Source` to
+`supervise.serve.runWithSource` to replace them while serving.
 
 ## Verify a change
 
