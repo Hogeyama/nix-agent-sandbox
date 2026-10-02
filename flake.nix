@@ -42,6 +42,10 @@
         # API を前提に書かれている。pkgs.zig は nixpkgs 側の alias で、追従する
         # と breaking release でビルドが黙って壊れるため明示的に固定する。
         zig = pkgs.zig_0_15;
+        # Nix はビルダーの出力を pty 経由で受け取り、TERM=xterm-256color も
+        # 設定する。zig build はこれを端末と判定し、進捗表示のエスケープ
+        # シーケンス (OSC 9;4) をビルドログに書き出す。derivation 内の
+        # zig build にはすべて --color off を付けて進捗表示を無効にする。
 
         # nixpkgs.pkl は JVM 版なので Apple の release から直接取得する。
         # （JVM版は起動に800msくらいかかる）
@@ -115,7 +119,7 @@
           doCheck = true;
           buildPhase = ''
             export HOME=$TMPDIR
-            zig build \
+            zig build --color off \
               --global-cache-dir "$TMPDIR/zig-cache" \
               -Doptimize=ReleaseSafe
           '';
@@ -126,7 +130,7 @@
             };
           in ''
             export HOME=$TMPDIR
-            zig build test \
+            zig build test --color off \
               --global-cache-dir "$TMPDIR/zig-cache" \
               -Dtest-bin-dir=${testTools}/bin
           '';
@@ -164,14 +168,14 @@
           doCheck = true;
           buildPhase = ''
             export HOME=$TMPDIR
-            zig build \
+            zig build --color off \
               --global-cache-dir "$TMPDIR/zig-cache" \
               -Doptimize=ReleaseSafe \
               -Dversion=${maskfsVersion}
           '';
           checkPhase = ''
             export HOME=$TMPDIR
-            zig build test --global-cache-dir "$TMPDIR/zig-cache"
+            zig build test --color off --global-cache-dir "$TMPDIR/zig-cache"
           '';
           installPhase = ''
             mkdir -p $out/bin
@@ -197,16 +201,16 @@
           doCheck = true;
           buildPhase = ''
             export HOME=$TMPDIR
-            zig build \
+            zig build --color off \
               --global-cache-dir "$TMPDIR/zig-cache" \
               -Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
               -Doptimize=ReleaseSafe
           '';
           checkPhase = ''
             export HOME=$TMPDIR
-            zig build test --global-cache-dir "$TMPDIR/zig-cache"
-            (cd ../../lib/masking && zig build test --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/zig-cache")
-            (cd ../../lib/process-supervisor && zig build test --cache-dir "$TMPDIR/process-supervisor-cache" --global-cache-dir "$TMPDIR/zig-cache")
+            zig build test --color off --global-cache-dir "$TMPDIR/zig-cache"
+            (cd ../../lib/masking && zig build test --color off --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/zig-cache")
+            (cd ../../lib/process-supervisor && zig build test --color off --cache-dir "$TMPDIR/process-supervisor-cache" --global-cache-dir "$TMPDIR/zig-cache")
           '';
           installPhase = ''
             mkdir -p $out/bin
@@ -241,7 +245,7 @@
           dontFixup = true;
           doCheck = true;
           buildPhase = ''
-            zig build \
+            zig build --color off \
               --global-cache-dir "$TMPDIR/sumi-zig-cache" \
               -Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
               -Doptimize=ReleaseSafe \
@@ -252,10 +256,10 @@
             # `sumi --licenses` に埋め込む Zig の LICENSE は複製なので、ビルドに使う
             # Zig の source と食い違っていないことを確かめる。
             cmp licenses/zig-LICENSE ${zig.src}/LICENSE
-            zig build test \
+            zig build test --color off \
               --global-cache-dir "$TMPDIR/sumi-zig-cache"
-            (cd ../../lib/masking && zig build test --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
-            (cd ../../lib/process-supervisor && zig build test --cache-dir "$TMPDIR/process-supervisor-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
+            (cd ../../lib/masking && zig build test --color off --cache-dir "$TMPDIR/masking-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
+            (cd ../../lib/process-supervisor && zig build test --color off --cache-dir "$TMPDIR/process-supervisor-cache" --global-cache-dir "$TMPDIR/sumi-zig-cache")
           '';
           installPhase = ''
             mkdir -p $out/bin
