@@ -28,6 +28,7 @@ const licenses = @import("licenses");
 const supervise = @import("supervise");
 const mask_stream = @import("masking").stream;
 const secrets = @import("secrets.zig");
+const serve_source = @import("serve_source.zig");
 const masker = @import("masker.zig");
 const shell = @import("shell.zig");
 const claude_post = @import("claude/hook_post.zig");
@@ -148,7 +149,8 @@ fn makeSocketDir(sock_path: []const u8) !void {
 /// serve は一覧をこのプロセスに持ち、`--server` で接続してくる hook と run の
 /// 問い合わせに答える。診断は定数の文言と利用者が渡した値だけにし、
 /// 接続から届いたバイトは混ぜない (supervise.serve の「出力の不変条件」)。
-fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
+/// secrets ファイルが変わると、以後の接続で読み直した一覧を使う (serve_source.zig)。
+fn runServe(args: []const []const u8) u8 {
     const parsed = parseServeArgs(args) catch return usage("serve takes --secrets-file F --listen ADDR");
     // 不正な ADDR は一覧を読む前に usage エラーにする。待ち受けられない値で
     // 一覧を読み込んでから失敗しても意味が無い。
@@ -156,7 +158,11 @@ fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
         error.SocketPathTooLong => "the --listen socket path must be at most 107 bytes",
         error.InvalidAddress => "--listen must be a socket path, unix:///PATH, tcp://127.0.0.1:PORT or tcp://[::1]:PORT (PORT 1-65535)",
     });
-    const list = secrets.load(allocator, parsed.secrets_file) catch |err| {
+    // 接続ごとに確保と解放を繰り返し、一覧も読み直すたびに作り直すので、
+    // arena ではなく解放できるアロケータを使う。
+    const gpa = std.heap.page_allocator;
+    var file_source: serve_source.FileSource = .{ .gpa = gpa, .path = parsed.secrets_file };
+    const initial = file_source.loadInitial() catch |err| {
         std.debug.print("sumi: {s}\n", .{secrets.describe(err)});
         return 1;
     };
@@ -164,8 +170,7 @@ fn runServe(allocator: std.mem.Allocator, args: []const []const u8) u8 {
         std.debug.print("sumi: cannot create the directory of the --listen path: {s}\n", .{@errorName(err)});
         return 1;
     };
-    // 接続ごとに確保と解放を繰り返すので、arena ではなく解放できるアロケータを渡す。
-    return supervise.serve.run(std.heap.page_allocator, list, listen) catch |err| {
+    return supervise.serve.runWithSource(gpa, initial, file_source.source(), listen) catch |err| {
         if (err == error.ListenPathNotSocket) {
             std.debug.print("sumi: the --listen path exists and is not a socket\n", .{});
             return 1;
@@ -306,7 +311,7 @@ fn dispatch(allocator: std.mem.Allocator, argv: []const []const u8, resolve_self
     }
     if (std.mem.eql(u8, sub, "filter")) return runFilter(allocator, args);
     if (std.mem.eql(u8, sub, "run")) return runSupervised(allocator, args);
-    if (std.mem.eql(u8, sub, "serve")) return runServe(allocator, args);
+    if (std.mem.eql(u8, sub, "serve")) return runServe(args);
 
     if (std.mem.eql(u8, sub, "hook") or std.mem.eql(u8, sub, "init") or std.mem.eql(u8, sub, "scan")) {
         const taken = takeAgent(args) catch return usage("unsupported --agent value (expected claude, codex or copilot)");
@@ -361,6 +366,7 @@ pub fn main() !u8 {
 test {
     _ = @import("agent_hooks.zig");
     _ = @import("secrets.zig");
+    _ = @import("serve_source.zig");
     _ = @import("shell.zig");
     _ = @import("jsonio.zig");
     _ = @import("masker.zig");

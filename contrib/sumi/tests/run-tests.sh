@@ -187,6 +187,44 @@ wait "$serve_pid" 2>/dev/null
 serve_pid=""
 check "serve writes nothing to stderr while serving" "0" "$(wc -c < "$work/serve.err" | tr -d ' ')"
 
+reload_secrets="$work/reload-secrets.txt"
+reload_sock="$serve_dir/reload.sock"
+printf '%s\n' "$current" > "$reload_secrets"
+"$sumi" serve --secrets-file "$reload_secrets" --listen "$reload_sock" 2>"$work/reload.err" &
+serve_pid=$!
+for _ in $(seq 50); do
+  "$sumi" run --server "$reload_sock" true >/dev/null 2>&1 && break
+  sleep 0.1
+done
+
+added="r3l0ad-added1"
+out="$("$sumi" run --server "$reload_sock" --shell /bin/bash "printf 'a=%s\n' '$added'")"
+check "serve does not mask a value before it is listed" "a=$added" "$out"
+
+printf '%s\n' "$added" >> "$reload_secrets"
+out="$("$sumi" run --server "$reload_sock" --shell /bin/bash "printf 'a=%s\n' '$added'")"
+record_success_status "run after appending to the served list" "$?"
+check "serve masks a value appended to the secrets file" 'a=*************' "$out"
+
+replaced="r3pl4ced-v4lu"
+printf '%s\n' "$replaced" > "$work/reload-next.txt"
+mv -f "$work/reload-next.txt" "$reload_secrets"
+out="$("$sumi" run --server "$reload_sock" --shell /bin/bash "printf 'a=%s b=%s\n' '$replaced' '$added'")"
+check "serve uses a secrets file replaced by rename" "a=************* b=$added" "$out"
+
+: > "$reload_secrets"
+out="$("$sumi" run --server "$reload_sock" --shell /bin/bash "printf 'a=%s\n' '$replaced'")"
+check "serve keeps the previous list when the secrets file becomes empty" 'a=*************' "$out"
+out="$("$sumi" run --server "$reload_sock" --shell /bin/bash "printf 'a=%s\n' '$replaced'")"
+check "serve keeps the previous list on the next connection too" 'a=*************' "$out"
+
+kill "$serve_pid" 2>/dev/null
+wait "$serve_pid" 2>/dev/null
+serve_pid=""
+check "serve warns once about an unusable secrets file" "1" "$(grep -c 'kept the previous secrets: the secrets file is empty' "$work/reload.err")"
+check "serve reports each reload" "2" "$(grep -c 'reloaded the secrets file' "$work/reload.err")"
+check "serve does not print listed values" "no" "$(grep -q -e "$added" -e "$replaced" -e "$current" "$work/reload.err" && echo yes || echo no)"
+
 timeout 5 "$sumi" serve --secrets-file "$work/missing.txt" --listen "$serve_dir/missing.sock" >/dev/null 2>"$work/serve-missing.err"
 status=$?
 check "serve with a missing list exits 1" "1" "$status"
