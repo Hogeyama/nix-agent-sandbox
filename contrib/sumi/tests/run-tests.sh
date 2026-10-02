@@ -364,6 +364,19 @@ check "init writes the TCP server address into the hooks as given" "3" \
 check "init writes the TCP server address into the shell prefix" "yes" \
   "$(jq -r '.env.CLAUDE_CODE_SHELL_PREFIX' "$tcp_settings" | grep -qF "'run' '--server' '$tcp_server'" && echo yes || echo no)"
 
+# serve may be started after init, so a broker that is not listening yet is a
+# warning, not a failed self-check.
+idle_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+idle_settings="$work/idle-settings.json"
+"$sumi" init --agent claude --server "tcp://127.0.0.1:$idle_port" --settings "$idle_settings" --shell /bin/bash >/dev/null 2>"$work/idle-init.err"
+check "init with a broker that is not listening succeeds" "0" "$?"
+check "init with a broker that is not listening writes the hooks" "3" \
+  "$(jq '[.hooks[][]?.hooks[]? | select(.command != null)] | length' "$idle_settings")"
+check "init with a broker that is not listening warns about it" "yes" \
+  "$(grep -qF "the mask broker at tcp://127.0.0.1:$idle_port is not reachable now" "$work/idle-init.err" && echo yes || echo no)"
+check "init with a broker that is not listening does not report a failed self-check" "no" \
+  "$(grep -qF 'self-check failed' "$work/idle-init.err" && echo yes || echo no)"
+
 start_proxy allow
 out="$(HTTP_PROXY="http://127.0.0.1:$proxy_port" "$sumi" run --server "$tcp_server" --shell /bin/bash 'printf "a=%s\n" "Tr0ub4dor"')"
 record_success_status "run over TCP serve through a CONNECT proxy" "$?"

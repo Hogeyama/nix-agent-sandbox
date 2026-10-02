@@ -38,6 +38,9 @@ const agent_hooks = @import("agent_hooks.zig");
 
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_SUPPRESSED: u8 = 121;
+/// ブローカーへ接続できなかった run が stderr へ出す診断。init の自己検査は、
+/// これを「設定は正しいがブローカーが動いていない」の印として読む。
+pub const UNREACHABLE_DIAGNOSTIC = "sumi: cannot reach the mask broker; output suppressed\n";
 pub const PROG: []const u8 = "sumi";
 pub const MARKER_ENV: [:0]const u8 = "SUMI_SUPERVISED=1";
 
@@ -219,7 +222,7 @@ fn parseRunArgs(args: []const []const u8) !RunArgs {
 /// 子の出力に由来する値を混ぜない。
 fn superviseDiagnostic(err: anyerror) []const u8 {
     return switch (err) {
-        error.SocketPathInvalid, error.RelayConnectFailed => "sumi: cannot reach the mask broker; output suppressed\n",
+        error.SocketPathInvalid, error.RelayConnectFailed => UNREACHABLE_DIAGNOSTIC,
         error.RelayClosedEarly => "sumi: mask broker closed early; output suppressed\n",
         error.RelayDrainTimeout => "sumi: mask broker stopped responding; output suppressed\n",
         else => "sumi: supervise failed; output suppressed\n",

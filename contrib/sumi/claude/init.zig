@@ -213,7 +213,7 @@ fn warn(message: []const u8) void {
     std.debug.print("sumi: warning: {s}\n", .{message});
 }
 
-fn runCommand(allocator: std.mem.Allocator, command: ExecCommand, input: []const u8, env: *const std.process.EnvMap) !struct { code: u8, stdout: []u8 } {
+fn runCommand(allocator: std.mem.Allocator, command: ExecCommand, input: []const u8, env: *const std.process.EnvMap) !struct { code: u8, stdout: []u8, stderr: []u8 } {
     const argv = try allocator.alloc([]const u8, command.args.len + 1);
     defer allocator.free(argv);
     argv[0] = command.command;
@@ -230,13 +230,12 @@ fn runCommand(allocator: std.mem.Allocator, command: ExecCommand, input: []const
     child.stdin = null;
     var out: std.ArrayList(u8) = .empty;
     var err: std.ArrayList(u8) = .empty;
-    defer err.deinit(allocator);
     try child.collectOutput(allocator, &out, &err, 16 * 1024 * 1024);
     const term = try child.wait();
     return .{ .code = switch (term) {
         .Exited => |code| code,
         else => 1,
-    }, .stdout = try out.toOwnedSlice(allocator) };
+    }, .stdout = try out.toOwnedSlice(allocator), .stderr = try err.toOwnedSlice(allocator) };
 }
 
 fn octalLine(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
@@ -279,26 +278,52 @@ fn selectProbe(values: []const []const u8) []const u8 {
 
 /// 値の一覧を持たない `--server` 版の自己検査。どの値が伏せられるかを知らないので、
 /// 無関係な文字列が素通しになること (= hook と run がブローカーへ届いていること) を確かめる。
-/// ブローカーへ届かなければ post-tool は withhold を、run は 121 を返すのでここで失敗する。
+/// ブローカーは init の後に起動してもよいので、届かなかったという応答も合格にする。
+/// その応答が返った時点で、書いた hook と prefix が sumi を起動できることは確かめられている。
+/// 戻り値は、どれか 1 つでもブローカーへ届かなかったかどうか。
 const SOCKET_PROBE = "sumi-self-check";
 
-fn selfCheckServer(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8) !void {
+fn selfCheckServer(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8) !bool {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
     try env.put("CLAUDE_CODE_SHELL", shell_path);
     try env.put("CLAUDE_CODE_SHELL_PREFIX", prefix);
+    var unreachable_seen = false;
 
     const post = try runCommand(allocator, commands.post_tool, "{\"hook_event_name\":\"PostToolUse\",\"tool_response\":\"" ++ SOCKET_PROBE ++ "\"}", &env);
-    if (post.code != 0 or post.stdout.len != 0) return error.PostToolCheckFailed;
+    if (post.code != 0) return error.PostToolCheckFailed;
+    if (post.stdout.len != 0) {
+        if (!isUnreachableNotice(allocator, post.stdout, "hookSpecificOutput", "updatedToolOutput")) return error.PostToolCheckFailed;
+        unreachable_seen = true;
+    }
 
     const expected_prefix = try formatShellPrefix(allocator, self_path, source, shell_path);
     if (!std.mem.eql(u8, prefix, expected_prefix)) return error.PrefixCheckFailed;
     const invocation = try formatClaudeInvocation(allocator, prefix, "printf '%s' '" ++ SOCKET_PROBE ++ "'; exit 3");
     const run_args = [_][]const u8{ "-c", invocation };
     const ran = try runCommand(allocator, .{ .command = shell_path, .args = &run_args }, "", &env);
-    if (ran.code != 3 or !std.mem.eql(u8, ran.stdout, SOCKET_PROBE)) return error.WrappedCommandCheckFailed;
+    if (ran.code == cli.EXIT_SUPPRESSED and ran.stdout.len == 0 and std.mem.eql(u8, ran.stderr, cli.UNREACHABLE_DIAGNOSTIC)) {
+        unreachable_seen = true;
+    } else if (ran.code != 3 or !std.mem.eql(u8, ran.stdout, SOCKET_PROBE)) return error.WrappedCommandCheckFailed;
+
     const prompt = try runCommand(allocator, commands.prompt, "{\"prompt\":\"" ++ SOCKET_PROBE ++ "\",\"cwd\":\"/\"}", &env);
-    if (prompt.code != 0 or prompt.stdout.len != 0) return error.PromptCheckFailed;
+    if (prompt.code != 0) return error.PromptCheckFailed;
+    if (prompt.stdout.len != 0) {
+        if (!isUnreachableNotice(allocator, prompt.stdout, null, "reason")) return error.PromptCheckFailed;
+        unreachable_seen = true;
+    }
+    return unreachable_seen;
+}
+
+/// hook の出力が「ブローカーへ届かなかった」という判断かどうか。`object` を与えると
+/// その下の `field` を、null なら最上位の `field` を見る。
+fn isUnreachableNotice(allocator: std.mem.Allocator, output: []const u8, object: ?[]const u8, field: []const u8) bool {
+    var parsed = jsonio.parse(allocator, output) catch return false;
+    defer parsed.deinit();
+    var holder = parsed.value;
+    if (object) |name| holder = .{ .object = (jsonio.getObject(holder, name) orelse return false).* };
+    const text = jsonio.getString(holder, field) orelse return false;
+    return std.mem.indexOf(u8, text, masker.UNAVAILABLE_REASON) != null;
 }
 
 fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []const u8, source: masker.Source, shell_path: []const u8, prefix: []const u8, probe: []const u8) !void {
@@ -403,7 +428,7 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
             if (mode != 0o600 and mode != 0o640 and mode != 0o400) warn("the secrets file is not mode 0600/0640/0400; other users may read it");
             break :blk .{ .secrets_file = secret_path };
         },
-        // ADDR はそのまま hook に書く。届くかは自己検査で確かめる。
+        // ADDR はそのまま hook に書く。ブローカーが動いていなくても設定は書ける。
         .server => |server| .{ .server = server },
     };
     const home = std.posix.getenv("HOME") orelse return fail("HOME is not set");
@@ -439,7 +464,9 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     if (backup_path) |path| std.debug.print("sumi: backup at {s}\n", .{path});
     const checked = switch (source) {
         .secrets_file => selfCheck(allocator, commands, self_path, source, shell_path, prefix, selectProbe(values)),
-        .server => selfCheckServer(allocator, commands, self_path, source, shell_path, prefix),
+        .server => |server| if (selfCheckServer(allocator, commands, self_path, source, shell_path, prefix)) |unreached| {
+            if (unreached) std.debug.print("sumi: warning: the mask broker at {s} is not reachable now; start `sumi serve` before starting Claude Code\n", .{server.text});
+        } else |err| err,
     };
     checked catch |err| {
         std.debug.print("sumi: self-check failed ({s}); settings were written", .{@errorName(err)});
