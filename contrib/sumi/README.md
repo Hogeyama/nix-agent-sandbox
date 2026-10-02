@@ -72,44 +72,85 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 ### シークレットファイルを隠す構成
 
 クイックスタートの方法では、`sumi` の実行時にシークレットファイルが読み込み可能である必要があり、敵対的なエージェントはシークレットファイル自体を盗むことができてしまいます。
-`sumi` は、Dev Container等の隔離環境と組み合わせてシークレットファイルを隠す構成をサポートしています。
+`sumi` は、Claude Code の [sandbox](https://docs.claude.com/en/docs/claude-code/sandboxing) などの隔離機構と組み合わせて、シークレットファイルを隠す構成をサポートしています。
 
 ```mermaid
 flowchart LR
-  subgraph container["Dev Container など"]
-    subgraph agent["Claude Code"]
-      hook["sumi hook"]
-    end
-    sock(["mask.sock<br/>（ソケットのみmount）"])
-  end
   subgraph host["ホスト"]
-    serve["sumi serve"]
+    subgraph claude["Claude Code"]
+      hook["sumi hook"]
+      subgraph sandbox["Bash の sandbox"]
+        run["sumi run"]
+      end
+    end
+    proxy["sandbox の proxy"]
+    serve["sumi serve<br/>127.0.0.1:47321"]
     secrets[("secrets.txt")]
   end
 
-  hook -- "マスクを依頼" --> sock --> serve
-  serve -- "マスク結果を返却" --> sock --> hook
+  hook -- "マスクを依頼" --> serve
+  run -- "マスクを依頼" --> proxy --> serve
   serve -- "読む" --> secrets
-  agent -. "読めない" .-x secrets
+  sandbox -. "読めない" .-x secrets
 ```
 
-ホストで `sumi serve` を起動してシークレットファイルを読ませ、コンテナにはソケットのあるディレクトリだけを mount します。
-コンテナ内の hook は、シークレットファイルの代わりにソケット越しに `sumi serve` へマスクを依頼します。
-シークレットファイルはコンテナに mount しないので、エージェントからは読めません。
+シークレットファイルを読むのは、ホストで動かす `sumi serve` だけにします。
+hook と、Bash のコマンドを包む `sumi run` は、シークレットファイルの代わりに `sumi serve` へマスクを依頼します。
+Bash のコマンドは sandbox の中で動くので、sandbox の設定でシークレットファイルを読めなくしておけば、エージェントからは読めません。
+sandbox の中から `sumi serve` へは、sandbox の proxy を通して届きます。
 
-#### 1. ホストで `sumi serve` を起動する
+#### 1. `sumi serve` を起動する
+
+```
+sumi serve --secrets-file ~/.claude/sumi/secrets.txt --listen tcp://127.0.0.1:47321
+```
+
+`sumi serve` は kill するまで動き続けます。ポート番号は空いている番号を選んでください。手順 3 の設定にも同じ番号を書きます。
+
+> [!NOTE]
+> * シークレットファイルを変更したら `sumi serve` を再起動してください。起動後に読み直すことはしません。
+> * 信頼できないユーザーと共有するマシンではこの構成は避けて、[Dev Container版](#dev-container-で使う)を検討してください。
+
+#### 2. Claude Code の設定を生成する
+
+`--secrets-file` の代わりに `--server` を指定して `sumi init` を実行します。
+
+```
+sumi init --agent claude --server tcp://127.0.0.1:47321
+```
+
+#### 3. sandbox を有効にし、シークレットファイルを隠す
+
+`~/.claude/settings.json` に次を足します。
+
+```jsonc
+{
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "network": { "allowedDomains": ["127.0.0.1:47321"] },
+    "filesystem": { "denyRead": ["~/.claude/sumi/secrets.txt"] }
+  },
+  "permissions": {
+    "deny": ["Read(~/.claude/sumi/secrets.txt)"]
+  }
+}
+```
+
+* `network.allowedDomains` には、手順 1 のポートだけを書きます。sandbox の中の `sumi run` はここを通って `sumi serve` に届きます。
+* `filesystem.denyRead` は Bash のコマンドからシークレットファイルを隠します。
+* `permissions.deny` は Read ツールなどからシークレットファイルを隠します。sandbox は Bash のコマンドにしか効かないので、こちらも必要です。
+* `allowUnsandboxedCommands: false` で、エージェントが sandbox の外でコマンドを実行する逃げ道を塞ぎます。
+
+#### Dev Container で使う
+
+Dev Container の中で Claude Code を動かす場合は、TCP の代わりに Unix ソケットも使えます。
+
+ホストで `sumi serve` を Unix ソケットで起動し、ソケットのあるディレクトリだけをコンテナに mount します。ディレクトリが無ければ、`sumi serve` が権限 0700 で作ります。
 
 ```
 sumi serve --secrets-file ~/.claude/sumi/secrets.txt --listen "$XDG_RUNTIME_DIR/sumi/mask.sock"
 ```
-
-`sumi serve` は kill するまで動き続けます。
-ソケットを置くディレクトリ（ここでは `$XDG_RUNTIME_DIR/sumi`）が無ければ、権限 0700 で作ります。既にあるディレクトリの権限は変えません。
-
-> [!NOTE]
-> * シークレットファイルを変更したら `sumi serve` を再起動してください。起動後に読み直すことはしません。
-
-#### 2. ソケットのディレクトリをコンテナに mount する
 
 ```jsonc
 // devcontainer.json
@@ -120,18 +161,16 @@ sumi serve --secrets-file ~/.claude/sumi/secrets.txt --listen "$XDG_RUNTIME_DIR/
 }
 ```
 
+コンテナ内にも[インストール](#インストール)の手順で sumi を入れ、次を実行します。
+
+```
+sumi init --agent claude --server /run/sumi/mask.sock
+```
+
 > [!NOTE]
-> * ソケットファイルではなく、ディレクトリを mount してください。`sumi serve` を再起動するとソケットが作り直され、ファイル単体の mount は古いソケットを指したままになります。
+> * ソケットファイルではなく、ディレクトリを mount する必要があります。`sumi serve` を再起動するとソケットが作り直され、ファイル単体の mount は古いソケットを指したままになるためです。
 > * ディレクトリは読み取り専用で mount します。コンテナ内のエージェントが `mask.sock` を消して、マスクしない自前の待ち受けに差し替えるのを防ぐためです。
 > * ソケットは 0600 で作られます。コンテナのユーザーの UID を、`sumi serve` を起動したホストのユーザーと合わせてください。
-
-#### 3. コンテナ内で Claude Code の設定を生成する
-
-コンテナ内にも[インストール](#インストール)の手順で sumi を入れ、`--secrets-file` の代わりに `--socket` を指定して `sumi init` を実行します。
-
-```
-sumi init --agent claude --socket /run/sumi/mask.sock
-```
 
 ## リミテーション
 
