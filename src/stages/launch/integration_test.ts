@@ -846,7 +846,9 @@ const ORPHAN_REAP_SCRIPT = [
   'import { readdirSync, readFileSync } from "node:fs";',
   'spawnSync("sh", ["-c", "sleep 0.2 &"]);',
   "await Bun.sleep(1000);",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: source of the script run in the container, where it is a template literal
   "const zombies = readdirSync('/proc').filter((d) => /^\\d+$/.test(d)).filter((d) => { try { return /^State:\\s+Z/m.test(readFileSync(`/proc/${d}/status`, 'utf8')); } catch { return false; } });",
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: source of the script run in the container, where it is a template literal
   "console.log(`zombies=${zombies.length} pid1=${readFileSync('/proc/1/comm', 'utf8').trim()}`);",
 ].join("\n");
 
