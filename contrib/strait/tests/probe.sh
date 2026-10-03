@@ -70,7 +70,7 @@ check() { # name expected-regex command
 api=https://api.github.com/repos/$REPO
 code='-sS -o /dev/null -w %{http_code} --max-time 20'
 
-# Positive controls: the issued credential is substituted and accepted.
+# Positive controls: upstream authentication always comes from the host.
 check "gh api with issued token" '^200' "curl $code -H \"Authorization: token \$GH_TOKEN\" $api"
 check "gh CLI" '"full_name"' "gh api repos/$REPO --jq '{full_name}'"
 check "gh pr list (GraphQL)" 'exit=0' "gh pr list -R $REPO --limit 1 >/dev/null; echo exit=\$?"
@@ -78,12 +78,15 @@ check "gh issue list (GraphQL)" 'exit=0' "gh issue list -R $REPO --limit 1 >/dev
 check "git fetch (Basic via extraheader)" 'HEAD' "git ls-remote https://github.com/$REPO.git HEAD"
 check "anthropic messages route passes" '^40[01]' "curl $code -X POST -H 'content-type: application/json' -d '{}' https://api.anthropic.com/v1/messages"
 
+# Client headers cannot select a different identity.
+check "missing authorization injected" '^200' "curl $code $api"
+check "cookie denied" '^403' "curl $code -H 'Cookie: session=attacker' $api"
+check "query token denied" '^403' "curl $code '$api?access_token=attacker'"
+
 # Bypass attempts.
-check "foreign token" '^403' "curl $code -H 'Authorization: Bearer nas-a1b-invalid' $api"
-# node:http keeps the first of duplicated Authorization headers and drops the
-# rest, and srt builds both the filter's view and the upstream request from
-# that. So only the first one matters, and only it is ever sent.
-check "duplicate Authorization, foreign first" '^403' "curl $code -H 'Authorization: token attacker' -H \"authorization: token \$GH_TOKEN\" $api"
+check "foreign token overwritten" '^200' "curl $code -H 'Authorization: Bearer nas-a1b-invalid' $api"
+# Duplicates cannot select the authentication identity: the host overwrites.
+check "duplicate Authorization, foreign first overwritten" '^200' "curl $code -H 'Authorization: token attacker' -H \"authorization: token \$GH_TOKEN\" $api"
 check "duplicate Authorization, foreign dropped" '^200' "curl $code -H \"Authorization: token \$GH_TOKEN\" -H 'authorization: token attacker' $api"
 check "other repository" '^403' "curl $code https://api.github.com/repos/octocat/hello-world"
 check "REST write" '^403' "curl $code -X POST -d '{}' $api/issues"
@@ -99,12 +102,12 @@ check "SOCKS scheme swap" 'exit=97' "curl $code --cacert /etc/ssl/certs/ca-certi
 check "SSH over CONNECT" 'SSH_EXIT=255' "eval \"timeout 30 \$GIT_SSH_COMMAND -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 443 -T git@github.com\"; echo SSH_EXIT=\$?"
 check "own TLS without srt CA" 'exit=60' "curl $code --cacert /etc/ssl/certs/ca-certificates.crt $api; echo exit=\$?"
 
-# An added host: only the issued key goes through, and upstream gets the real one.
+# An added host: upstream reflects only our synthetic host-owned test key.
 check "added host: issued key injected" "\"X-Api-Key\": \"$PROBE_KEY\"" "curl -sS --max-time 20 -H \"x-api-key: \$PROBE_KEY\" https://httpbin.org/headers | tr -d '\\n'"
 check "added host: sandbox sees a sentinel" '^masked $' "[ \"\$PROBE_KEY\" != '$PROBE_KEY' ] && echo masked"
-check "added host: foreign key" '^403' "curl $code -H 'x-api-key: attacker' https://httpbin.org/headers"
-check "added host: duplicated key" '^403' "curl $code -H \"x-api-key: \$PROBE_KEY\" -H 'x-api-key: attacker' https://httpbin.org/headers"
-check "added host: other auth header" '^403' "curl $code -H 'Authorization: Bearer attacker' https://httpbin.org/headers"
+check "added host: foreign key overwritten" '^200' "curl $code -H 'x-api-key: attacker' https://httpbin.org/headers"
+check "added host: duplicated key overwritten" '^200' "curl $code -H \"x-api-key: \$PROBE_KEY\" -H 'x-api-key: attacker' https://httpbin.org/headers"
+check "added host: other auth header removed" '^200' "curl $code -H 'Authorization: Bearer attacker' https://httpbin.org/headers"
 
 # Approval: a held request goes through once approved.
 check "approved REST read of another repo" '^200' "curl $code 'https://api.github.com/repos/octocat/hello-world?strait-probe-approve=1'"

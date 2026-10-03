@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { decide, type PolicyConfig, type Sentinels } from "./policy.ts";
+import type { CredentialHeaders } from "./credentials.ts";
+import { decide, type PolicyConfig } from "./policy.ts";
 
 const config: PolicyConfig = { githubRepos: ["my-org/private-repo"] };
-const s: Sentinels = {
-  githubToken: "fake_value_gh",
-  gitAuthorization: "fake_value_git",
-  anthropicOauth: "fake_value_oauth",
-  anthropicApiKey: "fake_value_key",
+const s: CredentialHeaders = {
+  "api.github.com": "authorization",
+  "github.com": "authorization",
+  "api.anthropic.com": "authorization",
 };
 
 type Case = [
@@ -132,42 +132,42 @@ describe("credentials", () => {
       "allow",
     ],
     [
-      "foreign token is denied",
+      "foreign token is overwritable",
       "GET",
       repo,
       { authorization: "Bearer nas-a1b-invalid" },
-      "deny",
+      "allow",
     ],
     [
-      "foreign Basic is denied",
+      "foreign Basic is overwritable",
       "GET",
       repo,
       { authorization: "Basic eDp5" },
-      "deny",
+      "allow",
     ],
     [
-      "sentinel plus suffix is denied",
+      "sentinel plus suffix is overwritable",
       "GET",
       repo,
       { authorization: "token fake_value_gh2" },
-      "deny",
+      "allow",
     ],
     [
-      "duplicate Authorization is denied",
+      "duplicate Authorization is overwritable",
       "GET",
       repo,
       [
         ["authorization", "token fake_value_gh"],
         ["Authorization", "token attacker"],
       ],
-      "deny",
+      "allow",
     ],
     [
-      "another host's sentinel is denied",
+      "another host's sentinel is overwritable",
       "GET",
       repo,
       { authorization: "Bearer fake_value_oauth" },
-      "deny",
+      "allow",
     ],
     ["cookie is denied", "GET", repo, { cookie: "user_session=x" }, "deny"],
     [
@@ -178,25 +178,25 @@ describe("credentials", () => {
       "deny",
     ],
     [
-      "x-api-key to GitHub is denied",
+      "x-api-key to GitHub is removed",
       "GET",
       repo,
       { "x-api-key": "fake_value_key" },
-      "deny",
+      "allow",
     ],
     [
-      "git auth must be the whole issued value",
+      "git client auth is overwritten",
       "POST",
       `${git}.git/git-upload-pack`,
       { authorization: "fake_value_git" },
       "allow",
     ],
     [
-      "gh token is not accepted by git",
+      "git client token is overwritten",
       "POST",
       `${git}.git/git-upload-pack`,
       { authorization: "token fake_value_gh" },
-      "deny",
+      "allow",
     ],
     [
       "anthropic oauth",
@@ -206,11 +206,11 @@ describe("credentials", () => {
       "allow",
     ],
     [
-      "anthropic foreign key is denied",
+      "anthropic foreign key is removed",
       "POST",
       "https://api.anthropic.com/v1/messages",
       { "x-api-key": "sk-ant-attacker" },
-      "deny",
+      "allow",
     ],
     [
       "anthropic issued key",
@@ -422,9 +422,10 @@ describe("hosts added in strait.json", () => {
       "docs.example.com": {},
     },
   };
-  const sen: Sentinels = {
-    githubToken: "fake_value_gh",
-    hosts: { "devapi.example.com": "fake_dev", "api.example.org": "fake_org" },
+  const sen: CredentialHeaders = {
+    "api.github.com": "authorization",
+    "devapi.example.com": "x-api-key",
+    "api.example.org": "authorization",
   };
   const run = (
     method: string,
@@ -439,7 +440,7 @@ describe("hosts added in strait.json", () => {
     );
     expect(run("GET", "https://docs.example.com/guide")).toBe("allow");
   });
-  test("the issued credential in its header", () => {
+  test("any client credential in its header", () => {
     expect(
       run("POST", "https://devapi.example.com/v1", { "x-api-key": "fake_dev" }),
     ).toBe("allow");
@@ -449,32 +450,32 @@ describe("hosts added in strait.json", () => {
       }),
     ).toBe("allow");
   });
-  test("a foreign key is denied", () => {
+  test("a foreign key is overwritten", () => {
     expect(
       run("GET", "https://devapi.example.com/", { "x-api-key": "attacker" }),
-    ).toBe("deny");
+    ).toBe("allow");
     expect(
       run("GET", "https://api.example.org/", {
         authorization: "Bearer attacker",
       }),
-    ).toBe("deny");
+    ).toBe("allow");
   });
-  test("the credential in another header, or another host's, is denied", () => {
+  test("the credential in another header, or another host's, is overwritten", () => {
     expect(
       run("GET", "https://devapi.example.com/", {
         authorization: "Bearer fake_dev",
       }),
-    ).toBe("deny");
+    ).toBe("allow");
     expect(
       run("GET", "https://devapi.example.com/", { "x-api-key": "fake_org" }),
-    ).toBe("deny");
+    ).toBe("allow");
     expect(
       run("GET", "https://devapi.example.com/", {
         authorization: "token fake_value_gh",
       }),
-    ).toBe("deny");
+    ).toBe("allow");
   });
-  test("a host without a credential takes none", () => {
+  test("a host without a credential takes no client auth", () => {
     expect(
       run("GET", "https://docs.example.com/", { authorization: "Bearer x" }),
     ).toBe("deny");
@@ -482,13 +483,13 @@ describe("hosts added in strait.json", () => {
       "deny",
     );
   });
-  test("a duplicated key header is denied", () => {
+  test("a duplicated key header is overwritten", () => {
     expect(
       run("GET", "https://devapi.example.com/", [
         ["x-api-key", "fake_dev"],
         ["x-api-key", "attacker"],
       ]),
-    ).toBe("deny");
+    ).toBe("allow");
   });
   test("cookies and query-string tokens are denied", () => {
     expect(run("GET", "https://devapi.example.com/", { cookie: "s=1" })).toBe(
@@ -536,4 +537,29 @@ describe("Artifact content hosts", () => {
       run(`${host}/`, { authorization: "Bearer fake_value_oauth" }).action,
     ).toBe("deny");
   });
+});
+
+test("configured custom auth requires a host credential even if config names the header", () => {
+  expect(
+    decide(
+      {
+        method: "GET",
+        url: "https://custom.example.com/",
+        headers: new Headers({ "private-token": "attacker" }),
+      },
+      {
+        githubRepos: [],
+        hosts: {
+          "custom.example.com": { credential: { header: "private-token" } },
+        },
+      },
+      {},
+    ).action,
+  ).toBe("deny");
+});
+test("anonymous requests with no host credential remain available", () => {
+  expect(
+    decide({ method: "GET", url: repo, headers: new Headers() }, config, {})
+      .action,
+  ).toBe("allow");
 });

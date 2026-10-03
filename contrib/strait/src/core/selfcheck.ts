@@ -128,3 +128,28 @@ export function assertRespondPatched(): void {
     throw new Error("hostExec needs the srt respond patch, which is missing");
   }
 }
+
+/** Required for every launch: masking alone must never enable substitution. */
+export function assertCredentialOverwritePatched(
+  managerSource = readFileSync(
+    fileURLToPath(import.meta.resolve("@anthropic-ai/sandbox-runtime")).replace(
+      /index\.js$/,
+      "sandbox/sandbox-manager.js",
+    ),
+    "utf8",
+  ),
+  tlsSource = readFileSync(
+    fileURLToPath(import.meta.resolve("@anthropic-ai/sandbox-runtime")).replace(
+      /index\.js$/,
+      "sandbox/tls-terminate-proxy.js",
+    ),
+    "utf8",
+  ),
+): void {
+  if (
+    !managerSource.includes("return config.credentials.overwriteHeaders;") ||
+    !tlsSource.includes("credential header overwrite failed")
+  ) {
+    throw new Error("srt credential overwrite patch is missing");
+  }
+}

@@ -4,7 +4,7 @@
 // request filter are fixed in code, and accepting that section would let a
 // config reopen `excludeDomains` or an external proxy. What a config can do is
 // add a host (`hosts`), which is always TLS-terminated and filtered, and
-// where only the credential strait issues for it is let through.
+// where strait overwrites authentication with its host-owned credential.
 
 import { HOSTEXEC_HOST } from "./hostexec.ts";
 import { HOSTS, type HostRule, isArtifactHost } from "./policy.ts";

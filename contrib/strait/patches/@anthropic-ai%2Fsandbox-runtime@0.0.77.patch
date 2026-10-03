@@ -50,3 +50,36 @@
      onDeny?.(method, url, decision.reason ?? DEFAULT_DENY_REASON);
      deny(res, decision);
      forUpstream.destroy();
+--- a/dist/sandbox/sandbox-manager.js
++++ b/dist/sandbox/sandbox-manager.js
+@@ -272,6 +272,9 @@
+  * copy of the real value.
+  */
+ function buildCredentialInjector() {
++    // Patched: library-only host-owned authentication replaces substitution.
++    if (config?.credentials?.overwriteHeaders)
++        return config.credentials.overwriteHeaders;
+     if (!config?.credentials)
+         return undefined;
+     return (headers, destHost) => {
+--- a/dist/sandbox/tls-terminate-proxy.js
++++ b/dist/sandbox/tls-terminate-proxy.js
+@@ -344,7 +344,17 @@
+     // The upstream TLS handshake (rejectUnauthorized defaults to true)
+     // completes before any HTTP bytes are written, so mutated headers never
+     // reach an unverified server.
+-    mutateHeaders?.(fwdHeaders, target.hostname);
++    try {
++        mutateHeaders?.(fwdHeaders, target.hostname);
++    }
++    catch {
++        // Patched: callback errors may contain secrets; fail closed generically.
++        respondDenied(res, 'credential header overwrite failed');
++        body.destroy();
++        if (body !== req)
++            destroyAfterDenial(req, res);
++        return;
++    }
+     // Masked-credential substitution in the request body, mirroring the
+     // header substitution above. undefined → the bare pipe below, exactly as
+     // before. May delete content-length from fwdHeaders (chunked fallback).

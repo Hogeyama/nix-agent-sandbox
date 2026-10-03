@@ -507,7 +507,7 @@
             runHook preBuild
             # パッチが当たっていない srt は SOCKS と非 TLS の CONNECT を素通しする。
             # 起動時の selfcheck でも落ちるが、ここで先に止める。
-            for marker in "Patched: SOCKS tunnels bypass" "Patched: a non-TLS stream would bypass" "decision.action === 'respond'"; do
+            for marker in "Patched: SOCKS tunnels bypass" "Patched: a non-TLS stream would bypass" "decision.action === 'respond'" "return config.credentials.overwriteHeaders;" "credential header overwrite failed"; do
               grep -rqF "$marker" node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox \
                 || { echo "srt patch missing: $marker" >&2; exit 1; }
             done

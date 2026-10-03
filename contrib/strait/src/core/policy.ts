@@ -1,3 +1,4 @@
+import type { CredentialHeaders } from "./credentials.ts";
 // Request policy evaluated by srt's filterRequest hook.
 //
 // Pure: no srt import and no I/O. The caller reads the body only where
@@ -41,30 +42,7 @@ export interface PolicyRequest {
 /** Largest body read for a decision. A larger one is never analysed. */
 export const BODY_LIMIT = 256 * 1024;
 
-/**
- * Sentinels srt substituted for the real credentials inside the sandbox.
- * A request may carry a credential only in the exact shape strait itself set
- * up, so a token the sandboxed program brought along never reaches upstream.
- */
-export interface Sentinels {
-  /** `GH_TOKEN`, sent by gh as `token <s>` or `Bearer <s>`. */
-  githubToken?: string;
-  /** Whole `Authorization` value for git over HTTPS (`Basic …`). */
-  gitAuthorization?: string;
-  /** `CLAUDE_CODE_OAUTH_TOKEN`, sent as `Bearer <s>`. */
-  anthropicOauth?: string;
-  /** `ANTHROPIC_API_KEY`, sent as `x-api-key`. */
-  anthropicApiKey?: string;
-  /** The credential of each configured host that takes one, by host. */
-  hosts?: Readonly<Record<string, string>>;
-}
-
-/**
- * A host added in strait.json. Every request to it on port 443 is allowed,
- * after the same transport checks as any other; the only credential it may
- * carry is the one strait issued, in `header`, as `<scheme> <credential>`
- * when a scheme is given.
- */
+/** A configured host, with the header strait owns when credentials exist. */
 export interface HostRule {
   credential?: { header: string; scheme?: string };
 }
@@ -159,7 +137,7 @@ const GRAPHQL_PATH = "/graphql";
 export function decide(
   req: PolicyRequest,
   config: PolicyConfig,
-  sentinels: Sentinels,
+  credentials: CredentialHeaders,
 ): Decision {
   let url: URL;
   try {
@@ -181,20 +159,16 @@ export function decide(
     return deny("request target is not in canonical form");
   }
 
-  const rule = Object.hasOwn(config.hosts ?? {}, url.hostname)
-    ? config.hosts?.[url.hostname]
-    : undefined;
-  if (rule !== undefined) {
-    return decideConfiguredHost(
-      req,
-      url,
-      rule,
-      sentinels.hosts?.[url.hostname],
-    );
-  }
-
-  const credential = checkCredentials(req, url, sentinels);
+  const credential = checkCredentials(
+    req,
+    url,
+    credentials,
+    Object.hasOwn(config.hosts ?? {}, url.hostname)
+      ? config.hosts?.[url.hostname]?.credential?.header
+      : undefined,
+  );
   if (credential) return credential;
+  if (Object.hasOwn(config.hosts ?? {}, url.hostname)) return allow;
 
   const method = req.method.toUpperCase();
   switch (url.hostname) {
@@ -221,105 +195,30 @@ export function decide(
   }
 }
 
-/** Returns a denial when the request carries a credential strait did not issue. */
+/** Client auth is removable only where the host supplies credentials. */
 function checkCredentials(
   req: PolicyRequest,
   url: URL,
-  s: Sentinels,
+  credentials: CredentialHeaders,
+  configuredHeader?: string,
 ): Decision | undefined {
   if (req.headers.has("cookie")) return deny("cookies are not forwarded");
   if (url.searchParams.has("access_token")) {
     return deny("credential in the query string");
   }
-
-  const authorization = req.headers.get("authorization");
-  if (authorization !== null) {
-    const accepted = acceptedAuthorizations(url.hostname, s);
-    if (!accepted.some((a) => sameAuthorization(authorization, a))) {
-      return deny("Authorization was not issued by strait");
+  const header = Object.hasOwn(credentials, url.hostname)
+    ? credentials[url.hostname]
+    : undefined;
+  for (const name of new Set([
+    "authorization",
+    "x-api-key",
+    ...(configuredHeader ? [configuredHeader] : []),
+  ])) {
+    if (req.headers.has(name) && header === undefined) {
+      return deny("no host credential configured");
     }
   }
-
-  const apiKey = req.headers.get("x-api-key");
-  if (apiKey !== null) {
-    const ok =
-      url.hostname === ANTHROPIC_HOST &&
-      s.anthropicApiKey !== undefined &&
-      apiKey === s.anthropicApiKey;
-    if (!ok) return deny("x-api-key was not issued by strait");
-  }
   return undefined;
-}
-
-/** Headers that carry credentials; each must hold exactly what strait issued. */
-const CREDENTIAL_HEADERS = ["authorization", "x-api-key"];
-
-function decideConfiguredHost(
-  req: PolicyRequest,
-  url: URL,
-  rule: HostRule,
-  sentinel: string | undefined,
-): Decision {
-  if (req.headers.has("cookie")) return deny("cookies are not forwarded");
-  if (url.searchParams.has("access_token")) {
-    return deny("credential in the query string");
-  }
-  const c = rule.credential;
-  const issued =
-    c === undefined || sentinel === undefined
-      ? undefined
-      : c.scheme === undefined
-        ? sentinel
-        : `${c.scheme} ${sentinel}`;
-  for (const name of new Set([
-    ...CREDENTIAL_HEADERS,
-    ...(c ? [c.header] : []),
-  ])) {
-    const got = req.headers.get(name);
-    if (got === null) continue;
-    // A duplicated header arrives joined with ", " and never matches.
-    const ok =
-      name === c?.header &&
-      issued !== undefined &&
-      (c.scheme === undefined
-        ? got === issued
-        : sameAuthorization(got, issued));
-    if (!ok) return deny(`${name} was not issued by strait`);
-  }
-  return allow;
-}
-
-function acceptedAuthorizations(host: string, s: Sentinels): string[] {
-  switch (host) {
-    case GITHUB_API_HOST:
-      return s.githubToken === undefined
-        ? []
-        : [`token ${s.githubToken}`, `Bearer ${s.githubToken}`];
-    case GITHUB_HOST:
-      return s.gitAuthorization === undefined ? [] : [s.gitAuthorization];
-    case ANTHROPIC_HOST:
-      return s.anthropicOauth === undefined
-        ? []
-        : [`Bearer ${s.anthropicOauth}`];
-    default:
-      return [];
-  }
-}
-
-// The scheme is case-insensitive; the credential must match byte for byte.
-// Through srt, node:http keeps only the first of duplicated Authorization
-// headers, and the same deduplicated set goes upstream. Headers built any
-// other way arrive joined with ", " and never match.
-function sameAuthorization(got: string, expected: string): boolean {
-  const g = splitScheme(got);
-  const e = splitScheme(expected);
-  if (g === undefined || e === undefined) return got === expected;
-  return g.scheme.toLowerCase() === e.scheme.toLowerCase() && g.rest === e.rest;
-}
-
-function splitScheme(v: string): { scheme: string; rest: string } | undefined {
-  const i = v.indexOf(" ");
-  return i <= 0 ? undefined : { scheme: v.slice(0, i), rest: v.slice(i + 1) };
 }
 
 function decideAnthropic(method: string, path: string): Decision {

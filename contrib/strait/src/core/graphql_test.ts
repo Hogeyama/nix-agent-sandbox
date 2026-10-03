@@ -311,7 +311,7 @@ describe("policy around GraphQL", () => {
         body: b,
       },
       { githubRepos: ["my-org/private-repo"] },
-      { githubToken: "fake_value_gh" },
+      { "api.github.com": "authorization" },
     ).action;
 
   test("allowed with the issued token", () => {
@@ -338,8 +338,8 @@ describe("policy around GraphQL", () => {
       "allow",
     );
   });
-  test("a foreign token is still denied", () => {
-    expect(run({ authorization: "token other" })).toBe("deny");
+  test("a foreign token does not select upstream authentication", () => {
+    expect(run({ authorization: "token other" })).toBe("allow");
   });
   test("another content type", () => {
     expect(run({ "content-type": "text/plain" })).toBe("deny");
