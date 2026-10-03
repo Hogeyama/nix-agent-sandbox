@@ -237,7 +237,10 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
     hooks.onPending?.(session),
   );
   await serve(approvals, socketPath);
-  process.on("exit", () => removeSocket(socketPath));
+  process.on("exit", () => {
+    approvals.close();
+    removeSocket(socketPath);
+  });
 
   await SandboxManager.initialize({
     network: {
@@ -355,6 +358,7 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
   child.on("exit", async (code, signal) => {
+    approvals.close();
     SandboxManager.cleanupAfterCommand();
     await SandboxManager.reset().catch(() => {});
     process.exit(signal ? 1 : (code ?? 0));

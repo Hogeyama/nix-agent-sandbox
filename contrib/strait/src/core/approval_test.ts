@@ -13,7 +13,13 @@ import {
   structured,
   tuiArgs,
 } from "../ui/review.ts";
-import { Approvals, type Pending, REQUEST_ID, serve } from "./approval.ts";
+import {
+  Approvals,
+  HOLD_MS,
+  type Pending,
+  REQUEST_ID,
+  serve,
+} from "./approval.ts";
 import { claimNewSocket, claimSocket, type SessionInfo } from "./session.ts";
 
 const req = {
@@ -327,6 +333,7 @@ describe("display", () => {
     ...req,
     id: "1.x7mq4ndp",
     since: Date.now(),
+    expiresAt: Date.now() + 240_000,
     ref: "k3f9-1.x7mq4ndp",
     session: session({ tty: "/dev/pts/3", tmuxPane: "%12" }),
     reason: "evil\n9-2\tGET https://api.github.com/repos/a/b‮\u001b[2J",
@@ -388,5 +395,152 @@ describe("resident review", () => {
     expect(args.find((a) => a.startsWith("--bind=start:"))).toBe(
       "--bind=start:reload('/s/strait' review list 'k3f9')",
     );
+  });
+});
+
+describe("Approvals hardening", () => {
+  function withClock(holdMs = 1_000) {
+    let epoch = 1_000_000;
+    let elapsed = 20_000;
+    const approvals = new Approvals(session(), holdMs, undefined, {
+      now: () => epoch,
+      monotonicNow: () => elapsed,
+    });
+    return {
+      approvals,
+      epoch: (v: number) => {
+        epoch = v;
+      },
+      elapsed: (v: number) => {
+        elapsed = v;
+      },
+    };
+  }
+
+  test("decide checks expiry before a delayed timer runs", async () => {
+    const c = withClock();
+    const held = c.approvals.hold(req);
+    const p = c.approvals.list()[0] as Pending;
+    c.epoch(p.expiresAt);
+    expect(c.approvals.decide(p.id, true)).toBe(false);
+    expect((await held).reason).toContain("not approved within");
+    expect(c.approvals.list()).toEqual([]);
+  });
+
+  test("setting the wall clock back cannot extend the deadline", async () => {
+    const c = withClock();
+    const held = c.approvals.hold(req);
+    const p = c.approvals.list()[0] as Pending;
+    c.epoch(0);
+    c.elapsed(21_000);
+    expect(c.approvals.decide(p.id, true)).toBe(false);
+    expect((await held).action).toBe("deny");
+  });
+
+  test("list drops expired requests", async () => {
+    const c = withClock();
+    const held = c.approvals.hold(req);
+    c.elapsed(21_000);
+    expect(c.approvals.list()).toEqual([]);
+    expect((await held).action).toBe("deny");
+  });
+
+  test("a clock that returns NaN denies", async () => {
+    const c = withClock();
+    const held = c.approvals.hold(req);
+    const p = c.approvals.list()[0] as Pending;
+    c.epoch(Number.NaN);
+    expect(c.approvals.decide(p.id, true)).toBe(false);
+    expect((await held).action).toBe("deny");
+  });
+
+  test("a zero-length hold cannot be approved", async () => {
+    const a = new Approvals(session(), 0);
+    expect((await a.hold(req)).action).toBe("deny");
+    expect(a.list()).toEqual([]);
+  });
+
+  test("a hold cannot be longer than HOLD_MS", () => {
+    for (const ms of [HOLD_MS + 1, Infinity, Number.NaN, -1]) {
+      expect(() => new Approvals(session(), ms)).toThrow();
+    }
+  });
+
+  test("changing the caller's object or a snapshot changes nothing", async () => {
+    let notified: Pending | undefined;
+    const a = new Approvals(session(), 10_000, (p) => {
+      notified = p;
+    });
+    const exec = { argv: ["ls"], cwd: "/w", env: { A: "1" } };
+    const original = { ...req, exec };
+    const held = a.hold(original);
+    const p = a.list()[0] as Pending;
+    original.url = "https://other.invalid";
+    exec.argv.push("-la");
+    exec.env.A = "2";
+    expect(notified).toBe(p);
+    expect(Reflect.set(p, "expiresAt", Infinity)).toBe(false);
+    expect(Reflect.set(p.exec?.argv as string[], 0, "rm")).toBe(false);
+    expect(p.url).toBe(req.url);
+    expect(p.exec).toEqual({ argv: ["ls"], cwd: "/w", env: { A: "1" } });
+    const list = a.list();
+    list.length = 0;
+    expect(a.list()).toHaveLength(1);
+    expect(a.decide(p.id, false)).toBe(true);
+    expect((await held).reason).toBe("push; denied by the user");
+  });
+
+  test("a value that is not a boolean decides nothing", async () => {
+    const a = new Approvals(session(), 10_000);
+    const held = a.hold(req);
+    const id = (a.list()[0] as Pending).id;
+    for (const v of ["true", 1, {}, null, undefined]) {
+      expect(a.decide(id, v as boolean)).toBe(false);
+    }
+    expect(a.list()).toHaveLength(1);
+    a.close();
+    expect((await held).action).toBe("deny");
+  });
+
+  test("close denies what waits and what comes later, once", async () => {
+    const a = new Approvals(session(), 10_000);
+    const first = a.hold(req);
+    const second = a.hold(req);
+    const p = a.list()[0] as Pending;
+    a.close("stopped");
+    a.close("again");
+    for (const held of [first, second, a.hold(req)]) {
+      expect(await held).toEqual({ action: "deny", reason: "stopped" });
+    }
+    expect(a.decide(p.id, true)).toBe(false);
+    expect(a.list()).toEqual([]);
+  });
+
+  test("a notifier that throws denies instead of leaving the request held", async () => {
+    const a = new Approvals(session(), 10_000, () => {
+      throw new Error("no notify-send");
+    });
+    expect((await a.hold(req)).action).toBe("deny");
+    expect(a.list()).toEqual([]);
+  });
+
+  test("handle refuses malformed requests", async () => {
+    const a = new Approvals(session(), 10_000);
+    const held = a.hold(req);
+    const id = (a.list()[0] as Pending).id;
+    for (const bad of [
+      null,
+      [],
+      "list",
+      { op: "list", extra: 1 },
+      { op: "decide", id, approve: "true" },
+      { op: "decide", id: 1, approve: true },
+      { op: "decide", id, approve: true, runId: "x" },
+    ]) {
+      expect(a.handle(bad)).toEqual({ error: "bad request" });
+    }
+    expect(a.list()).toHaveLength(1);
+    expect(a.handle({ op: "decide", id, approve: true })).toEqual({ ok: true });
+    expect(await held).toEqual({ action: "allow" });
   });
 });
