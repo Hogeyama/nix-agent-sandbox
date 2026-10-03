@@ -1,0 +1,267 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.5;
+  color: #182333;
+  background: #f4f6f9;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+h1 {
+  margin-bottom: 0.4rem;
+  font-size: 2rem;
+  letter-spacing: -0.04em;
+}
+h2 {
+  font-size: 1.1rem;
+}
+.page-header,
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.page-header {
+  margin-bottom: 0.6rem;
+}
+.eyebrow {
+  color: #425774;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+.scope-note {
+  padding: 0.9rem 1rem;
+  background: #fff5d9;
+  border: 1px solid #d7b761;
+  border-radius: 0.6rem;
+}
+#status {
+  min-height: 1.5rem;
+  font-weight: 600;
+}
+.inbox {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.65fr);
+  gap: 1rem;
+  align-items: start;
+}
+.queue-panel,
+.details-panel {
+  min-width: 0;
+  padding: 1.25rem;
+  background: #fff;
+  border: 1px solid #c9d2df;
+  border-radius: 0.7rem;
+}
+.panel-heading h2 {
+  margin-bottom: 0;
+}
+.panel-heading {
+  margin-bottom: 1rem;
+}
+#count {
+  padding: 0.1rem 0.55rem;
+  background: #e8edf5;
+  border-radius: 1rem;
+  font-size: 0.85rem;
+}
+#request-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+button {
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid #8291a6;
+  color: inherit;
+  background: #fff;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.45rem;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: #eef3fa;
+}
+button:focus-visible {
+  outline: 3px solid #1766d3;
+  outline-offset: 3px;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.request {
+  width: 100%;
+  text-align: left;
+  min-width: 0;
+}
+.request[aria-pressed="true"] {
+  border-color: #1766d3;
+  box-shadow: inset 3px 0 #1766d3;
+  background: #edf4ff;
+}
+.request span {
+  display: block;
+}
+.request-method {
+  margin-bottom: 0.25rem;
+  font-size: 0.8rem;
+}
+.request-url {
+  font-size: 0.85rem;
+}
+.request-context,
+.request-identity {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.display-note,
+#body-note,
+#selection-help,
+#empty,
+footer {
+  color: #4d5b6f;
+  font-size: 0.9rem;
+}
+.untrusted {
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+dl {
+  margin-bottom: 0;
+}
+dt {
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-top: 1rem;
+  color: #4d5b6f;
+}
+dd {
+  margin: 0.25rem 0 0;
+}
+pre {
+  margin: 0;
+  font-size: 0.84rem;
+  background: #f4f6f9;
+  padding: 0.65rem;
+  border-radius: 0.35rem;
+  max-height: 28rem;
+  overflow: auto;
+}
+.actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #c9d2df;
+  flex-wrap: wrap;
+}
+.approve {
+  background: #17624d;
+  color: #fff;
+  border-color: #17624d;
+}
+.approve:hover:not(:disabled) {
+  background: #114a3a;
+}
+.deny {
+  color: #922a26;
+  border-color: #ab655f;
+}
+footer {
+  margin-top: 1.25rem;
+}
+[hidden] {
+  display: none;
+}
+@media (max-width: 700px) {
+  body {
+    padding: 1rem;
+  }
+  .inbox {
+    grid-template-columns: 1fr;
+  }
+  .page-header {
+    align-items: flex-start;
+  }
+  h1 {
+    font-size: 1.65rem;
+  }
+  .queue-panel,
+  .details-panel {
+    padding: 1rem;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #edf1f7;
+    background: #111925;
+  }
+  .queue-panel,
+  .details-panel,
+  button {
+    background: #1a2636;
+    border-color: #54667e;
+  }
+  .eyebrow,
+  .display-note,
+  #body-note,
+  #selection-help,
+  #empty,
+  footer,
+  dt {
+    color: #b9c7da;
+  }
+  .scope-note {
+    color: #f8e6b3;
+    background: #342d1d;
+    border-color: #776532;
+  }
+  #count,
+  pre {
+    background: #111c2b;
+  }
+  button:hover:not(:disabled) {
+    background: #2b3e56;
+  }
+  .request[aria-pressed="true"] {
+    background: #243e60;
+    border-color: #7fb1ff;
+    box-shadow: inset 3px 0 #7fb1ff;
+  }
+  button:focus-visible {
+    outline-color: #7fb1ff;
+  }
+  .approve {
+    background: #17624d;
+    border-color: #5eaf98;
+  }
+  .approve:hover:not(:disabled) {
+    background: #207a61;
+  }
+  .deny {
+    color: #ffb8b2;
+    border-color: #bf827d;
+  }
+}

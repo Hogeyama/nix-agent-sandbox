@@ -114,7 +114,8 @@ function parseArgs(argv: string[]) {
   // A session named like a review subcommand could not be selected there.
   if (
     name !== undefined &&
-    (!isSessionId(name) || ["list", "show", "approve", "deny"].includes(name))
+    (!isSessionId(name) ||
+      ["list", "show", "approve", "deny", "web"].includes(name))
   ) {
     console.error(
       `strait: --name ${JSON.stringify(name)}: use letters, digits, _ and -, at most 32, not ending in -`,

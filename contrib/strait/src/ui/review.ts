@@ -5,6 +5,8 @@
 //   strait review --json [--all] [SESSION]   print what is waiting as JSON
 //   strait review list [--all] [SESSION]     print what is waiting, one per line
 //   strait review show REF                   print one request in full
+//   strait review web                        a browser inbox for every session
+//                                            (web.ts)
 //   strait review approve REF...
 //   strait review deny REF...
 //
@@ -99,6 +101,22 @@ export function parseRef(ref: string): { session: string; id: string } | null {
     : null;
 }
 
+/** Approve or deny one request. False when it is no longer waiting. */
+export async function decideRef(
+  dir: string,
+  ref: string,
+  approve: boolean,
+): Promise<boolean> {
+  const r = parseRef(ref);
+  if (r === null) return false;
+  const res = await ask(socketFor(dir, r.session), {
+    op: "decide",
+    id: r.id,
+    approve,
+  });
+  return res !== null && "ok" in res && res.ok === true;
+}
+
 async function settle(
   dir: string,
   refs: string[],
@@ -106,15 +124,7 @@ async function settle(
 ): Promise<boolean> {
   let ok = true;
   for (const ref of refs) {
-    const r = parseRef(ref);
-    const res = r
-      ? await ask(socketFor(dir, r.session), {
-          op: "decide",
-          id: r.id,
-          approve,
-        })
-      : null;
-    if (res !== null && "ok" in res && res.ok) {
+    if (await decideRef(dir, ref, approve)) {
       console.log(`${approve ? "approved" : "denied"} ${ref}`);
     } else {
       console.error(`${ref}: no such request (already decided or timed out)`);
@@ -312,6 +322,7 @@ async function tui(dir: string, scope: Scope): Promise<number> {
 function usage(): never {
   console.error(
     "usage: strait review [--json] [--all] [SESSION]\n" +
+      "       strait review web\n" +
       "       strait review list [--all] [SESSION]\n" +
       "       strait review show REF\n" +
       "       strait review approve|deny REF...",
@@ -357,6 +368,11 @@ export async function reviewMain(argv: string[]): Promise<number> {
   const dir = socketDir();
   const [cmd, ...rest] = argv;
   switch (cmd) {
+    case "web": {
+      if (rest.length !== 0) usage();
+      const { launchWebReview } = await import("./web.ts");
+      return launchWebReview(dir);
+    }
     case "list": {
       const { scope } = parseScope(rest);
       if (!(await running(dir, scope))) return 1;
