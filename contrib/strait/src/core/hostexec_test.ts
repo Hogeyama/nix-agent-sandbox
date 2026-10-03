@@ -383,6 +383,7 @@ describe("review display", () => {
       ref: "k3f9-1.x7mq4ndp",
       session: { id: "k3f9", cwd: "/w", command: ["claude"], startedAt: 0 },
       since: Date.now(),
+      expiresAt: Date.now() + 240_000,
       method: "POST",
       url: "https://hostexec.strait.invalid/run",
       reason: "run a command on the host",

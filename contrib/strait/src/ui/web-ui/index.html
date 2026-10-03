@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>strait · Request approvals</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">strait · Host review</p>
+        <h1>Request approvals</h1>
+        <p>Held requests across your running strait sessions.</p>
+      </div>
+      <button id="refresh" type="button" disabled>Refresh</button>
+    </header>
+    <main>
+      <p class="scope-note">Approval permits one request only. It does not mean the upstream operation succeeded. Review the complete request before deciding.</p>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true">Opening the approval inbox…</p>
+      <div class="inbox">
+        <section class="queue-panel" aria-labelledby="queue-heading">
+          <div class="panel-heading">
+            <h2 id="queue-heading">Pending requests</h2>
+            <span id="count" aria-label="Pending request count">0</span>
+          </div>
+          <p id="empty">Loading pending requests…</p>
+          <ul id="request-list" aria-label="Choose a request to review"></ul>
+        </section>
+        <section class="details-panel" aria-labelledby="details-heading">
+          <h2 id="details-heading">Request details</h2>
+          <p id="selection-help">Choose a pending request. Nothing is selected automatically.</p>
+          <div id="request-details" hidden>
+            <p class="display-note">Request data is untrusted text. Backslashes are doubled; control, format and Unicode line separator characters are shown as \u{hex} escapes. No links or markup are active.</p>
+            <dl id="fields"></dl>
+            <p id="body-note"></p>
+            <div id="actions" class="actions" aria-label="Decide on this request"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <footer>Requests expire automatically. A command may need approval for more than one request.</footer>
+    <noscript>JavaScript is required. Use strait review on the host to review requests in a terminal.</noscript>
+  </body>
+</html>
