@@ -92,30 +92,49 @@ CLAUDE_CONFIG_DIR=$PWD/.claude-state \
 
 ### Claude Code の履歴や memory の共有
 
-ホストと履歴・memory・projects を共有する場合は、`CLAUDE_CONFIG_DIR` を指定せずに起動し、`strait.json` で `~/.claude` 内の書き込み先を追加します。
+ホストと会話の記録や memory（`~/.claude/projects`）を共有する場合は、`CLAUDE_CONFIG_DIR` を指定せずに起動し、`strait.json` で `~/.claude` 内の書き込み先を追加します。
 
 ```json
 {
-  "githubRepos": ["my-org/private-repo"],
+  "githubRepos": [
+    "my-org/private-repo"
+  ],
   "filesystem": {
     "allowWrite": [
-      ".", "~/.claude.json",
-      "~/.claude/projects", "~/.claude/history.jsonl", "~/.claude/file-history",
-      "~/.claude/plans", "~/.claude/paste-cache", "~/.claude/todos", "~/.claude/debug",
-      "~/.claude/telemetry", "~/.claude/usage-data", "~/.claude/stats-cache.json",
-      "~/.claude/backups", "~/.claude/feedback"
+      ".",
+      "~/.claude.json",
+      "~/.claude/projects",
+      "~/.claude/backups"
     ],
     "denyRead": [
-      "/tmp", "~/.ssh", "~/.aws", "~/.config/gh",
-      "~/.claude/.credentials.json", "~/.claude/ide"
+      "/tmp",
+      "~/.ssh",
+      "~/.aws",
+      "~/.config/gh",
+      "~/.claude/.credentials.json",
+      "~/.claude/ide"
     ]
   }
 }
 ```
 
-この設定で Claude Code 2.1.285 が動作することを確認済みです（2026-10-01）。
+`CLAUDE_CONFIG_DIR` を付けずに起動します。トークンは、上の例と同じく環境変数で渡します。
 
-書き込みの許可は、履歴や memory など、エージェントによる変更を容認できるものに限定してください。`settings.json`、`skills`、`plugins`、statusline のスクリプトなど、ホストの Claude Code がサンドボックスの外部で実行するものは、書き込み禁止のままにしてください。`~/.claude.json` は Claude Code が頻繁に更新するので、書き込みの許可が必要です。ただし、このファイルには MCP サーバーの起動コマンドも含まれます。ホストの [managed settings](https://code.claude.com/docs/en/settings#settings-files)（`allowManagedMcpServersOnly` など）で、MCP サーバーを制限してください。
+```sh
+GH_TOKEN=$(gh auth token) \
+CLAUDE_CODE_OAUTH_TOKEN=... \
+  strait -- claude --permission-mode auto
+```
+
+`CLAUDE_CODE_OAUTH_TOKEN` を省略すると、Claude Code は `~/.claude/.credentials.json` のトークンを使おうとします。この設定ではこのファイルを読めないので、認証に失敗します。仮に読めても、strait が発行したトークンではないため、strait が要求を拒否します。
+
+`~/.claude/projects` をホストと共有しているので、ホストで始めたセッションも、同じディレクトリで `claude --resume <セッション ID>` を実行すれば再開できます。
+
+この例では、`~/.claude` 内の書き込み先を 3 つに限定しています。`~/.claude.json` は Claude Code が頻繁に更新します。`~/.claude/backups` には、Claude Code が `~/.claude.json` を書き換える前の内容を保存します。`~/.claude/projects` には、会話の記録と memory が入ります。
+
+Claude Code は、`~/.claude` 内のほかの場所にも書き込みます。例えば、プロンプトの履歴（`history.jsonl`）や、`/rewind` 用のスナップショット（`file-history`）です。この例ではこれらに書き込めないので、関連する機能が動作しないことがあります。問題が起きた場合は、その書き込み先を `allowWrite` に追加してください。どこに何が書き込まれるかは、Claude Code のドキュメントの [Application data](https://code.claude.com/docs/en/claude-directory#application-data) に記載されています。
+
+ただし、書き込みの許可は、履歴や memory など、エージェントによる変更を容認できるものに限定してください。`settings.json`、`skills`、`plugins`、statusline のスクリプトなど、ホストの Claude Code がサンドボックスの外部で実行するものは、書き込み禁止のままにしてください。`~/.claude.json` には MCP サーバーの起動コマンドも含まれます。ホストの [managed settings](https://code.claude.com/docs/en/settings#settings-files)（`allowManagedMcpServersOnly` など）で、MCP サーバーを制限してください。
 
 この設定例では、`.credentials.json` の読み取りを禁止しています。サンドボックス内の Claude Code はダミーのトークンで動作するので、このファイルを必要としません。`ide/` にも IDE との接続用のトークンがあるので、同様に読み取りを禁止しています。
 
