@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>コーディングエージェントのセキュリティ対策</title>
+<style>
+:root {
+  --ink: #14181f; --muted: #5b6472; --line: #d6dbe4; --bg: #ffffff; --stage: #ffffff;
+  --accent: #0d32b2; --code: #f4f6fa;
+  --stage-w: 1280px; --stage-h: 720px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #0d1117; color: var(--ink); }
+body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", sans-serif; overflow: hidden; }
+#deck { position: fixed; inset: 0; }
+.slide {
+  width: var(--stage-w); height: var(--stage-h); background: var(--stage); color: var(--ink);
+  display: none; padding: 64px 72px 56px;
+  /* Centred by transform, not by the layout box: a 1280px stage is wider than a phone, and
+     centring an over-sized grid item leaves the middle off-screen. The integrity gate caught
+     that at 375px as "the DOM holds 4 text blocks but almost nothing painted". */
+  position: absolute; left: 50%; top: 50%; transform-origin: center center;
+  /* A slide is a fixed frame, so content that does not fit is CUT rather than spilling over the
+     next slide — which is what makes overflow detectable: the integrity gate reads it as clipped
+     text, and the copy gate reads the cut line as copy it cannot see. */
+  overflow: hidden;
+}
+.slide.active { display: flex; flex-direction: column; }
+/* The frame is a flex column and the body is the flexible child: a percentage height inside a
+   padded, fixed box was 114px out on every slide, which the integrity gate reported as clipped
+   content on slides whose text was well inside the frame. */
+.slide .body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-size: 58px; line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: 38px; line-height: 1.15; margin: 0; letter-spacing: -0.01em; }
+h2::after { content: ""; display: block; width: 56px; height: 4px; background: var(--accent); margin-top: 16px; }
+.subtitle { font-size: 26px; color: var(--muted); margin: 0; }
+.slide.title .body { justify-content: center; }
+ul, ol { margin: 0; padding-left: 26px; }
+ol { display: flex; flex-direction: column; }
+li { font-size: 25px; margin: 0 0 14px; }
+li code, p code { background: var(--code); padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+p { font-size: 25px; margin: 0 0 10px; }
+blockquote { margin: 0; padding-left: 20px; border-left: 4px solid var(--accent); font-size: 24px; color: var(--muted); }
+pre { background: var(--code); padding: 14px 18px; border-radius: 8px; overflow: auto; margin: 0; }
+pre code { font: 18px/1.45 ui-monospace, "SF Mono", Menlo, monospace; }
+/* align-items is start, not center: prose taller than the frame then overflows DOWNWARD, where
+   the clip is measurable, instead of being cut off at both ends. Centred, a long bullet list is
+   silently trimmed top and bottom — the copy gate reads those lines as copy a user cannot see. */
+.cols { flex: 1; display: grid; grid-template-columns: 1fr 1.1fr; gap: 40px; align-items: start; min-height: 0; height: 100%; }
+.prose { min-height: 0; }
+.figs { display: flex; flex-direction: column; gap: 16px; justify-content: center; align-items: center; min-height: 0; height: 100%; }
+.figs.full { flex: 1; }
+.fig { display: flex; min-height: 0; width: 100%; height: 100%; justify-content: center; align-items: center; }
+svg.figure { max-width: 100%; max-height: 100%; height: auto; width: auto; }
+footer {
+  position: absolute; left: 72px; right: 72px; bottom: 22px; display: flex; justify-content: space-between;
+  font-size: 15px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px;
+}
+.notes { display: none; }
+#progress { position: fixed; left: 0; top: 0; height: 3px; background: var(--accent); transition: width .15s; z-index: 5; }
+#overview { position: fixed; inset: 0; background: #0d1117; overflow: auto; padding: 28px; display: none; z-index: 10; }
+#overview.on { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; align-content: start; }
+#overview .thumb { background: #fff; border-radius: 6px; overflow: hidden; cursor: pointer; position: relative; aspect-ratio: 16 / 9; }
+#overview .thumb .slide { display: block; transform: scale(0.234); transform-origin: top left; position: absolute; }
+#overview .thumb span { position: absolute; right: 6px; bottom: 4px; font-size: 12px; color: var(--muted); z-index: 2; }
+/* Every slide at once: what printing gives, and what a page gate has to read. One slide is on
+   screen at a time in the deck, so the copy gate over index.html only ever sees the first one.
+   print.html is the same content stacked, and that is the file the copy and contrast gates take. */
+body.print { overflow: visible; background: #eef1f6; }
+body.print #deck { position: static; }
+body.print #progress, body.print #overview { display: none !important; }
+body.print .slide {
+  display: flex !important; flex-direction: column; position: relative; left: auto; top: auto; transform: none !important;
+  margin: 0 auto 24px; box-shadow: 0 1px 4px rgba(20, 24, 31, .18); page-break-after: always; break-after: page;
+}
+body.print .notes { display: block; margin-top: 18px; border-top: 1px dashed var(--line); padding-top: 10px; font-size: 15px; color: var(--muted); }
+@media print {
+  html, body { background: #fff; overflow: visible; }
+  #deck { position: static; display: block; }
+  #progress, #overview { display: none !important; }
+  .slide { display: flex !important; flex-direction: column; position: static; left: auto; top: auto; margin: 0; box-shadow: none; page-break-after: always; break-after: page; transform: none !important; }
+  .notes { display: block; margin-top: 18px; border-top: 1px dashed var(--line); padding-top: 10px; font-size: 14px; color: var(--muted); }
+}
+
+/* Japanese slide typography and table layout for this document. */
+.slide.title h1 { font-size: 68px; line-height: 1.24; letter-spacing: 0; }
+.slide.title .subtitle { font-size: 30px; margin-top: 12px; }
+.slide.title .deck-title { visibility: hidden; }
+.slide[aria-label="目的と構成"] ol { margin-top: 24px; }
+.slide[aria-label="目的と構成"] li { margin-bottom: 26px; }
+.slide[aria-label="操作ミスと攻撃"] th:first-child { width: 24%; }
+.slide[aria-label="操作ミスと攻撃"] table { font-size: 25px; }
+.slide[aria-label="GitHubへの接続とrepoへの書込み"] .cols, .slide[aria-label="GitHubへの接続とrepoへの書込み"] .prose { display: contents; }
+.slide[aria-label="GitHubへの接続とrepoへの書込み"] .prose p { order: 1; margin: 0; font-size: 26px; }
+.slide[aria-label="GitHubへの接続とrepoへの書込み"] .figs { order: 2; flex: 1; height: auto; }
+.slide[aria-label="GitHubへの接続とrepoへの書込み"] .prose blockquote { order: 3; margin: 0; font-size: 24px; }
+
+body { font-family: "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", sans-serif; }
+:root { --accent: #244b71; --ink: #192c3b; --muted: #485967; --line: #cad4dc; }
+.slide { padding: 48px 64px 62px; }
+.slide .body { gap: 26px; }
+h2 { font-size: 48px; line-height: 1.3; letter-spacing: 0; font-weight: 700; }
+h2::after { width: 64px; height: 3px; margin-top: 18px; }
+p, li { font-size: 28px; line-height: 1.65; }
+p { margin-bottom: 22px; }
+li { margin-bottom: 24px; }
+.prose { display: flex; flex-direction: column; gap: 0; }
+.cols { grid-template-columns: 1fr 1fr; gap: 48px; }
+.cols li { font-size: 27px; line-height: 1.7; margin-bottom: 22px; }
+blockquote { margin-top: 22px; padding: 0 0 0 18px; font-size: 25px; line-height: 1.55; color: var(--ink); border-left-width: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 26px; line-height: 1.6; table-layout: fixed; }
+th { text-align: left; font-weight: 700; background: #edf2f6; }
+th, td { padding: 14px 18px; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+td + td, th + th { border-left: 1px solid #e2e7eb; }
+a { color: #214f76; text-decoration: underline; text-underline-offset: 4px; }
+footer { left: 64px; right: 64px; bottom: 20px; font-size: 16px; }
+.slide[aria-label="防御対象と要求水準"] td:first-child { width: 55%; }
+.slide[aria-label="付録・CIからの本番操作"] .cols { display: flex; flex-direction: column; gap: 12px; }
+.slide[aria-label="付録・CIからの本番操作"] .prose { flex: none; width: 100%; }
+.slide[aria-label="付録・CIからの本番操作"] .cols li { font-size: 26px; line-height: 1.55; margin-bottom: 16px; }
+.slide[aria-label="付録・CIからの本番操作"] .figs { width: 100%; flex: 1; }
+.slide[aria-label="比較する実行環境"] table { font-size: 24px; }
+.slide[aria-label="比較する実行環境"] th:first-child { width: 25%; }
+.slide[aria-label="比較する実行環境"] th, .slide[aria-label="比較する実行環境"] td { padding: 8px 18px; }
+.slide[aria-label="比較評価"] table, .slide[aria-label="付録・評価一覧"] table { font-size: 22px; line-height: 1.45; }
+.slide[aria-label="比較評価"] th, .slide[aria-label="比較評価"] td { padding: 7px 12px; }
+.slide[aria-label="比較評価"] th:first-child { width: 29%; }
+.slide[aria-label="比較評価"] th:not(:first-child), .slide[aria-label="比較評価"] td:not(:first-child),
+.slide[aria-label="付録・評価一覧"] th:not(:first-child), .slide[aria-label="付録・評価一覧"] td:not(:first-child) { text-align: center; vertical-align: middle; }
+.slide[aria-label="比較評価"] td:not(:first-child) { font-size: 30px; }
+.slide[aria-label="比較評価"] blockquote { font-size: 22px; margin-top: 16px; }
+.slide[aria-label="nasの利用条件"] table { font-size: 25px; }
+.slide[aria-label="付録・評価一覧"] th:first-child { width: 36%; }
+.slide[aria-label="付録・評価一覧"] th:nth-child(2) { width: 10%; }
+.slide[aria-label="付録・評価一覧"] th:nth-child(3) { width: 12%; }
+.slide[aria-label="付録・評価一覧"] th:nth-child(4) { width: 6%; }
+.slide[aria-label="付録・評価一覧"] th:nth-child(5) { width: 14%; }
+.slide[aria-label="付録・評価一覧"] th:nth-child(6) { width: 6%; }
+.slide[aria-label="付録・評価一覧"] th:nth-child(7) { width: 16%; }
+.slide[aria-label="付録・評価一覧"] th, .slide[aria-label="付録・評価一覧"] td { padding: 6px 10px; }
+.slide[aria-label="付録・評価一覧"] blockquote { font-size: 22px; margin-top: 14px; }
+.slide[aria-label="付録・比較の前提"] li { font-size: 26px; line-height: 1.6; margin-bottom: 18px; }
+.slide[aria-label="付録・出典と検証範囲"] table { font-size: 24px; }
+.slide[aria-label="付録・出典と検証範囲"] th:first-child { width: 41%; }
+.slide[aria-label="付録・出典と検証範囲"] th, .slide[aria-label="付録・出典と検証範囲"] td { padding: 12px 16px; }
+.slide[aria-label="付録・出典と検証範囲"] blockquote { font-size: 23px; }
+
+.slide[aria-label="想定する誤操作と攻撃"] th:first-child { width: 18%; }
+.slide[aria-label="想定する誤操作と攻撃"] ul { margin-top: 20px; }
+.slide[aria-label="想定する誤操作と攻撃"] li { font-size: 26px; margin-bottom: 12px; }
+.slide[aria-label="防ぎたい被害と要求水準"] table { font-size: 25px; }
+.slide[aria-label="防ぎたい被害と要求水準"] th, .slide[aria-label="防ぎたい被害と要求水準"] td { padding: 8px 18px; }
+.slide[aria-label="防ぎたい被害と要求水準"] th:first-child { width: 56%; }
+.slide[aria-label="比較条件"] table { font-size: 24px; line-height: 1.45; }
+.slide[aria-label="比較条件"] th:first-child { width: 15%; }
+.slide[aria-label="比較条件"] td, .slide[aria-label="比較条件"] th { padding: 10px 16px; }
+.slide[aria-label="Docker Sandboxの認証処理"] p { font-size: 26px; margin-bottom: 18px; }
+.slide[aria-label="Docker Sandboxの認証処理"] table { font-size: 26px; margin-bottom: 20px; }
+.slide[aria-label="Docker Sandboxの認証処理"] th:first-child { width: 35%; }
+.slide[aria-label="Docker Sandboxの評価"] p, .slide[aria-label="導入時に確認する項目"] p { font-size: 26px; }
+.slide[aria-label="Docker Sandboxの評価"] li { font-size: 27px; line-height: 1.6; margin-bottom: 18px; }
+.slide[aria-label="比較評価"] p { font-size: 26px; margin-bottom: 16px; }
+.slide[aria-label="付録・評価一覧"] p { font-size: 24px; margin-bottom: 14px; }
+.slide[aria-label="付録・出典と検証範囲"] th:first-child { width: 18%; }
+.slide[aria-label="付録・CIからの本番操作"] .cols, .slide[aria-label="付録・CIからの本番操作"] .prose { display: contents; }
+.slide[aria-label="付録・CIからの本番操作"] .prose p { order: 1; font-size: 26px; margin: 0; }
+.slide[aria-label="付録・CIからの本番操作"] .figs { order: 2; flex: 1; height: auto; }
+.slide[aria-label="付録・CIからの本番操作"] blockquote { order: 3; margin: 0; }
+.slide[aria-label="各構成の保護設定"] table { font-size: 23px; line-height: 1.4; }
+.slide[aria-label="各構成の保護設定"] th:first-child { width: 24%; }
+.slide[aria-label="各構成の保護設定"] th, .slide[aria-label="各構成の保護設定"] td { padding: 6px 16px; }
+.slide[aria-label="各構成の保護設定"] p { margin-bottom: 16px; }
+
+.slide[aria-label="nasの利用条件"] th, .slide[aria-label="nasの利用条件"] td,
+.slide[aria-label="付録・秘密情報を隠す設定"] th, .slide[aria-label="付録・秘密情報を隠す設定"] td { padding-top: 9px; padding-bottom: 9px; }
+
+.slide[aria-label="比較条件"] th, .slide[aria-label="比較条件"] td { padding-top: 8px; padding-bottom: 8px; }
+.slide[aria-label="比較条件"] p:last-child { font-size: 24px; margin-top: 12px; }
+.slide[aria-label="GitHubの接続許可と書込み先"] p { font-size: 26px; }
+.slide[aria-label="GitHubの接続許可と書込み先"] table { font-size: 24px; }
+.slide[aria-label="GitHubの接続許可と書込み先"] th:nth-child(1) { width: 19%; }
+.slide[aria-label="GitHubの接続許可と書込み先"] th:nth-child(2) { width: 23%; }
+.slide[aria-label="GitHubの接続許可と書込み先"] th:nth-child(3) { width: 41%; }
+.slide[aria-label="GitHubの接続許可と書込み先"] th:nth-child(4) { width: 17%; }
+.slide[aria-label="各構成の保護設定"] th:first-child { width: 18%; }
+.slide[aria-label="各構成の保護設定"] table { font-size: 23px; line-height: 1.4; }
+.slide[aria-label="比較評価"] p { font-size: 24px; line-height: 1.45; margin-bottom: 12px; }
+.slide[aria-label="比較評価"] p:last-child { font-size: 22px; margin-top: 8px; }
+.slide[aria-label="nasの利用条件"] th:first-child { width: 24%; }
+.slide[aria-label="nasの利用条件"] table { font-size: 24px; line-height: 1.5; }
+.slide[aria-label="付録・秘密情報を隠す設定"] p { font-size: 26px; }
+.slide[aria-label="付録・秘密情報を隠す設定"] table { font-size: 25px; line-height: 1.5; }
+.slide[aria-label="付録・秘密情報を隠す設定"] th:first-child { width: 39%; }
+.slide[aria-label="付録・情報の取得元の制限"] table { font-size: 25px; line-height: 1.5; }
+.slide[aria-label="付録・情報の取得元の制限"] th:first-child { width: 18%; }
+.slide[aria-label="付録・情報の取得元の制限"] th:nth-child(2) { width: 57%; }
+.slide[aria-label="付録・情報の取得元の制限"] p { font-size: 26px; }
+.slide[aria-label="付録・評価一覧"] table { font-size: 21px; line-height: 1.4; }
+.slide[aria-label="付録・評価一覧"] p:last-child { font-size: 21px; line-height: 1.45; margin-top: 12px; }
+body.print .notes { display: none; }
+#overview .thumb .slide { display: flex; left: 0; top: 0; }
+@page { size: 1280px 720px; margin: 0; }
+@media print {
+  .slide { margin: 0 !important; box-shadow: none !important; }
+  .notes, body.print .notes { display: none !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<div id="deck">
+<section class="slide title" data-index="0" aria-label="コーディングエージェントのセキュリティ対策">
+  <div class="body"><h1>コーディングエージェントの<br>セキュリティ対策</h1>
+  <p class="subtitle">Claude Codeの権限設計と実行環境の比較</p>
+  <div class="prose"></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">1 / 18</span></footer>
+  <aside class="notes"><p>Claude Codeに開発作業を任せる際の権限と制限を整理し、5つの実行環境を比較する。[Sources] ../threat-model.md [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="1" aria-label="目的と構成">
+  <div class="body"><h2>目的と構成</h2>
+  <div class="prose"><p>Claude Codeを動かす5つの構成について、どの被害を防げるか、どの設定が必要かを比較する。</p><ol><li>仮定：攻撃者に可能な操作と、信頼する仕組み</li><li>要求：防ぎたい被害と、求める防御の強さ</li><li>仕様・実測：各構成が設ける制限と、実験で確認した挙動</li><li>評価：その制限が、想定した攻撃を止められるか</li></ol></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">2 / 18</span></footer>
+  <aside class="notes"><p>対象はClaude Codeを開発に使う人。防御の要求水準は選んだ方針、仕様や実測はその方針への適合を判断する材料として区別する。比較表の記号は測定結果そのものではない。[Sources] ../threat-model.md「脅威モデルと要求水準の決め方」「比較結果と構成ごとの条件」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="2" aria-label="想定する誤操作と攻撃">
+  <div class="body"><h2>想定する誤操作と攻撃</h2>
+  <div class="prose"><p>エージェントと、その実行するプログラムについて、次の動作を仮定する。</p><table><thead><tr><th>種類</th><th>動作の例</th></tr></thead><tbody><tr><td>誤操作</td><td>利用者の指示に従おうとして、削除対象のパスを間違える</td></tr><tr><td>攻撃</td><td>悪意ある指示やプログラムにより、攻撃者のtokenで情報を送る。制限の回避も試みる</td></tr></tbody></table><p>隔離機構、制限を設定する管理者側の仕組み、承認システム自体への侵害は、この比較の対象外とする。</p></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">3 / 18</span></footer>
+  <aside class="notes"><p>攻撃はエージェントの判断を介さず、隔離環境内のプログラムが直接行う場合も含む。制約回避やプロンプトインジェクション、侵害されたMCP server等を想定する。信頼する対象の選択は脅威モデルの前提であり、攻撃の起こりやすさや隔離機構の無欠陥を実測した結果ではない。[Sources] ../threat-model.md「敵対的な操作と過失を分ける」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="3" aria-label="防ぎたい被害と要求水準">
+  <div class="body"><h2>防ぎたい被害と要求水準</h2>
+  <div class="prose"><p>この比較では、開発に必要な編集や通信を許可し、次の防御を要求する。</p><table><thead><tr><th>被害</th><th>求める防御</th></tr></thead><tbody><tr><td>許可していない相手への情報流出</td><td>攻撃でも阻止する</td></tr><tr><td>編集を許可しないホストファイル・既存設定の変更</td><td>攻撃でも阻止する。作業フォルダ内のホスト用.git/configやhookも対象</td></tr><tr><td>本番の変更、公開、権限の変更</td><td>攻撃でも阻止する</td></tr><tr><td>編集を許可したソース・履歴・記憶データの破壊や改変</td><td>誤操作による被害を減らす。悪意ある変更は残るリスクとして扱う</td></tr><tr><td>許可した相手への秘密の誤送信、ファイルへの誤保存</td><td>誤操作による被害を減らす</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">4 / 18</span></footer>
+  <aside class="notes"><p>この水準は今回選んだ方針であり、すべての用途に共通する必須条件という主張ではない。任せた範囲を越える影響は阻止し、編集を許した内容は審査と復旧を組み合わせる。ホスト設定は復旧可能でも保護する。作業領域内の既存.git/configやhookとその参照先も、ホストで使うものは保護対象。新しく作った設定は作業成果物として採用前にレビューする。履歴やmemoryを次の実行で再利用すれば、改変の影響も引き継ぐ。[Sources] ../threat-model.md「被害ごとに求める防御の水準」「ホスト・作業領域・履歴への被害の違い」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="4" aria-label="比較条件">
+  <div class="body"><h2>比較条件</h2>
+  <div class="prose"><p>許可方針と設定を以下のように定め、方針に反する操作を止められるかを評価する。</p><table><thead><tr><th>区分</th><th>比較に使う方針・設定・仮定</th></tr></thead><tbody><tr><td>許可方針</td><td>通信先はAnthropic API、GitHub、開発用の業務APIに限る</td></tr><tr><td>許可方針</td><td>GitHubで読み書きしてよいのは、自組織の指定した非公開repoだけ</td></tr><tr><td>設定</td><td>利用者のtokenの権限を必要最小限にする。本番の認証情報は渡さず、CIの権限と承認設定も制限する</td></tr><tr><td>設定</td><td>Claude Codeが実行しようとするshellコマンドをauto modeのAIが審査する。WebSearchツールは外す</td></tr><tr><td>APIの仮定</td><td>業務APIは自組織の開発環境専用で、第三者への保存・転送機能がない架空のAPIとする</td></tr></tbody></table><p>AIの操作審査は、誤操作による被害を減らす対策として評価する。</p></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">5 / 18</span></footer>
+  <aside class="notes"><p>GitHubではREST/GraphQLとGitの取得・更新を使う。必要な接続先はapi.anthropic.com、github.com、api.github.com、devapi.example.com。指定repoの投稿者が提供する内容を信頼済みとするため、外部投稿者や未審査の内容を取り込むなら前提を見直す。業務APIはx-api-keyだけで認証し、重複headerを拒否する。他のheader・query・bodyによる認証や認証主体の切替はなく、有効なkeyは自組織の開発環境だけにアクセスできる仮定。auto modeはmanaged settingsで全shellコマンドを審査し、取得元制限の自然言語ルールも設定する。WebSearchの結果はAnthropic APIの応答となるため、proxyでは取得元を判定できない。全条件と各構成の設定は設定例を参照。[Sources] ../threat-model.md「比較の共通条件」 ../threat-model-configurations.md「共通設定」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="5" aria-label="GitHubの接続許可と書込み先">
+  <div class="body"><h2>GitHubの接続許可と書込み先</h2>
+  <div class="prose"><p>社内repoにだけ情報を渡したい場合の例。通信制限ではapi.github.comへの接続を許可し、tokenやrepoは検査しない。</p><p>エージェント内のプログラムが、次のtokenを使えると仮定する。</p><table><thead><tr><th>書込み先</th><th>接続先のホスト名</th><th>使えるtoken</th><th>通信の可否</th></tr></thead><tbody><tr><td>社内のrepo</td><td>api.github.com</td><td>社内repoへの書込み権限を持つ利用者のtoken</td><td>通る</td></tr><tr><td>攻撃者のrepo</td><td>api.github.com</td><td>そのrepoへの書込み権限を持つ、攻撃者が持ち込んだtoken</td><td>通る</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">6 / 18</span></footer>
+  <aside class="notes"><p>この例では、社内のrepoへの書込みだけを許可したい。利用者のtokenは社内のrepoへ、攻撃者が持ち込むtokenは攻撃者のrepoへ書き込めるものとする。通信制限は宛先がapi.github.comかだけを調べるため、どちらの要求も通す。GitHub側では各tokenの権限に従って書込みを許可する。利用者のtokenの権限を絞っても、攻撃者のtokenを使う操作にはその制限が適用されない。未許可サービスへの送信がA1a、許可サービス内の未許可相手への送信がA1b。表は有効tokenによる流出の実測結果を表してはいない。[Sources] ../threat-model.md「被害と必要な防御」「通信先・権限・信頼済み情報源」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="6" aria-label="比較する実行環境">
+  <div class="body"><h2>比較する実行環境</h2>
+  <div class="prose"><p>同じClaude Codeを、次の構成で動かす。srtとnasは、隔離環境で起動するためのツール。</p><table><thead><tr><th>構成</th><th>隔離する範囲</th><th>通信の制限</th></tr></thead><tbody><tr><td>Claude Code内蔵sandbox</td><td>Bashと、その子プロセス</td><td>ホスト名で制限</td></tr><tr><td>srt</td><td>Claude Code本体を含む全プロセス</td><td>ホスト名で制限</td></tr><tr><td>Dev Container</td><td>コンテナ内の全プロセス</td><td>コンテナ内で接続先IPを制限</td></tr><tr><td>nas</td><td>コンテナ内の全プロセス</td><td>コンテナ外のproxyで宛先・操作を検査</td></tr><tr><td>Docker Sandbox</td><td>仮想マシン内の全プロセス</td><td>VM外でホスト名を制限</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">7 / 18</span></footer>
+  <aside class="notes"><p>srtはAnthropicのsandbox-runtimeで、OSの機能でファイルアクセスや通信を制限する。proxyは通信を仲介する仕組み。Docker SandboxはmicroVMを使い、比較設定ではclone modeでVM内の専用cloneを編集する。内蔵sandboxの本体側Read/Write/Editにはpermissionsを適用するが、本体はOS sandboxの外。すべての構成・攻撃の網羅的な検証を行った表ではない。[Sources] ../threat-model.md「各方式の評価理由と成立条件」 ../threat-model-configurations.md [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="7" aria-label="Docker Sandboxの認証処理">
+  <div class="body"><h2>Docker Sandboxの認証処理</h2>
+  <div class="prose"><p>実測対象はv0.45。GitHubのアカウント情報を取得するAPIに、同じ無効なtokenを送った。</p><p>通常のproxyは、送信時にtokenをホストに保存した認証情報へ置き換える。</p><table><thead><tr><th>経路</th><th>観測した応答</th></tr></thead><tbody><tr><td>通常のproxy経由</td><td>200成功。ホスト側のアカウント情報が返った</td></tr><tr><td>認証proxyを使わない経路</td><td>401 Bad credentials。通信は届き、GitHubが無効なtokenを拒否した</td></tr></tbody></table><p>proxyを使わない経路では、証明書とログでも認証情報の置換を通らないことを確認した。</p></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">8 / 18</span></footer>
+  <aside class="notes"><p>Linux上のsbx v0.45、GitHub GET /userで測定。直接接続にはcurl --noproxy '*'を使った。通常経路はDockerのCAとforwardログ、直接経路はGitHubの公開証明書とtransparentログだった。認証headerなしの通常経路でも200となる正常系を先に確認した。通信部分の実験であり、比較設定の全再現ではない。workspace mountなしで、clone modeは使っていない。有効な攻撃者tokenによる第三者repoへの書込み・git push・Anthropic Files APIは未検証。[Sources] ../experiments/sbx-a1b/README.md「構成と正常系の対照」「観測結果」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="8" aria-label="Docker Sandboxの評価">
+  <div class="body"><h2>Docker Sandboxの評価</h2>
+  <div class="prose"><p>接続先のホスト名を制限し、proxyで認証情報を置き換える構成を評価する。</p><ol><li><strong>仮定</strong>：攻撃者は、自分のrepoに書き込めるtokenを持ち込める。</li><li><strong>実測</strong>：プログラムが指定したtokenを、置き換えずにGitHubへ送れる経路があった。</li><li><strong>判断</strong>：その経路で有効なtokenを使われると、書込み先のrepoを制限できないと評価する。未許可repoへの流出を阻止する要求は満たさない。</li><li><strong>未検証</strong>：有効な攻撃者tokenでの書込みと、情報流出の完遂。</li></ol></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">9 / 18</span></footer>
+  <aside class="notes"><p>経路の成立を観測し、攻撃者が有効なcredentialを持つ脅威モデルに照らして判断した。○は「安全」という意味ではなく、今回求めた◎に未達であることを表す。通常の認証注入や共通の操作審査は過失低減として評価する。v3 kitのHTTP制限を使う構成は未実測で、この判定には含めない。[Sources] ../experiments/sbx-a1b/README.md「判定と実測の限界」 ../threat-model.md「系統5: Docker Sandbox」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="9" aria-label="各構成の保護設定">
+  <div class="body"><h2>各構成の保護設定</h2>
+  <div class="prose"><table><thead><tr><th>構成</th><th>比較に用いた設定</th><th>制限を評価する根拠</th></tr></thead><tbody><tr><td>内蔵sandbox</td><td>Bashを隔離。WebFetch・MCP・隔離外での実行を無効化</td><td>設定：Claude Code本体のホスト書込みを、一律には禁止していない</td></tr><tr><td>srt</td><td>Claude Code全体の書込みを制限。Git設定・hook・.claudeを保護</td><td>実測：0.0.77で、認証情報を置き換えずに許可先へ送れる経路を確認</td></tr><tr><td>Dev Container</td><td>コンテナ内で接続先IPを制限。作業フォルダをホストと共有</td><td>仕様・設定：DNSで情報を送れ、同じIP上の別ホスト名にも接続可能。共有する設定は書換え可能</td></tr><tr><td>nas</td><td>GitHubのtoken・repo・操作をproxyで制限。AnthropicのFiles APIは拒否</td><td>仕様：範囲外は承認まで停止。業務APIは、比較条件の架空の仕様を前提とする</td></tr><tr><td>Docker Sandbox</td><td>ホストrepoは読取り専用。VM内のコピーを編集</td><td>実測：ホスト名による通信制限と、認証情報の置換を通らない経路を確認</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">10 / 18</span></footer>
+  <aside class="notes"><p>内蔵sandbox・srt・Dev Container・nasの保護範囲は提示設定と仕様に基づく。srt 0.0.77ではSOCKS経由でTLS終端を通らず許可ホストへ届いたため、filterRequestを実装しても認証・repo検査は強制できないと判断する。実測は偽tokenへの認証エラーまで。Dev ContainerではDNS resolverを限定しても外部への問合せが転送されるため情報を送れる。IPで許可するため、共有IP上の別hostnameも区別しない。Docker Sandboxはclone modeでホストrepoをread-only mountし、shared skillsとSSH agent forwardingも無効にする。通信の実測は名前とIPを食い違わせた試行であり、すべての接続方式を検証したものではない。nasはGitHubに加え、AnthropicのFiles APIを拒否し、業務APIには共通条件の限定仕様を仮定する。[Sources] ../threat-model.md「各方式の評価理由と成立条件」 ../experiments/srt-filter-bypass/README.md ../experiments/sbx-shared-ip/README.md [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="10" aria-label="比較評価">
+  <div class="body"><h2>比較評価</h2>
+  <div class="prose"><p>仕様・設定と一部の実測に基づく評価。全項目を実測した表ではない。</p><p>◎ 攻撃による操作も、拒否または人間の承認待ちで止める。</p><p>○ 誤操作による被害を減らす。攻撃では回避される場合がある。</p><table><thead><tr><th>防御対象・要求水準は◎</th><th>内蔵sandbox</th><th>srt</th><th>Dev Container</th><th>nas</th><th>Docker Sandbox</th></tr></thead><tbody><tr><td>接続を許可していない相手への情報流出</td><td>◎</td><td>◎</td><td>○</td><td>◎</td><td>◎</td></tr><tr><td>許可サービス内の未許可repo等への情報流出</td><td>○</td><td>○</td><td>○</td><td>◎</td><td>○</td></tr><tr><td>編集を許可しないホストファイル・既存設定の変更</td><td>○</td><td>◎</td><td>○</td><td>◎※</td><td>◎</td></tr></tbody></table><p>※ nasは、既存設定とhookを保護する配置・設定が条件。</p></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">11 / 18</span></footer>
+  <aside class="notes"><p>評価根拠は方式別の仕様・設定と個別実験であり、全セルを実測したものではない。内蔵sandboxは本体のホスト書込み制限が不足。srtは全プロセスと既存設定を保護する一方、0.0.77ではSOCKS等による要求検査の迂回を観測。Dev ContainerはDNS問合せや共有IPによる通信、共有作業領域内の既存設定への書込みが残る。nasはproxyを経由させ、共有先・操作を検査する。Docker Sandboxはv0.45で名前とIPを食い違わせた接続の判定を観測し、未許可の名前への接続が拒否された。実際に同一IPを共有する組合せや全プロトコルを網羅してはいない。ホスト保護はclone mode等の設定による評価。◎には、保護された人間承認が届くまで必ず操作を止める構成も含む。B1はCI等に共通の導入条件として求め、方式間では採点しない。[Sources] ../threat-model.md「被害防止と予防の比較」「各方式の評価理由と成立条件」 ../experiments/sbx-shared-ip/README.md「判定と実測の限界」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="11" aria-label="nasの利用条件">
+  <div class="body"><h2>nasの利用条件</h2>
+  <div class="prose"><table><thead><tr><th>対象</th><th>利用条件と残るリスク</th></tr></thead><tbody><tr><td>GitHub</td><td>proxyがrepo・操作を検査し、tokenを利用者のものへ置換。範囲外は人間の承認まで止める</td></tr><tr><td>Anthropic・業務API</td><td>Anthropicのファイル保存APIは拒否。業務APIは、自組織の開発環境だけにアクセスできる仕様を仮定</td></tr><tr><td>ホストの設定</td><td>既存設定・hook・参照先と、作業フォルダの.claudeを保護する</td></tr><tr><td>作業内容・履歴</td><td>エージェントが書換え可能。履歴・記憶データはホストと共有し、次の実行で再利用する</td></tr><tr><td>運用</td><td>利用者がAPIごとの許可設定を保守する。承認者の判断精度や確認負担は未実測</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">12 / 18</span></footer>
+  <aside class="notes"><p>nasではコンテナ外のproxyがGitHubのrepo・操作・GraphQL本文を検査し、範囲外は承認待ちにする。利用者の認証情報へ上書きし、AnthropicのFiles APIは拒否する。業務APIは比較条件の限定された仕様を仮定。既存設定やhookの参照先も保護対象に収め、作業領域の.claudeを追加設定で保護する。履歴やmemoryはホストと共有し、次の実行へ内容の改変も引き継ぐ。承認の負担や審査精度は比較実測していない。[Sources] ../threat-model.md「系統4: nas」「選定時に残る条件と負担」「操作審査とモデル入力」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="12" aria-label="導入時に確認する項目">
+  <div class="body"><h2>導入時に確認する項目</h2>
+  <div class="prose"><ol><li>エージェントに編集させるファイルと、書込みを禁止する設定</li><li>情報を送ってよいサービス・アカウント・repo</li><li>承認なしで取得してよい情報源と、そこへ投稿できる人</li><li>本番操作につながるCIの権限と、承認が必要な操作</li><li>変更内容をレビューする人、復旧方法、設定を保守する人</li></ol></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">13 / 18</span></footer>
+  <aside class="notes"><p>この比較は一つの脅威モデルと構成例に対する判断を提示する。採用時はサービス側の権限、CI、ファイル配置等の違いを含めて再評価する。[Sources] ../threat-model.md「選定時に残る条件と負担」「比較の共通条件」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="13" aria-label="付録・秘密情報を隠す設定">
+  <div class="body"><h2>付録・秘密情報を隠す設定</h2>
+  <div class="prose"><p>利用者が、各構成で使える機能に合わせて読取禁止や値の置換を設定する。</p><table><thead><tr><th>作業での使い方</th><th>用意する対策</th></tr></thead><tbody><tr><td>作業で使わない秘密情報</td><td>ファイルを共有から外すか、読取りを禁止する</td></tr><tr><td>HTTP認証に本物のtokenが必要</td><td>対応するproxyで、ダミーtokenを送信時に本物へ置き換える</td></tr><tr><td>設定ファイルは必要だが、本物の値は不要</td><td>マスク機能でファイルの形を残し、秘密の値だけをダミーにする</td></tr><tr><td>ツール出力に秘密が含まれる</td><td>出力のマスク処理で、モデルに渡す前に秘密の値を伏せる</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">14 / 18</span></footer>
+  <aside class="notes"><p>利用できる保護機能は構成によって異なる。HTTP(S)以外の処理で本物が必要な場合は、今回の構成ではその値をエージェントから隠せない。Gitのindexや履歴に秘密があれば差分やgit showにも現れるため、読めない構成にするには渡す履歴にも本物を含めない。[Sources] ../threat-model.md「シークレットと作業領域」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="14" aria-label="付録・情報の取得元の制限">
+  <div class="body"><h2>付録・情報の取得元の制限</h2>
+  <div class="prose"><p>自動取得を許すrepoは、公開範囲と投稿者を確認して選ぶ。取得元を絞っても攻撃は想定し、被害への防御は別に評価する。</p><table><thead><tr><th>構成</th><th>取得元を審査・制限する仕組み</th><th>評価</th></tr></thead><tbody><tr><td>5構成共通</td><td>auto modeのAIに、許可したrepo以外の取得を拒否するルールを与える</td><td>○</td></tr><tr><td>nasの追加制限</td><td>GitHubのREST API・Git fetch・許可したGraphQL queryをproxyで検査。範囲外は人間の承認まで止める</td><td>◎は記載したGitHub経路に限る</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">15 / 18</span></footer>
+  <aside class="notes"><p>表は予防的要求P1に対する制限と評価。AIの取得元審査にとどまる構成は○とする。nasの◎はGitHubの指定経路に限る。承認はエージェントから保護し、届くまで実行を止める。信頼済みrepoへ外部投稿者や未審査の内容を取り込む場合は前提を見直す。[Sources] ../threat-model.md「予防的要求 P1」 [/Sources]</p></aside>
+</section>
+<section class="slide split" data-index="15" aria-label="付録・CIからの本番操作">
+  <div class="body"><h2>付録・CIからの本番操作</h2>
+  <div class="cols"><div class="prose"><p>CIの権限と承認設定は5構成に共通する導入条件とし、比較表では採点しない。</p><p>CIに本番用の権限を渡さないか、本番操作の前に人間の承認を必須にする。承認設定は、エージェントが編集できるworkflowの外で管理する。</p></div><div class="figs"><div class="fig"><svg class="figure" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" data-d2-version="v0.9.0" preserveAspectRatio="xMinYMin meet" viewBox="0 0 1512 123"><svg class="d2-2591600751 d2-svg" viewBox="-21 -21 1512 123"><rect x="-21" y="-21" width="1512" height="123" rx="0" fill="#FFFFFF" class=" fill-N7" stroke-width="0" /><style type="text/css"><![CDATA[
+.d2-2591600751 .text-bold {
+	font-family: "d2-2591600751-font-bold";
+}
+@font-face {
+	font-family: d2-2591600751-font-bold;
+	src: url("data:application/font-woff;base64,d09GRgABAAAAAAY4AAoAAAAACuwAAguFAAAAAAAAAAAAAAAAAAAAAAAAAABPUy8yAAAA9AAAAGAAAABgXxHXrmNtYXAAAAFUAAAAOgAAADoAYgCCZ2x5ZgAAAZAAAADIAAAAyIsCgWRoZWFkAAACWAAAADYAAAA2G38e1GhoZWEAAAKQAAAAJAAAACQKfwXCaG10eAAAArQAAAAMAAAADAYlAMtsb2NhAAACwAAAAAgAAAAIAFgAkG1heHAAAALIAAAAIAAAACAAGwD3bmFtZQAAAugAAAMvAAAIKgjwVkFwb3N0AAAGGAAAACAAAAAg/9EAMgADAioCvAAFAAACigJYAAAASwKKAlgAAAFeADIBKQAAAgsHAwMEAwICBGAAAvcAAAADAAAAAAAAAABBREJPACAAIP//Au7/BgAAA9gBESAAAZ8AAAAAAfAClAAAACAAAwAAAAEAAwABAAAADAAEAC4AAAAGAAQAAQACAEMASf//AAAAQwBJ////vv+5AAEAAAAAAAAAAQACAAAAAAAFAFAAAAJiApQAAwAJAA8AEgAVAAAzESERJTMnJyMHNzM3NyMXAzcnAREHUAIS/qWkJykEKSkEKiCYH3pfXwFNXgKU/WxbTWJi9l87O/6eubr+jQFzugAAAQAu//QCMAKYABsAAAUiJiY1NDY2MzIWFwcmJiMiBgYVFBYzMjY3FwYBXVKKU1WNUj9kIU4ZNyMsSStWSCg/GE5SDEyVbWyZUTMiXhcdMl5CZHAkGVxgAAEATQAAAOACjAADAAAzETMRTZMCjP10AAEAAAACC4Vl/NjrXw889QABA+gAAAAA2F2ghAAAAADdZi82/jf+xAhtA/EAAQADAAIAAAAAAAAAAQAAA9j+7wAACJj+N/43CG0AAQAAAAAAAAAAAAAAAAAAAAMCsgBQAkYALgEtAE0AAAAsAFgAZAABAAAAAwCQAAwAYwAHAAEAAAAAAAAAAAAAAAAABAADeJyclM9uG2UUxX9ObNMKwQJFVbqJvgWLIrVjUyVV26wmpFZGRHHwuCAkhDS2J7bl8czIM3YanoA1b8FbdMVD8ByINbrX165dEAUrinVm5v4537nnfsABf7JPpXof+K2eGq5wVL82vMe9+oXhfVr1PcNVHtV+N1xjUFsYrvN5rWP4I95WfzF8j+Pqj4bvc1htGf6Yp9UDw5/sO/4w/CnHvF3iCjznZ8MVDskN73HAD4b3eYDVrFR5QNNwjc84MlznCOgypiRhTMoQxw1jhsyZEVMQEjNjzA0xAxwBPgmlvk2JFDmG//g2IqRkRqQVR5Q4EkISIgpGVvEnzcq41o7SZ6ZIuvmUjIjoacaEiBRHxpCMlJiJ1ikpyXlJgwYFfeWbU1LgUTAmwSNjxpAGbVpc0mXEmAJHSysJs5CMG0puibS/swhRpk9MSmGs5qQMlKdTfrFmB1ziaJNr7Gbly60Kj3F8q9nCTWIcX+Lpv9tgtt13xSZioXqKhj0S5XmrExyp4tLX5xvFJS9xO+mzzeTDGg2Uncx6TI+5zl/mJ3nCJMW5Q3xCdVDoHuI40+eAUBX5joAuF7R5TVeffTp08LmiS8ArzW3TwfEVba4414xA8fJbSx1zxfc4vibQGKkdmz6iuTy9ITd3C3dxhpxjSq5bIDOW84vz450mLDuUbbmjUFf0dY8kUvZAVJE9ixiaK3J1xVS1XHmjMP0G5gj5Wups332XbVjY7q22+I5Md9gxN04yuSWjD03Ve88zt/rnETEgo6cRfTKmNCi507NdEzEnwXGuPr7QLSnx1znS505dEjNVBgGp1pmR629kvgmNe3/L987uEtm8qe7oZH2qXbpI5XRjRq9VvdW30FSONybQsKlmliMTlsrLk4r3Jdrb4h+q+wu93TKecEZGwuBvN8BTPJocc8IpI+0glVMWdjs09YZo8oJTPf2EWKPkvnyjOkmFEzyeccIJL3j2no4rJs64uDWXzd4+55zR5vQ/nWIZ3+aMV+t3/971V2Xa1LM4nqyfnu88xUf/w61f8HjrvuzoLSCbs7Bq77biioipcHGHm1q4h3h/AQAA//8DAPS3T1EAAAMAAAAAAAD/zgAyAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+}
+.d2-2591600751 .text-italic {
+	font-family: "d2-2591600751-font-italic";
+}
+@font-face {
+	font-family: d2-2591600751-font-italic;
+	src: url("data:application/font-woff;base64,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");
+}]]></style><style type="text/css"><![CDATA[.shape {
+  shape-rendering: geometricPrecision;
+  stroke-linejoin: round;
+}
+.connection {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.blend {
+  mix-blend-mode: multiply;
+  opacity: 0.5;
+}
+
+		.d2-2591600751 .fill-N1{fill:#0A0F25;}
+		.d2-2591600751 .fill-N2{fill:#676C7E;}
+		.d2-2591600751 .fill-N7{fill:#FFFFFF;}
+		.d2-2591600751 .fill-B1{fill:#0D32B2;}
+		.d2-2591600751 .stroke-B1{stroke:#0D32B2;}
+		.d2-2591600751 .stroke-B2{stroke:#0D32B2;}.appendix text.text{fill:#0A0F25}.md{--color-fg-default:#0A0F25;--color-fg-muted:#676C7E;--color-fg-subtle:#9499AB;--color-canvas-default:#FFFFFF;--color-canvas-subtle:#EEF1F8;--color-border-default:#0D32B2;--color-border-muted:#0D32B2;--color-neutral-muted:#EEF1F8;--color-accent-fg:#0D32B2;--color-accent-emphasis:#0D32B2;--color-attention-subtle:#676C7E;--color-danger-fg:red;}.light-code{display: block}.dark-code{display: none}]]></style><g class="YWdlbnQ="><g class="shape" ><rect x="0" y="0" width="252" height="81" stroke="#0D32B2" fill="#edf3fa" class=" stroke-B1" style="stroke-width:2;" /></g><text x="126" y="50.5" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:28px">エージェント</text></g><g class="Y2k="><g class="shape" ><rect x="500" y="0" width="68" height="81" stroke="#0D32B2" fill="#edf3fa" class=" stroke-B1" style="stroke-width:2;" /></g><text x="534" y="50.5" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:28px">CI</text></g><g class="YXBwcm92YWw="><g class="shape" ><rect x="816" y="0" width="217" height="81" stroke="#0D32B2" fill="#fcf0dc" class=" stroke-B1" style="stroke-width:2;" /></g><text x="924.5" y="50.5" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:28px">人間の承認</text></g><g class="cHJvZHVjdGlvbg=="><g class="shape" ><rect x="1183" y="0" width="287" height="81" stroke="#0D32B2" fill="#fbedeb" class=" stroke-B1" style="stroke-width:2;" /></g><text x="1326.5" y="50.5" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:28px">本番変更・公開</text></g><g class="KGFnZW50IC0mZ3Q7IGNpKVswXQ=="><marker id="mk-d2-2591600751-3488378134" markerWidth="10" markerHeight="12" refX="7" refY="6" viewBox="0 0 10 12" orient="auto" markerUnits="userSpaceOnUse"> <polygon points="0,0 10,6 0,12" fill="#0D32B2" class="connection fill-B1" stroke-width="2" /> </marker><path d="M 254 40 L 496 40" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2591600751-3488378134)" mask="url(#d2-2591600751)" /><text x="376" y="27" fill="#676C7E" class="text-italic fill-N2" style="text-anchor:middle;font-size:26px">コードを更新</text></g><g class="KGNpIC0mZ3Q7IGFwcHJvdmFsKVswXQ=="><path d="M 570 40 L 812 40" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2591600751-3488378134)" mask="url(#d2-2591600751)" /><text x="692.5" y="27" fill="#676C7E" class="text-italic fill-N2" style="text-anchor:middle;font-size:26px">本番操作を保留</text></g><g class="KGFwcHJvdmFsIC0mZ3Q7IHByb2R1Y3Rpb24pWzBd"><path d="M 1035 40 L 1179 40" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2591600751-3488378134)" mask="url(#d2-2591600751)" /><text x="1108.5" y="27" fill="#676C7E" class="text-italic fill-N2" style="text-anchor:middle;font-size:26px">承認後</text></g><mask id="d2-2591600751" maskUnits="userSpaceOnUse" x="-21" y="-21" width="1512" height="123">
+<rect x="-21" y="-21" width="1512" height="123" fill="white"></rect>
+<rect x="282" y="1" width="188" height="33" fill="rgba(0,0,0,0.75)"></rect>
+<rect x="583" y="1" width="219" height="33" fill="rgba(0,0,0,0.75)"></rect>
+<rect x="1060" y="1" width="97" height="33" fill="rgba(0,0,0,0.75)"></rect>
+</mask></svg></svg></div></div></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">16 / 18</span></footer>
+  <aside class="notes"><p>図は本番操作の前に承認を置く構成例。B1は全方式共通の導入条件で、隔離方式の比較表では採点しない。CIの起動自体を承認対象にするなら、Git pushだけでなくAPIによるブランチ更新やworkflow実行も含める。[Sources] ../threat-model.md「本番変更・公開・権限変更への対策」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="16" aria-label="付録・評価一覧">
+  <div class="body"><h2>付録・評価一覧</h2>
+  <div class="prose"><p>比較条件を満たす設定に対する評価。◎は攻撃の阻止、○は誤操作などの被害の低減。</p><table><thead><tr><th>要求</th><th>必要水準</th><th>内蔵sandbox</th><th>srt</th><th>Dev Container</th><th>nas</th><th>Docker Sandbox</th></tr></thead><tbody><tr><td>A1a 未許可の接続先への流出</td><td>◎</td><td>◎</td><td>◎</td><td>○</td><td>◎</td><td>◎</td></tr><tr><td>A1b 許可サービス内の未許可repo等への流出</td><td>◎</td><td>○</td><td>○</td><td>○</td><td>◎</td><td>○</td></tr><tr><td>B2a ホストファイル・既存設定の変更</td><td>◎</td><td>○</td><td>◎</td><td>○</td><td>◎※</td><td>◎</td></tr><tr><td>A2 許可した相手への秘密の誤送信</td><td>○以上</td><td>○</td><td>○</td><td>○</td><td>○</td><td>○</td></tr><tr><td>A3 秘密の誤保存</td><td>○以上</td><td>○</td><td>○</td><td>○</td><td>○</td><td>○</td></tr><tr><td>B2b 作業ファイル・履歴の破壊や改変</td><td>○以上</td><td>○</td><td>○</td><td>○</td><td>○</td><td>○</td></tr><tr><td>P1 未許可の情報源からの自動取得</td><td>○以上</td><td>○</td><td>○</td><td>○</td><td>◎†</td><td>○</td></tr></tbody></table><p>※ 既存設定・hookの保護が条件。† 15枚目に記載したGitHubの経路。A2・A3・B2bは誤操作への評価。</p></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">17 / 18</span></footer>
+  <aside class="notes"><p>本文の比較条件と同じ仮定・設定に対する判断。◎は攻撃でも阻止すると評価し、○は過失や一般的な方法による被害を防ぐか減らすと評価する。全項目を実測した表ではない。P1は被害防止とは別の予防的要求。B1は方式間で採点せず、CIの権限と承認を共通の導入条件とする。[Sources] ../threat-model.md「被害防止と予防の比較」 [/Sources]</p></aside>
+</section>
+<section class="slide text" data-index="17" aria-label="付録・出典と検証範囲">
+  <div class="body"><h2>付録・出典と検証範囲</h2>
+  <div class="prose"><p>Docker Sandboxの実測対象はv0.45。v3のHTTP制限は未実測。</p><table><thead><tr><th>根拠の種類</th><th>資料・対象</th></tr></thead><tbody><tr><td>要求・判断</td><td><a href="../threat-model.md">脅威モデル</a>：要求水準と各方式の評価理由</td></tr><tr><td>設定</td><td><a href="../threat-model-configurations.md">構成ごとの設定例</a>：共通条件と保護対象</td></tr><tr><td>実測</td><td><a href="../experiments/srt-filter-bypass/README.md">srt 0.0.77</a>：許可先へ認証情報を置き換えずに通信できる経路を確認</td></tr><tr><td>実測</td><td><a href="../experiments/sbx-a1b/README.md">sbx v0.45</a>：認証情報の置換を通らず、無効なtokenでGitHubから401が返る経路を確認</td></tr><tr><td>実測</td><td><a href="../experiments/sbx-shared-ip/README.md">sbx v0.45</a>：ホスト名に応じた接続の拒否と、接続先IPの再解決を確認</td></tr></tbody></table></div></div>
+  <footer><span class="deck-title">コーディングエージェントのセキュリティ対策</span><span class="page">18 / 18</span></footer>
+  <aside class="notes"><p>srtとDocker Sandboxの認証実験は、攻撃者の有効tokenによる流出完遂を確認したものではない。srtの実測はLinuxのみ。Docker Sandboxの共有IP実験は、名前とIPを食い違わせる方法で照合を確認したもので、実際に同じIPを共有するhostnameの組合せは用意していない。仕様の参照先と試行の限界は各資料に記載。[Sources] ../threat-model.md「系統2: srt」「系統5: Docker Sandbox」 [/Sources]</p></aside>
+</section>
+</div>
+<div id="overview" aria-hidden="true"></div>
+<script>
+(() => {
+  const slides = [...document.querySelectorAll("#deck .slide")];
+  const deck = document.getElementById("deck");
+  const progress = document.getElementById("progress");
+  const overview = document.getElementById("overview");
+  let at = 0;
+  const fit = () => {
+    // One fixed 1280x720 stage scaled to the viewport: nothing reflows between screens, so a
+    // screenshot of slide N is the same picture on any display.
+    const s = Math.min(innerWidth / 1280, innerHeight / 720) * 0.96;
+    for (const el of slides) el.style.transform = "translate(-50%, -50%) scale(" + s + ")";
+  };
+  const show = (n) => {
+    at = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((el, i) => el.classList.toggle("active", i === at));
+    progress.style.width = ((at + 1) / slides.length) * 100 + "%";
+    if (location.hash !== "#/" + (at + 1)) history.replaceState(null, "", "#/" + (at + 1));
+  };
+  const buildOverview = () => {
+    if (overview.childElementCount) return;
+    slides.forEach((el, i) => {
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
+      const clone = el.cloneNode(true);
+      clone.classList.add("active");
+      clone.style.transform = "scale(0.234)";
+      thumb.append(clone, Object.assign(document.createElement("span"), { textContent: i + 1 }));
+      thumb.addEventListener("click", () => { overview.classList.remove("on"); show(i); });
+      overview.append(thumb);
+    });
+  };
+  addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { show(at + 1); e.preventDefault(); }
+    else if (e.key === "ArrowLeft" || e.key === "PageUp") show(at - 1);
+    else if (e.key === "Home") show(0);
+    else if (e.key === "End") show(slides.length - 1);
+    else if (e.key === "o") { buildOverview(); overview.classList.toggle("on"); }
+    else if (e.key === "p") print();
+    else if (e.key === "f") document.documentElement.requestFullscreen?.();
+    else if (e.key === "Escape") overview.classList.remove("on");
+  });
+  deck.addEventListener("click", (e) => { if (!e.target.closest("a")) show(at + (e.clientX < innerWidth / 3 ? -1 : 1)); });
+  addEventListener("resize", fit);
+  addEventListener("hashchange", () => show((parseInt(location.hash.slice(2), 10) || 1) - 1));
+  fit();
+  show((parseInt(location.hash.slice(2), 10) || 1) - 1);
+})();
+</script>
+</body>
+</html>
