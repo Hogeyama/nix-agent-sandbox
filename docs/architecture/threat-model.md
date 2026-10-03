@@ -180,7 +180,7 @@ Claude Code 本体はホストで動かし、内蔵 sandbox で Bash と子プ�
 
 - **A1a: ◎** — sandbox 内の Bash の通信先を制限し、WebFetch ツールと MCP server も無効にする。`excludedCommands` による sandbox 外での実行を防ぐため、起動前に例外を除去し、managed settings で Edit／Write と Bash の両方から設定ファイルへの書込みを禁止する。[公式仕様](https://code.claude.com/docs/en/sandboxing#keep-developers-from-widening-the-policy)
 - **A1b: ○** — 許可した hostname 内の認証主体・endpoint を限定していない。利用者の token をマスクして権限を絞っても、隔離環境内のプログラムは攻撃者の用意した別の token を使って通信できる。
-- **B2a: ○** — Bash の作業領域外への write は制限できるが、本体は OS sandbox の外にいる。`Edit(path)` の deny は使えるものの、提示例には本体による作業領域外の書込を一律に拒否する設定がない。
+- **B2a: ○** — Bash の作業領域外への write は制限できるが、本体は OS sandbox の外にいる。本体の Edit／Write は permission ルールで制限するが、ルールは deny、ask、allow の順に評価され、deny の中を allow で開け直せない（[公式仕様](https://code.claude.com/docs/en/permissions)）。そのため、全体を deny して作業領域だけを許可する書き方はできない。読取りの `blockReadsOutsideWorkingDirectories` に当たる、書込み用の設定もない。個別のパスを `Edit(path)` で deny することはできるが、作業領域外への書込みを一律には拒否できず、その判断は auto mode の classifier に依存する。
 - **A2-Y・A3-Y: ○** — sandbox 内の `GH_TOKEN` と `API_PASSWORD` はダミー値とし、許可先への通信時に本物へ置換する。本体の Read には `.env` の deny を置く。不要な secret は Bash と本体の両方で読取拒否し、ツールの出力に残るシークレットは sumi でマスクし、auto mode の操作審査で誤保存を減らす。
 
 履歴や memory は `CLAUDE_CONFIG_DIR` で作業領域内の `.claude-state` に保存し、同じ制限を適用する実行でだけ再利用する。元のホスト側の保存先は、managed settings で Edit／Write と Bash の両方から書込みを禁止する。専用の保存先でも、履歴や memory の改変は次の実行へ引き継がれる。
