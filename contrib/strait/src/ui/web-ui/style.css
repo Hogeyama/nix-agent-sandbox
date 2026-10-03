@@ -195,6 +195,62 @@ footer {
 [hidden] {
   display: none;
 }
+/* Pin the page to the viewport so the body note and the decision buttons stay
+   in view: only the queue and the request data scroll. Narrow or short
+   windows keep the page scroll, where a pinned layout would leave no room. */
+@media (min-width: 701px) and (min-height: 700px) {
+  body {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .inbox {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .queue-panel,
+  .details-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  #request-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    align-content: start;
+    /* Room for the focus outline, which the scroll container would clip. */
+    padding: 6px;
+    margin: -6px;
+  }
+  #request-details:not([hidden]) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .details-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  #body-note {
+    margin: 1rem 0 0;
+  }
+  /* A field scrolling inside the scrolling request data is hard to reach. */
+  pre {
+    max-height: none;
+  }
+}
 @media (max-width: 700px) {
   body {
     padding: 1rem;
