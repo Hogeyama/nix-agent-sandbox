@@ -33,8 +33,10 @@
           <h2 id="details-heading">Request details</h2>
           <p id="selection-help">Choose a pending request. Nothing is selected automatically.</p>
           <div id="request-details" hidden>
-            <p class="display-note">Request data is untrusted text. Backslashes are doubled; control, format and Unicode line separator characters are shown as \u{hex} escapes. No links or markup are active.</p>
-            <dl id="fields"></dl>
+            <div class="details-scroll">
+              <p class="display-note">Request data is untrusted text. Backslashes are doubled; control, format and Unicode line separator characters are shown as \u{hex} escapes. No links or markup are active.</p>
+              <dl id="fields"></dl>
+            </div>
             <p id="body-note"></p>
             <div id="actions" class="actions" aria-label="Decide on this request"></div>
           </div>
