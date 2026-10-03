@@ -66,3 +66,7 @@ cases only when the user explicitly requests them.
 - Tests should import from relative paths, not use import maps for internal modules
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix (nix-community/bun2nix) + nix-bundle-elf for standalone binaries
+- Before changing anything under `contrib/strait/`, read
+  `contrib/strait/DESIGN.md` (how strait is put together) and
+  `contrib/strait/SECURITY.md` (what must hold, which code is trusted, and how
+  to verify a change).

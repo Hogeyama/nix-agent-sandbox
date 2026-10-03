@@ -1,6 +1,6 @@
 # strait のセキュリティ設計
 
-strait のコードをレビュー・変更する人のための文書です。保護の対象、信頼すべきコード、変更後の確認方法を記載します。使用方法は [README](README.md) を参照してください。
+strait のコードをレビュー・変更する人のための文書です。保護の対象、信頼すべきコード、変更後の確認方法を記載します。使用方法は [README](README.md)、全体の構成は [DESIGN.md](DESIGN.md) を参照してください。
 
 ## 保護の対象
 
@@ -90,7 +90,7 @@ HTTPS 越しの git は Basic 認証しか使用できず、srt は base64 で�
 
 ### GraphQL
 
-strait が本文を読み込むのは、`POST /graphql` だけです。本文は、256 KiB 以下の UTF-8 の JSON で、メンバーが重複しない 1 つの `{query, variables, operationName}` オブジェクトである必要があります。
+strait が本文を読み込むのは、`POST /graphql` と hostexec の要求（`POST https://hostexec.strait.invalid/run`）だけです。GraphQL の本文は、256 KiB 以下の UTF-8 の JSON で、メンバーが重複しない 1 つの `{query, variables, operationName}` オブジェクトである必要があります。
 
 strait は、次の条件をすべて満たす文書だけを許可します。
 

@@ -268,3 +268,5 @@ repo は `githubRepos` に追加します。追加した repo は、承認なし
 ## 仕組みとレビュー
 
 strait による要求の判定方法、信頼すべきコード、変更後の確認方法については、[SECURITY.md](SECURITY.md) を参照してください。
+
+全体の構成については、[DESIGN.md](DESIGN.md) を参照してください。
