@@ -3,18 +3,25 @@ import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { hashFile } from "./manifest.ts";
+import { assetBase, isProduct, type Product } from "./prepare.ts";
 import { verifyRelease } from "./verify.ts";
 
 const systems = ["x86_64-linux", "aarch64-linux"] as const;
+const tagPatterns: Record<Product, RegExp> = {
+  nas: /^v\d+\.\d+\.\d+$/,
+  strait: /^strait-v\d+\.\d+\.\d+$/,
+};
+
 export async function publicationFiles(
   directory: string,
   tag: string,
+  product: Product = "nas",
 ): Promise<string[]> {
-  if (!/^v\d+\.\d+\.\d+$/.test(tag))
+  if (!tagPatterns[product].test(tag))
     throw new Error(`Invalid release tag: ${tag}`);
   const files: string[] = [];
   for (const system of systems) {
-    const prefix = `nas-${tag}_${system}`;
+    const prefix = assetBase(product, tag, system);
     const expected = [
       `${prefix}.tar.gz`,
       `${prefix}-sources.tar.gz`,
@@ -49,6 +56,7 @@ export async function publicationFiles(
     );
     if (
       inventory.schemaVersion !== 1 ||
+      (inventory.product ?? "nas") !== product ||
       inventory.system !== system ||
       inventory.tag !== tag ||
       inventory.binaryArchive !== expected[0] ||
@@ -66,15 +74,23 @@ export async function publishRelease(options: {
   tag: string;
   repo: string;
   env?: NodeJS.ProcessEnv;
+  product?: Product;
+  /** Defaults to the tag. */
+  title?: string;
+  /** Release notes; GitHub generates them when absent. */
+  notesFile?: string;
+  /** false keeps /releases/latest on nas when another product publishes. */
+  latest?: boolean;
 }): Promise<void> {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repo))
     throw new Error("Invalid repository");
+  const product = options.product ?? "nas";
   const directory = resolve(options.directory);
-  const files = await publicationFiles(directory, options.tag);
+  const files = await publicationFiles(directory, options.tag, product);
   for (const system of systems) {
     await verifyRelease({
       stage: directory,
-      inventoryArtifact: `nas-${options.tag}_${system}-components.json`,
+      inventoryArtifact: `${assetBase(product, options.tag, system)}-components.json`,
     });
   }
   async function gh(args: string[]) {
@@ -104,8 +120,11 @@ export async function publishRelease(options: {
     "--draft",
     "--verify-tag",
     "--title",
-    options.tag,
-    "--generate-notes",
+    options.title ?? options.tag,
+    ...(options.notesFile
+      ? ["--notes-file", resolve(options.notesFile)]
+      : ["--generate-notes"]),
+    ...(options.latest === false ? ["--latest=false"] : []),
   ]);
   await gh([
     "release",
@@ -144,6 +163,7 @@ export async function publishRelease(options: {
     "--repo",
     options.repo,
     "--draft=false",
+    ...(options.latest === false ? ["--latest=false"] : []),
   ]);
 }
 
@@ -154,15 +174,28 @@ if (import.meta.main) {
       directory: { type: "string" },
       tag: { type: "string" },
       repo: { type: "string" },
+      product: { type: "string", default: "nas" },
+      title: { type: "string" },
+      "notes-file": { type: "string" },
+      "not-latest": { type: "boolean", default: false },
     },
   });
-  if (!values.directory || !values.tag || !values.repo)
+  if (
+    !values.directory ||
+    !values.tag ||
+    !values.repo ||
+    !isProduct(values.product)
+  )
     throw new Error(
-      "usage: publish.ts --directory DIR --tag vX.Y.Z --repo OWNER/REPO",
+      "usage: publish.ts --directory DIR --tag TAG --repo OWNER/REPO [--product nas|strait] [--title T] [--notes-file F] [--not-latest]",
     );
   await publishRelease({
     directory: values.directory,
     tag: values.tag,
     repo: values.repo,
+    product: values.product,
+    title: values.title,
+    notesFile: values["notes-file"],
+    latest: values["not-latest"] ? false : undefined,
   });
 }

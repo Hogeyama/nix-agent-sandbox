@@ -1,6 +1,7 @@
 // strait's entry point: route a subcommand, or launch the sandbox.
 //
 //   strait [--config strait.json] [--name NAME] [--debug] -- command [args...]
+//   strait --version
 //   strait review ...     approve or deny held requests, on the host (ui/review.ts)
 //   strait hostexec ...   ask to run a command on the host, from the sandbox
 //                         (ui/hostexec_client.ts)
@@ -9,6 +10,7 @@
 // under src/ui is wired in here, through hooks that cannot widen the policy.
 // To sandbox a program called review or hostexec, put it after `--`.
 
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fail, run, STRAIT_ROOT } from "./core/main.ts";
 import { hostexecMain } from "./ui/hostexec_client.ts";
@@ -17,7 +19,10 @@ import { reviewMain } from "./ui/review.ts";
 import { findStatusLine, wrapStatusLine } from "./ui/statusline.ts";
 
 const argv = process.argv.slice(2);
-if (argv[0] === "review") {
+if (argv[0] === "--version") {
+  const version = readFileSync(resolve(STRAIT_ROOT, "VERSION"), "utf8");
+  console.log(`strait ${version.trim()}`);
+} else if (argv[0] === "review") {
   process.exit(await reviewMain(argv.slice(1)));
 } else if (argv[0] === "hostexec") {
   process.exitCode = await hostexecMain(argv.slice(1));

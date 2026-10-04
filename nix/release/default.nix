@@ -1,21 +1,13 @@
+# Release inputs (notices, sources, recipes) for products that ship the Bun
+# runtime. The Bun, WebKit, and runtime source pins are shared: nas and
+# strait run the same pkgs.bun, so they cite the same materials for it.
 { pkgs
 , system
 , self
 , nixpkgs
 , bun2nix
 , nix-bundle-elf
-, nasUnwrapped
-, rawPayload
 , pklVersion
-, pklBinaryPin
-, pklNative
-, dtachMarked
-, hostexecIntercept
-, maskfs
-, maskFilter
-, sumi
-, mitmproxyVendor
-, nasAssetsBase
 }:
 
 let
@@ -76,8 +68,8 @@ let
     url = "https://github.com/unicode-org/icu/archive/refs/tags/release-78.3.tar.gz";
     hash = "sha256-8GvKtyc27p1VaJAzuBmKF4ViNUEozzjtsq/C5n4/2TE=";
   };
-  native = [
-    {
+  nativeEntry = {
+    "bun-icu" = {
       id = "bun-icu";
       version = "78.3";
       path = toString icuSource;
@@ -87,8 +79,8 @@ let
       notices = [ "LICENSE" ];
       # Bun's Linux relink route uses the system ICU (libicu-dev); see BUN-7.
       source = false;
-    }
-    {
+    };
+    dtach = {
       id = "dtach";
       version = pkgs.dtach.version;
       path = toString pkgs.dtach.src;
@@ -96,8 +88,8 @@ let
       license = "GPL-2.0-or-later";
       requirements = [ "DT-1" "DT-2" "DT-3" ];
       notices = [ "COPYING" "dtach.h" ];
-    }
-    {
+    };
+    glibc = {
       id = "glibc";
       version = pkgs.glibc.version;
       path = toString pkgs.glibc.src;
@@ -105,8 +97,8 @@ let
       license = "LGPL-2.1-or-later AND file-specific notices";
       requirements = [ "GLIBC-1" "GLIBC-2" "GLIBC-3" ];
       notices = [ "COPYING.LIB" "LICENSES" ];
-    }
-    {
+    };
+    pkl = {
       id = "pkl";
       version = pklVersion;
       path = toString pklSource;
@@ -115,8 +107,8 @@ let
       requirements = [ "PKL-1" "PKL-2" "PKL-3" ];
       notices = [ "LICENSE.txt" "NOTICE.txt" "THIRD-PARTY-NOTICES.txt" ];
       source = false;
-    }
-    {
+    };
+    zlib = {
       id = "zlib";
       version = pkgs.zlib.version;
       path = toString pkgs.zlib.src;
@@ -126,8 +118,8 @@ let
       notices = [ "README" ];
       source = false;
       payloadOnly = true;
-    }
-    {
+    };
+    openssl = {
       id = "openssl";
       version = pkgs.openssl.version;
       path = toString pkgs.openssl.src;
@@ -137,8 +129,8 @@ let
       notices = [ "LICENSE.txt" ];
       source = false;
       payloadOnly = true;
-    }
-    {
+    };
+    "zig-runtime" = {
       id = "zig-runtime";
       version = pkgs.zig_0_15.version;
       path = toString pkgs.zig_0_15.src;
@@ -147,8 +139,8 @@ let
       requirements = [ "MUSL-1" ];
       notices = [ "LICENSE" "lib/libc/musl/COPYRIGHT" ];
       source = false;
-    }
-    {
+    };
+    fuse3 = {
       id = "fuse3";
       version = pkgs.fuse3.version;
       path = toString pkgs.fuse3.src;
@@ -156,87 +148,185 @@ let
       license = "LGPL-2.1-only AND GPL-2.0-only for other files";
       requirements = [ "FUSE-1" "FUSE-2" ];
       notices = [ "LICENSE" "LGPL2.txt" "GPL2.txt" "lib/fuse.c" ];
-    }
-    {
-      id = "graphql-core";
-      version = mitmproxyVendor.version;
-      path = toString mitmproxyVendor.src;
-      origin = "https://pypi.org/project/graphql-core/${mitmproxyVendor.version}/";
-      license = "MIT";
-      requirements = [ "PKG-1" ];
-      notices = [ "LICENSE" ];
-      source = false;
-    }
-  ];
-  config = pkgs.writeText "nas-release-source-config.json" (builtins.toJSON {
-    inherit system policy native;
+    };
+  };
+  # GPL-2.0 text for Bun's libtcc1.c; any verbatim copy serves.
+  gplv2Text = "${pkgs.dtach.src}/COPYING";
+  bundlerLicense = "${nix-bundle-elf.outPath}/LICENSE";
+  # Settings every Bun product shares; each product adds its own.
+  common = {
+    inherit system policy;
     bunVersion = pkgs.bun.version;
-    inherit pklVersion;
     runtimeSources = toString runtimeSources;
     npmVerifier = toString ../../scripts/release/bun_npm.ts;
     sourceNoticeCollector = toString ../../scripts/release/source_notices.ts;
     nodeHeaders = toString nodeHeaders;
     rustSource = toString rustSource;
-    # Bun and Pkl sources are not copied; the materials record where the
-    # pinned upstream bytes live.
-    upstream = {
-      nodeHeaders = { url = nodeHeadersUrl; inherit (nodeHeaders) outputHash; };
-      rustSource = { url = rustSourceUrl; inherit (rustSource) outputHash; };
-      webkit = { repo = "https://github.com/oven-sh/WebKit"; commit = webkitRevision; };
-      pkl = { repo = "https://github.com/apple/pkl"; tag = pklVersion; };
-    };
-    pklBinaryPin = pklBinaryPin;
     webkitSource = toString webkitSource;
     webkitRevision = webkitRevision;
     webkitOrigin = "https://github.com/oven-sh/WebKit/tree/${webkitRevision}";
-    nasSource = toString self;
-    nasVersion = (builtins.fromJSON (builtins.readFile ../../package.json)).version;
     gccSource = toString pkgs.stdenv.cc.cc.src;
     gccVersion = pkgs.stdenv.cc.cc.version;
-    rawPayload = toString rawPayload;
-    nasAssetsBase = toString nasAssetsBase;
     bundlerRevision = nix-bundle-elf.rev;
-    bundlerLicense = "${nix-bundle-elf.outPath}/LICENSE";
-    originRoots = [
-      { id = "bun-bun"; root = toString nasUnwrapped; }
-      { id = "pkl"; root = toString pklNative; }
-      { id = "dtach"; root = toString dtachMarked; }
-      { id = "glibc"; root = toString pkgs.glibc; }
-      { id = "zlib"; root = toString pkgs.zlib; }
-      { id = "openssl"; root = toString pkgs.openssl; }
-      { id = "gcc-runtime"; root = toString pkgs.stdenv.cc.cc.lib; }
-      { id = "fuse3"; root = toString pkgs.fuse3.out; }
-      { id = "nas-maskfs"; root = toString maskfs; }
-    ];
-    originFiles = [
-      { id = "nas-hostexec"; name = "hostexec_intercept.so"; path = "${hostexecIntercept}/lib/hostexec_intercept.so"; }
-      { id = "nas-hostexec"; name = "nas-hostexec-client"; path = "${hostexecIntercept}/bin/nas-hostexec-client"; }
-      { id = "nas-hostexec"; name = "nas-hostexec-gateway"; path = "${hostexecIntercept}/bin/nas-hostexec-gateway"; }
-      { id = "nas-maskfs"; name = "nas-maskfs"; path = "${maskfs}/bin/nas-maskfs"; }
-      { id = "nas-mask-filter"; name = "nas-mask-filter"; path = "${maskFilter}/bin/nas-mask-filter"; }
-      { id = "sumi"; name = "sumi"; path = "${sumi}/bin/sumi"; }
-    ];
-    javascript = {
-      cli = "${nasUnwrapped}/share/nas/cli-compliance";
-      ui = "${nasUnwrapped}/share/nas/dist/compliance";
-    };
-    recipes = [
-      { id = "nixpkgs-glibc"; path = toString (nixpkgs.outPath + "/pkgs/development/libraries/glibc"); }
-      { id = "nixpkgs-dtach"; path = toString (nixpkgs.outPath + "/pkgs/by-name/dt/dtach/package.nix"); }
-      { id = "nixpkgs-bun"; path = toString (nixpkgs.outPath + "/pkgs/by-name/bu/bun/package.nix"); }
-      { id = "nixpkgs-zlib"; path = toString (nixpkgs.outPath + "/pkgs/development/libraries/zlib"); }
-      { id = "nixpkgs-fuse3"; path = toString (nixpkgs.outPath + "/pkgs/os-specific/linux/fuse"); }
-      { id = "bun2nix"; path = toString bun2nix.outPath; }
-      { id = "nix-bundle-elf"; path = toString nix-bundle-elf.outPath; }
-      { id = "mark_elf"; path = toString ../../scripts/release/mark_elf.sh; }
-      { id = "runtime-source-inputs"; path = "${runtimeSources}/sources.json"; }
-      { id = "bun-npm-source-inputs"; path = "${runtimeSources}/bun-npm-sources.json"; }
-      { id = "license-policy"; path = toString ./policy.json; }
-    ];
-  });
+    inherit bundlerLicense gplv2Text;
+  };
+  # Bun and Pkl sources are not copied; the materials record where the
+  # pinned upstream bytes live.
+  commonUpstream = {
+    nodeHeaders = { url = nodeHeadersUrl; inherit (nodeHeaders) outputHash; };
+    rustSource = { url = rustSourceUrl; inherit (rustSource) outputHash; };
+    webkit = { repo = "https://github.com/oven-sh/WebKit"; commit = webkitRevision; };
+  };
+  mkInputs = name: settings:
+    let
+      config = pkgs.writeText "${name}-source-config.json" (builtins.toJSON (common // settings));
+    in
+    pkgs.runCommand "${name}-release-inputs-${system}" {
+      nativeBuildInputs = [ pkgs.python3 pkgs.gnutar pkgs.gzip pkgs.xz pkgs.bun ];
+    } ''
+      python3 ${../../scripts/release/collect_native.py} ${config} "$out"
+    '';
+  recipe = id: path: { inherit id; path = toString path; };
+  bunRecipes = [
+    (recipe "runtime-source-inputs" "${runtimeSources}/sources.json")
+    (recipe "bun-npm-source-inputs" "${runtimeSources}/bun-npm-sources.json")
+    (recipe "license-policy" ./policy.json)
+  ];
 in
-pkgs.runCommand "nas-release-inputs-${system}" {
-  nativeBuildInputs = [ pkgs.python3 pkgs.gnutar pkgs.gzip pkgs.xz pkgs.bun ];
-} ''
-  python3 ${../../scripts/release/collect_native.py} ${config} "$out"
-''
+{
+  nas =
+    { nasUnwrapped
+    , rawPayload
+    , pklBinaryPin
+    , pklNative
+    , dtachMarked
+    , hostexecIntercept
+    , maskfs
+    , maskFilter
+    , sumi
+    , mitmproxyVendor
+    , nasAssetsBase
+    }:
+    mkInputs "nas" {
+      native = map (id: nativeEntry.${id}) [
+        "bun-icu" "dtach" "glibc" "pkl" "zlib" "openssl" "zig-runtime" "fuse3"
+      ] ++ [
+        {
+          id = "graphql-core";
+          version = mitmproxyVendor.version;
+          path = toString mitmproxyVendor.src;
+          origin = "https://pypi.org/project/graphql-core/${mitmproxyVendor.version}/";
+          license = "MIT";
+          requirements = [ "PKG-1" ];
+          notices = [ "LICENSE" ];
+          source = false;
+        }
+      ];
+      inherit pklVersion pklBinaryPin;
+      upstream = commonUpstream // {
+        pkl = { repo = "https://github.com/apple/pkl"; tag = pklVersion; };
+      };
+      product = {
+        id = "nas";
+        version = (builtins.fromJSON (builtins.readFile ../../package.json)).version;
+        source = toString self;
+        subcomponents = [ "nas-hostexec" "nas-maskfs" "nas-mask-filter" "sumi" ];
+      };
+      rawPayload = toString rawPayload;
+      nasAssetsBase = toString nasAssetsBase;
+      originRoots = [
+        { id = "bun-bun"; root = toString nasUnwrapped; }
+        { id = "pkl"; root = toString pklNative; }
+        { id = "dtach"; root = toString dtachMarked; }
+        { id = "glibc"; root = toString pkgs.glibc; }
+        { id = "zlib"; root = toString pkgs.zlib; }
+        { id = "openssl"; root = toString pkgs.openssl; }
+        { id = "gcc-runtime"; root = toString pkgs.stdenv.cc.cc.lib; }
+        { id = "fuse3"; root = toString pkgs.fuse3.out; }
+        { id = "nas-maskfs"; root = toString maskfs; }
+      ];
+      originFiles = [
+        { id = "nas-hostexec"; name = "hostexec_intercept.so"; path = "${hostexecIntercept}/lib/hostexec_intercept.so"; }
+        { id = "nas-hostexec"; name = "nas-hostexec-client"; path = "${hostexecIntercept}/bin/nas-hostexec-client"; }
+        { id = "nas-hostexec"; name = "nas-hostexec-gateway"; path = "${hostexecIntercept}/bin/nas-hostexec-gateway"; }
+        { id = "nas-maskfs"; name = "nas-maskfs"; path = "${maskfs}/bin/nas-maskfs"; }
+        { id = "nas-mask-filter"; name = "nas-mask-filter"; path = "${maskFilter}/bin/nas-mask-filter"; }
+        { id = "sumi"; name = "sumi"; path = "${sumi}/bin/sumi"; }
+      ];
+      javascript = {
+        cli = "${nasUnwrapped}/share/nas/cli-compliance";
+        ui = "${nasUnwrapped}/share/nas/dist/compliance";
+      };
+      recipes = [
+        (recipe "nixpkgs-glibc" (nixpkgs.outPath + "/pkgs/development/libraries/glibc"))
+        (recipe "nixpkgs-dtach" (nixpkgs.outPath + "/pkgs/by-name/dt/dtach/package.nix"))
+        (recipe "nixpkgs-bun" (nixpkgs.outPath + "/pkgs/by-name/bu/bun/package.nix"))
+        (recipe "nixpkgs-zlib" (nixpkgs.outPath + "/pkgs/development/libraries/zlib"))
+        (recipe "nixpkgs-fuse3" (nixpkgs.outPath + "/pkgs/os-specific/linux/fuse"))
+        (recipe "bun2nix" bun2nix.outPath)
+        (recipe "nix-bundle-elf" nix-bundle-elf.outPath)
+        (recipe "mark_elf" ../../scripts/release/mark_elf.sh)
+      ] ++ bunRecipes;
+    };
+
+  # strait runs pkgs.bun itself (not a --compile executable), next to its
+  # unbundled npm packages (nodeModules, as the bundle ships them) and srt's
+  # rebuilt apply-seccomp.
+  strait =
+    { nodeModules
+    , straitVersion
+    , rawPayload
+    , srtSource
+    , srtVersion
+    , srtApplySeccomp
+    }:
+    mkInputs "strait" {
+      native = map (id: nativeEntry.${id}) [ "bun-icu" "glibc" "zig-runtime" ] ++ [
+        {
+          id = "srt-apply-seccomp";
+          version = srtVersion;
+          path = toString srtSource;
+          origin = "https://github.com/anthropics/sandbox-runtime/tree/v${srtVersion}/vendor/seccomp-src; built from source with Zig's musl";
+          license = "Apache-2.0";
+          requirements = [ "SRT-1" ];
+          notices = [ "LICENSE" ];
+          source = false;
+        }
+      ];
+      upstream = commonUpstream // {
+        extra.sandboxRuntime = {
+          repo = "https://github.com/anthropics/sandbox-runtime";
+          tag = "v${srtVersion}";
+          inherit (srtSource) outputHash;
+        };
+      };
+      product = {
+        id = "strait";
+        version = straitVersion;
+        source = toString self;
+        subcomponents = [ ];
+      };
+      rawPayload = toString rawPayload;
+      originRoots = [
+        { id = "bun-bun"; root = toString pkgs.bun; }
+        { id = "glibc"; root = toString pkgs.glibc; }
+        { id = "gcc-runtime"; root = toString pkgs.stdenv.cc.cc.lib; }
+      ];
+      originFiles = [
+        { id = "srt-apply-seccomp"; name = "apply-seccomp"; path = "${srtApplySeccomp}/bin/apply-seccomp"; under = toString nodeModules; }
+      ];
+      javascript = { };
+      npmPackages = {
+        id = "strait";
+        root = toString nodeModules;
+        reviewed = builtins.fromJSON (builtins.readFile ./strait-packages.json);
+      };
+      recipes = [
+        (recipe "nixpkgs-glibc" (nixpkgs.outPath + "/pkgs/development/libraries/glibc"))
+        (recipe "nixpkgs-bun" (nixpkgs.outPath + "/pkgs/by-name/bu/bun/package.nix"))
+        (recipe "bun2nix" bun2nix.outPath)
+        (recipe "nix-bundle-elf" nix-bundle-elf.outPath)
+        (recipe "strait-packages-policy" ./strait-packages.json)
+      ] ++ bunRecipes;
+    };
+}

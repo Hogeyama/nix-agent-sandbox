@@ -272,3 +272,46 @@ test("rejects unsupported architecture, unknown component, and altered archive",
     "archive listing failed",
   );
 });
+
+test("a strait bundle keeps its notices at the root and stages as strait", async () => {
+  const f = await fixture();
+  await rm(path.join(f.payload, "share"), { recursive: true });
+  await mkdir(path.join(f.payload, "licenses/bun/cargo-inputs"), {
+    recursive: true,
+  });
+  await copyFile(
+    path.join(f.inputs, "licenses/COPYING"),
+    path.join(f.payload, "licenses/COPYING"),
+  );
+  await copyFile(
+    path.join(f.inputs, "licenses/bun/cargo-inputs/NOTICE"),
+    path.join(f.payload, "licenses/bun/cargo-inputs/NOTICE"),
+  );
+  const inventory = await prepareRelease({
+    inputs: f.inputs,
+    binary: f.binary,
+    out: f.out,
+    tag: "strait-v1.2.3",
+    product: "strait",
+  });
+  expect(inventory.product).toBe("strait");
+  expect(inventory.binaryArchive).toBe("strait-v1.2.3_x86_64-linux.tar.gz");
+  expect(
+    Bun.spawnSync(["tar", "-tzf", path.join(f.out, inventory.binaryArchive)])
+      .stdout.toString()
+      .split("\n"),
+  ).toContain("strait");
+  await verifyRelease({ stage: f.out });
+});
+
+test("nas inventories keep their shape", async () => {
+  const f = await fixture();
+  const inventory = await prepareRelease({
+    inputs: f.inputs,
+    binary: f.binary,
+    out: f.out,
+    tag: "v1.2.3",
+  });
+  expect("product" in inventory).toBe(false);
+  expect(inventory.binaryArchive).toBe("nas-v1.2.3_x86_64-linux.tar.gz");
+});

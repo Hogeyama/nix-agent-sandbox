@@ -22,8 +22,27 @@ import {
   walkRegular,
 } from "./manifest.ts";
 
+/** A product released with Bun-runtime materials, and where its bundle keeps notices. */
+export const products = {
+  nas: { noticeDir: "share/nas/assets/licenses" },
+  strait: { noticeDir: "licenses" },
+} as const;
+export type Product = keyof typeof products;
+
+export function isProduct(value: string): value is Product {
+  return Object.hasOwn(products, value);
+}
+
+/** nas-v1.2.3_<system> for nas, whose tags are bare; strait-v1.2.3_<system> otherwise. */
+export function assetBase(product: Product, tag: string, system: string) {
+  const name = tag.startsWith(`${product}-`) ? tag : `${product}-${tag}`;
+  return `${name}_${system}`;
+}
+
 export interface StagedInventory {
   schemaVersion: 1;
+  /** Absent in nas inventories staged before strait was released. */
+  product?: Product;
   tag: string;
   system: string;
   binaryArchive: string;
@@ -81,8 +100,9 @@ async function removeScratch(dir: string) {
 async function embeddedInventory(
   extracted: string,
   origins: Record<string, string>,
+  product: Product,
 ) {
-  const noticeDir = path.join(extracted, "share/nas/assets/licenses");
+  const noticeDir = path.join(extracted, products[product].noticeDir);
   const embeddedNotices = await fileHashes(noticeDir).catch((e) => {
     throw new Error(`embedded notice tree missing or invalid: ${e}`);
   });
@@ -132,7 +152,9 @@ export async function prepareRelease(options: {
   binary: string;
   out: string;
   tag: string;
+  product?: Product;
 }): Promise<StagedInventory> {
+  const product = options.product ?? "nas";
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.tag))
     throw new Error(`unsafe tag: ${options.tag}`);
   const inputs = await readReleaseInputs(options.inputs);
@@ -141,13 +163,14 @@ export async function prepareRelease(options: {
   if (!binaryStat.isFile() || binaryStat.size === 0)
     throw new Error("bundled binary is missing or empty");
   const binarySha256 = await hashFile(binary);
-  const scratch = await mkdtemp(path.join(tmpdir(), "nas-release-"));
+  const scratch = await mkdtemp(path.join(tmpdir(), `${product}-release-`));
   try {
     const extracted = path.join(scratch, "extracted");
     await run([binary, "--extract", extracted], "bundled binary extraction");
     const { embeddedNotices, payloadElf } = await embeddedInventory(
       extracted,
       inputs.payloadOrigins ?? {},
+      product,
     );
     const expectedNotices = await fileHashes(
       path.join(options.inputs, "licenses"),
@@ -167,8 +190,8 @@ export async function prepareRelease(options: {
     const materialsDir = path.join(scratch, "materials");
     await mkdir(binaryDir);
     await mkdir(materialsDir);
-    await copyFile(binary, path.join(binaryDir, "nas"));
-    await chmod(path.join(binaryDir, "nas"), 0o755);
+    await copyFile(binary, path.join(binaryDir, product));
+    await chmod(path.join(binaryDir, product), 0o755);
     await copyTree(
       path.join(options.inputs, "licenses"),
       path.join(binaryDir, "licenses"),
@@ -183,9 +206,11 @@ export async function prepareRelease(options: {
       fileHashesForStage[`materials/${relative}`] = await hashFile(
         path.join(materialsDir, relative),
       );
-    const base = `nas-${options.tag}_${inputs.system}`;
+    const base = assetBase(product, options.tag, inputs.system);
     const inventory: StagedInventory = {
       schemaVersion: 1,
+      // nas inventories keep their earlier shape.
+      ...(product === "nas" ? {} : { product }),
       tag: options.tag,
       system: inputs.system,
       binaryArchive: `${base}.tar.gz`,

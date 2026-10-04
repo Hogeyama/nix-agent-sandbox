@@ -370,9 +370,12 @@
           EOF
           chmod +x $out/maskfs/nas-maskfs
         '';
-        releaseInputs = import ./nix/release {
-          inherit pkgs system self nixpkgs bun2nix nix-bundle-elf nasUnwrapped rawPayload pklVersion
-            pklNative dtachMarked hostexecIntercept maskfs maskFilter sumi mitmproxyVendor;
+        release = import ./nix/release {
+          inherit pkgs system self nixpkgs bun2nix nix-bundle-elf pklVersion;
+        };
+        releaseInputs = release.nas {
+          inherit nasUnwrapped rawPayload pklNative dtachMarked hostexecIntercept maskfs maskFilter
+            sumi mitmproxyVendor;
           pklBinaryPin = pklSourceBySystem.${system};
           nasAssetsBase = nasAssetsBundleBase;
         };
@@ -485,9 +488,66 @@
         # srt へのパッチは bun2nix が依存の取得時に当てる。
         straitSrc = ./contrib/strait;
         straitPackageJson = builtins.fromJSON (builtins.readFile ./contrib/strait/package.json);
+        straitVersion = pkgs.lib.removeSuffix "\n" (builtins.readFile ./contrib/strait/VERSION);
+        # npm の srt に入っている apply-seccomp は glibc を静的リンクした
+        # ビルド済みバイナリで、そのソースは npm パッケージに含まれない。
+        # 配布物には上流の同じタグのソースから musl で作り直したものを入れる。
+        srtVersion = "0.0.77";
+        srtSource = pkgs.fetchFromGitHub {
+          owner = "anthropics";
+          repo = "sandbox-runtime";
+          rev = "v${srtVersion}";
+          hash = "sha256-iZtwX8S/8At2ZcCBSyf7v1GkLh5wDJvgsAXQz4rviTE=";
+        };
+        srtZigTarget = {
+          "x86_64-linux" = "x86_64-linux-musl";
+          "aarch64-linux" = "aarch64-linux-musl";
+        }.${system};
+        srtApplySeccomp = pkgs.stdenv.mkDerivation {
+          pname = "srt-apply-seccomp";
+          version = srtVersion;
+          src = srtSource;
+          nativeBuildInputs = [ zig pkgs.xxd ];
+          buildInputs = [ pkgs.libseccomp ];
+          dontConfigure = true;
+          # vendor/seccomp/build.ts と同じ手順: libseccomp で両アーキテクチャの
+          # BPF を生成してヘッダーに埋め込み、apply-seccomp を静的リンクする。
+          # 生成器はビルド時にだけ使い、配布しない。
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR
+            src_dir=vendor/seccomp-src
+            $CC -O2 -Wall -Wextra -o seccomp-unix-block $src_dir/seccomp-unix-block.c -lseccomp
+            ./seccomp-unix-block x86_64.bpf x86_64
+            ./seccomp-unix-block aarch64.bpf aarch64
+            {
+              echo '#if defined(__x86_64__)'
+              echo 'static const unsigned char unix_block_bpf[] = {'
+              xxd -i < x86_64.bpf
+              echo '};'
+              echo '#elif defined(__aarch64__)'
+              echo 'static const unsigned char unix_block_bpf[] = {'
+              xxd -i < aarch64.bpf
+              echo '};'
+              echo '#else'
+              echo '#error "unsupported architecture for unix-block BPF filter"'
+              echo '#endif'
+            } > unix-block-bpf.h
+            export ZIG_LOCAL_CACHE_DIR=$TMPDIR/zig-cache ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache
+            zig cc -target ${srtZigTarget} -static -O2 -Wall -Wextra -I. \
+              -o apply-seccomp $src_dir/apply-seccomp.c
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 apply-seccomp $out/bin/apply-seccomp
+            runHook postInstall
+          '';
+        };
+        srtVendorArch = { "x86_64-linux" = "x64"; "aarch64-linux" = "arm64"; }.${system};
         strait = b2n.mkDerivation {
           pname = "strait";
-          version = straitPackageJson.version;
+          version = straitVersion;
           src = straitSrc;
           bunDeps = b2n.fetchBunDeps {
             bunNix = ./contrib/strait/bun.nix;
@@ -499,6 +559,11 @@
                 cp -r ${pkg}/. $out
                 chmod -R u+w $out
                 patch -p1 -d $out < ${straitSrc}/${patchFile}
+                # Apache-2.0 4(b): 変更したファイル自体に変更の旨を残す。
+                # 末尾に足すので行番号と source map はずれない。
+                sed -n 's|^+++ b/||p' ${straitSrc}/${patchFile} | while read -r file; do
+                  printf '%s\n' '// Modified for strait (nix-agent-sandbox) on ${modifiedDate}: see ${patchFile}' >> "$out/$file"
+                done
               '') straitPackageJson.patchedDependencies;
           };
           nativeBuildInputs = [ pkgs.makeWrapper ];
@@ -516,13 +581,126 @@
           installPhase = ''
             runHook preInstall
             mkdir -p $out/share/strait $out/bin
-            cp -r bunfig.toml package.json patches src node_modules \
+            cp -r bunfig.toml package.json VERSION patches src node_modules \
               strait strait-statusline $out/share/strait/
+            # srt の vendor は他のアーキテクチャと Windows 用のバイナリも持つ。
+            # 使うのはこのアーキテクチャの apply-seccomp だけで、それも
+            # ソースから作り直したものに置き換える。
+            vendor=$out/share/strait/node_modules/@anthropic-ai/sandbox-runtime/vendor
+            chmod -R u+w $vendor
+            rm -rf $vendor/srt-win $vendor/seccomp
+            install -Dm755 ${srtApplySeccomp}/bin/apply-seccomp \
+              $vendor/seccomp/${srtVendorArch}/apply-seccomp
+            # bun はスコープ付きパッケージへのリンクを絶対パスで作る。
+            # 配布物を展開した先で store を指さないよう、相対にする。
+            find $out/share/strait/node_modules -type l | while read -r link; do
+              target=$(readlink "$link")
+              case "$target" in
+                $out/*) ln -sfn "$(realpath -m --relative-to="$(dirname "$link")" "$target")" "$link" ;;
+                /*) echo "symlink leaves the package: $link -> $target" >&2; exit 1 ;;
+              esac
+            done
             makeWrapper $out/share/strait/strait $out/bin/strait \
               --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.bun ]}
             runHook postInstall
           '';
         };
+
+        # 配布用: Bun と glibc を同梱した自己展開スクリプト。strait の
+        # ファイルは bundle のルートに置く。こうすると STRAIT_ROOT が bundle
+        # 全体になり、同梱した Bun と共有ライブラリもサンドボックスから
+        # 書けなくなる。launcher は libexec/bun を優先して使う。
+        straitBundledEntry = pkgs.writeScript "strait-bundled-entry" ''
+          #!/bin/sh
+          here=$(dirname "$0")
+          # 展開せずに実行すると、一時ディレクトリに展開して起動する。
+          # 既定の denyRead は /tmp を隠すので、サンドボックスの中から
+          # strait hostexec と statusline に届かない。展開を求める。
+          if [ -e "$here/self.tar.gz" ] && [ "''${1:-}" != "--version" ]; then
+            echo "strait: extract this file first (<file> --extract <directory>) and run <directory>/bin/strait" >&2
+            exit 2
+          fi
+          exec "$here/strait" "$@"
+        '';
+        # bundle に入れる strait のファイル一式。
+        # - bun の isolated レイアウトはリンクだらけで、bundle-script の
+        #   include はリンクの一部を store への絶対パスに変えてしまう。
+        #   各パッケージは 1 バージョンしかないので、リンクのない hoisted
+        #   レイアウトに並べ直す。
+        # - Nix の fixup と bun2nix は shebang を store のパスに書き換える。
+        #   Nix のないホストでは起動できないので、元の形に戻す。
+        straitBundleTree = pkgs.runCommand "strait-bundle-tree-${straitVersion}" { } ''
+          mkdir -p $out/node_modules
+          for name in strait strait-statusline bunfig.toml package.json VERSION patches src; do
+            cp -r ${strait}/share/strait/$name $out/$name
+          done
+          chmod -R u+w $out
+          src=${strait}/share/strait/node_modules/.bun
+          for pkg in $(cd $src && find . -mindepth 4 -maxdepth 5 -name package.json -printf '%h\n' | sort); do
+            case "$pkg" in
+              ./*/node_modules/@*/*|./*/node_modules/[!@]*) ;;
+              *) continue ;;
+            esac
+            [ -L "$src/$pkg" ] && continue
+            name=''${pkg#./*/node_modules/}
+            dest=$out/node_modules/$name
+            [ -e "$dest" ] && { echo "package installed twice: $name" >&2; exit 1; }
+            mkdir -p "$(dirname "$dest")"
+            cp -r "$src/$pkg" "$dest"
+          done
+          chmod -R u+w $out
+          if find $out -type l | grep -q .; then
+            echo "links remain in the bundle tree" >&2
+            exit 1
+          fi
+          find $out -type f -exec sed -i \
+            -e '1s|^#!/nix/store/[^ ]*/bin/sh$|#!/bin/sh|' \
+            -e '1s|^#!/nix/store/[^ ]*/bin/node$|#!/usr/bin/env node|' {} +
+          for file in $(grep -rlI '^#!/nix/store/' $out || true); do
+            if head -n1 "$file" | grep -q '^#!/nix/store/'; then
+              echo "store shebang left in $file" >&2
+              exit 1
+            fi
+          done
+        '';
+        mkStraitBundle = licenses: bundle-script {
+          name = "strait";
+          script = straitBundledEntry;
+          type = "preload";
+          binaries = [
+            { name = "bun"; target = "${pkgs.bun}/bin/bun"; }
+          ];
+          extraFiles = pkgs.lib.genAttrs [
+            "strait"
+            "strait-statusline"
+            "bunfig.toml"
+            "package.json"
+            "VERSION"
+            "patches"
+            "src"
+            "node_modules"
+          ] (name: "${straitBundleTree}/${name}")
+          // pkgs.lib.optionalAttrs (licenses != null) { licenses = licenses; };
+          resolveWith = [
+            "${pkgs.glibc}/lib/libpthread.so.0"
+            "${pkgs.glibc}/lib/libdl.so.2"
+            "${pkgs.glibc}/lib/librt.so.1"
+            "${pkgs.glibc}/lib/libm.so.6"
+            "${pkgs.glibc}/lib/libc.so.6"
+            "${pkgs.gcc.cc.lib}/lib/libgcc_s.so.1"
+          ];
+        };
+        straitBundledRaw = mkStraitBundle null;
+        straitRawPayload = pkgs.runCommand "strait-raw-payload-${system}" { } ''
+          ${straitBundledRaw} --extract "$out"
+        '';
+        straitReleaseInputs = release.strait {
+          inherit straitVersion srtSource srtVersion srtApplySeccomp;
+          nodeModules = "${straitBundleTree}/node_modules";
+          rawPayload = straitRawPayload;
+        };
+        # 配布する bundle には、展開後にも読めるように notice を入れる。
+        straitBundled = mkStraitBundle "${straitReleaseInputs}/licenses";
       in
       {
         packages = {
@@ -534,6 +712,8 @@
           mask-filter = maskFilter;
           sumi = sumi;
           strait = strait;
+          strait-bundled = straitBundled;
+          strait-release-inputs = straitReleaseInputs;
           vscode-nas-approval = vscodeNasApproval;
         } // pkgs.lib.optionalAttrs (builtins.getEnv "NAS_REBUILT_BINARY" != "") {
           bundled-with-runtime = nasBundledWithRuntime;
@@ -576,6 +756,8 @@
             pklNative
             # 静的に検出できる規約は prompt ではなく ast-grep ルールに落とす。
             pkgs.ast-grep
+            # scripts/release/check_strait_bundle.sh が Bun の置き換え手順を試す。
+            pkgs.patchelf
             # skills/ の diffity-* が呼ぶ差分ビューア。npm -g ではなく
             # flake 側で固定して、シェルに入れば必ず同じ版が使えるようにする。
             pkgs.diffity

@@ -4,4 +4,11 @@
 # sandbox's writable workspace, and a `preload` there would run on the host
 # at the next launch.
 here=$(dirname "$(readlink -f "$0")")
-exec bun --config="$here/bunfig.toml" --no-env-file "$here/src/cli.ts" "$@"
+# The release bundle carries its own Bun under libexec/, inside this directory
+# and so inside the part the sandbox cannot write. A checkout or the Nix
+# package uses the bun on PATH.
+bun=bun
+if [ -x "$here/libexec/bun" ]; then
+  bun="$here/libexec/bun"
+fi
+exec "$bun" --config="$here/bunfig.toml" --no-env-file "$here/src/cli.ts" "$@"

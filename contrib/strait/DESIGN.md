@@ -36,7 +36,7 @@ nas は、独自の大きなプロキシでネットワークのポリシーを�
 
 ### 起動の流れ
 
-1. `strait`（launcher）が、固定の `bunfig.toml` と `--no-env-file` を指定して bun で `src/cli.ts` を起動します。
+1. `strait`（launcher）が、固定の `bunfig.toml` と `--no-env-file` を指定して bun で `src/cli.ts` を起動します。配布物では同梱の `libexec/bun`、それ以外では PATH の `bun` を使います。
 2. `cli.ts` が、サブコマンド（`review`、`hostexec`）を振り分けます。それ以外は、UI のフックを付けて `core/main.ts` の `run()` を呼び出します。
 3. `run()` が `strait.json` を検証し、ホスト環境から送信先ごとの認証ヘッダーを組み立てます。GitHub の API は Bearer、git は Basic、Anthropic は OAuth を優先して API key にフォールバックします。
 4. 認証ヘッダー上書きのパッチを必ず検証します。`hostExec` が有効な場合は、srt に respond のパッチがあることを検証します。セッション ID を決定し、承認用ソケットを確保して待機を開始します。

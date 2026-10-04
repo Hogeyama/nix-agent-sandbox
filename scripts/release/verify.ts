@@ -8,7 +8,7 @@ import {
   safeRelative,
   sha256,
 } from "./manifest.ts";
-import type { StagedInventory } from "./prepare.ts";
+import { isProduct, type StagedInventory } from "./prepare.ts";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -70,7 +70,7 @@ async function verifyArchive(
   inventoryHash: string,
 ): Promise<string> {
   safeRelative(name);
-  const temp = await mkdtemp(path.join(tmpdir(), "nas-archive-check-"));
+  const temp = await mkdtemp(path.join(tmpdir(), "release-archive-check-"));
   try {
     await extractArchive(path.join(stage, name), temp);
     const actual = await fileHashes(temp);
@@ -105,6 +105,8 @@ export async function verifyRelease(options: {
   if (inventory.schemaVersion !== 1) {
     throw new Error("invalid staged inventory");
   }
+  if (inventory.product !== undefined && !isProduct(inventory.product))
+    throw new Error(`unknown product: ${inventory.product}`);
   if (
     !inventory.files ||
     !inventory.binarySha256 ||
@@ -152,7 +154,8 @@ export async function verifyRelease(options: {
       inventoryHash,
     );
     if (
-      (await hashFile(path.join(binaryRoot, "nas"))) !== inventory.binarySha256
+      (await hashFile(path.join(binaryRoot, inventory.product ?? "nas"))) !==
+      inventory.binarySha256
     )
       throw new Error("bundled binary identity changed");
     await rm(path.join(materialsRoot, "inventory.json"));

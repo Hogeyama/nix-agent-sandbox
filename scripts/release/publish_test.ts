@@ -12,7 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hashFile } from "./manifest.ts";
-import { prepareRelease } from "./prepare.ts";
+import {
+  assetBase,
+  type Product,
+  prepareRelease,
+  products,
+} from "./prepare.ts";
 import { publicationFiles, publishRelease } from "./publish.ts";
 
 const dirs: string[] = [];
@@ -21,29 +26,25 @@ afterEach(async () => {
     dirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })),
   );
 });
-async function fixture() {
+async function fixture(product: Product = "nas", tag = "v1.2.3") {
+  const noticeDir = products[product].noticeDir;
   const root = await mkdtemp(join(tmpdir(), "nas-publish-"));
   dirs.push(root);
   const dir = join(root, "publish");
   await mkdir(dir);
   const assets: Array<{ name: string; size: number }> = [];
   for (const system of ["x86_64-linux", "aarch64-linux"]) {
-    const base = `nas-v1.2.3_${system}`;
+    const base = assetBase(product, tag, system);
     const inputs = join(root, `inputs-${system}`);
     const payload = join(root, `payload-${system}`);
     const stage = join(root, `stage-${system}`);
     await mkdir(join(inputs, "licenses"), { recursive: true });
     await mkdir(join(inputs, "sources"));
-    await mkdir(join(payload, "share/nas/assets/licenses"), {
-      recursive: true,
-    });
+    await mkdir(join(payload, noticeDir), { recursive: true });
     await mkdir(join(payload, "orig"));
     await writeFile(join(inputs, "licenses/COPYING"), "license\n");
     await writeFile(join(inputs, "sources/code.tar.gz"), "source\n");
-    await writeFile(
-      join(payload, "share/nas/assets/licenses/COPYING"),
-      "license\n",
-    );
+    await writeFile(join(payload, noticeDir, "COPYING"), "license\n");
     await writeFile(
       join(payload, "orig/nas"),
       Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
@@ -78,7 +79,8 @@ async function fixture() {
       inputs,
       binary,
       out: stage,
-      tag: "v1.2.3",
+      tag,
+      product,
     });
     const files = [
       `${base}.tar.gz`,
@@ -204,4 +206,68 @@ test("incomplete remote set remains draft", async () => {
     }),
   ).rejects.toThrow("incomplete");
   expect(await readFile(env.CALLS, "utf8")).not.toContain("release edit");
+});
+
+test("a strait release carries its notes and leaves /releases/latest on nas", async () => {
+  const { dir, env } = await fixture("strait", "strait-v1.2.3");
+  const notes = join(dir, "notes.md");
+  await writeFile(notes, "- first release\n");
+  await publishRelease({
+    directory: dir,
+    tag: "strait-v1.2.3",
+    repo: "owner/repo",
+    env,
+    product: "strait",
+    title: "strait 1.2.3",
+    notesFile: notes,
+    latest: false,
+  });
+  const calls = (await readFile(env.CALLS, "utf8")).trim().split("\n");
+  expect(calls[0]).toContain(`--notes-file ${notes}`);
+  expect(calls[0]).toContain("--title strait 1.2.3");
+  expect(calls[0]).toContain("--latest=false");
+  expect(calls[0]).not.toContain("--generate-notes");
+  expect(calls[1]).toContain(" strait-v1.2.3_aarch64-linux.tar.gz");
+  expect(calls[3]).toContain("--draft=false --latest=false");
+});
+
+test("a product accepts only its own tags", async () => {
+  const { dir } = await fixture("strait", "strait-v1.2.3");
+  await expect(publicationFiles(dir, "v1.2.3", "strait")).rejects.toThrow(
+    "Invalid release tag",
+  );
+  await expect(publicationFiles(dir, "strait-v1.2.3", "nas")).rejects.toThrow(
+    "Invalid release tag",
+  );
+});
+
+test("the CLI takes the flags release-strait.yml passes", async () => {
+  const { dir, env } = await fixture("strait", "strait-v1.2.3");
+  const notes = join(dir, "notes.md");
+  await writeFile(notes, "- first release\n");
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, "publish.ts"),
+      "--product",
+      "strait",
+      "--directory",
+      dir,
+      "--tag",
+      "strait-v1.2.3",
+      "--repo",
+      "owner/repo",
+      "--title",
+      "strait 1.2.3",
+      "--notes-file",
+      notes,
+      "--not-latest",
+    ],
+    { env, stdout: "pipe", stderr: "pipe" },
+  );
+  expect(await proc.exited).toBe(0);
+  const calls = (await readFile(env.CALLS, "utf8")).trim().split("\n");
+  expect(calls[0]).toContain("--latest=false");
+  expect(calls[0]).toContain(`--notes-file ${notes}`);
+  expect(calls[3]).toContain("--draft=false --latest=false");
 });

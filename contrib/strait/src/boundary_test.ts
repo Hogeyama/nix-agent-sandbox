@@ -27,7 +27,7 @@ test("src/core imports nothing from src/ui", () => {
 test("STRAIT_ROOT is the whole strait directory", async () => {
   const { STRAIT_ROOT } = await import("./core/main.ts");
   expect(STRAIT_ROOT).toBe(join(import.meta.dir, ".."));
-  for (const f of ["strait", "package.json", "patches", "src"]) {
+  for (const f of ["strait", "package.json", "VERSION", "patches", "src"]) {
     expect(readdirSync(STRAIT_ROOT)).toContain(f);
   }
 });

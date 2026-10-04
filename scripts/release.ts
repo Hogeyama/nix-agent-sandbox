@@ -1,4 +1,4 @@
-import { prepareRelease } from "./release/prepare.ts";
+import { isProduct, prepareRelease } from "./release/prepare.ts";
 import { verifyRelease } from "./release/verify.ts";
 
 function flags(args: string[]): Record<string, string> {
@@ -22,10 +22,12 @@ function flags(args: string[]): Record<string, string> {
 function required(
   args: Record<string, string>,
   names: string[],
+  optional: string[] = [],
 ): Record<string, string> {
   for (const name of names) if (!args[name]) throw new Error(`missing ${name}`);
   for (const name of Object.keys(args))
-    if (!names.includes(name)) throw new Error(`unexpected ${name}`);
+    if (!names.includes(name) && !optional.includes(name))
+      throw new Error(`unexpected ${name}`);
   return args;
 }
 
@@ -33,8 +35,11 @@ try {
   const [operation, ...rest] = Bun.argv.slice(2);
   const args = flags(rest);
   if (operation === "prepare") {
-    required(args, ["--inputs", "--binary", "--out", "--tag"]);
+    required(args, ["--inputs", "--binary", "--out", "--tag"], ["--product"]);
+    const product = args["--product"] ?? "nas";
+    if (!isProduct(product)) throw new Error(`unknown product: ${product}`);
     const inventory = await prepareRelease({
+      product,
       inputs: args["--inputs"],
       binary: args["--binary"],
       out: args["--out"],
@@ -49,7 +54,7 @@ try {
     console.log("release artifacts verified");
   } else
     throw new Error(
-      "usage: release.ts prepare --inputs DIR --binary FILE --out DIR --tag TAG | verify --stage DIR",
+      "usage: release.ts prepare --inputs DIR --binary FILE --out DIR --tag TAG [--product nas|strait] | verify --stage DIR",
     );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

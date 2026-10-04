@@ -4,8 +4,11 @@
 # $REPO. The token is only ever handed to strait; nothing here prints it.
 #
 #   GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
+#
+# STRAIT_DIR=<dir> tests another strait directory instead of this checkout,
+# such as a release bundle extracted with `strait-<arch> --extract <dir>`.
 set -uo pipefail
-here=$(cd "$(dirname "$0")/.." && pwd)
+here=$(cd "${STRAIT_DIR:-$(dirname "$0")/..}" && pwd)
 REPO=${1:-Hogeyama/nix-agent-sandbox}
 : "${GH_TOKEN:?set GH_TOKEN}"
 work=$(mktemp -d)
@@ -130,6 +133,12 @@ check "hostexec denied" 'exit=126' "$here/strait hostexec -- echo no; echo exit=
 check "write strait.json" 'Read-only|denied' ": >> strait.json && echo WROTE"
 check "write strait source" 'Read-only|denied' ": >> $here/src/policy.ts && echo WROTE"
 check "write patched srt" 'Read-only|denied' ": >> $here/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/mux-proxy.js && echo WROTE"
+# A release bundle keeps Bun and its libraries in the same directory.
+if [[ -e $here/orig/bun ]]; then
+  check "write bundled bun" 'Read-only|denied' ": >> $here/orig/bun && echo WROTE"
+fi
+# srt's apply-seccomp blocks AF_UNIX sockets inside the sandbox.
+check "AF_UNIX socket blocked" 'af_unix=blocked|no-python3' "command -v python3 >/dev/null || { echo no-python3; exit; }; python3 -c 'import socket; socket.socket(socket.AF_UNIX)' 2>/dev/null && echo af_unix=open || echo af_unix=blocked"
 check "plant bunfig preload" 'planted' "echo 'console.log(\"PRELOAD RAN\")' > p.ts && echo 'preload = [\"./p.ts\"]' > bunfig.toml && echo planted"
 check "planted preload is ignored" '^ok $' "echo ok"
 

@@ -32,7 +32,7 @@ strait のコードをレビュー・変更する人のための文書です。�
 | `config.ts` | `strait.json` を検証する |
 | `selfcheck.ts` | 起動時に、srt のパッチの有効性を検証する |
 
-このほかに信頼の対象となるのは、`strait` の launcher、サブコマンドを振り分ける `src/cli.ts`、srt、srt へのパッチ、graphql-js です。srt と graphql-js のバージョンは `package.json` で固定しています。
+このほかに信頼の対象となるのは、`strait` の launcher、サブコマンドを振り分ける `src/cli.ts`、srt、srt へのパッチ、graphql-js、Bun です。srt と graphql-js のバージョンは `package.json` で固定しています。Nix でビルドする strait（Nix package と配布物）は、srt の `apply-seccomp` を同梱のビルド済みバイナリではなく、上流の同じタグのソースから作り直したものに置き換えます（[ライセンス設計の SRT-3](../../docs/superpowers/specs/2026-10-04-strait-release-license-design.md#srt-3-apply-seccomp-をソースから作り直す)）。配布物は Bun と glibc も同梱し、launcher は同梱の Bun（`libexec/bun`）を使います。
 
 `src/ui/`（ブラウザで動作する `web-ui/` を含めて約 1,400 行）は判定に関与しません。
 
@@ -139,7 +139,7 @@ Linux の srt は Unix ソケットを遮断するので、nas のようにソ�
 strait の設定ファイルと strait 自身のファイルは、次回の起動時にホストで使用されます。サンドボックスから変更できると、エージェントが次回のポリシーを選択できてしまいます。そのため、設定にかかわらず、次のパスを `denyWrite` に追加します。
 
 - 設定ファイル
-- strait のディレクトリ全体（`STRAIT_ROOT`）：launcher、ソース、パッチ、パッチ済みの srt
+- strait のディレクトリ全体（`STRAIT_ROOT`）：launcher、ソース、パッチ、パッチ済みの srt。配布物ではこれが展開先全体になり、同梱の Bun と共有ライブラリも含みます
 - 作業ディレクトリの `.claude`
 
 `STRAIT_ROOT` がディレクトリ全体を指すことは、`src/boundary_test.ts` で固定しています。ファイルの移動によって、保護の範囲が縮小しないようにするためです。
@@ -154,6 +154,7 @@ strait の起動には、必ず launcher を使用してください。`bun src/
 bun run test:strait-unit                                # リポジトリのルートで実行。contrib/strait で bun install が必要
 node_modules/.bin/tsc -p contrib/strait/tsconfig.json   # 事前に contrib/strait で bun install
 nix build .#strait                                      # パッチの目印の検証を含む
+nix build .#strait-bundled                              # 配布物（下記の probe で確認する）
 GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 ```
 
@@ -162,6 +163,13 @@ GH_TOKEN=$(gh auth token) contrib/strait/tests/probe.sh [owner/repo]
 Unix ソケットを使用するユニットテストは、strait のサンドボックス内のように `AF_UNIX` が使用できない環境ではスキップされます。スキップが 0 件になるのは、ホストで実行した場合だけです。
 
 `tests/probe.sh` は、ネットワーク、bubblewrap、socat がある Linux ホストで、チェックアウトの `contrib/strait/strait` を実際に起動して検証します。変更したソースをそのまま試験するためです。引数には、読み取りを許可する repo を指定します。省略時の値は `Hogeyama/nix-agent-sandbox` です。`GH_TOKEN` には、その repo を読み取れるトークンを指定してください。`strait.json` は、`probe.sh` が一時ディレクトリに作成します。
+
+配布物を変更した場合は、展開したツリーに対しても probe を実行します。同梱の Bun と共有ライブラリへの書き込みが拒否されること、作り直した `apply-seccomp` が `AF_UNIX` を遮断することも確認します。
+
+```sh
+./result/strait --extract ~/.cache/strait-release-test   # result は nix build .#strait-bundled の出力
+GH_TOKEN=$(gh auth token) STRAIT_DIR=~/.cache/strait-release-test contrib/strait/tests/probe.sh
+```
 
 許可されるべき要求（発行したトークンでの `curl`、`gh api`、`gh pr list`、`git ls-remote`、Claude Code の messages）と並行して、`probe.sh` は次の回避を試行します。
 

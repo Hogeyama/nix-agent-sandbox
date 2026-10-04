@@ -42,7 +42,7 @@ strait は、これらを次のように解消します。
 
 ## 利用前の確認事項
 
-- **動作環境**：確認済みの環境は Linux だけです。bubblewrap と socat が必要です。インストールには Nix を使用します。
+- **動作環境**：確認済みの環境は Linux（x86_64、aarch64）だけです。bubblewrap、socat、ripgrep（`rg`）が必要です。srt がこれらを使用します。
 - **承認の頻度**：承認なしで許可する範囲が狭いため、承認の回数は多くなります。例えば push には毎回 2 回の承認が必要です。
 - **保留の期限**：保留された要求は、240 秒で拒否されます。期限内に応答がなければ、エージェントには拒否が返却されます。
 - **利用できない機能**：
@@ -51,7 +51,21 @@ strait は、これらを次のように解消します。
 
 ## インストールと起動
 
-このリポジトリのチェックアウトからインストールします。
+GitHub Release の配布物を展開してインストールします。配布物は Bun を同梱しているので、Bun や Nix は不要です。
+
+```sh
+curl -fsSLO https://github.com/Hogeyama/nix-agent-sandbox/releases/download/strait-latest/strait_x86_64-linux.tar.gz
+tar -xzf strait_x86_64-linux.tar.gz strait
+./strait --extract ~/.local/share/strait
+mkdir -p ~/.local/bin
+ln -sf ~/.local/share/strait/bin/strait ~/.local/bin/strait
+```
+
+aarch64 では、ファイル名の `x86_64` を `aarch64` に替えてください。展開先には、まだ存在しないディレクトリを指定します。`/tmp` の下は避けてください。既定の設定ではサンドボックスから `/tmp` を読めないので、`strait hostexec` と statusline が動作しません。展開せずに `./strait` を実行しても、`--version` 以外は拒否されます。
+
+この URL は常に最新の strait を指します。更新するときは、展開先を削除してから同じ手順を実行してください。インストール済みのバージョンは `strait --version` で、変更点は [CHANGELOG](CHANGELOG.md) で確認できます。特定のバージョンに固定する場合は、`https://github.com/Hogeyama/nix-agent-sandbox/releases/download/strait-v0.1.0/strait-v0.1.0_x86_64-linux.tar.gz` のように、タグを含む URL を使用してください（strait は nas 本体とは別に `strait-v*` タグでリリースしています）。配布物に含まれる第三者のライセンスと、対応するソースの入手方法は [RELEASE-MATERIALS.md](RELEASE-MATERIALS.md) に記載しています。
+
+Nix を使う場合は、このリポジトリのチェックアウトからインストールすることもできます。
 
 ```sh
 nix profile install .#strait

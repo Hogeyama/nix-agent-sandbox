@@ -145,6 +145,42 @@ UPSTREAM = "recipes/upstream-sources.json"
 SELF_HOSTED_BUN_SOURCES = {"tinycc"}
 
 
+README = {
+    "nas": (
+        "Bundled nas uses JavaScriptCore under the GNU Library General Public License v2 "
+        "(bun/webkit/Source/JavaScriptCore/COPYING.LIB), TinyCC under LGPL 2.1 or later "
+        "(bun/tinycc/COPYING), glibc under LGPL 2.1 or later and file-specific terms "
+        "(native/glibc/COPYING.LIB and native/glibc/LICENSES), and libfuse under LGPL 2.1 "
+        "(native/fuse3/LGPL2.txt). No nas distribution term restricts modification or "
+        "reverse engineering of these libraries for debugging such modifications.\n"
+        "Source materials for bundled nas, TinyCC, glibc, libfuse, and dtach are under "
+        "sources/. The corresponding sources of Bun (including JavaScriptCore and its "
+        "other dependencies) and Pkl (including its GraalVM runtime) are the pinned "
+        "upstream revisions listed in recipes/upstream-sources.json. "
+        "This directory contains original license and copyright notices. See "
+        "docs/release-materials.md in sources/nas-source.tar.gz for the rebuild route and "
+        "the component inventory for each license decision and material path.\n"
+    ),
+    "strait": (
+        "Bundled strait runs the Bun runtime, which uses JavaScriptCore under the GNU "
+        "Library General Public License v2 (bun/webkit/Source/JavaScriptCore/COPYING.LIB) "
+        "and TinyCC under LGPL 2.1 or later (bun/tinycc/COPYING), with glibc under LGPL 2.1 "
+        "or later and file-specific terms (native/glibc/COPYING.LIB and native/glibc/LICENSES). "
+        "No strait distribution term restricts modification or reverse engineering of these "
+        "libraries for debugging such modifications.\n"
+        "Source materials for strait, TinyCC, and glibc are under sources/. The corresponding "
+        "sources of Bun (including JavaScriptCore and its other dependencies) are the pinned "
+        "upstream revisions listed in recipes/upstream-sources.json. The sandbox-runtime "
+        "package is modified by contrib/strait/patches/ in sources/strait-source.tar.gz, and "
+        "its apply-seccomp helper is rebuilt from the upstream tag recorded in the component "
+        "inventory. This directory contains original license and copyright notices. See "
+        "contrib/strait/RELEASE-MATERIALS.md in sources/strait-source.tar.gz for the "
+        "replacement route and the component inventory for each license decision and "
+        "material path.\n"
+    ),
+}
+
+
 def component(id_: str, version: str, license_: str, origin: str, requirements: list[str],
               notices: list[str], sources: list[str]) -> dict:
     return {
@@ -208,8 +244,8 @@ def copy_recipes(root: Path, cfg: dict) -> list[str]:
 
 def collect_javascript(root: Path, cfg: dict) -> list[dict]:
     result = []
-    for target in ("cli", "ui"):
-        base = Path(cfg["javascript"][target])
+    for target, directory in cfg["javascript"].items():
+        base = Path(directory)
         manifest = json.loads((base / "components.json").read_text())
         for item in manifest["components"]:
             new = dict(item)
@@ -235,6 +271,68 @@ def collect_javascript(root: Path, cfg: dict) -> list[dict]:
                 new["sources"].append(archive_tree(
                     root, f"sources/javascript/{target}/{relative.name}.tar.gz", directory))
             result.append(new)
+    return result
+
+
+def installed_packages(node_modules: Path) -> list[Path]:
+    """Package directories directly under node_modules (or @scope/), following no links."""
+    found = []
+    for manifest in sorted(node_modules.rglob("package.json")):
+        directory = manifest.parent
+        if any(part.is_symlink() for part in [directory, *directory.parents]
+               if part.is_relative_to(node_modules)):
+            continue
+        def is_modules(path: Path) -> bool:
+            return path == node_modules or path.name == "node_modules"
+        parent = directory.parent
+        if not is_modules(parent) and not (
+            parent.name.startswith("@") and is_modules(parent.parent)
+        ):
+            continue
+        found.append(directory)
+    return found
+
+
+def collect_npm_packages(root: Path, cfg: dict) -> list[dict]:
+    """Notices of the npm packages a product installs unbundled.
+
+    Every installed package and version must have a reviewed entry, so a
+    dependency update cannot ship a package whose terms nobody read.
+    """
+    reviewed = cfg["npmPackages"]["reviewed"]
+    prefix = cfg["npmPackages"]["id"]
+    seen = set()
+    result = []
+    for directory in installed_packages(Path(cfg["npmPackages"]["root"])):
+        manifest = json.loads((directory / "package.json").read_text())
+        key = f"{manifest['name']}@{manifest['version']}"
+        if key in seen:
+            raise ValueError(f"package installed twice: {key}")
+        seen.add(key)
+        terms = reviewed.get(key)
+        if terms is None:
+            raise ValueError(f"unreviewed npm package: {key}")
+        names = sorted(
+            entry.name for entry in directory.iterdir()
+            if entry.is_file() and not entry.is_symlink()
+            and any(word in entry.name.lower() for word in NOTICE_NAMES)
+        )
+        if not names:
+            raise ValueError(f"{key}: no original permission/copyright notice found")
+        notices = [
+            add_file(root, f"licenses/javascript/{prefix}/{key}/{name}", directory / name)
+            for name in names
+        ]
+        new = component(
+            f"{prefix}-npm-" + "".join(c if c.isalnum() or c in "._-" else "-" for c in key),
+            manifest["version"], terms["license"], f"npm:{key}", terms["requirements"],
+            notices, [],
+        )
+        if "decision" in terms:
+            new["decision"] = terms["decision"]
+        result.append(new)
+    if seen != set(reviewed):
+        raise ValueError("reviewed npm packages not installed: " + ", ".join(sorted(set(reviewed) - seen)))
     return result
 
 
@@ -272,7 +370,7 @@ def elf_origins(raw_payload: Path, config: dict) -> tuple[dict[str, str], list[s
         if owner is None:
             owner = next(
                 (item["id"] for item in config["originFiles"]
-                 if source_path.is_relative_to(config["nasAssetsBase"])
+                 if source_path.is_relative_to(item.get("under", config.get("nasAssetsBase", "/")))
                  and item["name"] == source_path.name
                  and hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest() == digest),
                 None,
@@ -288,8 +386,13 @@ def main() -> None:
     config = json.loads(Path(sys.argv[1]).read_text())
     fetched_root = Path(config["runtimeSources"])
     fetched = json.loads((fetched_root / "sources.json").read_text())
-    if fetched["bunVersion"] != config["bunVersion"] or fetched["pklVersion"] != config["pklVersion"]:
+    # Pkl ships with nas only; a product without it leaves pklVersion out.
+    with_pkl = "pklVersion" in config
+    if fetched["bunVersion"] != config["bunVersion"] or (
+        with_pkl and fetched["pklVersion"] != config["pklVersion"]
+    ):
         raise ValueError("Runtime sources differ from the bundled Bun/Pkl versions")
+    product = config["product"]
     for key in ("bunSources", "cargo", "npm", "pklSources"):
         config[key] = [dict(item, path=str(fetched_root / item["path"])) for item in fetched[key]]
     config["npmPins"] = str(fetched_root / "bun-npm-sources.json")
@@ -343,7 +446,7 @@ def main() -> None:
         components.append(component(id_, entry["version"], entry["license"], entry["origin"],
                                     entry["requirements"], notices, sources))
 
-    for entry in config["pklSources"]:
+    for entry in config["pklSources"] if with_pkl else []:
         archive = Path(entry["path"])
         source_rel = UPSTREAM
         terms = policy[entry["id"]]
@@ -368,20 +471,20 @@ def main() -> None:
     # This is the fixed hash of the official executable fetched by flake.nix
     # before mark_elf and autoPatchelf change it. Retain that identity in the
     # scoped Pkl audit without copying the 100 MB prebuilt file into sources.
-    pkl_pin = config["pklBinaryPin"]
-    pkl_hash = pkl_pin["hash"]
-    if not pkl_hash.startswith("sha256-"):
-        raise ValueError("Pkl binary pin is not a SHA-256 SRI hash")
-    pkl_hex = base64.b64decode(pkl_hash.removeprefix("sha256-"), validate=True).hex()
-    if len(pkl_hex) != 64:
-        raise ValueError("Pkl binary SHA-256 has wrong length")
-    add_file(root, "recipes/pkl-upstream-sha256.txt",
-                              f"{pkl_hex}  {pkl_pin['url']}\n".encode())
+    if with_pkl:
+        pkl_pin = config["pklBinaryPin"]
+        pkl_hash = pkl_pin["hash"]
+        if not pkl_hash.startswith("sha256-"):
+            raise ValueError("Pkl binary pin is not a SHA-256 SRI hash")
+        pkl_hex = base64.b64decode(pkl_hash.removeprefix("sha256-"), validate=True).hex()
+        if len(pkl_hex) != 64:
+            raise ValueError("Pkl binary SHA-256 has wrong length")
+        add_file(root, "recipes/pkl-upstream-sha256.txt",
+                 f"{pkl_hex}  {pkl_pin['url']}\n".encode())
 
     libtcc_path = "src/runtime/ffi/libtcc1.c"
     libtcc_source = add_file(root, "sources/bun/libtcc1.c", extract_notice(bun_archive, libtcc_path))
-    dtach_source = Path(next(item["path"] for item in config["native"] if item["id"] == "dtach"))
-    gpl_notice = add_file(root, "licenses/bun/libtcc1/GPL-2.0.txt", (dtach_source / "COPYING").read_bytes())
+    gpl_notice = add_file(root, "licenses/bun/libtcc1/GPL-2.0.txt", Path(config["gplv2Text"]).read_bytes())
     exception_notice = add_file(root, "licenses/bun/libtcc1/libtcc1.c", extract_notice(bun_archive, libtcc_path))
     components.append(component("bun-libtcc1", config["bunVersion"],
                                 "GPL-2.0-or-later WITH libtcc1-linking-exception",
@@ -450,9 +553,12 @@ def main() -> None:
                          extract_notice(fetched_npm / archive, name))
     recipe_paths = copy_recipes(root, config)
     components.extend(collect_javascript(root, config))
+    if "npmPackages" in config:
+        components.extend(collect_npm_packages(root, config))
 
-    own_notice = add_file(root, "licenses/nas/LICENSE", Path(config["nasSource"]) / "LICENSE")
-    own_source = archive_tree(root, "sources/nas-source.tar.gz", Path(config["nasSource"]),
+    own = product["id"]
+    own_notice = add_file(root, f"licenses/{own}/LICENSE", Path(product["source"]) / "LICENSE")
+    own_source = archive_tree(root, f"sources/{own}-source.tar.gz", Path(product["source"]),
                               exclude=(".superpowers",))
     rust_toolchain = tomllib.loads(extract_notice(bun_archive, "rust-toolchain.toml").decode())
     if rust_toolchain["toolchain"]["channel"] != "nightly-2026-07-20":
@@ -472,26 +578,12 @@ def main() -> None:
                                "Bun pinned Rust nightly toolchain", ["BUN-7"], rust_notices, [UPSTREAM])
     rust_component["decision"] = "Choose MIT for Rust's dual-licensed code and retain original third-party notices and LLVM exceptions; see BUN-7."
     components.append(rust_component)
-    add_file(root, "licenses/README.txt", (
-        "Bundled nas uses JavaScriptCore under the GNU Library General Public License v2 "
-        "(bun/webkit/Source/JavaScriptCore/COPYING.LIB), TinyCC under LGPL 2.1 or later "
-        "(bun/tinycc/COPYING), glibc under LGPL 2.1 or later and file-specific terms "
-        "(native/glibc/COPYING.LIB and native/glibc/LICENSES), and libfuse under LGPL 2.1 "
-        "(native/fuse3/LGPL2.txt). No nas distribution term restricts modification or "
-        "reverse engineering of these libraries for debugging such modifications.\n"
-        "Source materials for bundled nas, TinyCC, glibc, libfuse, and dtach are under "
-        "sources/. The corresponding sources of Bun (including JavaScriptCore and its "
-        "other dependencies) and Pkl (including its GraalVM runtime) are the pinned "
-        "upstream revisions listed in recipes/upstream-sources.json. "
-        "This directory contains original license and copyright notices. See "
-        "docs/release-materials.md in sources/nas-source.tar.gz for the rebuild route and "
-        "the component inventory for each license decision and material path.\n"
-    ).encode())
+    add_file(root, "licenses/README.txt", README[own].encode())
     # The Nix recipes rebuild the bundle, so they belong to nas itself.
-    components.append(component("nas", config["nasVersion"], "repository license", "nas repository",
+    components.append(component(own, product["version"], "repository license", "nas repository",
                                 [], [own_notice], [own_source] + recipe_paths))
-    for id_ in ("nas-hostexec", "nas-maskfs", "nas-mask-filter", "sumi"):
-        components.append(component(id_, config["nasVersion"], "repository license", "nas repository",
+    for id_ in product["subcomponents"]:
+        components.append(component(id_, product["version"], "repository license", "nas repository",
                                     [], [own_notice], [own_source]))
     # libgcc_s is resolvable for the bundle but not always copied into it.
     # Only a copied library is GPL object code needing GCC's source; code
@@ -529,11 +621,14 @@ def main() -> None:
         "npm": "bun.lock files in the Bun source; every package is fetched from registry.npmjs.org by integrity",
         "nodeHeaders": upstream["nodeHeaders"],
         "rustSource": upstream["rustSource"],
-        "pkl": upstream["pkl"],
-        "pklRuntime": [
-            {key: item[key] for key in ("id", "version", "url", "origin", "hash")}
-            for item in fetched["pklSources"]
-        ],
+        **({
+            "pkl": upstream["pkl"],
+            "pklRuntime": [
+                {key: item[key] for key in ("id", "version", "url", "origin", "hash")}
+                for item in fetched["pklSources"]
+            ],
+        } if with_pkl else {}),
+        **upstream.get("extra", {}),
     }, indent=2) + "\n").encode())
     manifest = {"schemaVersion": 1, "system": config["system"],
                 "components": components, "payloadOrigins": origins}
