@@ -383,7 +383,7 @@ describe("launch token and polling", () => {
 });
 
 describe("review and one-request decisions", () => {
-  test("renders hostile strings as inert visible text without selecting anything", async () => {
+  test("selects the initial request and renders hostile strings as inert visible text", async () => {
     const hostile = "<script>alert(1)</script>\n\u202e\\n\ud800";
     const h = harness({
       pending: [
@@ -391,8 +391,8 @@ describe("review and one-request decisions", () => {
       ],
     });
     await tick();
-    expect(h.node("actions").children).toHaveLength(0);
-    expect(h.document.activeElement).toBeUndefined();
+    expect(h.node("request-details").hidden).toBe(false);
+    expect(h.document.activeElement).toBe(h.listButton());
     expect(decisions(h)).toHaveLength(0);
     const button = h.listButton();
     button.click();
@@ -403,6 +403,55 @@ describe("review and one-request decisions", () => {
     expect(h.node("actions").children).toHaveLength(2);
     expect(decisions(h)).toHaveLength(0);
     h.app.stop();
+  });
+  test("an empty inbox focuses the oldest new request, including after the last decision", async () => {
+    const h = harness({ pending: [] });
+    try {
+      await tick();
+      expect(h.node("actions").children).toHaveLength(0);
+      expect(h.document.activeElement).toBeUndefined();
+      const oldest = request({ session: "older", since: NOW - 3000 });
+      h.setPending([request(), oldest]);
+      await h.app.refresh();
+      expect(h.node("request-details").hidden).toBe(false);
+      expect(h.node("fields").textContent).toContain(oldest.ref);
+      expect(h.document.activeElement).toBe(h.listButton(1));
+      expect(decisions(h)).toHaveLength(0);
+
+      h.deny().click();
+      await tick();
+      h.approve().click();
+      await tick();
+      expect(h.node("request-list").children).toHaveLength(0);
+      expect(h.node("request-details").hidden).toBe(true);
+
+      const next = request({ n: "2" });
+      h.setPending([next]);
+      await h.app.refresh();
+      expect(h.node("fields").textContent).toContain(next.ref);
+      expect(h.document.activeElement).toBe(h.listButton());
+      expect(decisions(h)).toHaveLength(2);
+    } finally {
+      h.app.stop();
+    }
+  });
+  test("new requests do not replace an existing selection or reset its scroll", async () => {
+    const h = harness();
+    try {
+      await tick();
+      const approve = h.approve();
+      h.node("details-scroll").scrollTop = 300;
+      h.node("refresh").focus();
+      h.setPending([request(), request({ n: "2", since: NOW - 3000 })]);
+      await h.app.refresh();
+      expect(h.approve()).toBe(approve);
+      expect(h.listButton().attributes.get("aria-pressed")).toBe("true");
+      expect(h.document.activeElement).toBe(h.node("refresh"));
+      expect(h.node("details-scroll").scrollTop).toBe(300);
+      expect(decisions(h)).toHaveLength(0);
+    } finally {
+      h.app.stop();
+    }
   });
   test("a host command is shown one argument per line, never as a plain request", async () => {
     const hostile = "a b\n\u202e";
@@ -686,13 +735,14 @@ describe("review and one-request decisions", () => {
     ]) {
       const h = harness({ pending: [request(), request({ n: "2" })] });
       await tick();
+      const focused = h.document.activeElement;
       h.listButton().click();
       h.setDecisionResponse(reply);
       h.approve().click();
       await tick();
       expect(decisions(h)).toHaveLength(1);
       expect(h.node("actions").children).toHaveLength(0);
-      expect(h.document.activeElement).toBeUndefined();
+      expect(h.document.activeElement).toBe(focused);
       expect(h.node("status").textContent).not.toContain(
         "Approved one request",
       );

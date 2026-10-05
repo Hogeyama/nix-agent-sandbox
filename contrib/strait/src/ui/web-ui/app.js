@@ -466,6 +466,7 @@ export function startInbox({
       const snapshot = pendingSnapshot(payload);
       if (stopped || startingRevision !== revision) return;
       inherited = inheritedEnv(payload);
+      const wasEmpty = records.size === 0;
       records = new Map(
         snapshot
           .filter((record) => record.expiresAt > now())
@@ -485,6 +486,7 @@ export function startInbox({
           : "Up to date. No requests are waiting.";
       }
       renderList();
+      if (wasEmpty) selectOldest();
     } catch {
       if (stopped || startingRevision !== revision) return;
       clearSelection(
