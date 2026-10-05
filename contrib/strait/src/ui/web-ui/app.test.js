@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  graphqlParts,
   pendingSnapshot,
   sameRecord,
+  shellWord,
   startInbox,
   takeToken,
   timestamp,
   visible,
+  visibleJson,
 } from "./app.js";
 
 const TOKEN = "a".repeat(64);
@@ -200,13 +203,34 @@ const decisions = (h) =>
   h.calls.filter((call) => call.path === "/api/decision");
 
 describe("hostile request display", () => {
-  test("timestamps include a readable UTC date and exact epoch milliseconds", () => {
-    expect(timestamp(0)).toBe("1970-01-01T00:00:00.000Z (0 epoch ms)");
-    expect(timestamp(NOW)).toContain(new Date(NOW).toISOString());
-    expect(timestamp(NOW)).toContain(`${NOW} epoch ms`);
-    expect(timestamp(Number.MAX_SAFE_INTEGER)).toBe(
-      `Date unavailable (${Number.MAX_SAFE_INTEGER} epoch ms)`,
+  test("shell words are bare, single-quoted, or $'...' with every backslash an escape", () => {
+    expect(shellWord("printf")).toBe("printf");
+    expect(shellWord("--opt=a/b.c")).toBe("--opt=a/b.c");
+    expect(shellWord("")).toBe("''");
+    expect(shellWord('say "hi"')).toBe(`'say "hi"'`);
+    expect(shellWord("C:\\path")).toBe("'C:\\path'");
+    expect(shellWord("日本語 😀")).toBe("'日本語 😀'");
+    expect(shellWord("it's")).toBe("$'it\\'s'");
+    expect(shellWord("a\\b\nc")).toBe("$'a\\\\b\\nc'");
+    expect(shellWord("\t\r\u0000\u001b\u0085\u202e\u2028\ud800\u{e0001}")).toBe(
+      "$'\\t\\r\\x00\\x1b\\x85\\u202e\\u2028\\ud800\\U000e0001'",
     );
+    // A literal escape from the data has its backslash doubled.
+    expect(shellWord("\\u202e\n")).toBe("$'\\\\u202e\\n'");
+    expect(shellWord("\u202e")).not.toBe(shellWord("\\u202e"));
+  });
+  test("timestamps are local dates", () => {
+    expect(timestamp(NOW)).toBe(new Date(NOW).toLocaleString());
+    expect(timestamp(Number.MAX_SAFE_INTEGER)).toBe("Date unavailable");
+  });
+  test("JSON-quoted text keeps JSON's escapes and escapes what JSON leaves raw", () => {
+    expect(visibleJson('say "hi"\n\\')).toBe('"say \\"hi\\"\\n\\\\"');
+    expect(visibleJson("\u202e\u2028\u0085")).toBe(
+      '"\\u{202e}\\u{2028}\\u{85}"',
+    );
+    // A literal escape from the data has its backslash doubled by JSON.
+    expect(visibleJson("\\u{202e}")).toBe('"\\\\u{202e}"');
+    expect(visibleJson("\u202e")).not.toBe(visibleJson("\\u{202e}"));
   });
   test("controls, bidi formats, separators and lone surrogates are visible", () => {
     expect(
@@ -396,19 +420,60 @@ describe("review and one-request decisions", () => {
     await tick();
     const row = h.listButton().textContent;
     expect(row).toContain("Host command");
-    expect(row).toContain(visible(JSON.stringify(hostile)));
+    expect(row).toContain("rm $'a b\\n\\u202e'");
     h.listButton().click();
     const fields = h.node("fields").textContent;
     expect(fields).toContain("Command, run on the host");
-    expect(fields).toContain('argv[0] "rm"');
-    expect(fields).toContain(visible(`argv[1] ${JSON.stringify(hostile)}`));
+    expect(fields).toContain("rm $'a b\\n\\u202e'");
     expect(fields).toContain("/w/x");
-    expect(fields).toContain('PATH, HOME from the host, plus:\nK="v"');
+    expect(fields).toContain("PATH, HOME from the host, plus:\nK=v");
     expect(fields).not.toContain("Body (captured raw string)");
+    expect(fields).not.toContain("Session command");
+    const tips = new Map(
+      h
+        .node("fields")
+        .children.filter((child) => child.tagName === "dt")
+        .map((term) => [term.textContent, term.attributes.get("title")]),
+    );
+    expect(tips.get("Command, run on the host")).toContain("Shell words");
+    expect(tips.get("Command directory")).toContain("backslashes are doubled");
+    expect(tips.get("Since")).toBeUndefined();
     expect(h.node("body-note").textContent).toContain(
       "runs this command on the host",
     );
     h.app.stop();
+  });
+  test("a GraphQL body shows its query as lines and its variables as indented JSON", async () => {
+    const body = JSON.stringify({
+      query: "mutation($b: String!) {\n  add(body: $b) { id }\n}",
+      variables: { b: 'LGTM\n"ok"\u202e' },
+    });
+    const h = harness({ pending: [request({ body })] });
+    await tick();
+    h.listButton().click();
+    const fields = h.node("fields").textContent;
+    expect(fields).toContain(
+      "GraphQL query" + "mutation($b: String!) {\n  add(body: $b) { id }\n}",
+    );
+    expect(fields).toContain(
+      'GraphQL variables{\n  "b": "LGTM\\n\\"ok\\"\\u{202e}"\n}',
+    );
+    expect(fields).toContain(visible(body));
+    expect(fields).not.toContain("\u202e");
+    expect(h.node("body-note").textContent).toContain("decoded");
+    h.app.stop();
+  });
+  test("a body that is not a GraphQL object is shown raw only", () => {
+    for (const body of ["", "[]", "null", '{"q":1}', '{"query":1}', "{"]) {
+      expect(graphqlParts(body)).toBeNull();
+    }
+    expect(
+      graphqlParts('{"query":"a\\r\\nb\\u202e","operationName":"O","x":[1]}'),
+    ).toEqual({
+      query: ["a", "b\\u{202e}"],
+      operationName: '"O"',
+      rest: ["{", '  "x": [', "    1", "  ]", "}"],
+    });
   });
   test("unknown and captured-empty bodies are distinct", async () => {
     const h = harness({

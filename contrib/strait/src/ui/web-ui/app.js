@@ -2,18 +2,62 @@
 // Data from a held request is hostile, including the reason and working directory.
 export function visible(value) {
   return value.replace(/[\\\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/gu, (character) =>
-    character === "\\"
-      ? "\\\\"
-      : `\\u{${character.codePointAt(0).toString(16)}}`,
+    character === "\\" ? "\\\\" : escapeChar(character),
   );
 }
 
+const escapeChar = (character) =>
+  `\\u{${character.codePointAt(0).toString(16)}}`;
+
+// JSON text with what JSON.stringify leaves raw escaped as well. Its own
+// output doubles every backslash taken from the data, so a single backslash
+// always starts an escape and needs no doubling here.
+export const visibleJson = (value) => escapeJsonText(JSON.stringify(value));
+
+const escapeJsonText = (text) =>
+  text.replace(/[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/gu, escapeChar);
+
+// Indented JSON as lines that strait split, each escaped on its own.
+const jsonLines = (value) =>
+  JSON.stringify(value, null, 2).split("\n").map(escapeJsonText);
+
 export function timestamp(value) {
   const date = new Date(value);
-  const iso = Number.isNaN(date.getTime())
+  return Number.isNaN(date.getTime())
     ? "Date unavailable"
-    : date.toISOString();
-  return `${iso} (${value} epoch ms)`;
+    : date.toLocaleString();
+}
+
+/**
+ * A GraphQL body taken apart, or null when it is not one JSON object with a
+ * string query. Policy denies a body with a duplicated member before review,
+ * so JSON.parse sees what GitHub would.
+ */
+export function graphqlParts(body) {
+  let value;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    typeof value.query !== "string"
+  ) {
+    return null;
+  }
+  const { query, variables, operationName, ...rest } = value;
+  return {
+    // Lines that strait split, each escaped on its own.
+    query: query.split(/\r?\n/).map(visible),
+    ...(operationName !== undefined
+      ? { operationName: visibleJson(operationName) }
+      : {}),
+    ...(variables !== undefined ? { variables: jsonLines(variables) } : {}),
+    ...(Object.keys(rest).length ? { rest: jsonLines(rest) } : {}),
+  };
 }
 
 // `<session>-<n>.<incarnation>`, as core/approval.ts and core/session.ts make it.
@@ -94,17 +138,48 @@ export function inheritedEnv(payload) {
   return isStrings(payload?.inheritedEnv) ? [...payload.inheritedEnv] : [];
 }
 
-// Lines of text, each escaped on its own. One argument per line, JSON-quoted: a joined command line would hide where
-// each argument ends.
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
+
+// One argument as a shell word, the way a person would type it. Nothing is
+// special inside '...', so only an argument with a quote or an invisible
+// character needs $'...', where every backslash starts an escape.
+export function shellWord(arg) {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+  if (!arg.includes("'") && !INVISIBLE.test(arg)) return `'${arg}'`;
+  let text = "";
+  for (const character of arg) {
+    const code = character.codePointAt(0);
+    text +=
+      character === "\\" || character === "'"
+        ? `\\${character}`
+        : character === "\n"
+          ? "\\n"
+          : character === "\t"
+            ? "\\t"
+            : character === "\r"
+              ? "\\r"
+              : !INVISIBLE.test(character)
+                ? character
+                : code < 0x100
+                  ? `\\x${code.toString(16).padStart(2, "0")}`
+                  : code < 0x10000
+                    ? `\\u${code.toString(16).padStart(4, "0")}`
+                    : `\\U${code.toString(16).padStart(8, "0")}`;
+  }
+  return `$'${text}'`;
+}
+
+// A command line of shell words: the quoting shows where each argument ends.
+export const commandLine = (argv) => argv.map(shellWord).join(" ");
+
+// Lines of escaped text.
 export function execLines(exec, inherited) {
   const env = Object.entries(exec.env);
   return {
-    argv: exec.argv.map(
-      (arg, index) => `argv[${index}] ${JSON.stringify(arg)}`,
-    ),
+    command: commandLine(exec.argv),
     env: [
-      `${inherited.length ? inherited.join(", ") : "Nothing"} from the host${env.length ? ", plus:" : ", nothing else"}`,
-      ...env.map(([key, value]) => `${key}=${JSON.stringify(value)}`),
+      `${inherited.length ? inherited.map(visible).join(", ") : "Nothing"} from the host${env.length ? ", plus:" : ", nothing else"}`,
+      ...env.map(([key, value]) => `${visible(key)}=${shellWord(value)}`),
     ],
   };
 }
@@ -200,19 +275,23 @@ export function startInbox({
         String(sameRecord(selected?.record, record)),
       );
       for (const [className, text] of [
-        ["request-method", record.exec ? "Host command" : record.method],
+        [
+          "request-method",
+          record.exec ? "Host command" : visible(record.method),
+        ],
         [
           "request-url",
-          record.exec
-            ? record.exec.argv.map((a) => JSON.stringify(a)).join(" ")
-            : record.url,
+          record.exec ? commandLine(record.exec.argv) : visible(record.url),
         ],
-        ["request-context", record.cwd],
-        ["request-identity", `Session ${record.session} · ${record.ref}`],
+        ["request-context", visible(record.cwd)],
+        [
+          "request-identity",
+          visible(`Session ${record.session} · ${record.ref}`),
+        ],
       ]) {
         const line = document.createElement("span");
         line.className = `${className} untrusted`;
-        line.textContent = visible(text);
+        line.textContent = text;
         button.append(line);
       }
       button.addEventListener("click", () => select(record));
@@ -239,33 +318,53 @@ export function startInbox({
     help.hidden = true;
     detail.hidden = false;
     const exec = record.exec && execLines(record.exec, inherited);
-    for (const [label, value] of [
+    const graphql =
+      !record.exec && record.body !== undefined
+        ? graphqlParts(record.body)
+        : null;
+    const rawBody =
+      record.body === undefined
+        ? "Unavailable: strait did not capture this request body."
+        : visible(record.body);
+    // Every value is escaped text; an array is lines that strait split.
+    // How each field escapes untrusted text, shown when hovering its label.
+    const SHELL =
+      "Shell words. Inside $'…', a backslash starts an escape such as \\n or \\u202e.";
+    const JSON_TEXT =
+      "JSON. Characters JSON leaves raw, such as U+202E, are shown as \\u{hex}.";
+    const TEXT =
+      "Invisible characters are shown as \\u{hex}, and backslashes are doubled.";
+    for (const [label, value, tip, collapsed] of [
       ...(exec
         ? [
-            ["Command, run on the host", exec.argv],
-            ["Command directory", record.exec.cwd],
-            ["Command environment", exec.env],
+            ["Command, run on the host", exec.command, SHELL],
+            ["Command directory", visible(record.exec.cwd), TEXT],
+            ["Command environment", exec.env, SHELL],
           ]
         : []),
-      ["Method", record.method],
-      ["URL", record.url],
-      ["Policy reason", record.reason],
-      ...(exec
-        ? []
-        : [
-            [
-              "Body (captured raw string)",
-              record.body ??
-                "Unavailable: strait did not capture this request body.",
-            ],
-          ]),
-      ["Session", record.session],
-      [
-        "Session command",
-        record.command.map((a) => JSON.stringify(a)).join(" "),
-      ],
-      ["Session directory", record.cwd],
-      ["Reference", record.ref],
+      ["Method", visible(record.method), TEXT],
+      ["URL", visible(record.url), TEXT],
+      ["Policy reason", visible(record.reason), TEXT],
+      ...(graphql
+        ? [
+            ["GraphQL query", graphql.query, TEXT],
+            ...(graphql.operationName !== undefined
+              ? [["GraphQL operation name", graphql.operationName, JSON_TEXT]]
+              : []),
+            ...(graphql.variables
+              ? [["GraphQL variables", graphql.variables, JSON_TEXT]]
+              : []),
+            ...(graphql.rest
+              ? [["Other body members", graphql.rest, JSON_TEXT]]
+              : []),
+            ["Body (captured raw string)", rawBody, TEXT, true],
+          ]
+        : exec
+          ? []
+          : [["Body (captured raw string)", rawBody, TEXT]]),
+      ["Session", visible(record.session)],
+      ["Session directory", visible(record.cwd), TEXT],
+      ["Reference", visible(record.ref)],
       ["Since", timestamp(record.since)],
       ["Expires at", timestamp(record.expiresAt)],
     ]) {
@@ -273,12 +372,21 @@ export function startInbox({
       const definition = document.createElement("dd");
       const text = document.createElement("pre");
       term.textContent = label;
+      if (tip) {
+        term.className = "tip";
+        term.setAttribute("title", tip);
+      }
       text.className = "untrusted";
-      // An array is lines that strait split, not ones the request contains.
-      text.textContent = Array.isArray(value)
-        ? value.map(visible).join("\n")
-        : visible(value);
-      definition.append(text);
+      text.textContent = Array.isArray(value) ? value.join("\n") : value;
+      if (collapsed) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Show";
+        details.append(summary, text);
+        definition.append(details);
+      } else {
+        definition.append(text);
+      }
       fields.append(term, definition);
     }
     bodyNote.textContent = record.exec
@@ -287,7 +395,9 @@ export function startInbox({
         ? "An unavailable body does not mean the request body is empty."
         : record.body === ""
           ? "The captured body is an empty string (0 characters)."
-          : "The captured body is shown without JSON or GraphQL transformations.";
+          : graphql
+            ? "The GraphQL query and variables are decoded from the captured body, which is shown raw under Body."
+            : "The captured body is shown without JSON or GraphQL transformations.";
     for (const [approve, label, className] of [
       [false, "Deny request", "deny"],
       [true, "Approve once", "approve"],

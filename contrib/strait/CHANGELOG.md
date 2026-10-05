@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Breaking:** `githubRepos` in `strait.json` is renamed to `trustedGitHubRepos`. The old key is rejected as unknown.
 - Reading an allowed repository with a recent gh no longer waits for approval. This covers `gh pr view`, `gh issue view`, `gh issue status`, `gh label list` and `gh release list`, and every `--json` field of `gh pr view`/`list`, `gh issue view`/`list`, `gh label list` and `gh repo view`. Checked with gh 2.102, where `gh issue view` also needs `trustLinkedIssues`.
 - `gh pr status` and `gh search` still wait for approval, because they search beyond one repository.
+- `strait review web` is easier to read. A GraphQL body is shown as its query, one line per line, and its variables as indented JSON; the raw body stays available under a toggle. A host command is shown as one shell command line, such as `printf '%s|' 'say "hi"' $'a\nb'`, and times are local dates without epoch milliseconds. The details no longer show the command that started the session, which was easy to mistake for the host command.
 
 ### Fixed
 

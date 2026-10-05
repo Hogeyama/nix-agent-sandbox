@@ -127,7 +127,6 @@ button:disabled {
   font-size: 0.75rem;
   font-weight: 400;
 }
-.display-note,
 #body-note,
 #selection-help,
 #empty,
@@ -154,6 +153,11 @@ dt {
 dd {
   margin: 0.25rem 0 0;
 }
+dt.tip {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
 pre {
   margin: 0;
   font-size: 0.84rem;
@@ -162,6 +166,11 @@ pre {
   border-radius: 0.35rem;
   max-height: 28rem;
   overflow: auto;
+}
+summary {
+  cursor: pointer;
+  font-size: 0.84rem;
+  margin-bottom: 0.25rem;
 }
 .actions {
   display: flex;
@@ -275,7 +284,6 @@ footer {
     border-color: #54667e;
   }
   .eyebrow,
-  .display-note,
   #body-note,
   #selection-help,
   #empty,
