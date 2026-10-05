@@ -50,8 +50,11 @@ export function graphqlParts(body) {
   }
   const { query, variables, operationName, ...rest } = value;
   return {
-    // Lines that strait split, each escaped on its own.
-    query: query.split(/\r?\n/).map(visible),
+    // Preserve source indentation, including tabs inside block strings.
+    // Escape every other control and data backslash as in ordinary text.
+    query: query
+      .split(/\r?\n/)
+      .map((line) => line.split("\t").map(visible).join("\t")),
     ...(operationName !== undefined
       ? { operationName: visibleJson(operationName) }
       : {}),
@@ -347,7 +350,11 @@ export function startInbox({
       ["Policy reason", visible(record.reason), TEXT],
       ...(graphql
         ? [
-            ["GraphQL query", graphql.query, TEXT],
+            [
+              "GraphQL query",
+              graphql.query,
+              "Line breaks and tabs are preserved; tabs use two-column stops. Other invisible characters are shown as \\u{hex}, and backslashes are doubled.",
+            ],
             ...(graphql.operationName !== undefined
               ? [["GraphQL operation name", graphql.operationName, JSON_TEXT]]
               : []),

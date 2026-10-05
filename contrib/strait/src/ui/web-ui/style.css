@@ -138,6 +138,7 @@ footer {
   direction: ltr;
   unicode-bidi: isolate;
   white-space: pre-wrap;
+  tab-size: 2;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }

@@ -494,7 +494,7 @@ describe("review and one-request decisions", () => {
   });
   test("a GraphQL body shows its query as lines and its variables as indented JSON", async () => {
     const body = JSON.stringify({
-      query: "mutation($b: String!) {\n  add(body: $b) { id }\n}",
+      query: "mutation($b: String!) {\n\tadd(body: $b) {\n\t\tid\n\t}\n}",
       variables: { b: 'LGTM\n"ok"\u202e' },
     });
     const h = harness({ pending: [request({ body })] });
@@ -502,7 +502,8 @@ describe("review and one-request decisions", () => {
     h.listButton().click();
     const fields = h.node("fields").textContent;
     expect(fields).toContain(
-      "GraphQL query" + "mutation($b: String!) {\n  add(body: $b) { id }\n}",
+      "GraphQL query" +
+        "mutation($b: String!) {\n\tadd(body: $b) {\n\t\tid\n\t}\n}",
     );
     expect(fields).toContain(
       'GraphQL variables{\n  "b": "LGTM\\n\\"ok\\"\\u{202e}"\n}',
@@ -511,6 +512,16 @@ describe("review and one-request decisions", () => {
     expect(fields).not.toContain("\u202e");
     expect(h.node("body-note").textContent).toContain("decoded");
     h.app.stop();
+  });
+  test("GraphQL tabs stay distinct from literal escapes and other controls remain visible", () => {
+    const query = '\tquery { field(arg: """\n\ttext\\u{9}\u202e\r\0\n""") }';
+    expect(graphqlParts(JSON.stringify({ query })).query).toEqual([
+      '\tquery { field(arg: """',
+      "\ttext\\\\u{9}\\u{202e}\\u{d}\\u{0}",
+      '""") }',
+    ]);
+    // The exception belongs only to the decoded query display.
+    expect(visible("\t")).toBe("\\u{9}");
   });
   test("a body that is not a GraphQL object is shown raw only", () => {
     for (const body of ["", "[]", "null", '{"q":1}', '{"query":1}', "{"]) {
