@@ -393,7 +393,20 @@ describe("review display", () => {
   });
 });
 
-describe("srt respond patch", () => {
+// Restricted sandboxes may forbid listening even on loopback. Probe separately
+// so errors in the patched response handler still fail the test.
+const canListenOnLoopback = await new Promise<boolean>((resolve, reject) => {
+  const probe = createServer();
+  probe.once("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPERM" || error.code === "EACCES") resolve(false);
+    else reject(error);
+  });
+  probe.listen(0, "127.0.0.1", () =>
+    probe.close((error) => (error ? reject(error) : resolve(true))),
+  );
+});
+
+describe.skipIf(!canListenOnLoopback)("srt respond patch", () => {
   test("filterRequest's own response reaches the client", async () => {
     const server = createServer((req, res) => {
       decideAndRespond(
