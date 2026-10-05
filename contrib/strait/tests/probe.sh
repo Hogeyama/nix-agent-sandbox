@@ -94,7 +94,8 @@ check "duplicate Authorization, foreign dropped" '^200' "curl $code -H \"Authori
 check "other repository" '^403' "curl $code https://api.github.com/repos/octocat/hello-world"
 check "REST write" '^403' "curl $code -X POST -d '{}' $api/issues"
 gql="curl $code -X POST -H 'content-type: application/json' -H \"Authorization: token \$GH_TOKEN\" https://api.github.com/graphql -d"
-check "graphql viewer" '^403' "$gql '{\"query\":\"{viewer{login}}\"}'"
+# viewer { login } is allowed for `gh issue status`; anything else under viewer is not.
+check "graphql viewer beyond login" '^403' "$gql '{\"query\":\"{viewer{repositories(first:1){totalCount}}}\"}'"
 check "graphql other repository" '^403' "$gql '{\"query\":\"{repository(owner:\\\"octocat\\\",name:\\\"hello-world\\\"){name}}\"}'"
 check "graphql traversal" '^403' "$gql '{\"query\":\"{repository(owner:\\\"${REPO%/*}\\\",name:\\\"${REPO#*/}\\\"){owner{repositories(first:1){totalCount}}}}\"}'"
 check "graphql mutation" '^403' "$gql '{\"query\":\"mutation{addStar(input:{starrableId:\\\"x\\\"}){clientMutationId}}\"}'"
