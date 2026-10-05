@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed
+
+- Resizing the terminal now reaches the sandboxed command. srt runs bwrap with `--new-session`, so the command was outside the terminal's foreground process group and never got `SIGWINCH`; strait now forwards it.
+
 ## [0.1.0] - 2026-10-04
 
 First release.

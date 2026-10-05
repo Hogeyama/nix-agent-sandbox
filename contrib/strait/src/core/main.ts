@@ -44,6 +44,7 @@ import {
   isSessionId,
   sessionInfo,
 } from "./session.ts";
+import { forwardWinch } from "./winch.ts";
 
 /** The strait directory: the launcher, src/, the patch and node_modules. */
 export const STRAIT_ROOT = resolve(import.meta.dir, "..", "..");
@@ -285,6 +286,11 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
   const forward = (sig: NodeJS.Signals) => () => child.kill(sig);
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
+  // bwrap's --new-session keeps the command out of the terminal's
+  // foreground group, so a resize must be passed on by hand.
+  process.on("SIGWINCH", () => {
+    if (child.pid !== undefined) forwardWinch(child.pid);
+  });
   child.on("exit", async (code, signal) => {
     approvals.close();
     SandboxManager.cleanupAfterCommand();

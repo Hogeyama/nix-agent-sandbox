@@ -31,6 +31,7 @@ strait のコードをレビュー・変更する人のための文書です。�
 | `session.ts` | セッション ID と承認用ソケットを確保する |
 | `config.ts` | `strait.json` を検証する |
 | `selfcheck.ts` | 起動時に、srt のパッチの有効性を検証する |
+| `winch.ts` | 端末のサイズの変更（SIGWINCH）を、サンドボックス内のセッションに転送する |
 
 このほかに信頼の対象となるのは、`strait` の launcher、サブコマンドを振り分ける `src/cli.ts`、srt、srt へのパッチ、graphql-js、Bun です。srt と graphql-js のバージョンは `package.json` で固定しています。Nix でビルドする strait（Nix package と配布物）は、srt の `apply-seccomp` を同梱のビルド済みバイナリではなく、上流の同じタグのソースから作り直したものに置き換えます（[ライセンス設計の SRT-3](../../docs/superpowers/specs/2026-10-04-strait-release-license-design.md#srt-3-apply-seccomp-をソースから作り直す)）。配布物は Bun と glibc も同梱し、launcher は同梱の Bun（`libexec/bun`）を使います。
 
