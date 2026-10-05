@@ -31,6 +31,11 @@ test("filesystem keys override one by one", () => {
   expect(c.filesystem.allowRead).toEqual(DEFAULT_FILESYSTEM.allowRead);
 });
 
+test("an owner wildcard is accepted", () => {
+  const c = parseConfig(JSON.stringify({ githubRepos: ["my-org/*"] }));
+  expect(c.githubRepos).toEqual(["my-org/*"]);
+});
+
 test.each([
   [
     "network section",
@@ -40,6 +45,10 @@ test.each([
   ["repo without owner", { githubRepos: ["private-repo"] }],
   ["repo with path", { githubRepos: ["my-org/private-repo/issues"] }],
   ["repo with percent", { githubRepos: ["my%2Dorg/repo"] }],
+  ["wildcard owner", { githubRepos: ["*/repo"] }],
+  ["wildcard owner and name", { githubRepos: ["*/*"] }],
+  ["partial wildcard name", { githubRepos: ["my-org/repo-*"] }],
+  ["owner alone", { githubRepos: ["my-org/"] }],
   ["non-string path", { filesystem: { denyRead: [1] } }],
   ["non-boolean hostExec", { hostExec: "yes" }],
   ["non-boolean statusLine", { statusLine: "no" }],

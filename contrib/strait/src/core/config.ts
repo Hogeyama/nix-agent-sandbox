@@ -78,8 +78,9 @@ export function parseConfig(text: string): StraitConfig {
 
   const githubRepos = stringArray(top.githubRepos ?? [], "githubRepos");
   for (const r of githubRepos) {
-    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r)) {
-      throw new Error(`githubRepos: "${r}" is not owner/name`);
+    // `owner/*` is the only wildcard: every repository of one owner.
+    if (!/^[A-Za-z0-9_.-]+\/(?:[A-Za-z0-9_.-]+|\*)$/.test(r)) {
+      throw new Error(`githubRepos: "${r}" is not owner/name or owner/*`);
     }
   }
 

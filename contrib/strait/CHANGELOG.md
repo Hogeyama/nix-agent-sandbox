@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- `githubRepos` accepts `owner/*` for every repository of one owner.
+
 ### Fixed
 
 - Resizing the terminal now reaches the sandboxed command. srt runs bwrap with `--new-session`, so the command was outside the terminal's foreground process group and never got `SIGWINCH`; strait now forwards it.

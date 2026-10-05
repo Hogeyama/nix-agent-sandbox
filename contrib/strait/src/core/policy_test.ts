@@ -301,6 +301,53 @@ describe("GitHub API", () => {
   ]);
 });
 
+describe("every repository of one owner", () => {
+  const owner: PolicyConfig = { githubRepos: ["My-Org/*"] };
+  const action = (method: string, url: string) =>
+    decide({ method, url, headers: new Headers() }, owner, s).action;
+
+  test("any repository of the owner, by REST and git", () => {
+    expect(action("GET", "https://api.github.com/repos/my-org/another")).toBe(
+      "allow",
+    );
+    expect(
+      action("POST", "https://github.com/my-org/another.git/git-upload-pack"),
+    ).toBe("allow");
+  });
+  test("an owner whose name only starts the same goes to review", () => {
+    expect(
+      action("GET", "https://api.github.com/repos/my-org-evil/another"),
+    ).toBe("review");
+  });
+  test("a literal * repository name does not stand for the rule", () => {
+    expect(action("GET", "https://api.github.com/repos/other/*")).toBe(
+      "review",
+    );
+  });
+  test("GraphQL on any repository of the owner", () => {
+    const graphql = (o: string) =>
+      decide(
+        {
+          method: "POST",
+          url: "https://api.github.com/graphql",
+          headers: new Headers({ "content-type": "application/json" }),
+          body: JSON.stringify({
+            query: `{ repository(owner: "${o}", name: "another") { name } }`,
+          }),
+        },
+        owner,
+        s,
+      ).action;
+    expect(graphql("my-org")).toBe("allow");
+    expect(graphql("octocat")).toBe("review");
+  });
+  test("writes still go to review", () => {
+    expect(action("POST", "https://api.github.com/repos/my-org/x/issues")).toBe(
+      "review",
+    );
+  });
+});
+
 describe("git over HTTPS", () => {
   run([
     [

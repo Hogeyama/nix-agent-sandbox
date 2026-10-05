@@ -48,7 +48,10 @@ export interface HostRule {
 }
 
 export interface PolicyConfig {
-  /** `owner/name` pairs whose contents may be read. Compared case-insensitively. */
+  /**
+   * `owner/name` pairs whose contents may be read, or `owner/*` for every
+   * repository of one owner. Compared case-insensitively.
+   */
   githubRepos: readonly string[];
   /** Whether HOSTEXEC_HOST takes requests to run commands on the host. */
   hostExec?: boolean;
@@ -380,5 +383,9 @@ function repoAllowed(
   // Percent-encoding would let two spellings name one repository.
   if (owner === "" || repo === "" || /%/.test(owner + repo)) return false;
   const want = `${owner}/${repo}`.toLowerCase();
-  return config.githubRepos.some((r) => r.toLowerCase() === want);
+  const anyOfOwner = `${owner}/*`.toLowerCase();
+  return config.githubRepos.some((r) => {
+    const rule = r.toLowerCase();
+    return rule === want || rule === anyOfOwner;
+  });
 }
