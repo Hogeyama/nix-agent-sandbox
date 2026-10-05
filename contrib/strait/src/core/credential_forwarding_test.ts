@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createMitmCA,
   disposeMitmCA,
@@ -17,7 +20,22 @@ const canBindLocalSocket = await new Promise<boolean>((resolve) => {
   probe.once("error", () => resolve(false));
   probe.listen(0, "127.0.0.1", () => probe.close(() => resolve(true)));
 });
-test.skipIf(!hasLinuxNetworkHelpers || !canBindLocalSocket)(
+// srt's proxy listens on Unix sockets, which srt itself blocks inside a
+// strait sandbox.
+async function canListenOnUnixSockets(): Promise<boolean> {
+  const dir = mkdtempSync(join(tmpdir(), "strait-unix-probe-"));
+  try {
+    return await new Promise<boolean>((done) => {
+      const s = createServer();
+      s.once("error", () => done(false));
+      s.listen(join(dir, "p.sock"), () => s.close(() => done(true)));
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const unixSockets = await canListenOnUnixSockets();
+test.skipIf(!hasLinuxNetworkHelpers || !canBindLocalSocket || !unixSockets)(
   "patched srt manager forwards host-owned auth and byte-identical data",
   async () => {
     const ca = createMitmCA({});
