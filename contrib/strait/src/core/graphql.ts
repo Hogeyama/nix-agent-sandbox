@@ -31,7 +31,7 @@ import {
 
 /**
  * Paths gh needs for its reads of one repository, written as a selection set.
- * Taken from every query gh 2.46 and 2.90 send for `pr view`/`list`/`checks`,
+ * Taken from every query gh 2.46, 2.90 and 2.102 send for `pr view`/`list`/`checks`,
  * `issue view`/`list`/`status`, `release view`/`list`, `label list` and
  * `repo view`, with each command's `--json` asking for every field it offers
  * (src/core/testdata/gh_queries.json).
@@ -42,7 +42,8 @@ import {
  * none of which is listed. Where a path does step into another repository or
  * project (`parent`, `templateRepository`, `closingIssuesReferences`,
  * `closedByPullRequestsReferences`, `projectItems`), it stops at IDs, names,
- * numbers and URLs. Outside `repository` there are only gh's schema probes
+ * numbers and URLs; LINKED_ISSUE_TITLES is the one exception, and it is off
+ * by default. Outside `repository` there are only gh's schema probes
  * (`__type`), which return field names, and `viewer { login }`.
  */
 const GITHUB_FIELDS = `{
@@ -68,6 +69,14 @@ const GITHUB_FIELDS = `{
       stateReason title updatedAt url
       assignees { nodes { databaseId id login name } totalCount }
       author { id login name }
+      blockedBy {
+        totalCount
+        nodes { id number repository { nameWithOwner } state url }
+      }
+      blocking {
+        totalCount
+        nodes { id number repository { nameWithOwner } state url }
+      }
       closedByPullRequestsReferences {
         nodes { id number repository { id name owner { id login } } url }
         pageInfo { endCursor hasNextPage }
@@ -82,10 +91,17 @@ const GITHUB_FIELDS = `{
         }
         pageInfo { endCursor hasNextPage }
       }
+      issueType { color description id name }
       labels { nodes { color description id name } totalCount }
       milestone { description dueOn number title }
+      parent { id number repository { nameWithOwner } state url }
       projectCards { nodes { column { name } project { name } } totalCount }
       reactionGroups { content users { totalCount } }
+      subIssues {
+        totalCount
+        nodes { id number repository { nameWithOwner } state url }
+      }
+      subIssuesSummary { completed percentCompleted total }
     }
     issueTemplates { about body name title }
     issues {
@@ -95,6 +111,14 @@ const GITHUB_FIELDS = `{
         title updatedAt url
         assignees { nodes { databaseId id login name } totalCount }
         author { id login name }
+        blockedBy {
+          totalCount
+          nodes { id number repository { nameWithOwner } state url }
+        }
+        blocking {
+          totalCount
+          nodes { id number repository { nameWithOwner } state url }
+        }
         closedByPullRequestsReferences {
           nodes { id number repository { id name owner { id login } } url }
           pageInfo { endCursor hasNextPage }
@@ -109,14 +133,21 @@ const GITHUB_FIELDS = `{
           }
           pageInfo { endCursor hasNextPage }
         }
+        issueType { color description id name }
         labels { nodes { color description id name } totalCount }
         milestone { description dueOn number title }
+        parent { id number repository { nameWithOwner } state url }
         projectCards { nodes { column { name } project { name } } totalCount }
         projectItems {
           totalCount
           nodes { fieldValueByName { name optionId } id project { id title } }
         }
         reactionGroups { content users { totalCount } }
+        subIssues {
+          totalCount
+          nodes { id number repository { nameWithOwner } state url }
+        }
+        subIssuesSummary { completed percentCompleted total }
       }
       pageInfo { endCursor hasNextPage }
     }
@@ -312,6 +343,30 @@ const GITHUB_FIELDS = `{
   viewer { login }
 }`;
 
+/**
+ * Titles of the issues linked to an issue as its parent, sub-issues or
+ * dependencies, which gh 2.102 selects for `issue view` and `issue list
+ * --json`. A dependency may be an issue of any owner (GitHub accepts one in
+ * another account's repository), and a parent or sub-issue one of the same
+ * owner but not necessarily in githubRepos, so these titles are text written
+ * outside githubRepos. gh selects all four together, so allowing only the
+ * same-owner ones would not let `issue view` through. The rest of each linked
+ * issue (id, number, state, URL, repository name) is in GITHUB_FIELDS.
+ * Allowed only with `trustLinkedIssues`.
+ */
+const LINKED_ISSUE_TITLES = `{
+  repository {
+    issueOrPullRequest { ...linked }
+    issues { nodes { ...linked } }
+  }
+}
+fragment linked on Issue {
+  parent { title }
+  subIssues { nodes { title } }
+  blockedBy { nodes { title } }
+  blocking { nodes { title } }
+}`;
+
 /** The root field every allowed path starts at, and its owner/name arguments. */
 const REPOSITORY_PATH = "/repository";
 
@@ -330,9 +385,21 @@ interface Occurrence {
 }
 
 const allowed = allowedPaths(GITHUB_FIELDS);
+const linkedTitles = allowedPaths(LINKED_ISSUE_TITLES);
+const allowedWithLinked = {
+  leaves: new Set([...allowed.leaves, ...linkedTitles.leaves]),
+  inner: new Set([...allowed.inner, ...linkedTitles.inner]),
+};
 
 /** The leaves of GITHUB_FIELDS, for tests that tie them to gh's queries. */
 export const GITHUB_LEAF_PATHS: ReadonlySet<string> = allowed.leaves;
+/** The leaves `trustLinkedIssues` adds. */
+export const LINKED_TITLE_LEAF_PATHS: ReadonlySet<string> = linkedTitles.leaves;
+
+export interface GraphqlOptions {
+  /** Allow the titles of linked issues, which may come from any repository. */
+  trustLinkedIssues?: boolean;
+}
 
 /** The leaf paths a document selects, or null when it cannot be analysed. */
 export function leafPaths(query: string): string[] | null {
@@ -348,7 +415,9 @@ export function leafPaths(query: string): string[] | null {
 export function judgeGraphql(
   body: unknown,
   isRepoAllowed: (owner: string, name: string) => boolean,
+  options: GraphqlOptions = {},
 ): GraphqlVerdict {
+  const paths = options.trustLinkedIssues ? allowedWithLinked : allowed;
   const bad = (reason: string): GraphqlVerdict => ({
     ok: false,
     reason,
@@ -405,7 +474,7 @@ export function judgeGraphql(
     outside.some((p) => path === p || path.startsWith(`${p}/`));
   const repos = new Set<string>();
   for (const o of analysed.fields) {
-    const ok = o.leaf ? allowed.leaves.has(o.path) : allowed.inner.has(o.path);
+    const ok = o.leaf ? paths.leaves.has(o.path) : paths.inner.has(o.path);
     if (!ok) {
       if (!within(o.path)) outside.push(o.path);
       continue;

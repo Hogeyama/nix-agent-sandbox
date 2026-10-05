@@ -211,6 +211,7 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
           },
           {
             githubRepos: config.githubRepos,
+            trustLinkedIssues: config.trustLinkedIssues,
             hostExec: config.hostExec,
             hosts: config.hosts,
           },

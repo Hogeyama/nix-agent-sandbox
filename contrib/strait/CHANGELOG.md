@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `githubRepos` accepts `owner/*` for every repository of one owner.
+- `"trustLinkedIssues": true` lets GraphQL read, without approval, the titles of the issues linked to an issue as its parent, sub-issues or dependencies. Those issues may live in any repository, so this is off by default. `gh issue view` asks for them, so without it every `gh issue view` waits for approval.
 
 ### Changed
 
-- The GraphQL allowlist covers gh 2.90: `pr view`, `issue view`, `label list` and `release list` no longer wait for approval, nor do the `--json` fields of `pr`/`issue` `view`/`list`, `label list` and `repo view`. gh's schema probes (`__type` field names) and `viewer { login }` pass too; `gh pr status` and `gh search` are still held, since they reach beyond one repository.
+- Reading an allowed repository with a recent gh no longer waits for approval. This covers `gh pr view`, `gh issue view`, `gh issue status`, `gh label list` and `gh release list`, and every `--json` field of `gh pr view`/`list`, `gh issue view`/`list`, `gh label list` and `gh repo view`. Checked with gh 2.102, where `gh issue view` also needs `trustLinkedIssues`.
+- `gh pr status` and `gh search` still wait for approval, because they search beyond one repository.
 
 ### Fixed
 

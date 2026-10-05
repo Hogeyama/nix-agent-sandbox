@@ -4,6 +4,7 @@ import { DEFAULT_FILESYSTEM, parseConfig } from "./config.ts";
 test("empty config uses defaults", () => {
   expect(parseConfig("{}")).toEqual({
     githubRepos: [],
+    trustLinkedIssues: false,
     filesystem: DEFAULT_FILESYSTEM,
     hostExec: false,
     statusLine: true,
@@ -51,6 +52,7 @@ test.each([
   ["owner alone", { githubRepos: ["my-org/"] }],
   ["non-string path", { filesystem: { denyRead: [1] } }],
   ["non-boolean hostExec", { hostExec: "yes" }],
+  ["non-boolean trustLinkedIssues", { trustLinkedIssues: 1 }],
   ["non-boolean statusLine", { statusLine: "no" }],
   ["wildcard host", { hosts: { "*.example.com": {} } }],
   ["host with a port", { hosts: { "devapi.example.com:8443": {} } }],

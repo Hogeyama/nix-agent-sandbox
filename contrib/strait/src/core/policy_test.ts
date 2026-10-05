@@ -348,6 +348,25 @@ describe("every repository of one owner", () => {
   });
 });
 
+describe("trustLinkedIssues reaches the GraphQL check", () => {
+  const graphql = (trustLinkedIssues?: boolean) =>
+    decide(
+      {
+        method: "POST",
+        url: "https://api.github.com/graphql",
+        headers: new Headers({ "content-type": "application/json" }),
+        body: JSON.stringify({
+          query:
+            '{ repository(owner: "my-org", name: "private-repo") { issueOrPullRequest(number: 1) { ... on Issue { parent { title } } } } }',
+        }),
+      },
+      { ...config, trustLinkedIssues },
+      s,
+    ).action;
+  test("held without it", () => expect(graphql()).toBe("review"));
+  test("allowed with it", () => expect(graphql(true)).toBe("allow"));
+});
+
 describe("git over HTTPS", () => {
   run([
     [

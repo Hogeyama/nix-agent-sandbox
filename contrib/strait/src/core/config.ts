@@ -18,6 +18,8 @@ export interface FilesystemConfig {
 
 export interface StraitConfig {
   githubRepos: string[];
+  /** Read linked issues' titles from any repository without approval. */
+  trustLinkedIssues: boolean;
   filesystem: FilesystemConfig;
   /** Let the sandbox ask to run commands on the host, each one approved. */
   hostExec: boolean;
@@ -72,7 +74,14 @@ export function parseConfig(text: string): StraitConfig {
   const top = record(raw, "strait.json");
   rejectUnknown(
     top,
-    ["githubRepos", "filesystem", "hostExec", "statusLine", "hosts"],
+    [
+      "githubRepos",
+      "trustLinkedIssues",
+      "filesystem",
+      "hostExec",
+      "statusLine",
+      "hosts",
+    ],
     "strait.json",
   );
 
@@ -94,6 +103,10 @@ export function parseConfig(text: string): StraitConfig {
       }
     }
   }
+  const trustLinkedIssues = top.trustLinkedIssues ?? false;
+  if (typeof trustLinkedIssues !== "boolean") {
+    throw new Error("trustLinkedIssues must be true or false");
+  }
   const hostExec = top.hostExec ?? false;
   if (typeof hostExec !== "boolean") {
     throw new Error("hostExec must be true or false");
@@ -104,6 +117,7 @@ export function parseConfig(text: string): StraitConfig {
   }
   return {
     githubRepos,
+    trustLinkedIssues,
     filesystem,
     hostExec,
     statusLine,

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { GITHUB_LEAF_PATHS, judgeGraphql, leafPaths } from "./graphql.ts";
+import {
+  GITHUB_LEAF_PATHS,
+  judgeGraphql,
+  LINKED_TITLE_LEAF_PATHS,
+  leafPaths,
+} from "./graphql.ts";
 import { decide, hasDuplicateMember } from "./policy.ts";
 import gh from "./testdata/gh_queries.json";
 
@@ -17,19 +22,61 @@ const repo = (inner: string) =>
   `query { repository(owner: "my-org", name: "private-repo") { ${inner} } }`;
 
 describe("gh's own queries", () => {
+  const ours = (o: string, n: string) =>
+    `${o}/${n}`.toLowerCase() === "hogeyama/nix-agent-sandbox";
   for (const r of gh.requests) {
-    test(r.command, () => {
-      const verdict = judgeGraphql(
-        { query: r.query, variables: r.variables },
-        (o, n) => `${o}/${n}`.toLowerCase() === "hogeyama/nix-agent-sandbox",
-      );
-      expect(verdict).toEqual({ ok: true });
+    const body = { query: r.query, variables: r.variables };
+    const linked = (leafPaths(r.query) ?? []).some((p) =>
+      LINKED_TITLE_LEAF_PATHS.has(p),
+    );
+    test(`gh ${r.gh}: ${r.command}`, () => {
+      expect(judgeGraphql(body, ours, { trustLinkedIssues: true })).toEqual({
+        ok: true,
+      });
+      if (linked) {
+        const held = judgeGraphql(body, ours);
+        expect(held.ok).toBe(false);
+        if (!held.ok) expect(held.reason).toContain("/title");
+      } else {
+        expect(judgeGraphql(body, ours)).toEqual({ ok: true });
+      }
     });
   }
 
   test("the allowed leaves are exactly the ones gh asked for", () => {
     const asked = new Set(gh.requests.flatMap((r) => leafPaths(r.query) ?? []));
-    expect([...GITHUB_LEAF_PATHS].sort()).toEqual([...asked].sort());
+    const listed = new Set([...GITHUB_LEAF_PATHS, ...LINKED_TITLE_LEAF_PATHS]);
+    expect([...listed].sort()).toEqual([...asked].sort());
+  });
+
+  test("linked issues' titles are held unless trusted, and nothing else", () => {
+    for (const p of LINKED_TITLE_LEAF_PATHS) {
+      expect(p.endsWith("/title")).toBe(true);
+      expect(GITHUB_LEAF_PATHS.has(p)).toBe(false);
+    }
+  });
+});
+
+describe("trustLinkedIssues", () => {
+  const linked = repo(
+    "issueOrPullRequest(number: 1) { ... on Issue { parent { title } } }",
+  );
+  test("off by default: a linked issue's title goes to review", () => {
+    expect(judge(linked).ok).toBe(false);
+  });
+  test("on: a linked issue's title is allowed", () => {
+    expect(
+      judgeGraphql({ query: linked }, allowedRepo, { trustLinkedIssues: true }),
+    ).toEqual({ ok: true });
+  });
+  test("on: still nothing more of the linked issue than its title", () => {
+    const body = repo(
+      "issueOrPullRequest(number: 1) { ... on Issue { parent { title body } } }",
+    );
+    expect(
+      judgeGraphql({ query: body }, allowedRepo, { trustLinkedIssues: true })
+        .ok,
+    ).toBe(false);
   });
 });
 

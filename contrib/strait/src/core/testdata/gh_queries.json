@@ -1,5 +1,5 @@
 {
-  "comment": "GraphQL requests gh sent, captured with GH_DEBUG=api. The 2.46.0 entries are the first request of each command, through a proxy that refused the connection. The 2.90.0 entries are every request of each command, through a local stand-in for api.github.com that answered gh's schema probes (__type) with GitHub's real answers and failed everything else; '--json <all fields>' selects every field the command offers. 'gh pr status' and 'gh search' are left out on purpose: their documents reach /search, which is not limited to one repository.",
+  "comment": "GraphQL requests gh sent, captured with GH_DEBUG=api. The 2.46.0 entries are the first request of each command, through a proxy that refused the connection. The 2.90.0 and 2.102.0 entries are every request of each command, through a local stand-in for api.github.com that answered gh's schema probes (__type) with GitHub's real answers and failed everything else; '--json <all fields>' selects every field the command offers. 'gh pr status' and 'gh search' are left out on purpose: their documents reach /search, which is not limited to one repository.",
   "requests": [
     {
       "gh": "2.46.0",
@@ -328,6 +328,47 @@
       "command": "gh search issues/prs (schema probe only)",
       "query": "query SearchType_enumValues{SearchType: __type(name: \"SearchType\"){enumValues(includeDeprecated: true){name}}}",
       "variables": {}
+    },
+    {
+      "gh": "2.102.0",
+      "command": "gh issue view 1",
+      "query": "\n\tquery IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissue: issueOrPullRequest(number: $number) {\n\t\t\t\t__typename\n\t\t\t\t...on Issue{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},comments(last: 1) {nodes {author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}}},totalCount},stateReason,issueType{id,name,description,color},parent{id,number,title,url,state,repository{nameWithOwner}},subIssues(first:100){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},subIssuesSummary{total,completed,percentCompleted},blockedBy(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},blocking(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},id}\n\t\t\t\t...on PullRequest{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},comments(last: 1) {nodes {author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}}},totalCount},id}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "number": 1,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.102.0",
+      "command": "gh issue view 1 --comments",
+      "query": "\n\tquery IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissue: issueOrPullRequest(number: $number) {\n\t\t\t\t__typename\n\t\t\t\t...on Issue{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},stateReason,issueType{id,name,description,color},parent{id,number,title,url,state,repository{nameWithOwner}},subIssues(first:100){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},subIssuesSummary{total,completed,percentCompleted},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},blockedBy(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},blocking(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},id}\n\t\t\t\t...on PullRequest{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},id}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "number": 1,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.102.0",
+      "command": "gh issue view 1 --json <all fields>",
+      "query": "\n\tquery IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissue: issueOrPullRequest(number: $number) {\n\t\t\t\t__typename\n\t\t\t\t...on Issue{assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},blockedBy(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},blocking(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},body,closed,closedAt,closedByPullRequestsReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,isPinned,issueType{id,name,description,color},labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,parent{id,number,title,url,state,repository{nameWithOwner}},projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},state,stateReason,subIssues(first:100){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},subIssuesSummary{total,completed,percentCompleted},title,updatedAt,url}\n\t\t\t\t...on PullRequest{assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},body,closed,closedAt,comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},state,title,updatedAt,url}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "number": 1,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.102.0",
+      "command": "gh issue list --json <all fields>",
+      "query": "fragment issue on Issue {assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},blockedBy(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},blocking(first:50){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},body,closed,closedAt,closedByPullRequestsReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,isPinned,issueType{id,name,description,color},labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,parent{id,number,title,url,state,repository{nameWithOwner}},projectCards(first:100){nodes{project{name}column{name}},totalCount},projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: \"Status\") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount},reactionGroups{content,users{totalCount}},state,stateReason,subIssues(first:100){nodes{id,number,title,url,state,repository{nameWithOwner}},totalCount},subIssuesSummary{total,completed,percentCompleted},title,updatedAt,url}\n\tquery IssueList($owner: String!, $repo: String!, $limit: Int, $endCursor: String, $states: [IssueState!] = OPEN, $assignee: String, $author: String, $mention: String) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissues(first: $limit, after: $endCursor, orderBy: {field: CREATED_AT, direction: DESC}, states: $states, filterBy: {assignee: $assignee, createdBy: $author, mentioned: $mention}) {\n\t\t\t\ttotalCount\n\t\t\t\tnodes {\n\t\t\t\t\t...issue\n\t\t\t\t}\n\t\t\t\tpageInfo {\n\t\t\t\t\thasNextPage\n\t\t\t\t\tendCursor\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\t",
+      "variables": {
+        "limit": 30,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox",
+        "states": ["OPEN"]
+      }
     }
   ]
 }

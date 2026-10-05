@@ -104,7 +104,9 @@ strait は、次の条件をすべて満たす文書だけを許可します。
 - すべての `repository` について、`owner` と `name` が `githubRepos` のいずれか 1 つを指す。`owner/*` の規則は、その owner のすべてのリポジトリを指します。
 - 解析可能である。未知の directive、引数・変数・fragment の重複、未定義や循環する fragment、トークン数・深さ・展開量の上限の超過がある文書は、解析不能として許可しません。
 
-`GITHUB_FIELDS` は、gh 2.46 と 2.90 の主要なコマンドが送信する query から作成しました（`src/core/testdata/gh_queries.json`）。2.90 の分は、各コマンドが送るすべての要求を収録し、`--json` で選べるフィールドもすべて含めています。末端はすべてスカラーで、他のリポジトリの内容に到達する経路（`owner { repositories }`、`viewer { starredRepositories }` など）は含みません。他のリポジトリを指す経路（`parent`、`closingIssuesReferences` など）は、ID、名前、番号、URL で止まります。
+`GITHUB_FIELDS` は、gh 2.46、2.90、2.102 の主要なコマンドが送信する query から作成しました（`src/core/testdata/gh_queries.json`）。2.90 以降の分は、各コマンドが送るすべての要求を収録し、`--json` で選べるフィールドもすべて含めています。末端はすべてスカラーで、他のリポジトリの内容に到達する経路（`owner { repositories }`、`viewer { starredRepositories }` など）は含みません。他のリポジトリを指す経路（`parent`、`closingIssuesReferences` など）は、ID、名前、番号、URL で止まります。
+
+例外は、つながった issue（`parent`、`subIssues`、`blockedBy`、`blocking`）のタイトルです（`LINKED_ISSUE_TITLES`）。gh 2.102 の `issue view` は常にこれを選びます。依存先（`blockedBy`、`blocking`）には他の owner の issue も指定できます（別アカウントのリポジトリの issue で確認済み）。親と子は同じ owner に限られますが、`githubRepos` にないリポジトリのこともあります。どちらも、タイトルは `githubRepos` の外で書かれた文章になり得ます。gh は 4 つをまとめて選ぶので、同じ owner の親と子だけを許可しても `issue view` は通りません。そのため 4 つを同じ扱いにしています。既定では許可せず、`trustLinkedIssues` を有効にした場合だけ許可します。strait は応答を見ないので、つながった issue が許可したリポジトリにあるかどうかは判定できません。この設定は、どこのリポジトリのタイトルでも取り込むという P1 の例外です。
 
 `repository` の外で許可するのは、gh がフィールドの有無を調べるためのスキーマの問い合わせ（`__type { fields { name } enumValues { name } }`）と、`viewer { login }` だけです。どちらもリポジトリの内容を返しません。`gh pr status` と `gh search` は、リポジトリに限定されない `search` を使うので、保留されます。許可リストの末端と、収録した query の末端が完全に一致することをテストで検証しています。経路を追加する場合は、その query を testdata に追加してください。
 

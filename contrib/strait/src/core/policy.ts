@@ -53,6 +53,8 @@ export interface PolicyConfig {
    * repository of one owner. Compared case-insensitively.
    */
   githubRepos: readonly string[];
+  /** Allow GraphQL to read the titles of linked issues in any repository. */
+  trustLinkedIssues?: boolean;
   /** Whether HOSTEXEC_HOST takes requests to run commands on the host. */
   hostExec?: boolean;
   /** Hosts added in strait.json, by exact lowercase name. */
@@ -282,8 +284,10 @@ function decideGraphql(
   if (hasDuplicateMember(req.body)) {
     return deny("GraphQL body has a duplicated member");
   }
-  const verdict = judgeGraphql(body, (owner, name) =>
-    repoAllowed(owner, name, config),
+  const verdict = judgeGraphql(
+    body,
+    (owner, name) => repoAllowed(owner, name, config),
+    { trustLinkedIssues: config.trustLinkedIssues },
   );
   return verdict.ok ? allow : review(verdict.reason);
 }
