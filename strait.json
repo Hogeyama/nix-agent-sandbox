@@ -1,0 +1,28 @@
+{
+  "filesystem": {
+    "allowWrite": [
+      ".",
+      "~/.claude.json",
+      "~/.claude/projects",
+      "~/.claude/backups",
+      "/tmp/claude"
+    ],
+    "allowRead": [
+      "/tmp/claude-http-*.sock",
+      "~/.local/share/claude",
+      "~/.config/git"
+    ],
+    "denyRead": [
+      "/tmp",
+      "~/.ssh",
+      "~/.aws",
+      "~/.config",
+      "~/.local/share/",
+      "~/.claude/.credentials.json",
+      "~/.claude/ide",
+      "Nixとの相性が悪くてdenyRead(/)ができないの。。。"
+    ]
+  },
+  "trustedGitHubRepos": ["Hogeyama/*"],
+  "hostExec": true
+}
