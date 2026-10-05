@@ -41,10 +41,12 @@ const tick = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 };
 
-// The tiny DOM is intentionally text-only: an HTML injection or focus move fails.
+// The tiny DOM is intentionally text-only: an HTML injection fails.
 class Element {
-  constructor(tagName) {
+  constructor(tagName, ownerDocument) {
     this.tagName = tagName;
+    this.ownerDocument = ownerDocument;
+    this.scrollTop = 0;
     this.children = [];
     this.attributes = new Map();
     this.listeners = new Map();
@@ -68,7 +70,7 @@ class Element {
     throw new Error("HTML rendering is forbidden");
   }
   focus() {
-    throw new Error("Automatic focus is forbidden");
+    this.ownerDocument.activeElement = this;
   }
   append(...children) {
     this.children.push(...children);
@@ -108,16 +110,17 @@ function harness({
     "status",
     "refresh",
     "request-details",
+    "details-scroll",
     "fields",
     "body-note",
     "selection-help",
     "actions",
   ];
-  const nodes = new Map(ids.map((id) => [id, new Element("div")]));
-  nodes.get("refresh").disabled = true;
   const document = new Element("document");
+  const nodes = new Map(ids.map((id) => [id, new Element("div", document)]));
+  nodes.get("refresh").disabled = true;
   document.getElementById = (id) => nodes.get(id);
-  document.createElement = (tagName) => new Element(tagName);
+  document.createElement = (tagName) => new Element(tagName, document);
   let currentTime = NOW;
   const location = {
     hash: token ? `#${token}` : "",
@@ -365,6 +368,7 @@ describe("review and one-request decisions", () => {
     });
     await tick();
     expect(h.node("actions").children).toHaveLength(0);
+    expect(h.document.activeElement).toBeUndefined();
     expect(decisions(h)).toHaveLength(0);
     const button = h.listButton();
     button.click();
@@ -419,7 +423,21 @@ describe("review and one-request decisions", () => {
     expect(h.node("body-note").textContent).toContain("empty string");
     h.app.stop();
   });
-  test("approval sends exactly the selected immutable identity and never selects the next request", async () => {
+  test("switching requests resets detail scrolling while unchanged polls retain it", async () => {
+    const h = harness({ pending: [request(), request({ n: "2" })] });
+    try {
+      await tick();
+      h.listButton().click();
+      h.node("details-scroll").scrollTop = 300;
+      await h.app.refresh();
+      expect(h.node("details-scroll").scrollTop).toBe(300);
+      h.listButton(1).click();
+      expect(h.node("details-scroll").scrollTop).toBe(0);
+    } finally {
+      h.app.stop();
+    }
+  });
+  test("approval sends exactly the selected immutable identity and selects the next request", async () => {
     const holding = deferred();
     const first = request();
     const second = request({ n: "2" });
@@ -437,13 +455,48 @@ describe("review and one-request decisions", () => {
     });
     holding.resolve(response({ ok: true }));
     await tick();
-    expect(h.node("actions").children).toHaveLength(0);
-    expect(h.node("request-details").hidden).toBe(true);
+    expect(h.node("actions").children).toHaveLength(2);
+    expect(h.node("request-details").hidden).toBe(false);
     expect(h.node("status").textContent).toContain(
       "does not mean the upstream operation succeeded",
     );
-    expect(h.listButton().attributes.get("aria-pressed")).toBe("false");
+    expect(h.listButton().attributes.get("aria-pressed")).toBe("true");
+    expect(h.document.activeElement).toBe(h.listButton());
+    expect(h.node("fields").textContent).toContain(first.ref);
+    approve.click({ force: true });
+    expect(decisions(h)).toHaveLength(1);
     h.app.stop();
+  });
+  test.each([
+    true,
+    false,
+  ])("decision %s focuses the oldest unexpired request across sessions", async (approve) => {
+    const holding = deferred();
+    const newest = request({ n: "2", since: NOW - 100 });
+    const expired = request({ n: "3", since: NOW - 5000, expiresAt: NOW + 1 });
+    const oldest = request({ session: "another", since: NOW - 3000 });
+    const h = harness({ pending: [request(), newest, expired, oldest] });
+    try {
+      await tick();
+      h.listButton().click();
+      h.node("details-scroll").scrollTop = 400;
+      h.setDecisionResponse(holding.promise);
+      (approve ? h.approve() : h.deny()).click();
+      h.setNow(NOW + 2);
+      holding.resolve(response({ ok: true }));
+      await tick();
+      expect(h.node("fields").textContent).toContain(oldest.ref);
+      expect(h.listButton(2).attributes.get("aria-pressed")).toBe("true");
+      expect(h.document.activeElement).toBe(h.listButton(2));
+      expect(h.node("details-scroll").scrollTop).toBe(0);
+      expect(decisions(h)).toHaveLength(1);
+      h.approve().click();
+      await tick();
+      expect(JSON.parse(decisions(h)[1].options.body).ref).toBe(oldest.ref);
+      expect(h.node("fields").textContent).toContain(newest.ref);
+    } finally {
+      h.app.stop();
+    }
   });
   test("denial sends approve false for just one request", async () => {
     const h = harness();
@@ -453,6 +506,8 @@ describe("review and one-request decisions", () => {
     await tick();
     expect(JSON.parse(decisions(h)[0].options.body).approve).toBe(false);
     expect(h.node("status").textContent).toBe("Denied one request.");
+    expect(h.node("actions").children).toHaveLength(0);
+    expect(h.node("request-details").hidden).toBe(true);
     h.app.stop();
   });
   test("a button detached by selecting another record cannot decide either record", async () => {
@@ -564,7 +619,7 @@ describe("review and one-request decisions", () => {
       response({ error: "failed" }, 500),
       response({ ok: false }),
     ]) {
-      const h = harness();
+      const h = harness({ pending: [request(), request({ n: "2" })] });
       await tick();
       h.listButton().click();
       h.setDecisionResponse(reply);
@@ -572,6 +627,7 @@ describe("review and one-request decisions", () => {
       await tick();
       expect(decisions(h)).toHaveLength(1);
       expect(h.node("actions").children).toHaveLength(0);
+      expect(h.document.activeElement).toBeUndefined();
       expect(h.node("status").textContent).not.toContain(
         "Approved one request",
       );
@@ -619,7 +675,7 @@ describe("static asset safety", () => {
     expect(css).toContain("direction: ltr");
     expect(css).toContain("unicode-bidi: isolate");
     expect(script).not.toMatch(
-      /innerHTML|outerHTML|insertAdjacentHTML|document\.write|localStorage|sessionStorage|\.focus\(/,
+      /innerHTML|outerHTML|insertAdjacentHTML|document\.write|localStorage|sessionStorage/,
     );
   });
 });

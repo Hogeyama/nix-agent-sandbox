@@ -139,6 +139,7 @@ export function startInbox({
   const status = element("status");
   const refreshButton = element("refresh");
   const detail = element("request-details");
+  const detailScroll = element("details-scroll");
   const fields = element("fields");
   const bodyNote = element("body-note");
   const help = element("selection-help");
@@ -155,9 +156,7 @@ export function startInbox({
   let listSignature = "";
   let renderedButtons = new Map();
 
-  function clearSelection(
-    message = "Choose a pending request. Nothing is selected automatically.",
-  ) {
+  function clearSelection(message = "Choose a pending request.") {
     if (expiryTimer !== undefined) clearTimeout(expiryTimer);
     expiryTimer = undefined;
     // Old handlers also test the selection object, so detached buttons cannot act.
@@ -315,7 +314,19 @@ export function startInbox({
       },
       Math.min(record.expiresAt - now(), 2_147_483_647),
     );
+    detailScroll.scrollTop = 0;
     renderList();
+  }
+
+  function selectOldest() {
+    let oldest;
+    for (const record of records.values()) {
+      if (record.expiresAt <= now()) continue;
+      if (!oldest || record.since < oldest.since) oldest = record;
+    }
+    if (!oldest) return;
+    select(oldest);
+    if (selected?.record === oldest) renderedButtons.get(keyOf(oldest)).focus();
   }
 
   async function api(path, body) {
@@ -404,6 +415,7 @@ export function startInbox({
     status.textContent = approve
       ? "Sending approval for one request…"
       : "Sending denial for one request…";
+    let resolved = false;
     try {
       const response = await api("/api/decision", {
         ref: record.ref,
@@ -415,6 +427,7 @@ export function startInbox({
       } else {
         if (!response.ok || (await response.json()).ok !== true)
           throw new Error("Decision unconfirmed");
+        resolved = true;
         status.textContent = approve
           ? "Approved one request. This does not mean the upstream operation succeeded."
           : "Denied one request.";
@@ -428,7 +441,8 @@ export function startInbox({
       clearSelection();
       renderList();
       refreshButton.disabled = stopped || refreshing;
-      // No automatic retry or selection. The next regular poll refreshes the list.
+      if (resolved && !stopped) selectOldest();
+      // The next regular poll refreshes the list; decisions are never retried.
     }
   }
 
