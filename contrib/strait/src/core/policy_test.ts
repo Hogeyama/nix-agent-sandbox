@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CredentialHeaders } from "./credentials.ts";
 import { decide, type PolicyConfig } from "./policy.ts";
 
-const config: PolicyConfig = { githubRepos: ["my-org/private-repo"] };
+const config: PolicyConfig = { trustedGitHubRepos: ["my-org/private-repo"] };
 const s: CredentialHeaders = {
   "api.github.com": "authorization",
   "github.com": "authorization",
@@ -302,7 +302,7 @@ describe("GitHub API", () => {
 });
 
 describe("every repository of one owner", () => {
-  const owner: PolicyConfig = { githubRepos: ["My-Org/*"] };
+  const owner: PolicyConfig = { trustedGitHubRepos: ["My-Org/*"] };
   const action = (method: string, url: string) =>
     decide({ method, url, headers: new Headers() }, owner, s).action;
 
@@ -479,7 +479,7 @@ describe("Anthropic", () => {
 
 describe("hosts added in strait.json", () => {
   const cfg: PolicyConfig = {
-    githubRepos: [],
+    trustedGitHubRepos: [],
     hosts: {
       "devapi.example.com": { credential: { header: "x-api-key" } },
       "api.example.org": {
@@ -614,7 +614,7 @@ test("configured custom auth requires a host credential even if config names the
         headers: new Headers({ "private-token": "attacker" }),
       },
       {
-        githubRepos: [],
+        trustedGitHubRepos: [],
         hosts: {
           "custom.example.com": { credential: { header: "private-token" } },
         },

@@ -3,7 +3,7 @@ import { DEFAULT_FILESYSTEM, parseConfig } from "./config.ts";
 
 test("empty config uses defaults", () => {
   expect(parseConfig("{}")).toEqual({
-    githubRepos: [],
+    trustedGitHubRepos: [],
     trustLinkedIssues: false,
     filesystem: DEFAULT_FILESYSTEM,
     hostExec: false,
@@ -23,18 +23,18 @@ test("hostExec is opt-in", () => {
 test("filesystem keys override one by one", () => {
   const c = parseConfig(
     JSON.stringify({
-      githubRepos: ["my-org/private-repo"],
+      trustedGitHubRepos: ["my-org/private-repo"],
       filesystem: { denyWrite: [".claude", ".local/state"] },
     }),
   );
-  expect(c.githubRepos).toEqual(["my-org/private-repo"]);
+  expect(c.trustedGitHubRepos).toEqual(["my-org/private-repo"]);
   expect(c.filesystem.denyWrite).toEqual([".claude", ".local/state"]);
   expect(c.filesystem.allowRead).toEqual(DEFAULT_FILESYSTEM.allowRead);
 });
 
 test("an owner wildcard is accepted", () => {
-  const c = parseConfig(JSON.stringify({ githubRepos: ["my-org/*"] }));
-  expect(c.githubRepos).toEqual(["my-org/*"]);
+  const c = parseConfig(JSON.stringify({ trustedGitHubRepos: ["my-org/*"] }));
+  expect(c.trustedGitHubRepos).toEqual(["my-org/*"]);
 });
 
 test.each([
@@ -43,13 +43,14 @@ test.each([
     { network: { tlsTerminate: { excludeDomains: ["api.github.com"] } } },
   ],
   ["unknown filesystem key", { filesystem: { allowAllUnixSockets: true } }],
-  ["repo without owner", { githubRepos: ["private-repo"] }],
-  ["repo with path", { githubRepos: ["my-org/private-repo/issues"] }],
-  ["repo with percent", { githubRepos: ["my%2Dorg/repo"] }],
-  ["wildcard owner", { githubRepos: ["*/repo"] }],
-  ["wildcard owner and name", { githubRepos: ["*/*"] }],
-  ["partial wildcard name", { githubRepos: ["my-org/repo-*"] }],
-  ["owner alone", { githubRepos: ["my-org/"] }],
+  ["githubRepos, the old name", { githubRepos: ["my-org/private-repo"] }],
+  ["repo without owner", { trustedGitHubRepos: ["private-repo"] }],
+  ["repo with path", { trustedGitHubRepos: ["my-org/private-repo/issues"] }],
+  ["repo with percent", { trustedGitHubRepos: ["my%2Dorg/repo"] }],
+  ["wildcard owner", { trustedGitHubRepos: ["*/repo"] }],
+  ["wildcard owner and name", { trustedGitHubRepos: ["*/*"] }],
+  ["partial wildcard name", { trustedGitHubRepos: ["my-org/repo-*"] }],
+  ["owner alone", { trustedGitHubRepos: ["my-org/"] }],
   ["non-string path", { filesystem: { denyRead: [1] } }],
   ["non-boolean hostExec", { hostExec: "yes" }],
   ["non-boolean trustLinkedIssues", { trustLinkedIssues: 1 }],

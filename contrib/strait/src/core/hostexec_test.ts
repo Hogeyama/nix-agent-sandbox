@@ -314,7 +314,7 @@ describe("policy", () => {
         headers: new Headers(over.headers ?? {}),
         body: over.body ?? JSON.stringify(ok),
       },
-      { githubRepos: [], hostExec },
+      { trustedGitHubRepos: [], hostExec },
       {},
     );
 

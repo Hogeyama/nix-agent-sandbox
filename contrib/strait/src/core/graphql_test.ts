@@ -381,7 +381,7 @@ describe("policy around GraphQL", () => {
         }),
         body: b,
       },
-      { githubRepos: ["my-org/private-repo"] },
+      { trustedGitHubRepos: ["my-org/private-repo"] },
       { "api.github.com": "authorization" },
     ).action;
 
@@ -396,7 +396,7 @@ describe("policy around GraphQL", () => {
         headers: new Headers({ "content-type": "application/json" }),
         body: JSON.stringify({ query: "{ viewer { email } }" }),
       },
-      { githubRepos: ["my-org/private-repo"] },
+      { trustedGitHubRepos: ["my-org/private-repo"] },
       {},
     );
     expect(d).toEqual({

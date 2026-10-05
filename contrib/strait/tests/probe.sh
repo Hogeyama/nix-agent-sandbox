@@ -29,7 +29,7 @@ cleanup() {
 trap cleanup EXIT
 # httpbin.org stands in for an added host: it echoes the headers it got, which
 # shows what strait let through and what srt injected.
-printf '{ "githubRepos": ["%s"], "hostExec": true, "hosts": { "httpbin.org": { "credential": { "env": "PROBE_KEY", "header": "x-api-key" } } } }\n' "$REPO" >"$work/strait.json"
+printf '{ "trustedGitHubRepos": ["%s"], "hostExec": true, "hosts": { "httpbin.org": { "credential": { "env": "PROBE_KEY", "header": "x-api-key" } } } }\n' "$REPO" >"$work/strait.json"
 PROBE_KEY=strait-probe-real-$RANDOM$RANDOM
 cd "$work"
 

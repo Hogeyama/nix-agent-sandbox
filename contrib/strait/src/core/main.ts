@@ -210,7 +210,7 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
             body,
           },
           {
-            githubRepos: config.githubRepos,
+            trustedGitHubRepos: config.trustedGitHubRepos,
             trustLinkedIssues: config.trustLinkedIssues,
             hostExec: config.hostExec,
             hosts: config.hosts,

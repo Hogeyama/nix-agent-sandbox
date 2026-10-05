@@ -17,7 +17,7 @@ export interface FilesystemConfig {
 }
 
 export interface StraitConfig {
-  githubRepos: string[];
+  trustedGitHubRepos: string[];
   /** Read linked issues' titles from any repository without approval. */
   trustLinkedIssues: boolean;
   filesystem: FilesystemConfig;
@@ -75,7 +75,7 @@ export function parseConfig(text: string): StraitConfig {
   rejectUnknown(
     top,
     [
-      "githubRepos",
+      "trustedGitHubRepos",
       "trustLinkedIssues",
       "filesystem",
       "hostExec",
@@ -85,11 +85,16 @@ export function parseConfig(text: string): StraitConfig {
     "strait.json",
   );
 
-  const githubRepos = stringArray(top.githubRepos ?? [], "githubRepos");
-  for (const r of githubRepos) {
+  const trustedGitHubRepos = stringArray(
+    top.trustedGitHubRepos ?? [],
+    "trustedGitHubRepos",
+  );
+  for (const r of trustedGitHubRepos) {
     // `owner/*` is the only wildcard: every repository of one owner.
     if (!/^[A-Za-z0-9_.-]+\/(?:[A-Za-z0-9_.-]+|\*)$/.test(r)) {
-      throw new Error(`githubRepos: "${r}" is not owner/name or owner/*`);
+      throw new Error(
+        `trustedGitHubRepos: "${r}" is not owner/name or owner/*`,
+      );
     }
   }
 
@@ -116,7 +121,7 @@ export function parseConfig(text: string): StraitConfig {
     throw new Error("statusLine must be true or false");
   }
   return {
-    githubRepos,
+    trustedGitHubRepos,
     trustLinkedIssues,
     filesystem,
     hostExec,

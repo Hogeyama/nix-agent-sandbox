@@ -2,7 +2,7 @@
 //
 // A document is allowed only if every operation is a query and every field it
 // selects lies on a path in GITHUB_FIELDS. Almost all of them are rooted at
-// `repository(owner, name)`, which must name a repository in githubRepos. Anything else, including a document this
+// `repository(owner, name)`, which must name a repository in trustedGitHubRepos. Anything else, including a document this
 // module cannot analyse, is left for review. The rules are a trimmed copy of
 // nas's (src/network/authz/graphql.ts and
 // docs/superpowers/specs/2026-09-20-graphql-field-path-policy-design.md):
@@ -348,8 +348,8 @@ const GITHUB_FIELDS = `{
  * dependencies, which gh 2.102 selects for `issue view` and `issue list
  * --json`. A dependency may be an issue of any owner (GitHub accepts one in
  * another account's repository), and a parent or sub-issue one of the same
- * owner but not necessarily in githubRepos, so these titles are text written
- * outside githubRepos. gh selects all four together, so allowing only the
+ * owner but not necessarily in trustedGitHubRepos, so these titles are text written
+ * outside trustedGitHubRepos. gh selects all four together, so allowing only the
  * same-owner ones would not let `issue view` through. The rest of each linked
  * issue (id, number, state, URL, repository name) is in GITHUB_FIELDS.
  * Allowed only with `trustLinkedIssues`.

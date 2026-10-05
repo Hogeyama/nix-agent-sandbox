@@ -84,7 +84,7 @@ try {
         const url = req.url.replace(`:${port}/`, "/");
         const decision = decide(
           { method: req.method, url, headers: req.headers },
-          { githubRepos: [], hosts: { localhost: {} } },
+          { trustedGitHubRepos: [], hosts: { localhost: {} } },
           mode === "anonymous" ? {} : credential.policyHeaders,
         );
         if (decision.action !== "allow") return { action: "deny" };

@@ -1,5 +1,5 @@
 {
-  "githubRepos": ["my-org/private-repo"],
+  "trustedGitHubRepos": ["my-org/private-repo"],
   "filesystem": {
     "allowWrite": ["."],
     "denyWrite": [".claude"],

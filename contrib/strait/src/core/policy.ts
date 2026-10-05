@@ -52,7 +52,7 @@ export interface PolicyConfig {
    * `owner/name` pairs whose contents may be read, or `owner/*` for every
    * repository of one owner. Compared case-insensitively.
    */
-  githubRepos: readonly string[];
+  trustedGitHubRepos: readonly string[];
   /** Allow GraphQL to read the titles of linked issues in any repository. */
   trustLinkedIssues?: boolean;
   /** Whether HOSTEXEC_HOST takes requests to run commands on the host. */
@@ -388,7 +388,7 @@ function repoAllowed(
   if (owner === "" || repo === "" || /%/.test(owner + repo)) return false;
   const want = `${owner}/${repo}`.toLowerCase();
   const anyOfOwner = `${owner}/*`.toLowerCase();
-  return config.githubRepos.some((r) => {
+  return config.trustedGitHubRepos.some((r) => {
     const rule = r.toLowerCase();
     return rule === want || rule === anyOfOwner;
   });

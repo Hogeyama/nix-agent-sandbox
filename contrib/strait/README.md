@@ -83,7 +83,7 @@ Nix を使う場合は、このリポジトリのチェックアウトからイ�
 nix profile install .#strait
 ```
 
-作業ディレクトリに `strait.json` を配置し、`githubRepos` に自分のリポジトリを記述します。
+作業ディレクトリに `strait.json` を配置し、`trustedGitHubRepos` に自分のリポジトリを記述します。
 
 ```sh
 cp contrib/strait/strait.example.json /path/to/workspace/strait.json
@@ -91,7 +91,7 @@ cp contrib/strait/strait.example.json /path/to/workspace/strait.json
 
 ```json
 {
-  "githubRepos": ["my-org/private-repo"]
+  "trustedGitHubRepos": ["my-org/private-repo"]
 }
 ```
 
@@ -124,7 +124,7 @@ CLAUDE_CONFIG_DIR=$PWD/.claude-state \
 
 ```json
 {
-  "githubRepos": [
+  "trustedGitHubRepos": [
     "my-org/private-repo"
   ],
   "filesystem": {
@@ -243,9 +243,9 @@ strait はこの機能の存在をエージェントに通知しません。エ�
 
 ### GitHub のリポジトリ
 
-リポジトリは `githubRepos` に追加します。追加したリポジトリは、承認なしで読み取れるようになります。`my-org/*` と書くと、`my-org` のすべてのリポジトリが対象になります。owner の部分にワイルドカードは使えません。
+リポジトリは `trustedGitHubRepos` に追加します。追加したリポジトリは、承認なしで読み取れるようになります。`my-org/*` と書くと、`my-org` のすべてのリポジトリが対象になります。owner の部分にワイルドカードは使えません。
 
-gh 2.102 以降の `gh issue view` は、つながった issue（親、子、依存先）のタイトルも取得します。依存先の issue は、他の owner のリポジトリにあってもかまいません。親と子の issue は同じ owner に限られますが、`githubRepos` にないリポジトリのこともあります。そのため既定では、このタイトルを含む要求は承認待ちになります。つながる相手が信頼できる範囲に限られる運用（組織の中で閉じている場合など）なら、`"trustLinkedIssues": true` で承認なしにできます。ただし strait は、つながった issue がどのリポジトリにあるかを確かめません。この設定で許可されるのは、どこから来たものでもタイトルだけです。本文やコメントは、設定にかかわらず許可しません。
+gh 2.102 以降の `gh issue view` は、つながった issue（親、子、依存先）のタイトルも取得します。依存先の issue は、他の owner のリポジトリにあってもかまいません。親と子の issue は同じ owner に限られますが、`trustedGitHubRepos` にないリポジトリのこともあります。そのため既定では、このタイトルを含む要求は承認待ちになります。つながる相手が信頼できる範囲に限られる運用（組織の中で閉じている場合など）なら、`"trustLinkedIssues": true` で承認なしにできます。ただし strait は、つながった issue がどのリポジトリにあるかを確かめません。この設定で許可されるのは、どこから来たものでもタイトルだけです。本文やコメントは、設定にかかわらず許可しません。
 
 ### その他のホスト
 
@@ -277,8 +277,8 @@ gh 2.102 以降の `gh issue view` は、つながった issue（親、子、依
 
 | キー | 内容 | 既定 |
 | --- | --- | --- |
-| `githubRepos` | 承認なしで読み取れる GitHub のリポジトリ（`owner/name`、または owner のすべてのリポジトリを表す `owner/*`） | なし |
-| `trustLinkedIssues` | つながった issue（親、子、依存先）のタイトルを、`githubRepos` にないリポジトリのものでも承認なしで読み取る | `false` |
+| `trustedGitHubRepos` | 承認なしで読み取れる GitHub のリポジトリ（`owner/name`、または owner のすべてのリポジトリを表す `owner/*`） | なし |
+| `trustLinkedIssues` | つながった issue（親、子、依存先）のタイトルを、`trustedGitHubRepos` にないリポジトリのものでも承認なしで読み取る | `false` |
 | `hostExec` | ホストでのコマンド実行の依頼を許可する | `false` |
 | `hosts` | 承認なしで接続できるホストと、その認証情報 | なし |
 | `statusLine` | `false` にすると、Claude Code の statusline にセッション ID を表示しない | `true` |
