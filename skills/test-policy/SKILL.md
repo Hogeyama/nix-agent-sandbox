@@ -142,7 +142,9 @@ test.skipIf(!dockerAvailable)("...", async () => { ... });
 ### テストの実行環境
 
 作業中は `bun run test:unit` や対象を絞ったテストを使う。NAS 内でのセッション終了時は、
-リポジトリルートで `bun run test` と `hostexec bun run test` をそれぞれ1回、順に実行する。
+変更が及ぶコンポーネントのスイートを、リポジトリルートで NAS 内と `hostexec` の
+それぞれ1回、順に実行する。関係のないスイートは実行しない（例: `contrib/strait/` だけの
+変更なら `test:strait-unit`）。共有コードに及ぶ変更や、範囲が分からない場合は `bun run test` を使う。
 片方が失敗しても、もう片方を実行する。成功・失敗・スキップは環境別に報告し、
 必要な依存や権限がなくスキップされたテストは、実行済みとして報告しない。
 詳細な検証順序と結果の読み方は post-change-checks に従う。

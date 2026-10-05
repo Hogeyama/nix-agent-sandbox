@@ -37,11 +37,18 @@ bun run compile            # Build standalone binary (bun build --compile)
 ## End-of-session Verification
 
 When a session changes executable code, tests, or configuration that affects
-runtime or build behavior, run both `bun run test` and `hostexec bun run test`
-once before finishing, from the repository root. Run them sequentially, and run
-the second even if the first fails. Host execution is part of the requested
-verification; do not ask again whether to include it. Report each environment's
-result and skips separately. See `skills/post-change-checks/SKILL.md` for details.
+runtime or build behavior, run the test suites that cover the change once before
+finishing, both in the sandbox and on the host (`hostexec`), from the repository
+root. Run only the suites of the components the change touches and of the
+components that use them; running unrelated suites proves nothing about the
+change. A change confined to `contrib/strait/`, for example, runs
+`bun run test:strait-unit`, not `bun run test`. Run the full `bun run test` only
+when the change reaches shared code (`src/` used by several suites, `lib/`,
+`scripts/`, `package.json`, test infrastructure) or you cannot tell what it
+reaches. Run the two environments sequentially, and run the second even if the
+first fails. Host execution is part of the requested verification; do not ask
+again whether to include it. Report each environment's result and skips
+separately. See `skills/post-change-checks/SKILL.md` for details.
 
 Do not run tests merely to answer a question, explain a commit, inspect or review
 existing code, or edit documentation or agent instructions. For documentation-

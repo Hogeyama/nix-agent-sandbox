@@ -36,19 +36,28 @@ bun run check
 
 `check` currently includes the lint aggregate as well as TypeScript checks.
 
-4. Before ending the work session, run the full suite in NAS and on the host.
+4. Before ending the work session, run the suites that cover the change, in NAS
+   and on the host.
 
 Use the repository's Nix development environment (or equivalent installed
 build tools). `test:unit` now includes Zig suites as well as Bun suites;
 addon Python wrappers also require Python and the generated vendor dependencies.
 Inspect [package.json](../../package.json) for the current aggregate membership.
 
-Inside NAS, run both commands from the repository root, once each as the final
-check for the session, including narrow changes:
+Pick the suites from the components the change touches and the components
+that use them; the per-component scripts are in package.json (`test:strait-unit`,
+`test:sumi`, `test:mitmproxy-addon-unit`, ...). Do not run suites the change
+cannot affect: a change confined to `contrib/strait/` runs only
+`test:strait-unit`. Use the full `bun run test` when the change reaches shared
+code (`src/` used by several suites, `lib/`, `scripts/`, `package.json`, test
+infrastructure) or when you cannot tell what it reaches.
+
+Inside NAS, run the chosen command from the repository root, once in each
+environment as the final check for the session, for example:
 
 ```bash
-bun run test
-hostexec bun run test
+bun run test:strait-unit
+hostexec bun run test:strait-unit
 ```
 
 Run them sequentially and record both exit statuses. Run the second even if
@@ -106,8 +115,9 @@ to recover output. Direct component commands, such as
 Report these items in the final response:
 
 - Whether `fmt`, `lint`, and `check` passed or failed
-- Separate pass/fail results and log locations for `bun run test` inside NAS
-  and `hostexec bun run test` on the host
+- Which suites were run and why they cover the change
+- Separate pass/fail results and log locations for the run inside NAS and the
+  `hostexec` run on the host
 - Test summary counts by suite/runtime when available; distinguish skips and
   cached Zig successes from tests actually rerun
 - Which integration/e2e tests were skipped or not run and why; do not infer
