@@ -1,8 +1,8 @@
 // GraphQL read policy for POST https://api.github.com/graphql.
 //
 // A document is allowed only if every operation is a query and every field it
-// selects lies on a path in GITHUB_FIELDS, rooted at `repository(owner, name)`
-// for a repository in githubRepos. Anything else, including a document this
+// selects lies on a path in GITHUB_FIELDS. Almost all of them are rooted at
+// `repository(owner, name)`, which must name a repository in githubRepos. Anything else, including a document this
 // module cannot analyse, is left for review. The rules are a trimmed copy of
 // nas's (src/network/authz/graphql.ts and
 // docs/superpowers/specs/2026-09-20-graphql-field-path-policy-design.md):
@@ -30,95 +30,286 @@ import {
 } from "graphql";
 
 /**
- * Paths gh needs for common reads, written as a selection set. Taken from the
- * queries gh 2.46 sends for `pr view`/`list`/`checks`, `issue view`/`list`,
- * `release view`/`list` and `repo view` (src/testdata/gh_queries.json). Every
- * leaf is a scalar, and nothing here leads to another repository's content:
- * reaching one needs a field such as `owner { repositories }` or
- * `author { ... on User { pullRequests } }`, none of which is listed.
+ * Paths gh needs for its reads of one repository, written as a selection set.
+ * Taken from every query gh 2.46 and 2.90 send for `pr view`/`list`/`checks`,
+ * `issue view`/`list`/`status`, `release view`/`list`, `label list` and
+ * `repo view`, with each command's `--json` asking for every field it offers
+ * (src/core/testdata/gh_queries.json).
+ *
+ * Every leaf is a scalar, and nothing here leads to another repository's
+ * content: reaching one needs a field such as `owner { repositories }`,
+ * `viewer { starredRepositories }` or `author { ... on User { pullRequests } }`,
+ * none of which is listed. Where a path does step into another repository or
+ * project (`parent`, `templateRepository`, `closingIssuesReferences`,
+ * `closedByPullRequestsReferences`, `projectItems`), it stops at IDs, names,
+ * numbers and URLs. Outside `repository` there are only gh's schema probes
+ * (`__type`), which return field names, and `viewer { login }`.
  */
 const GITHUB_FIELDS = `{
+  __type { enumValues { name } fields { name } }
   repository {
-    name description hasIssuesEnabled
-    owner { id login }
-    issues { nodes { ...issueSummary } pageInfo { ...page } totalCount }
-    issueOrPullRequest { __typename ...conversation stateReason }
-    pullRequests {
-      nodes {
-        number title state url createdAt isDraft isCrossRepository headRefName
-        headRepositoryOwner { id login name }
+    archivedAt createdAt deleteBranchOnMerge description diskUsage forkCount
+    hasDiscussionsEnabled hasIssuesEnabled hasProjectsEnabled hasWikiEnabled
+    homepageUrl id isArchived isBlankIssuesEnabled isEmpty isFork
+    isInOrganization isMirror isPrivate isSecurityPolicyEnabled isTemplate
+    isUserConfigurationRepository mergeCommitAllowed mirrorUrl name
+    nameWithOwner openGraphImageUrl pushedAt rebaseMergeAllowed
+    securityPolicyUrl squashMergeAllowed sshUrl stargazerCount updatedAt url
+    usesCustomOpenGraphImage viewerCanAdminister viewerDefaultCommitEmail
+    viewerDefaultMergeMethod viewerHasStarred viewerPermission
+    viewerPossibleCommitEmails viewerSubscription visibility
+    assignableUsers { nodes { id login name } }
+    codeOfConduct { key name url }
+    contactLinks { about name url }
+    defaultBranchRef { name }
+    fundingLinks { platform url }
+    issueOrPullRequest {
+      __typename body closed closedAt createdAt id isPinned number state
+      stateReason title updatedAt url
+      assignees { nodes { databaseId id login name } totalCount }
+      author { id login name }
+      closedByPullRequestsReferences {
+        nodes { id number repository { id name owner { id login } } url }
+        pageInfo { endCursor hasNextPage }
       }
-      pageInfo { ...page } totalCount
+      comments {
+        totalCount
+        nodes {
+          authorAssociation body createdAt id includesCreatedEdit isMinimized
+          minimizedReason url viewerDidAuthor
+          author { id login name }
+          reactionGroups { content users { totalCount } }
+        }
+        pageInfo { endCursor hasNextPage }
+      }
+      labels { nodes { color description id name } totalCount }
+      milestone { description dueOn number title }
+      projectCards { nodes { column { name } project { name } } totalCount }
+      reactionGroups { content users { totalCount } }
     }
+    issueTemplates { about body name title }
+    issues {
+      totalCount
+      nodes {
+        body closed closedAt createdAt id isPinned number state stateReason
+        title updatedAt url
+        assignees { nodes { databaseId id login name } totalCount }
+        author { id login name }
+        closedByPullRequestsReferences {
+          nodes { id number repository { id name owner { id login } } url }
+          pageInfo { endCursor hasNextPage }
+        }
+        comments {
+          totalCount
+          nodes {
+            authorAssociation body createdAt id includesCreatedEdit
+            isMinimized minimizedReason url viewerDidAuthor
+            author { id login name }
+            reactionGroups { content users { totalCount } }
+          }
+          pageInfo { endCursor hasNextPage }
+        }
+        labels { nodes { color description id name } totalCount }
+        milestone { description dueOn number title }
+        projectCards { nodes { column { name } project { name } } totalCount }
+        projectItems {
+          totalCount
+          nodes { fieldValueByName { name optionId } id project { id title } }
+        }
+        reactionGroups { content users { totalCount } }
+      }
+      pageInfo { endCursor hasNextPage }
+    }
+    labels {
+      totalCount
+      nodes { color createdAt description id isDefault name updatedAt url }
+      pageInfo { endCursor hasNextPage }
+    }
+    languages { edges { node { name } size } }
+    latestRelease { name publishedAt tagName url }
+    licenseInfo { key name nickname }
+    mentionableUsers { nodes { id login name } }
+    milestones { nodes { description dueOn number title } }
+    owner { id login }
+    parent { id name owner { id login } }
+    primaryLanguage { name }
+    projects { nodes { body id name number resourcePath } }
+    projectsV2 { nodes { closed id number resourcePath title url } }
     pullRequest {
-      ...conversation
-      additions deletions baseRefName headRefName isCrossRepository isDraft
-      maintainerCanModify mergeable
-      headRepository { id name }
-      headRepositoryOwner { id login name }
+      additions baseRefName baseRefOid body changedFiles closed closedAt
+      createdAt deletions fullDatabaseId headRefName headRefOid id
+      isCrossRepository isDraft maintainerCanModify mergeStateStatus
+      mergeable mergedAt number reviewDecision state title updatedAt url
+      assignees { nodes { databaseId id login name } totalCount }
+      author { id login name }
       autoMergeRequest {
         authorEmail commitBody commitHeadline enabledAt mergeMethod
         enabledBy { id login name }
       }
-      reviewRequests {
-        nodes {
-          requestedReviewer { __typename login name slug organization { login } }
-        }
+      closingIssuesReferences {
+        nodes { id number repository { id name owner { id login } } url }
+        pageInfo { endCursor hasNextPage }
       }
-      reviews {
+      comments {
+        totalCount
         nodes {
-          id body state submittedAt authorAssociation
-          author { login } commit { oid } reactionGroups { ...reactions }
+          authorAssociation body createdAt id includesCreatedEdit isMinimized
+          minimizedReason url viewerDidAuthor
+          author { id login name }
+          reactionGroups { content users { totalCount } }
         }
-        pageInfo { ...page } totalCount
+        pageInfo { endCursor hasNextPage }
       }
       commits {
         totalCount
         nodes {
           commit {
+            authoredDate committedDate messageBody messageHeadline oid
+            authors { nodes { email name user { id login } } }
             statusCheckRollup {
               contexts {
                 nodes {
-                  __typename context state targetUrl createdAt description
-                  name status conclusion startedAt completedAt detailsUrl
+                  __typename completedAt conclusion context createdAt
+                  description detailsUrl name startedAt state status
+                  targetUrl
                   checkSuite { workflowRun { workflow { name } } }
                 }
-                pageInfo { ...page }
+                pageInfo { endCursor hasNextPage }
               }
             }
           }
         }
       }
+      files { nodes { additions changeType deletions path } }
+      headRepository { id name nameWithOwner }
+      headRepositoryOwner { id login name }
+      labels { nodes { color description id name } totalCount }
+      latestReviews {
+        nodes { author { login } authorAssociation body state submittedAt }
+      }
+      mergeCommit { oid }
+      mergedBy { id login name }
+      milestone { description dueOn number title }
+      potentialMergeCommit { oid }
+      projectCards { nodes { column { name } project { name } } totalCount }
+      reactionGroups { content users { totalCount } }
+      reviewRequests {
+        nodes {
+          requestedReviewer {
+            __typename login name slug
+            organization { login }
+          }
+        }
+      }
+      reviews {
+        totalCount
+        nodes {
+          authorAssociation body id state submittedAt
+          author { login }
+          commit { oid }
+          reactionGroups { content users { totalCount } }
+        }
+        pageInfo { endCursor hasNextPage }
+      }
+    }
+    pullRequestTemplates { body filename }
+    pullRequests {
+      totalCount
+      nodes {
+        additions baseRefName baseRefOid body changedFiles closed closedAt
+        createdAt deletions fullDatabaseId headRefName headRefOid id
+        isCrossRepository isDraft maintainerCanModify mergeStateStatus
+        mergeable mergedAt number reviewDecision state title updatedAt url
+        assignees { nodes { databaseId id login name } totalCount }
+        author { id login name }
+        autoMergeRequest {
+          authorEmail commitBody commitHeadline enabledAt mergeMethod
+          enabledBy { id login name }
+        }
+        closingIssuesReferences {
+          nodes { id number repository { id name owner { id login } } url }
+          pageInfo { endCursor hasNextPage }
+        }
+        comments {
+          totalCount
+          nodes {
+            authorAssociation body createdAt id includesCreatedEdit
+            isMinimized minimizedReason url viewerDidAuthor
+            author { id login name }
+            reactionGroups { content users { totalCount } }
+          }
+          pageInfo { endCursor hasNextPage }
+        }
+        commits {
+          nodes {
+            commit {
+              authoredDate committedDate messageBody messageHeadline oid
+              authors { nodes { email name user { id login } } }
+              statusCheckRollup {
+                contexts {
+                  nodes {
+                    __typename completedAt conclusion context createdAt
+                    description detailsUrl name startedAt state status
+                    targetUrl
+                    checkSuite { workflowRun { workflow { name } } }
+                  }
+                  pageInfo { endCursor hasNextPage }
+                }
+              }
+            }
+          }
+        }
+        files { nodes { additions changeType deletions path } }
+        headRepository { id name nameWithOwner }
+        headRepositoryOwner { id login name }
+        labels { nodes { color description id name } totalCount }
+        latestReviews {
+          nodes { author { login } authorAssociation body state submittedAt }
+        }
+        mergeCommit { oid }
+        mergedBy { id login name }
+        milestone { description dueOn number title }
+        potentialMergeCommit { oid }
+        projectCards { nodes { column { name } project { name } } totalCount }
+        projectItems {
+          totalCount
+          nodes { fieldValueByName { name optionId } id project { id title } }
+        }
+        reactionGroups { content users { totalCount } }
+        reviewRequests {
+          nodes {
+            requestedReviewer {
+              __typename login name slug
+              organization { login }
+            }
+          }
+        }
+        reviews {
+          totalCount
+          nodes {
+            authorAssociation body id state submittedAt
+            author { login }
+            commit { oid }
+            reactionGroups { content users { totalCount } }
+          }
+          pageInfo { endCursor hasNextPage }
+        }
+      }
+      pageInfo { endCursor hasNextPage }
     }
     release { databaseId isDraft }
     releases {
-      nodes { name tagName isDraft isLatest isPrerelease createdAt publishedAt }
-      pageInfo { ...page }
+      nodes {
+        createdAt immutable isDraft isLatest isPrerelease name publishedAt
+        tagName
+      }
+      pageInfo { endCursor hasNextPage }
     }
+    repositoryTopics { nodes { topic { name } } }
+    templateRepository { id name owner { id login } }
+    watchers { totalCount }
   }
-}
-fragment page on PageInfo { endCursor hasNextPage }
-fragment reactions on ReactionGroup { content users { totalCount } }
-fragment issueSummary on Issue {
-  number title state stateReason url updatedAt
-  labels { nodes { id name description color } totalCount }
-}
-fragment conversation on Issue {
-  id number title state url body createdAt
-  author { id login name }
-  assignees { nodes { id login name } totalCount }
-  labels { nodes { id name description color } totalCount }
-  milestone { number title description dueOn }
-  projectCards { nodes { project { name } column { name } } totalCount }
-  reactionGroups { ...reactions }
-  comments {
-    nodes {
-      id body url createdAt authorAssociation includesCreatedEdit
-      isMinimized minimizedReason viewerDidAuthor
-      author { id login name } reactionGroups { ...reactions }
-    }
-    pageInfo { ...page } totalCount
-  }
+  viewer { login }
 }`;
 
 /** The root field every allowed path starts at, and its owner/name arguments. */

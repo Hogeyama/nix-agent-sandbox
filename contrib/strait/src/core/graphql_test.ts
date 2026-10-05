@@ -21,7 +21,7 @@ describe("gh's own queries", () => {
     test(r.command, () => {
       const verdict = judgeGraphql(
         { query: r.query, variables: r.variables },
-        (o, n) => `${o}/${n}` === "hogeyama/nix-agent-sandbox",
+        (o, n) => `${o}/${n}`.toLowerCase() === "hogeyama/nix-agent-sandbox",
       );
       expect(verdict).toEqual({ ok: true });
     });
@@ -71,6 +71,11 @@ describe("allowed", () => {
       "owner and name compared case-insensitively",
       `{ repository(owner: "My-Org", name: "Private-Repo") { name } }`,
     ],
+    ["the viewer's login", "{ viewer { login } }"],
+    [
+      "gh's schema probe",
+      '{ Release: __type(name: "Release") { fields { name } } }',
+    ],
     [
       "a fragment under a listed parent",
       `${repo("pullRequest(number: 1) { ...F }")} fragment F on PullRequest { title }`,
@@ -107,12 +112,12 @@ describe("reasons list every violation", () => {
   test("operations, fields and repositories together", () => {
     expect(
       judge(
-        `${repo("name")} mutation M { addStar(input: {}) { clientMutationId } } query O { repository(owner: "octocat", name: "hello-world") { name } viewer { login } }`,
+        `${repo("name")} mutation M { addStar(input: {}) { clientMutationId } } query O { repository(owner: "octocat", name: "hello-world") { name } viewer { email } }`,
       ),
     ).toEqual({
       ok: false,
       reason:
-        "only GraphQL queries are allowed (found mutation); GraphQL fields /addStar, /viewer are not allowed; octocat/hello-world is not an allowed repository",
+        "only GraphQL queries are allowed (found mutation); GraphQL fields /addStar, /viewer/email are not allowed; octocat/hello-world is not an allowed repository",
     });
   });
   test("nothing is cut off", () => {
@@ -172,7 +177,26 @@ describe("paths", () => {
       "search root",
       `{ search(query: "x", type: REPOSITORY, first: 1) { issueCount } }`,
     ],
-    ["viewer root", "{ viewer { login } }"],
+    ["viewer beyond login", "{ viewer { email } }"],
+    [
+      "another repository through the viewer",
+      "{ viewer { login starredRepositories { nodes { name description } } } }",
+    ],
+    [
+      "another repository's content through a reference",
+      repo(
+        "pullRequest(number: 1) { closingIssuesReferences { nodes { title body } } }",
+      ),
+    ],
+    [
+      "a schema probe beyond field names",
+      '{ __type(name: "Repository") { fields { name type { name } } } }',
+    ],
+    ["the whole schema", "{ __schema { types { name } } }"],
+    [
+      "a schema probe next to another repository",
+      `{ __type(name: "Release") { fields { name } } repository(owner: "octocat", name: "hello-world") { name } }`,
+    ],
     [
       "a mutation, even of listed fields",
       `mutation { repository(owner: "my-org", name: "private-repo") { name } }`,
@@ -323,14 +347,14 @@ describe("policy around GraphQL", () => {
         method: "POST",
         url,
         headers: new Headers({ "content-type": "application/json" }),
-        body: JSON.stringify({ query: "{ viewer { login } }" }),
+        body: JSON.stringify({ query: "{ viewer { email } }" }),
       },
       { githubRepos: ["my-org/private-repo"] },
       {},
     );
     expect(d).toEqual({
       action: "review",
-      reason: "GraphQL field /viewer is not allowed",
+      reason: "GraphQL field /viewer/email is not allowed",
     });
   });
   test("charset=utf-8 is fine", () => {

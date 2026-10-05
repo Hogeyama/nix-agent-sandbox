@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `githubRepos` accepts `owner/*` for every repository of one owner.
 
+### Changed
+
+- The GraphQL allowlist covers gh 2.90: `pr view`, `issue view`, `label list` and `release list` no longer wait for approval, nor do the `--json` fields of `pr`/`issue` `view`/`list`, `label list` and `repo view`. gh's schema probes (`__type` field names) and `viewer { login }` pass too; `gh pr status` and `gh search` are still held, since they reach beyond one repository.
+
 ### Fixed
 
 - Resizing the terminal now reaches the sandboxed command. srt runs bwrap with `--new-session`, so the command was outside the terminal's foreground process group and never got `SIGWINCH`; strait now forwards it.

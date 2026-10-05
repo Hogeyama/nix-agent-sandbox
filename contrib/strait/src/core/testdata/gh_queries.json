@@ -1,8 +1,8 @@
 {
-  "comment": "GraphQL requests gh 2.46.0 sent as the first request of each command, captured with GH_DEBUG=api through a proxy that refused the connection. Only a command whose first request is GraphQL appears, and later requests of the same command are missing.",
-  "ghVersion": "2.46.0",
+  "comment": "GraphQL requests gh sent, captured with GH_DEBUG=api. The 2.46.0 entries are the first request of each command, through a proxy that refused the connection. The 2.90.0 entries are every request of each command, through a local stand-in for api.github.com that answered gh's schema probes (__type) with GitHub's real answers and failed everything else; '--json <all fields>' selects every field the command offers. 'gh pr status' and 'gh search' are left out on purpose: their documents reach /search, which is not limited to one repository.",
   "requests": [
     {
+      "gh": "2.46.0",
       "command": "gh issue list",
       "query": "fragment issue on Issue {number,title,url,state,updatedAt,labels(first:100){nodes{id,name,description,color},totalCount},stateReason}\n  query IssueList($owner: String!, $repo: String!, $limit: Int, $endCursor: String, $states: [IssueState!] = OPEN, $assignee: String, $author: String, $mention: String) {\n    repository(owner: $owner, name: $repo) {\n      hasIssuesEnabled\n      issues(first: $limit, after: $endCursor, orderBy: {field: CREATED_AT, direction: DESC}, states: $states, filterBy: {assignee: $assignee, createdBy: $author, mentioned: $mention}) {\n        totalCount\n        nodes {\n          ...issue\n        }\n        pageInfo {\n          hasNextPage\n          endCursor\n        }\n      }\n    }\n  }",
       "variables": {
@@ -13,6 +13,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh issue view --comments",
       "query": "query IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      hasIssuesEnabled\n      issue: issueOrPullRequest(number: $number) {\n        __typename\n        ...on Issue{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},stateReason,comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},id}\n        ...on PullRequest{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},id}\n      }\n    }\n  }",
       "variables": {
@@ -22,6 +23,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh issue view",
       "query": "query IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      hasIssuesEnabled\n      issue: issueOrPullRequest(number: $number) {\n        __typename\n        ...on Issue{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},comments(last: 1) {nodes {author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}}},totalCount},stateReason,id}\n        ...on PullRequest{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},comments(last: 1) {nodes {author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}}},totalCount},id}\n      }\n    }\n  }",
       "variables": {
@@ -31,6 +33,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh pr checks",
       "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {number,headRefName,id}\n    }\n  }",
       "variables": {
@@ -40,6 +43,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh pr list --json",
       "query": "fragment pr on PullRequest{number,title,headRefName,state,url}\n    query PullRequestList(\n      $owner: String!,\n      $repo: String!,\n      $limit: Int!,\n      $endCursor: String,\n      $baseBranch: String,\n      $headBranch: String,\n      $state: [PullRequestState!] = OPEN\n    ) {\n      repository(owner: $owner, name: $repo) {\n        pullRequests(\n          states: $state,\n          baseRefName: $baseBranch,\n          headRefName: $headBranch,\n          first: $limit,\n          after: $endCursor,\n          orderBy: {field: CREATED_AT, direction: DESC}\n        ) {\n          totalCount\n          nodes {\n            ...pr\n          }\n          pageInfo {\n            hasNextPage\n            endCursor\n          }\n        }\n      }\n    }",
       "variables": {
@@ -50,6 +54,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh pr list",
       "query": "fragment pr on PullRequest{number,title,state,url,headRefName,headRepositoryOwner{id,login,...on User{name}},isCrossRepository,isDraft,createdAt}\n    query PullRequestList(\n      $owner: String!,\n      $repo: String!,\n      $limit: Int!,\n      $endCursor: String,\n      $baseBranch: String,\n      $headBranch: String,\n      $state: [PullRequestState!] = OPEN\n    ) {\n      repository(owner: $owner, name: $repo) {\n        pullRequests(\n          states: $state,\n          baseRefName: $baseBranch,\n          headRefName: $headBranch,\n          first: $limit,\n          after: $endCursor,\n          orderBy: {field: CREATED_AT, direction: DESC}\n        ) {\n          totalCount\n          nodes {\n            ...pr\n          }\n          pageInfo {\n            hasNextPage\n            endCursor\n          }\n        }\n      }\n    }",
       "variables": {
@@ -60,6 +65,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh pr view --comments",
       "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {url,number,title,state,body,author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},isDraft,maintainerCanModify,mergeable,additions,deletions,commits{totalCount},baseRefName,headRefName,headRepositoryOwner{id,login,...on User{name}},headRepository{id,name},isCrossRepository,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login},...on Team{organization{login}name,slug}}}},reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},assignees(first:100){nodes{id,login,name},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},projectCards(first:100){nodes{project{name}column{name}},totalCount},milestone{number,title,description,dueOn},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},reactionGroups{content,users{totalCount}},createdAt,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},id}\n    }\n  }",
       "variables": {
@@ -69,6 +75,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh pr view",
       "query": "query PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n    repository(owner: $owner, name: $repo) {\n      pullRequest(number: $pr_number) {url,number,title,state,body,author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},isDraft,maintainerCanModify,mergeable,additions,deletions,commits{totalCount},baseRefName,headRefName,headRepositoryOwner{id,login,...on User{name}},headRepository{id,name},isCrossRepository,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login},...on Team{organization{login}name,slug}}}},reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},assignees(first:100){nodes{id,login,name},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},projectCards(first:100){nodes{project{name}column{name}},totalCount},milestone{number,title,description,dueOn},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},reactionGroups{content,users{totalCount}},createdAt,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},id}\n    }\n  }",
       "variables": {
@@ -78,6 +85,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh release list",
       "query": "query RepositoryReleaseList($direction:OrderDirection!$endCursor:String$name:String!$owner:String!$perPage:Int!){repository(owner: $owner, name: $name){releases(first: $perPage, orderBy: {field: CREATED_AT, direction: $direction}, after: $endCursor){nodes{name,tagName,isDraft,isLatest,isPrerelease,createdAt,publishedAt},pageInfo{hasNextPage,endCursor}}}}",
       "variables": {
@@ -89,6 +97,7 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh release view",
       "query": "query RepositoryReleaseByTag($name:String!$owner:String!$tagName:String!){repository(owner: $owner, name: $name){release(tagName: $tagName){databaseId,isDraft}}}",
       "variables": {
@@ -98,12 +107,227 @@
       }
     },
     {
+      "gh": "2.46.0",
       "command": "gh repo view",
       "query": "query RepositoryInfo($owner: String!, $name: String!) {\n    repository(owner: $owner, name: $name) {name,owner{id,login},description}\n  }",
       "variables": {
         "name": "nix-agent-sandbox",
         "owner": "hogeyama"
       }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr view 1",
+      "query": "\n\tquery PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\tpullRequest(number: $pr_number) {url,number,title,state,body,author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},isDraft,maintainerCanModify,mergeable,additions,deletions,commits{totalCount},baseRefName,headRefName,headRepositoryOwner{id,login,...on User{name}},headRepository{id,name,nameWithOwner},isCrossRepository,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login,name},...on Bot{login},...on Team{organization{login}name,slug}}}},reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},reactionGroups{content,users{totalCount}},createdAt,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},id}\n\t\t}\n\t}",
+      "variables": {
+        "owner": "Hogeyama",
+        "pr_number": 1,
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr list",
+      "query": "fragment pr on PullRequest{number,title,state,url,headRefName,headRepositoryOwner{id,login,...on User{name}},isCrossRepository,isDraft,createdAt}\n\t\tquery PullRequestList(\n\t\t\t$owner: String!,\n\t\t\t$repo: String!,\n\t\t\t$limit: Int!,\n\t\t\t$endCursor: String,\n\t\t\t$baseBranch: String,\n\t\t\t$headBranch: String,\n\t\t\t$state: [PullRequestState!] = OPEN\n\t\t) {\n\t\t\trepository(owner: $owner, name: $repo) {\n\t\t\t\tpullRequests(\n\t\t\t\t\tstates: $state,\n\t\t\t\t\tbaseRefName: $baseBranch,\n\t\t\t\t\theadRefName: $headBranch,\n\t\t\t\t\tfirst: $limit,\n\t\t\t\t\tafter: $endCursor,\n\t\t\t\t\torderBy: {field: CREATED_AT, direction: DESC}\n\t\t\t\t) {\n\t\t\t\t\ttotalCount\n\t\t\t\t\tnodes {\n\t\t\t\t\t\t...pr\n\t\t\t\t\t}\n\t\t\t\t\tpageInfo {\n\t\t\t\t\t\thasNextPage\n\t\t\t\t\t\tendCursor\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}",
+      "variables": {
+        "limit": 30,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox",
+        "state": ["OPEN"]
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr checks 1",
+      "query": "\n\tquery PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\tpullRequest(number: $pr_number) {number,headRefName,id}\n\t\t}\n\t}",
+      "variables": {
+        "owner": "Hogeyama",
+        "pr_number": 1,
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr status (schema probe only)",
+      "query": "query PullRequest_fields2{WorkflowRun: __type(name: \"WorkflowRun\"){fields(includeDeprecated: true){name}}}",
+      "variables": {}
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr status (schema probe only)",
+      "query": "query PullRequest_fields{PullRequest: __type(name: \"PullRequest\"){fields(includeDeprecated: true){name}},StatusCheckRollupContextConnection: __type(name: \"StatusCheckRollupContextConnection\"){fields(includeDeprecated: true){name}}}",
+      "variables": {}
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue view 1",
+      "query": "\n\tquery IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissue: issueOrPullRequest(number: $number) {\n\t\t\t\t__typename\n\t\t\t\t...on Issue{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},comments(last: 1) {nodes {author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}}},totalCount},stateReason,id}\n\t\t\t\t...on PullRequest{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},comments(last: 1) {nodes {author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}}},totalCount},id}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "number": 1,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue view 1 --comments",
+      "query": "\n\tquery IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissue: issueOrPullRequest(number: $number) {\n\t\t\t\t__typename\n\t\t\t\t...on Issue{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},stateReason,comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},id}\n\t\t\t\t...on PullRequest{number,url,state,createdAt,title,body,author{login,...on User{id,name}},milestone{number,title,description,dueOn},assignees(first:100){nodes{id,login,name,databaseId},totalCount},labels(first:100){nodes{id,name,description,color},totalCount},reactionGroups{content,users{totalCount}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},id}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "number": 1,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue list",
+      "query": "fragment issue on Issue {number,title,url,state,updatedAt,labels(first:100){nodes{id,name,description,color},totalCount},stateReason}\n\tquery IssueList($owner: String!, $repo: String!, $limit: Int, $endCursor: String, $states: [IssueState!] = OPEN, $assignee: String, $author: String, $mention: String) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissues(first: $limit, after: $endCursor, orderBy: {field: CREATED_AT, direction: DESC}, states: $states, filterBy: {assignee: $assignee, createdBy: $author, mentioned: $mention}) {\n\t\t\t\ttotalCount\n\t\t\t\tnodes {\n\t\t\t\t\t...issue\n\t\t\t\t}\n\t\t\t\tpageInfo {\n\t\t\t\t\thasNextPage\n\t\t\t\t\tendCursor\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\t",
+      "variables": {
+        "limit": 30,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox",
+        "states": ["OPEN"]
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue status",
+      "query": "query UserCurrent{viewer{login}}",
+      "variables": {}
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue status",
+      "query": "fragment issue on Issue{number,title,url,state,updatedAt,labels(first:100){nodes{id,name,description,color},totalCount}}\n\tquery IssueStatus($owner: String!, $repo: String!, $viewer: String!, $per_page: Int = 10) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tassigned: issues(filterBy: {assignee: $viewer, states: OPEN}, first: $per_page, orderBy: {field: UPDATED_AT, direction: DESC}) {\n\t\t\t\ttotalCount\n\t\t\t\tnodes {\n\t\t\t\t\t...issue\n\t\t\t\t}\n\t\t\t}\n\t\t\tmentioned: issues(filterBy: {mentioned: $viewer, states: OPEN}, first: $per_page, orderBy: {field: UPDATED_AT, direction: DESC}) {\n\t\t\t\ttotalCount\n\t\t\t\tnodes {\n\t\t\t\t\t...issue\n\t\t\t\t}\n\t\t\t}\n\t\t\tauthored: issues(filterBy: {createdBy: $viewer, states: OPEN}, first: $per_page, orderBy: {field: UPDATED_AT, direction: DESC}) {\n\t\t\t\ttotalCount\n\t\t\t\tnodes {\n\t\t\t\t\t...issue\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox",
+        "viewer": "Hogeyama"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh release list",
+      "query": "query Release_fields{Release: __type(name: \"Release\"){fields{name}}}",
+      "variables": {}
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh release list",
+      "query": "query RepositoryReleaseList($direction:OrderDirection!$endCursor:String$name:String!$owner:String!$perPage:Int!){repository(owner: $owner, name: $name){releases(first: $perPage, orderBy: {field: CREATED_AT, direction: $direction}, after: $endCursor){nodes{name,tagName,isDraft,immutable,isLatest,isPrerelease,createdAt,publishedAt},pageInfo{hasNextPage,endCursor}}}}",
+      "variables": {
+        "direction": "DESC",
+        "endCursor": null,
+        "name": "nix-agent-sandbox",
+        "owner": "Hogeyama",
+        "perPage": 30
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh release view strait-v0.1.0",
+      "query": "query RepositoryReleaseByTag($name:String!$owner:String!$tagName:String!){repository(owner: $owner, name: $name){release(tagName: $tagName){databaseId,isDraft}}}",
+      "variables": {
+        "name": "nix-agent-sandbox",
+        "owner": "Hogeyama",
+        "tagName": "strait-v0.1.0"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh label list",
+      "query": "fragment label on Label{color,description,name}\n\tquery LabelList($owner: String!, $repo: String!, $limit: Int!, $endCursor: String, $query: String, $orderBy: LabelOrder) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\tlabels(first: $limit, after: $endCursor, query: $query, orderBy: $orderBy) {\n\t\t\t\ttotalCount,\n\t\t\t\tnodes {\n\t\t\t\t\t...label\n\t\t\t\t}\n\t\t\t\tpageInfo {\n\t\t\t\t\thasNextPage\n\t\t\t\t\tendCursor\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "limit": 30,
+        "orderBy": {
+          "direction": "ASC",
+          "field": "CREATED_AT"
+        },
+        "owner": "Hogeyama",
+        "query": "",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh repo view Hogeyama/nix-agent-sandbox",
+      "query": "query RepositoryInfo($owner: String!, $name: String!) {\n\t\trepository(owner: $owner, name: $name) {name,owner{id,login},description}\n\t}",
+      "variables": {
+        "name": "nix-agent-sandbox",
+        "owner": "Hogeyama"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr view 1 --json <all fields>",
+      "query": "\n\tquery PullRequestByNumber($owner: String!, $repo: String!, $pr_number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\tpullRequest(number: $pr_number) {additions,assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},baseRefName,baseRefOid,body,changedFiles,closed,closedAt,closingIssuesReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},commits(first: 100) {nodes {commit {authors(first:100) {nodes {name,email,user{id,login}}},messageHeadline,messageBody,oid,committedDate,authoredDate}}},createdAt,deletions,files(first: 100) {nodes {additions,deletions,path,changeType}},fullDatabaseId,headRefName,headRefOid,headRepository{id,name,nameWithOwner},headRepositoryOwner{id,login,...on User{name}},id,isCrossRepository,isDraft,labels(first:100){nodes{id,name,description,color},totalCount},latestReviews(first: 100) {nodes {author{login},authorAssociation,submittedAt,body,state}},maintainerCanModify,mergeCommit{oid},mergeStateStatus,mergeable,mergedAt,mergedBy{login,...on User{id,name}},milestone{number,title,description,dueOn},number,potentialMergeCommit{oid},reactionGroups{content,users{totalCount}},reviewDecision,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login,name},...on Bot{login},...on Team{organization{login}name,slug}}}},reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},state,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},title,updatedAt,url}\n\t\t}\n\t}",
+      "variables": {
+        "owner": "Hogeyama",
+        "pr_number": 1,
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh pr list --json <all fields>",
+      "query": "fragment pr on PullRequest{additions,assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},autoMergeRequest {authorEmail,commitBody,commitHeadline,mergeMethod,enabledAt,enabledBy{login,...on User{id,name}}},baseRefName,baseRefOid,body,changedFiles,closed,closedAt,closingIssuesReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},commits(first: 100) {nodes {commit {authors(first:100) {nodes {name,email,user{id,login}}},messageHeadline,messageBody,oid,committedDate,authoredDate}}},createdAt,deletions,files(first: 100) {nodes {additions,deletions,path,changeType}},fullDatabaseId,headRefName,headRefOid,headRepository{id,name,nameWithOwner},headRepositoryOwner{id,login,...on User{name}},id,isCrossRepository,isDraft,labels(first:100){nodes{id,name,description,color},totalCount},latestReviews(first: 100) {nodes {author{login},authorAssociation,submittedAt,body,state}},maintainerCanModify,mergeCommit{oid},mergeStateStatus,mergeable,mergedAt,mergedBy{login,...on User{id,name}},milestone{number,title,description,dueOn},number,potentialMergeCommit{oid},projectCards(first:100){nodes{project{name}column{name}},totalCount},projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: \"Status\") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount},reactionGroups{content,users{totalCount}},reviewDecision,reviewRequests(first: 100) {nodes {requestedReviewer {__typename,...on User{login,name},...on Bot{login},...on Team{organization{login}name,slug}}}},reviews(first: 100) {nodes {id,author{login},authorAssociation,submittedAt,body,state,commit{oid},reactionGroups{content,users{totalCount}}}pageInfo{hasNextPage,endCursor}totalCount},state,statusCheckRollup: commits(last: 1) {nodes {commit {statusCheckRollup {contexts(first:100) {nodes {__typename...on StatusContext {context,state,targetUrl,createdAt,description},...on CheckRun {name,checkSuite{workflowRun{workflow{name}}},status,conclusion,startedAt,completedAt,detailsUrl}},pageInfo{hasNextPage,endCursor}}}}}},title,updatedAt,url}\n\t\tquery PullRequestList(\n\t\t\t$owner: String!,\n\t\t\t$repo: String!,\n\t\t\t$limit: Int!,\n\t\t\t$endCursor: String,\n\t\t\t$baseBranch: String,\n\t\t\t$headBranch: String,\n\t\t\t$state: [PullRequestState!] = OPEN\n\t\t) {\n\t\t\trepository(owner: $owner, name: $repo) {\n\t\t\t\tpullRequests(\n\t\t\t\t\tstates: $state,\n\t\t\t\t\tbaseRefName: $baseBranch,\n\t\t\t\t\theadRefName: $headBranch,\n\t\t\t\t\tfirst: $limit,\n\t\t\t\t\tafter: $endCursor,\n\t\t\t\t\torderBy: {field: CREATED_AT, direction: DESC}\n\t\t\t\t) {\n\t\t\t\t\ttotalCount\n\t\t\t\t\tnodes {\n\t\t\t\t\t\t...pr\n\t\t\t\t\t}\n\t\t\t\t\tpageInfo {\n\t\t\t\t\t\thasNextPage\n\t\t\t\t\t\tendCursor\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}",
+      "variables": {
+        "limit": 30,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox",
+        "state": ["OPEN"]
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue view 1 --json <all fields>",
+      "query": "\n\tquery IssueByNumber($owner: String!, $repo: String!, $number: Int!) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissue: issueOrPullRequest(number: $number) {\n\t\t\t\t__typename\n\t\t\t\t...on Issue{assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},body,closed,closedAt,closedByPullRequestsReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,isPinned,labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},state,stateReason,title,updatedAt,url}\n\t\t\t\t...on PullRequest{assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},body,closed,closedAt,comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,projectCards(first:100){nodes{project{name}column{name}},totalCount},reactionGroups{content,users{totalCount}},state,title,updatedAt,url}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "number": 1,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh issue list --json <all fields>",
+      "query": "fragment issue on Issue {assignees(first:100){nodes{id,login,name,databaseId},totalCount},author{login,...on User{id,name}},body,closed,closedAt,closedByPullRequestsReferences(first: 100) {nodes {id,number,url,repository {id,name,owner {id,login}}}pageInfo{hasNextPage,endCursor}},comments(first: 100) {nodes {id,author{login,...on User{id,name}},authorAssociation,body,createdAt,includesCreatedEdit,isMinimized,minimizedReason,reactionGroups{content,users{totalCount}},url,viewerDidAuthor},pageInfo{hasNextPage,endCursor},totalCount},createdAt,id,isPinned,labels(first:100){nodes{id,name,description,color},totalCount},milestone{number,title,description,dueOn},number,projectCards(first:100){nodes{project{name}column{name}},totalCount},projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: \"Status\") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount},reactionGroups{content,users{totalCount}},state,stateReason,title,updatedAt,url}\n\tquery IssueList($owner: String!, $repo: String!, $limit: Int, $endCursor: String, $states: [IssueState!] = OPEN, $assignee: String, $author: String, $mention: String) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\thasIssuesEnabled\n\t\t\tissues(first: $limit, after: $endCursor, orderBy: {field: CREATED_AT, direction: DESC}, states: $states, filterBy: {assignee: $assignee, createdBy: $author, mentioned: $mention}) {\n\t\t\t\ttotalCount\n\t\t\t\tnodes {\n\t\t\t\t\t...issue\n\t\t\t\t}\n\t\t\t\tpageInfo {\n\t\t\t\t\thasNextPage\n\t\t\t\t\tendCursor\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\t",
+      "variables": {
+        "limit": 30,
+        "owner": "Hogeyama",
+        "repo": "nix-agent-sandbox",
+        "states": ["OPEN"]
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh label list --json <all fields>",
+      "query": "fragment label on Label{color,createdAt,description,id,isDefault,name,updatedAt,url}\n\tquery LabelList($owner: String!, $repo: String!, $limit: Int!, $endCursor: String, $query: String, $orderBy: LabelOrder) {\n\t\trepository(owner: $owner, name: $repo) {\n\t\t\tlabels(first: $limit, after: $endCursor, query: $query, orderBy: $orderBy) {\n\t\t\t\ttotalCount,\n\t\t\t\tnodes {\n\t\t\t\t\t...label\n\t\t\t\t}\n\t\t\t\tpageInfo {\n\t\t\t\t\thasNextPage\n\t\t\t\t\tendCursor\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}",
+      "variables": {
+        "limit": 30,
+        "orderBy": {
+          "direction": "ASC",
+          "field": "CREATED_AT"
+        },
+        "owner": "Hogeyama",
+        "query": "",
+        "repo": "nix-agent-sandbox"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh repo view Hogeyama/nix-agent-sandbox --json <all fields>",
+      "query": "query RepositoryInfo($owner: String!, $name: String!) {\n\t\trepository(owner: $owner, name: $name) {archivedAt,assignableUsers(first:100){nodes{id,login,name}},codeOfConduct{key,name,url},contactLinks{about,name,url},createdAt,defaultBranchRef{name},deleteBranchOnMerge,description,diskUsage,forkCount,fundingLinks{platform,url},hasDiscussionsEnabled,hasIssuesEnabled,hasProjectsEnabled,hasWikiEnabled,homepageUrl,id,isArchived,isBlankIssuesEnabled,isEmpty,isFork,isInOrganization,isMirror,isPrivate,isSecurityPolicyEnabled,isTemplate,isUserConfigurationRepository,issueTemplates{name,title,body,about},issues(states:OPEN){totalCount},labels(first:100){nodes{id,color,name,description}},languages(first:100){edges{size,node{name}}},latestRelease{publishedAt,tagName,name,url},licenseInfo{key,name,nickname},mentionableUsers(first:100){nodes{id,login,name}},mergeCommitAllowed,milestones(first:100,states:OPEN){nodes{number,title,description,dueOn}},mirrorUrl,name,nameWithOwner,openGraphImageUrl,owner{id,login},parent{id,name,owner{id,login}},primaryLanguage{name},projects(first:100,states:OPEN){nodes{id,name,number,body,resourcePath}},projectsV2(first:100,query:\"is:open\"){nodes{id,number,title,resourcePath,closed,url}},pullRequestTemplates{body,filename},pullRequests(states:OPEN){totalCount},pushedAt,rebaseMergeAllowed,repositoryTopics(first:100){nodes{topic{name}}},securityPolicyUrl,squashMergeAllowed,sshUrl,stargazerCount,templateRepository{id,name,owner{id,login}},updatedAt,url,usesCustomOpenGraphImage,viewerCanAdminister,viewerDefaultCommitEmail,viewerDefaultMergeMethod,viewerHasStarred,viewerPermission,viewerPossibleCommitEmails,viewerSubscription,visibility,watchers{totalCount}}\n\t}",
+      "variables": {
+        "name": "nix-agent-sandbox",
+        "owner": "Hogeyama"
+      }
+    },
+    {
+      "gh": "2.90.0",
+      "command": "gh search issues/prs (schema probe only)",
+      "query": "query SearchType_enumValues{SearchType: __type(name: \"SearchType\"){enumValues(includeDeprecated: true){name}}}",
+      "variables": {}
     }
   ]
 }

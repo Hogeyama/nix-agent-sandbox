@@ -17,7 +17,7 @@ strait のコードをレビュー・変更する人のための文書です。�
 
 ## 信頼すべきコード
 
-判定に関与するのは `src/core/` だけです。約 2,300 行で、そのうち約 100 行は GraphQL の許可リスト（データ）です。
+判定に関与するのは `src/core/` だけです。約 2,500 行で、そのうち約 270 行は GraphQL の許可リスト（データ）です。
 
 | ファイル | 役割 |
 | --- | --- |
@@ -104,7 +104,9 @@ strait は、次の条件をすべて満たす文書だけを許可します。
 - すべての `repository` について、`owner` と `name` が `githubRepos` のいずれか 1 つを指す。`owner/*` の規則は、その owner のすべてのリポジトリを指します。
 - 解析可能である。未知の directive、引数・変数・fragment の重複、未定義や循環する fragment、トークン数・深さ・展開量の上限の超過がある文書は、解析不能として許可しません。
 
-`GITHUB_FIELDS` は、gh 2.46 の主要なコマンドが送信する query から作成しました（`src/core/testdata/gh_queries.json`）。末端はすべてスカラーで、他の repo の内容に到達する経路（`owner { repositories }` など）は含みません。許可リストの末端と、収録した query の末端が完全に一致することをテストで検証しています。経路を追加する場合は、その query を testdata に追加してください。
+`GITHUB_FIELDS` は、gh 2.46 と 2.90 の主要なコマンドが送信する query から作成しました（`src/core/testdata/gh_queries.json`）。2.90 の分は、各コマンドが送るすべての要求を収録し、`--json` で選べるフィールドもすべて含めています。末端はすべてスカラーで、他のリポジトリの内容に到達する経路（`owner { repositories }`、`viewer { starredRepositories }` など）は含みません。他のリポジトリを指す経路（`parent`、`closingIssuesReferences` など）は、ID、名前、番号、URL で止まります。
+
+`repository` の外で許可するのは、gh がフィールドの有無を調べるためのスキーマの問い合わせ（`__type { fields { name } enumValues { name } }`）と、`viewer { login }` だけです。どちらもリポジトリの内容を返しません。`gh pr status` と `gh search` は、リポジトリに限定されない `search` を使うので、保留されます。許可リストの末端と、収録した query の末端が完全に一致することをテストで検証しています。経路を追加する場合は、その query を testdata に追加してください。
 
 条件を満たさない文書は保留され、理由にはすべての違反が列挙されます。この規則は nas の[フィールド経路ポリシー](../../docs/superpowers/specs/2026-09-20-graphql-field-path-policy-design.md)を簡略化したものです。nas と異なり、owner と name の両方を要求します。
 
