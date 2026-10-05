@@ -8,6 +8,7 @@ code in this repository.
 ```bash
 # Setup (required on a fresh checkout)
 bun install                # Install JS dependencies
+bun install --cwd contrib/strait # strait's own deps (test:strait-unit needs them)
 bun run vendor             # Populate src/docker/mitmproxy/vendor/ (gitignored;
                            # the mitmproxy addon's python tests skip without it)
 

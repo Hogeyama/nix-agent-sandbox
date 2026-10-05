@@ -16,6 +16,9 @@ jobs:
       - name: Install dependencies
         run: |
           nix develop -c bun install --frozen-lockfile
+          # strait is its own package with its own lockfile and a patched srt,
+          # which test:strait-unit imports and checks.
+          nix develop -c bun install --frozen-lockfile --cwd contrib/strait
           nix develop -c bun run vendor
 
       - name: Documentation checks
