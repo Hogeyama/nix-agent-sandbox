@@ -24,5 +24,6 @@
     ]
   },
   "trustedGitHubRepos": ["Hogeyama/*"],
-  "hostExec": true
+  "hostExec": true,
+  "notify": "terminal"
 }
