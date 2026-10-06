@@ -370,7 +370,7 @@ async function dispatch(
   const script = `set -euo pipefail
 nas_measure_start() { printf -v "$1" %s ""; }
 nas_measure_done() { :; }
-mktemp() { command mktemp "$TEST_ROOT/shell-rc.XXXXXX"; }
+mktemp() { ${shellEscape([Bun.which("mktemp")!])} "$TEST_ROOT/shell-rc.XXXXXX"; }
 exec_nas() { exec "$@"; }
 EXEC_PREFIX=()
 AGENT_COMMAND=("$@")

@@ -20,6 +20,9 @@ function buildDescription(facts: GuideFacts): string {
   }
   if (facts.dind !== null) {
     symptoms.push("a docker build fails to reach the network");
+    symptoms.push(
+      "Docker or Testcontainers cannot connect from sandboxed Bash",
+    );
   }
   if (facts.network.remoteForwards.length > 0) {
     symptoms.push("a connection to a host port is refused");
@@ -103,15 +106,43 @@ function hostexecSection(
 
 function dindSection(): string {
   return [
-    "## Docker builds cannot reach the network",
+    "## Docker and Testcontainers in sandboxed Bash",
     "",
-    "Docker works here, but a build container has no route out. Pulling a base",
-    "image succeeds, because that goes through a proxied daemon, while anything",
-    "the build itself fetches — `apt-get`, `pip`, `curl` — fails to resolve.",
+    "Run your usual `docker` commands or test command (for example `bun test`).",
+    "nas's Bash wrapper automatically connects an isolated network namespace",
+    "to the session's DinD API and mirrors published TCP ports on `127.0.0.1`.",
+    "No command prefix or Claude `excludedCommands` entry is needed. Keep",
+    "the `DOCKER_HOST` and `TESTCONTAINERS_*` variables supplied by nas; a",
+    "hard-coded `tcp://127.0.0.1:2375` points at the isolated namespace instead.",
     "",
-    "So a Dockerfile that pulls fine and then dies on its first `apt-get` is not",
-    "a broken Dockerfile. Do not rewrite it; use an image that already carries",
-    "what you need, or tell the user the build needs network access.",
+    "The Bash sandbox must allow nas's Unix sockets (the documented Claude",
+    "configuration uses `allowAllUnixSockets`). The bridge supports published",
+    "IPv4 TCP ports. UDP and connections from a container back to a server in",
+    "the isolated Bash namespace are not supported.",
+    "Start or restart containers from the sandboxed Bash command before using",
+    "their ports there. Containers started through an outer, direct Docker",
+    "endpoint are not forwarded until restarted through the bridge. An",
+    "unauthorized-port error includes this recovery instruction.",
+    "",
+    "If Docker cannot connect, first check `docker version` in the same Bash",
+    "command and inspect `DOCKER_HOST`. A `nas DinD bridge` error identifies",
+    "a bridge startup, socket-access, or port-conflict problem. Report that",
+    "error instead of excluding the test runner from the sandbox. If Docker",
+    "works but a test cannot reach its container, check `docker port` and use",
+    "the published host port on `127.0.0.1`, not the container's private IP.",
+    "",
+    "## Docker network permissions",
+    "",
+    "Image pulls use `docker.networkScopes`, separately from the agent's",
+    "network permissions. A registry 403 requires the user to allow that",
+    "registry in the Docker scopes; changing `DOCKER_HOST` cannot fix it.",
+    "The bridge does not grant additional external network access.",
+    "",
+    "A build container has no direct route out. Pulling a permitted base image",
+    "can succeed while its first `apt-get`, `pip`, or `curl` fails to resolve.",
+    "Do not rewrite the Dockerfile just to work around that constraint; use",
+    "an image that already carries what you need, or tell the user the build",
+    "needs network access.",
   ].join("\n");
 }
 

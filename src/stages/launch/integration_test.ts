@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 /**
  * Container integration tests: Docker イメージと entrypoint の実起動
@@ -506,10 +506,8 @@ const [dockerAvailable, ptyScriptPath] = await Promise.all([
 const imageBuildable = RUNNING_ON_HOST_DOCKER;
 const canRunImage = dockerAvailable && imageBuildable;
 
-/** Docker イメージをビルド（初回のみ） */
-let imageBuilt = false;
+/** Build the fixture once, outside each command assertion's timeout. */
 async function ensureImage(): Promise<void> {
-  if (imageBuilt) return;
   imageBuildAttempted = true;
   const imageName = IMAGE_NAME;
   const buildProbes = await resolveBuildProbes(imageName);
@@ -527,8 +525,9 @@ async function ensureImage(): Promise<void> {
         ),
     ),
   );
-  imageBuilt = true;
 }
+
+if (canRunImage) beforeAll(ensureImage, 120_000);
 
 /**
  * テスト用 docker run。
@@ -544,8 +543,6 @@ async function dockerRun(
     stdin?: string;
   } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  await ensureImage();
-
   const uid = process.getuid!() ?? 1000;
   const gid = process.getgid!() ?? 1000;
   const user = process.env.USER?.trim() || "nas";
@@ -934,6 +931,28 @@ for (const withProfile of [true, false]) {
 // ホスト Docker (DOCKER_HOST 未設定) の場合は /tmp が使えるので常に動く。
 const canBindMount =
   canRunImage && (SHARED_TMP !== undefined || !process.env.DOCKER_HOST);
+
+test.skipIf(!canBindMount)(
+  "Integration: DinD enables Bash interception and an agent-owned gateway without masking",
+  async () => {
+    const workDir = await makeTempDir("nas-e2e-bash-bridge-ws-");
+    try {
+      const result = await dockerRun(
+        [
+          "/bin/bash",
+          "-c",
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.
+          'test -S /run/nas-dind-bridge/bridge.sock && test "$(cat /run/nas-dind-bridge-netns)" = "$(readlink /proc/self/ns/net)" && test "$(stat -c %u /run/nas-dind-bridge/bridge.sock)" = "$EUID" && /bin/bash -c \'test -z "${NAS_DIND_BRIDGE_NETNS:-}" && printf "nested=%s" "$0"\'; exit 37',
+        ],
+        { workDir, envVars: { NAS_DIND_BRIDGE: "1" } },
+      );
+      expect(result.code, result.stderr).toBe(37);
+      expect(result.stdout).toBe("nested=/bin/bash");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
 
 test.skipIf(!canBindMount)(
   "Integration: absolute /bin/bash remains the system executable when mask filter is disabled",

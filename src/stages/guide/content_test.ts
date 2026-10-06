@@ -89,7 +89,8 @@ describe("renderGuide", () => {
       "Read before retrying or working around an unexpected failure inside " +
         "the nas sandbox: network requests fail to resolve or are refused; " +
         "a command becomes unresponsive for minutes; a docker build fails " +
-        "to reach the network. Explains which sandbox constraint causes " +
+        "to reach the network; Docker or Testcontainers cannot connect from " +
+        "sandboxed Bash. Explains which sandbox constraint causes " +
         "each, and which ones no amount of retrying will get past. Also " +
         "read when showing a playwright-cli browser to the user via xpra.",
     );
@@ -204,11 +205,16 @@ describe("renderGuide", () => {
     expect(out).toContain("not a hang");
   });
 
-  test("explains the DinD build asymmetry only when docker is enabled", () => {
+  test("provides Docker sandbox diagnostics only when docker is enabled", () => {
     expect(renderGuide(makeFacts())).not.toContain("apt-get");
+    expect(renderGuide(makeFacts())).not.toContain("DOCKER_HOST");
 
     const out = renderGuide(makeFacts({ dind: { shared: true } }));
     expect(out).toContain("apt-get");
+    expect(out).toContain("DOCKER_HOST");
+    expect(out).toContain("docker.networkScopes");
+    expect(out).toContain("allowAllUnixSockets");
+    expect(out).toContain("published host port");
   });
 
   test("appends the user's extra section verbatim", () => {

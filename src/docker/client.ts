@@ -41,6 +41,9 @@ export const EMBEDDED_ASSET_NAMES = [
   "nix-direnv.sh",
   "nix-direnv.LICENSE",
   "local-proxy.mjs",
+  "dind-bridge.mjs",
+  "dind-bridge-protocol.mjs",
+  "dind-bridge-runtime.mjs",
 ] as const;
 
 const EMBEDDED_ASSET_GROUPS = [

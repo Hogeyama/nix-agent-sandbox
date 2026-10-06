@@ -358,6 +358,45 @@ if [ "${NAS_PORT_RELAY_STARTUP:-}" = "1" ] && [ "$NAS_SHELL_MODE" != "true" ]; t
   fi
 fi
 
+# The gateway belongs to this container's original DinD network namespace.
+# Persist that identity for docker exec --shell; never recapture an inner one.
+if [ "${NAS_DIND_BRIDGE:-}" = 1 ]; then
+  if [ "$NAS_SHELL_MODE" != true ]; then
+    NAS_DIND_BASE_NETNS="$(readlink /proc/self/ns/net)"
+    printf '%s\n' "$NAS_DIND_BASE_NETNS" > /run/nas-dind-bridge-netns
+    chmod 644 /run/nas-dind-bridge-netns
+    install -d -m 700 -o "$NAS_UID" -g "$NAS_GID" /run/nas-dind-bridge
+    # A restart reuses the container filesystem after all old processes died.
+    rm -f /run/nas-dind-bridge/bridge.sock /run/nas-dind-bridge/bridge.sock.api
+    # A separate FIFO avoids a second Bash coprocess when port-relay is active.
+    NAS_DIND_GATEWAY_READY_DIR="$(mktemp -d /run/nas-dind-bridge-start.XXXXXX)"
+    if ! mkfifo -m 600 "$NAS_DIND_GATEWAY_READY_DIR/ready"; then
+      rm -rf "$NAS_DIND_GATEWAY_READY_DIR"
+      echo '[nas] DinD bridge readiness setup failed' >&2
+      exit 1
+    fi
+    (exec "${EXEC_PREFIX[@]}" /usr/local/bin/bun /usr/local/lib/nas/dind-bridge.mjs serve --socket /run/nas-dind-bridge/bridge.sock --docker-host tcp://127.0.0.1:2375) >"$NAS_DIND_GATEWAY_READY_DIR/ready" &
+    NAS_DIND_GATEWAY_PROCESS=$!
+    exec {NAS_DIND_GATEWAY_READY_FD}<"$NAS_DIND_GATEWAY_READY_DIR/ready"
+    rm -rf "$NAS_DIND_GATEWAY_READY_DIR"
+    if ! IFS= read -r -t 10 NAS_DIND_GATEWAY_READY <&"$NAS_DIND_GATEWAY_READY_FD" ||
+       [ "$NAS_DIND_GATEWAY_READY" != ready ] ||
+       ! kill -0 "$NAS_DIND_GATEWAY_PROCESS" 2>/dev/null; then
+      echo '[nas] DinD bridge failed to initialize or timed out' >&2
+      kill "$NAS_DIND_GATEWAY_PROCESS" 2>/dev/null || true
+      wait "$NAS_DIND_GATEWAY_PROCESS" 2>/dev/null || true
+      exit 1
+    fi
+    exec {NAS_DIND_GATEWAY_READY_FD}<&-
+  else
+    NAS_DIND_BASE_NETNS="$(cat /run/nas-dind-bridge-netns)"
+    if [ ! -S /run/nas-dind-bridge/bridge.sock ]; then
+      echo '[nas] DinD bridge is unavailable' >&2
+      exit 1
+    fi
+  fi
+fi
+
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
 if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then
@@ -378,7 +417,11 @@ NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
 NAS_REAL_BASH="/bin/bash"
 mkdir -p "$NAS_BASH_OVERRIDE"
 
+NAS_BASH_MASK_ENABLED=false
 if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
+  NAS_BASH_MASK_ENABLED=true
+fi
+if [ "$NAS_BASH_MASK_ENABLED" = true ] || [ "${NAS_DIND_BRIDGE:-}" = 1 ]; then
   BASH_SYSTEM_PATH="$(readlink -f /bin/bash)"
   NAS_REAL_BASH="$NAS_BASH_OVERRIDE/bash.real"
 
@@ -387,7 +430,7 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   fi
 
   # Preserve an unusable existing backup, but do not make non-Bash payloads
-  # depend on it through the launcher. The mask wrapper still uses bash.real
+  # depend on it through the launcher. The Bash wrapper still uses bash.real
   # and fails closed without falling back to this separate copy.
   if [ ! -f "$NAS_REAL_BASH" ] || [ ! -x "$NAS_REAL_BASH" ]; then
     NAS_REAL_BASH="$(mktemp /tmp/nas-launch-bash.XXXXXX)"
@@ -424,8 +467,10 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
     cat << 'MASK_WRAPPER_HEADER'
 #!/tmp/nas-bash-override/bash.real
 MASK_WRAPPER_HEADER
-    printf 'readonly nas_mask_filter_path=%q\n' "$NAS_MASK_FILTER"
-    printf 'readonly nas_mask_socket_path=%q\n' "$NAS_MASK_SOCKET"
+    printf 'readonly nas_mask_filter_path=%q\n' "${NAS_MASK_FILTER:-}"
+    printf 'readonly nas_mask_socket_path=%q\n' "${NAS_MASK_SOCKET:-}"
+    printf 'readonly nas_dind_bridge_base_netns=%q\n' "${NAS_DIND_BASE_NETNS:-}"
+    printf 'readonly nas_dind_bridge_socket_path=%q\n' "$([ "${NAS_DIND_BRIDGE:-}" != 1 ] || printf '%s' /run/nas-dind-bridge/bridge.sock)"
     cat << 'MASK_WRAPPER_BODY'
 if [ "${1:-}" = "/entrypoint.sh" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
@@ -441,7 +486,26 @@ if [ "$#" -eq 2 ] && { [ "$1" = -c ] || [ "$1" = -lc ]; }; then
       ;;
   esac
 fi
-if [ -n "${SUMI_SUPERVISED:-}" ]; then
+nas_bash_command=(/tmp/nas-bash-override/bash.real "$@")
+nas_bash_bridge=false
+if [ -n "${nas_dind_bridge_socket_path:-}" ]; then
+  nas_bash_netns="$(readlink /proc/self/ns/net)" || {
+    echo '[nas] Cannot identify the Bash network namespace' >&2
+    exit 1
+  }
+  # An inherited marker is diagnostic, not proof that a relay is still live.
+  # The helper checks its namespace's control socket and reuses the listener.
+  if [ "$nas_bash_netns" != "$nas_dind_bridge_base_netns" ]; then
+    nas_bash_bridge=true
+    nas_bash_command=(/usr/local/bin/bun /usr/local/lib/nas/dind-bridge.mjs run
+      --socket "$nas_dind_bridge_socket_path" --base-netns "$nas_dind_bridge_base_netns"
+      --argv0 "$0" -- "${nas_bash_command[@]}")
+  fi
+fi
+if [ -n "${SUMI_SUPERVISED:-}" ] || [ -z "$nas_mask_filter_path" ] || [ -z "$nas_mask_socket_path" ]; then
+  if [ "$nas_bash_bridge" = true ]; then
+    exec "${nas_bash_command[@]}"
+  fi
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
 if [ ! -S "$nas_mask_socket_path" ]; then
@@ -449,7 +513,7 @@ if [ ! -S "$nas_mask_socket_path" ]; then
 fi
 exec "$nas_mask_filter_path" run --server "$nas_mask_socket_path" \
   --argv0 "$0" -- \
-  /tmp/nas-bash-override/bash.real "$@"
+  "${nas_bash_command[@]}"
 MASK_WRAPPER_BODY
   } > "$BASH_WRAPPER_TMP"
   chmod +x "$BASH_WRAPPER_TMP"

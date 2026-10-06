@@ -62,6 +62,41 @@ async function shell(script: string, env: Record<string, string> = {}) {
   return { code, stdout, stderr };
 }
 
+test("IDE baseline preserves the built-in DinD and Testcontainers environment", async () => {
+  await fixture(async (root, library) => {
+    const env = {
+      DOCKER_HOST: "tcp://127.0.0.1:2375",
+      NAS_DIND_BRIDGE: "1",
+      NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+      TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
+      TESTCONTAINERS_CONNECTION_MODE: "docker_host",
+      TESTCONTAINERS_HOST_OVERRIDE: "127.0.0.1",
+    };
+    const result = await shell(
+      `set -euo pipefail
+source "$LIBRARY"
+nas_devcontainer_capture '' '' claude
+unset ${Object.keys(env).join(" ")}
+nas_devcontainer_apply
+printf '%s\\n' ${Object.keys(env)
+        .map((key) => `"$${key}"`)
+        .join(" ")}
+`,
+      {
+        ...env,
+        LIBRARY: library,
+        NAS_REAL_BASH: "/bin/bash",
+        NAS_DIRENV_ENABLED: "false",
+        WORKSPACE: root,
+      },
+    );
+    expect(result).toMatchObject({
+      code: 0,
+      stdout: `${Object.values(env).join("\n")}\n`,
+    });
+  });
+});
+
 test("baseline resets unset dynamic keys and applies prefix exactly once on reentry", async () => {
   await fixture(async (root, library) => {
     const ops = path.join(root, "ops.sh");

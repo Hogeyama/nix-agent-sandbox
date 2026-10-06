@@ -86,6 +86,18 @@ docker.enable の既定は false です。古い設定の `docker.shared = true`
 
 設定を信頼し直して新しいセッションを起動し、`docker pull alpine` などで取得を確認します。通信が拒否されると 403 Forbidden で取得に失敗します。
 
+### Bash の隔離内での Docker
+
+[Claude Code の Bash sandbox](/nix-agent-sandbox/configuration/bwrap/) 内でも、通常どおり `docker` や `bun test` などを実行できます。nas の Bash wrapper が Docker API への接続と、コンテナが公開した TCP ポートの中継を自動で用意します。Testcontainers のためにテストコマンドを `excludedCommands` に追加する必要はありません。
+
+nas が設定した `DOCKER_HOST` と `TESTCONTAINERS_*` をそのまま使います。API の接続先を `tcp://127.0.0.1:2375` に固定すると、隔離された Bash 自身の localhost を指すため接続できません。コンテナのサービスには、Testcontainers が返す接続先、または `docker port` で確認した公開ポートの `127.0.0.1` へ接続します。
+
+この中継には、Bash sandbox から nas の Unix ソケットへ接続できる設定が必要です。対象は IPv4 の公開 TCP ポートで、UDP と、コンテナから隔離内のテストプロセスへの逆向き接続には対応しません。外部への通信許可は引き続き `docker.networkScopes` で決まります。
+
+コンテナは、隔離内の Bash から起動または再起動します。隔離の外から Docker API を直接使って起動したコンテナのポートは、そのままでは中継されません。その場合は、隔離内で `docker restart <コンテナ名>` を実行します。
+
+API に接続できない場合は、同じ Bash コマンド内で `docker version` と `DOCKER_HOST` を確認します。`nas DinD bridge` のエラーは中継の起動、ソケットへのアクセス、ポートの競合を示します。API は使えてイメージの取得だけが 403 になる場合は、レジストリの通信許可を確認します。エージェント向けの確認手順は、セッション内の `/nas-sandbox` スキルにもあります。
+
 ### データと取得キャッシュ
 
 | 対象 | セッション終了後 |

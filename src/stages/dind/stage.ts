@@ -292,6 +292,7 @@ function buildContainerState(
   // needs no addition: ProxyStage's baseline already carries 127.0.0.1.
   const staticEnv: Record<string, string> = {
     DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+    NAS_DIND_BRIDGE: "1",
     NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
   };
   const testcontainersDefaults: Record<string, string> = {

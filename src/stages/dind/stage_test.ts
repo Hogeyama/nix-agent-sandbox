@@ -205,6 +205,16 @@ test("planDind: no_proxy and NO_PROXY survive as ProxyStage seeded them", () => 
   );
 });
 
+test("planDind: enables the automatic bridge independently of mask and bwrap settings", () => {
+  for (const support of [false, true]) {
+    const input = makeDindInput({ dockerEnable: true });
+    input.profile.bwrap.support = support;
+    expect(
+      planDind(input)?.outputOverrides.container?.env.static.NAS_DIND_BRIDGE,
+    ).toBe("1");
+  }
+});
+
 test("planDind: does not invent NAS_DIND_CONTAINER_NAME", () => {
   const plan = planDind(makeDindInput({ dockerEnable: true }));
 
@@ -399,6 +409,7 @@ test("DindStage: planner merges into existing container slice and overrides a st
       static: {
         EXISTING_ENV: "1",
         DOCKER_HOST: "tcp://127.0.0.1:2375",
+        NAS_DIND_BRIDGE: "1",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
         TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
         TESTCONTAINERS_CONNECTION_MODE: "docker_host",

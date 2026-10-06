@@ -97,3 +97,7 @@ GUI は Nix / Docker と分ける。必要なホストの画面環境、xpra へ
 - `ui.enable` / `ui.port` / `ui.idleTimeout` は profiles の「UI の設定」で扱う。手動起動、ブラウザで開けない場合、UI だけの停止は troubleshooting に置く。
 - Codex キーリングの前提は Claude 用の通信設定へ誘導しない。codex プロファイルに設定すること、`nas codex` で試すこと、未許可の API 接続先を Audit で確認して network の「接続先の追加」に進むことを明示する。第三者サービスの接続先を推測した固定リストは載せない。
 - troubleshooting は冒頭で症状ごとに該当節へ進める。UI を開けない読者に Audit の操作を先に要求しない。
+
+### Bash 隔離内の Docker（2026-10-07）
+
+development の読者は、テスト用 Docker を有効にし、Claude の Bash sandbox 内でもテストを動かしたい人。通常のテストコマンドを選び、接続失敗と取得許可不足を切り分けられることを到達点とする。自動中継 → nas の環境変数と公開ポート → Unix ソケット・IPv4 TCP の条件 → `docker version` と registry 403 の診断の順に説明する。bwrap は Docker 内の処理にどの通信制限が及ぶかだけを扱い、接続手順は development に置く。ソケットのプロトコルと転送先検証の実装は設計文書、エージェントの対処手順は生成する `/nas-sandbox` に置く。
