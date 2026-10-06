@@ -197,7 +197,9 @@ strait review deny k3f9-2.x7mq4ndp
 
 要求の ID（`k3f9-2.x7mq4ndp`）の末尾は strait の起動ごとに変わります。同じ名前でセッションを再起動しても、再起動前の ID で新しい要求を承認することはありません。
 
-同じディレクトリで複数のセッションを実行する場合は、statusline の `[strait:<ID>]` と一覧の `[<ID>]` を照合してください。`strait --name release -- claude` のように、名前を指定することもできます。要求の保留時には、`notify-send` があればデスクトップ通知も表示されます。`notify-send` が届かない環境（SSH 越しなど）では、`"notify": "terminal"` で端末の通知（OSC 9）に切り替えられます。iTerm2、WezTerm、kitty、Ghostty、Windows Terminal が、ウィンドウが前面にないときに通知を表示します。tmux の中では `set -g allow-passthrough on` が必要です。端末の通知は内容を表示せず、セッション ID だけを示します。
+同じディレクトリで複数のセッションを実行する場合は、statusline の `[strait:<ID>]` と一覧の `[<ID>]` を照合してください。`strait --name release -- claude` のように、名前を指定することもできます。要求の保留時には、`notify-send` があればデスクトップ通知も表示されます。`notify-send` が届かない環境（SSH 越しなど）では、`"notify": "terminal"` で端末の通知（OSC 9）に切り替えられます。iTerm2、WezTerm、kitty、Ghostty、Windows Terminal が、ウィンドウが前面にないときに通知を表示します。端末の通知は内容を表示せず、セッション ID だけを示します。
+
+tmux の中では `set -g allow-passthrough all` を設定してください。`on` は表示中のペインだけが対象です。`all` にすると、別のウィンドウへ移動したときや、別のペインをズームしたときも、非表示のペインから通知が届きます。
 
 `git push` は、`info/refs?service=git-receive-pack` と `git-receive-pack` の 2 件の要求として保留されます。両方を承認してください。
 

@@ -38,7 +38,8 @@ function desktop(session: SessionInfo): (p: Pending) => void {
  * the URL and the reason come from the sandbox, and written here they could
  * carry escape sequences of their own. OSC 9 is the notification iTerm2,
  * WezTerm, kitty, Ghostty and Windows Terminal show; inside tmux it reaches
- * the outer terminal only through DCS passthrough (`allow-passthrough on`).
+ * the outer terminal only through DCS passthrough (`allow-passthrough all`
+ * also allows notifications from hidden panes).
  */
 export function terminalSequence(
   session: Pick<SessionInfo, "id" | "tmuxPane">,
