@@ -224,7 +224,7 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 [Anthropic の Dev Container 参照実装](https://code.claude.com/docs/ja/devcontainer)を基に、filesystem を container で隔離し、外向き通信を container 内の iptables で制限する。[設定例](threat-model-configurations.md#系統3)
 
-- **A1a: ○** — TCP 443 の接続先を IP で制限するが、UDP 53 で DNS の問合せを送れる。プログラムが情報をドメイン名に埋め込んで問い合わせると、その情報は攻撃者の DNS サーバへ届く。使用する DNS resolver を限定しても、resolver が外部へ問合せを転送するため、この方法で情報を送れる。また、許可先が共有 IP 上にあれば、同じ IP 上の攻撃者の hostname にも接続できる。個々の接続先が専用 IP を使う場合でも、IP 許可全体を hostname の強制制限と同一視しない。`api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)も、container の中で Bash を内蔵 sandbox で隔離しなければ残る。
+- **A1a: ○** — TCP 443 の接続先を IP で制限するが、UDP 53 で DNS の問合せを送れる。プログラムが情報をドメイン名に埋め込んで問い合わせると、その情報は攻撃者の DNS サーバへ届く。使用する DNS resolver を限定しても、resolver が外部へ問合せを転送するため、この方法で情報を送れる。また、許可先が共有 IP 上にあれば、同じ IP 上の攻撃者の hostname にも接続できる。個々の接続先が専用 IP を使う場合でも、IP 許可全体を hostname の強制制限と同一視しない。`api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)も残る。参照実装と同じ capability の container では内蔵 sandbox が起動せず、seccomp と AppArmor の制限を外して `enableWeakerNestedSandbox` を使えば Bash から拒否できたが、container 自体の隔離を弱める（[実測](experiments/anthropic-mcp-connector/README.md#bash-だけを内蔵-sandbox-で塞ぐ構成)）。
 - **A1b: ○** — IP と port の制限では、許可サービス内で攻撃者の token を使う操作を区別できない。
 - **B2a: ○** — ホストからは作業領域だけを RW mount し、Claude Code の状態は container 用 volume に置く。ただし、共有作業領域内の Git / Claude Code の設定・hook 等を保護していない。
 - **A2-Y・A3-Y: ○** — `GH_TOKEN` と `.env` の `API_PASSWORD` は本物を container 内で使う。sumi が必要で、モデルへの混入と auto mode による誤保存の低減にとどまる。
@@ -249,7 +249,7 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 [Docker Sandbox](https://www.docker.com/products/docker-sandboxes/) の microVM に Claude Code を隔離し、ホスト側 proxy で接続先を制限し、要求に認証情報を付ける。提示例は hostname 単位で許可する。[設定例](threat-model-configurations.md#系統5)
 
-- **A1a: ◎†** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。`sbx v0.45.1` の[実測](experiments/sbx-shared-ip/README.md)では、proxy を通らない接続も IP ではなく SNI や Host header の名前で判定され、上流への接続先もその名前から解決し直された。そのため、許可先と IP を共有する別の hostname へは接続できなかった。ただし `api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)は hostname の制限では防げない。VM の中で Bash を内蔵 sandbox で隔離し、Bash から `api.anthropic.com` を拒否することが条件となる。
+- **A1a: ◎†** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。`sbx v0.45.1` の[実測](experiments/sbx-shared-ip/README.md)では、proxy を通らない接続も IP ではなく SNI や Host header の名前で判定され、上流への接続先もその名前から解決し直された。そのため、許可先と IP を共有する別の hostname へは接続できなかった。ただし `api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)は hostname の制限では防げない。VM の中で Bash を内蔵 sandbox で隔離し、Bash から `api.anthropic.com` を拒否することが条件となる。`sbx v0.45.1` の VM では内蔵 sandbox が追加の設定なしに動き、この要求を拒否した（[実測](experiments/anthropic-mcp-connector/README.md#bash-だけを内蔵-sandbox-で塞ぐ構成)）。
 - **A1b: ○** — `sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では、GitHub への通常の proxy 通信は偽の Authorization header もホストの認証値へ上書きした。一方、`curl --noproxy '*'` は GitHub の公開証明書で TLS 接続し、指定した偽 token に対して `Bad credentials` が返った。ログは認証注入のない `transparent` 経路を示す。接続先のホスト名は制限されるが、この方法ではプログラムが指定した token が GitHub へ届く。実測した範囲は、偽の token に対する GitHub の認証エラーが返るところまでである。
 - **B2a: ◎** — clone mode で VM 内に作業用の clone を作り、ホスト repo は `/run/sandbox/source` に read-only mount する。shared skills と SSH agent forwarding も無効にする。
 - **A2-Y・A3-Y: ○** — secret store と代理注入を使う。ただし、ホスト repo の mount には untracked / `.gitignore` 対象も含まれ、`.env` 等の secret は VM 内から読める。代理注入だけでは隠せないため、[設定例](threat-model-configurations.md#系統5)の secret の移動・読取拒否・sumi 併用と auto mode を組み合わせる。

@@ -60,6 +60,28 @@ Sandbox is required but failed to initialize: EPERM: operation not permitted, li
 - Claude Code 本体が Bash の隔離境界の外にある構成では、Bash の通信先から `api.anthropic.com` を除けば、Bash からこの要求を送れない。
 - Claude Code 本体と Bash が同じ境界の中にある構成では、`api.anthropic.com` を拒否できない。要求の header か本文を検査し、`mcp_servers` 等を含む要求を拒否する必要がある。
 - web fetch など、Anthropic 側で外部に接続する他の server tool も同じ系統の経路になる。今回は MCP connector だけを実測した。
+## Bash だけを内蔵 sandbox で塞ぐ構成
+
+Claude Code 本体が Bash の隔離境界の外にある構成で、Bash の通信先から `api.anthropic.com` を除けばこの要求を止められるかを、系統1・3・5の形で確かめた。どの構成も、`claude -p` に Bash で同じ要求を送らせた。Claude Code の設定は共通で、内蔵 sandbox を有効にし、`failIfUnavailable: true`、`allowUnsandboxedCommands: false`、`strictAllowlist: true` とした。
+
+- 対照: `allowedDomains` に `api.anthropic.com:443` を入れる（threat-model の系統1の旧設定例と同じ）
+- 対策: `allowedDomains` から除き、`deniedDomains` に `api.anthropic.com` を入れる
+
+内蔵 sandbox は Bash の要求に認証情報を付けないので、対照の要求はダミーの token のまま Anthropic に届き、401 になる。攻撃者は自分の API key を使えば済むので、Anthropic に届くこと自体を通過とみなす。
+
+| 構成 | 実行環境 | 対照 | 対策 |
+| --- | --- | --- | --- |
+| 系統1 | ホスト、Claude Code 2.1.291 | 401（Anthropic に到達） | `CONNECT tunnel failed, response 403`（内蔵 sandbox の proxy が拒否） |
+| 系統5 | Docker Sandbox `sbx v0.45.1` の VM、Claude Code 2.1.280 | 401 | `CONNECT tunnel failed, response 403` |
+| 系統3 | `docker run --cap-add NET_ADMIN --cap-add NET_RAW`、Claude Code 2.1.291 | 未測定 | bwrap が user namespace を作れず、Bash のコマンドがすべて失敗 |
+| 系統3 | 上に `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` を追加 | 未測定 | `Can't mount proc` で失敗。`enableWeakerNestedSandbox: true` を足すと `CONNECT tunnel failed, response 403` |
+
+系統5の VM では、内蔵 sandbox の bwrap が追加の設定なしに動いた。VM の中から直接 `curl` で送った要求も、sbx の network policy を通って Anthropic に届き、401 になった。
+
+系統3では、Dev Container の参照実装と同じ capability の container の中で、内蔵 sandbox は起動しなかった。`failIfUnavailable` により Bash は sandbox の外で実行されず、失敗した。内蔵 sandbox を動かすには、container の seccomp と AppArmor の制限を外し、`enableWeakerNestedSandbox` で container の `/proc` を sandbox に見せる必要があった。どちらも container 自体の隔離を弱める。系統3の対照は、参照実装の firewall が `api.anthropic.com` を許可する設計なので測定していない。
+
+検証用の sbx sandbox は削除し、`sbx ls` と `sbx secret ls` が空で、global policy が検証前と同じであることを確認した。
+
 ## nas
 
 同じ要求を、インストール済みの nas（プリセット変更前）のコンテナから送った。HTTP 200 が返り、応答に `mcp_tool_use` と `mcp_tool_result` があった。当時の Anthropic 向けプリセットは `/v1/messages` の本文で content block の型を検査していたが、`mcp_tool_use` を許可しており、`mcp_servers` を検査していなかった。

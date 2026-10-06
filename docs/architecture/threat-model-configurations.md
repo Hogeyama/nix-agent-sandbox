@@ -130,7 +130,7 @@ Bash 側は credential masking、本体の Read は `.env` の deny で保護す
 
 Bash の通信先には `api.anthropic.com` を含めず、`deniedDomains` でも拒否する。Messages API は、要求の本文に書いた MCP server へ Anthropic 側から接続する機能を持つため、Bash から送れると第三者への送信経路になる（[実測](experiments/anthropic-mcp-connector/README.md)）。
 
-この構成の A1a は、上記の仕様に基づいて ◎ と評価する。追加した書込み禁止ルールと `deniedDomains` の動作は実測していない。
+この構成の A1a は、上記の仕様に基づいて ◎ と評価する。追加した書込み禁止ルールの動作は実測していない。`deniedDomains` により Bash から `api.anthropic.com` への接続が拒否されることは、Claude Code 2.1.291 で[実測](experiments/anthropic-mcp-connector/README.md#bash-だけを内蔵-sandbox-で塞ぐ構成)した。
 
 ## 系統2
 
