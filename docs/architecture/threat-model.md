@@ -122,6 +122,8 @@ nas の proxy は、サービス内のどの repo 等を読み書きできるか
 
   `devapi.example.com` は比較用の架空の API で、次の仕様を前提とする。認証は `x-api-key` のみで行い、header の重複は拒否する。他の header・query・body による認証や認証主体の切替は提供しない。有効な key は自組織の開発環境にだけアクセスでき、第三者のアカウント・保存先や外部への転送機能は持たない。これは比較条件であり、実在 API の検証結果ではない。
 
+fine-grained token で Contents: Read を与えた public repo には、Issues 権限がなくても Issue を作成できる（[実測](experiments/nono-a1b/readonly-token-check.md#条件の切り分け)）。All repositories を選ぶと resource owner の public repo がすべて対象に入るため、repository は必要な非公開 repo に限る。他 owner の public repo には、この方法では作成できなかった。
+
 fine-grained token の scope はその token を使った操作だけを制限する。隔離環境内のプログラムが攻撃者の用意した別の token を使えば、その token の権限で第三者の repo へ書き込める。また、公開 repo の read 権限は残るため P1 の取得制限にもならない。
 
 この違いは Anthropic API にも当てはまる。Files API のファイルは認証した workspace に属し、同じ workspace の別 key からも参照できる。したがって、許可した `api.anthropic.com` に攻撃者の key でアップロードできれば、攻撃者の workspace に情報が保存される。利用者の認証情報を proxy が付ける機能に加え、攻撃者のアカウントで通信する操作や、許可していない API への接続を拒否できるかも評価する。
@@ -265,7 +267,7 @@ Docker Sandbox は、今後の対応次第で A1b を満たす構成を作れる
 
 この追試では、同じ managed token が両 repo に書き込める。認証主体を固定しても、token が書き込める未許可相手への送信を阻止できるとは限らないことを実証した。攻撃者アカウントの実 token を持ち込む試験ではなく、両 repo はユーザーの管理下にある。
 
-token 自体の権限による制限は、対象 API で実際に拒否されることも確かめる。その後の[直接対照](experiments/nono-a1b/readonly-token-check.md)では、ユーザーが Contents / Issues / Metadata を Read-only にして作成した新規 fine-grained PAT でも、公開 repo への Issue 作成が `gh issue create` と REST の両方で成功した。原因は未確定であり、これを token すり替えの成功とは数えない。「登録 token を read-only にすればこの書込み経路を防げる」という前提は、この対照では成立しなかった。
+token 自体の権限による制限は、対象 API で実際に拒否されることも確かめる。その後の[直接対照](experiments/nono-a1b/readonly-token-check.md)では、ユーザーが Contents / Issues / Metadata を Read-only にして作成した新規 fine-grained PAT でも、公開 repo への Issue 作成が `gh issue create` と REST の両方で成功した。追試では、Issues 権限なしの作成が通るのは、token の対象に含めた public repo に Contents: Read がある場合に限られた。private repo、Metadata だけの token、対象に含めていない public repo では拒否された。All repositories の token でも、作成できたのは resource owner 自身の public repo だけで、他 owner の public repo では拒否された。これを token すり替えの成功とは数えない。「登録 token を read-only にすればこの書込み経路を防げる」という前提は、この対照では成立しなかった。
 
 採用を進めるなら、まず GraphQL を禁止して REST に限定できるかを決める。GraphQL が必要なら、本文の対象まで検査する追加処理、または許可操作を限定した仲介 API が必要になる。製品内の拡張機能でどこまで実現できるかは今回の実験の対象外である。
 

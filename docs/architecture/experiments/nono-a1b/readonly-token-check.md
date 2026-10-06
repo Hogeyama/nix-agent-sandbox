@@ -40,7 +40,30 @@
 
 [公式の権限一覧の導入](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#about-permissions-required-for-fine-grained-personal-access-token)は、列挙した権限が非公開リソースのアクセスに必要であり、一部の公開リソースはその権限なしでもアクセス可能と説明している。ただし、Issue 作成の個別ページには公開 repo の例外が明記されていない。2025-11-20 の[同様の再現報告](https://github.com/orgs/community/discussions/180063)もあるが、GitHub による仕様の確定回答としては扱わない。公開 repo への参加操作と token の権限判定の関係が原因である可能性はあるものの、今回の試験だけでは確定できない。
 
-同じ問題は 2026-06-09 の [github/docs #44656](https://github.com/github/docs/issues/44656) にも報告されている。報告者は fine-grained token と GitHub App installation token について、`metadata: read` だけでも公開 repo に Issue を作成できるとしている。参照時点では Closed だが、内部へコピーして公開 Issue を閉じる `fix-internally` ラベルが付いており、動作の修正完了を示すものではない。本試験の token は Contents / Issues / Metadata の3権限なので、metadata 単独の再現は行っていない。
+同じ問題は 2026-06-09 の [github/docs #44656](https://github.com/github/docs/issues/44656) にも報告されている。報告者は fine-grained token と GitHub App installation token について、`metadata: read` だけでも公開 repo に Issue を作成できるとしている。参照時点では Closed だが、内部へコピーして公開 Issue を閉じる `fix-internally` ラベルが付いており、動作の修正完了を示すものではない。metadata 単独の token は後の[条件の切り分け](#条件の切り分け)で試し、作成できなかった。
+
+## 条件の切り分け
+
+**同じ token・同じ repo で visibility だけを変えると、private では HTTP 403、public では HTTP 201 になった。** Issues 権限なしの作成が通るのは、public repo で、その repo が token の Repository access に明示的に含まれ、token に Contents: Read がある場合に限られた。All repositories でも明示的に含まれるのは resource owner 自身の repo だけで、他 owner の public repo には作成できなかった。2026-10-06 15:00 UTC 頃（JST 10-07 未明）にホストの `gh api -X POST repos/OWNER/REPO/issues` で確認した。権限はユーザーが GitHub の作成確認画面で共有したもの。上の `pass tmp` は、この時点で HTTP 401 (`Bad credentials`) となり再試験できなかった。
+
+| token の Repository access | token の権限 | 対象 repo | 結果 |
+| --- | --- | --- | --- |
+| all repositories | Metadata: Read-only | `Hogeyama/nix-agent-sandbox`（public） | HTTP 403。GraphQL `createIssue` も拒否 |
+| all repositories | Contents / Metadata: Read-only | `Hogeyama/nix-agent-sandbox`（public） | HTTP 201、[#18](https://github.com/Hogeyama/nix-agent-sandbox/issues/18) |
+| `Hogeyama/test-github` のみ | Contents / Metadata: Read-only | `Hogeyama/test-github`（private） | HTTP 403 |
+| 同上 | 同上 | `Hogeyama/nix-agent-sandbox`（public・未選択） | HTTP 403 |
+| 同上 | 同上 | `Hogeyama/test-github`（public に変更） | HTTP 201、[test-github#3](https://github.com/Hogeyama/test-github/issues/3) |
+| 同上 | 同上 | `cq2n-iwym/test`（public・他 owner） | HTTP 403 |
+| all repositories（#18 とは別に新規作成） | Contents / Metadata: Read-only | `cq2n-iwym/test`（public・他 owner） | HTTP 403 |
+| 同上 | 同上 | `Hogeyama/nix-agent-sandbox`（public） | HTTP 201、[#19](https://github.com/Hogeyama/nix-agent-sandbox/issues/19) |
+| 同上 | 同上 | `Hogeyama/test`（private） | HTTP 403 |
+
+すべての応答に `X-Accepted-GitHub-Permissions: issues=write` が付いていた。`cq2n-iwym/test` は Hogeyama とは別の User が所有し、Issues が有効な public repo である。`Hogeyama/test` は認証なしでは 404、token では 403 を返したので、存在する private repo と判断した。ユーザーは Hogeyama 所有の repo ではオーナーなので、それらの結果はユーザー権限では分かれていない。
+
+- 公開 repo では誰でも Issue を作れるため、token が Contents: Read でその repo を読めると、Issues 権限の判定を経ずに作成が通ると解釈できる。private repo では Issues 権限が効いていた。
+- Metadata: Read だけの token は作成できなかった。github/docs #44656 の「`metadata: read` だけで作成できる」という報告とは一致しない。報告後に GitHub の判定が変わった可能性があるが、確認していない。
+- 作成画面に表示される「Also includes public repositories (read-only)」による未選択 repo の暗黙の読取りでは、作成できなかった。All repositories の token でも、他 owner の public repo には作成できなかった。他 owner の repo は1つしか試していないが、利用者の token をこの経路で使っても、他 owner が管理する repo へは書き込めないと見られる。一方、All repositories を選ぶと resource owner 自身の public repo がすべて対象に入り、Contents: Read だけで作成できる。
+- 最初の for-agent token で [#13](https://github.com/Hogeyama/nix-agent-sandbox/issues/13) を作成できた時点の権限は記録していない。上の Metadata のみの for-agent token と同じ設定だったかは不明である。
 
 ## 記録と再現
 

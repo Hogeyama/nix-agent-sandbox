@@ -6,7 +6,7 @@
 
 その後、ユーザー指定の2 repo で[実 GitHub の書込み試験](live-github.md)も行い、GraphQL を許可したときに非正規 repo へ Issue を作成できることを確認した。以下は先に行った模擬 API の記録である。
 
-さらに、[read-only 設定の新規 PAT による直接対照](readonly-token-check.md)では、公開 repo の Issue 作成が成功した。登録 token の権限で書込みを防ぐ場合も、設定名だけでなく対象 API の実効的な制限を確認する必要がある。
+さらに、[read-only 設定の新規 PAT による直接対照](readonly-token-check.md)では、公開 repo の Issue 作成が成功した。追試では、作成が通るのは token の対象に含めた public repo に Contents: Read がある場合に限られ、private repo では拒否された。登録 token の権限で書込みを防ぐ場合も、設定名だけでなく対象 API の実効的な制限を確認する必要がある。
 
 2026-10-06 に nono 0.79.0 を Linux 6.18.40 / NixOS で実行した。A1b（許可サービス内の未許可相手への送信）を想定し、sandbox 内で任意コードを実行できる攻撃者が、別の認証情報や API の引数を使えるかを調べる。LLM に実際のプロンプトインジェクションを与える試験ではない。
 
