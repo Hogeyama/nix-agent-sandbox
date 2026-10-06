@@ -80,12 +80,14 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 
 | 要求 | 必要水準 | 系統1 settings | 系統2 srt | 系統3 Dev Container | 系統4 nas | 系統5 Docker Sandbox |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| A1a: 未許可送信先への流出 | ◎ | ◎ | ◎ | ○ | ◎ | ◎ |
+| A1a: 未許可送信先への流出 | ◎ | ◎ | ○ | ○ | ◎ | ◎† |
 | A1b: 許可済みサービス内で、共有を許可していない相手への流出 | ◎ | ○ | ○ | ○ | ◎ | ○ |
 | B2a: ホストのファイルや実行設定の破壊・改変 | ◎ | ○ | ◎ | ○ | ◎‡ | ◎ |
 | A2-Y: 正規連携先への不要な secret 混入 | ○以上 | ○ | ○ | ○ | ○ | ○ |
 | A3-Y: secret の意図しない保存 | ○以上 | ○ | ○ | ○ | ○ | ○ |
 | B2b-Y: 作業ファイル・履歴・memory の破壊・汚染 | ○以上 | ○ | ○ | ○ | ○ | ○ |
+
+`†` Docker Sandbox の A1a は、`api.anthropic.com` を経由した第三者への送信（[Anthropic の server tool](#anthropic-の-server-tool)）を塞ぐことが条件となる。提示構成には未反映である。
 
 `‡` nas の B2a は、既存設定を保護対象のパスに置くことが条件となる。履歴や memory のように書込みを許可するデータへの被害は B2b で評価する。
 
@@ -100,7 +102,7 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 | 構成 | 保護範囲と成立条件・負担 |
 | --- | --- |
 | **系統1: settings.json** | Bash を内蔵 sandbox で隔離する。履歴・memory は専用の保存先に分ける。本体によるその他のホストファイルへの書込みには追加の対策が必要。読み込まれる設定ファイルをすべて書込み禁止の対象にする |
-| **系統2: srt** | 本体を含め OS sandbox で隔離する。A1b・P1 のためにサービス内の読み書き先を制限するには、srt の変更が必要になる。srt 0.0.77 の検査関数 `filterRequest` は SOCKS 等の経路で迂回できる |
+| **系統2: srt** | 本体を含め OS sandbox で隔離する。本体のために許可する `api.anthropic.com` から第三者へ送信できる。A1b・P1 のためにサービス内の読み書き先を制限するには、srt の変更が必要になる。srt 0.0.77 の検査関数 `filterRequest` は SOCKS 等の経路で迂回できる |
 | **系統3: Dev Container** | 既存 container 運用に載せやすい。DNS の問合せを使った情報送信を防ぎ、共有作業領域にある設定や hook への書込みを制限する追加対策が必要 |
 | **系統4: nas** | 提示条件では A1a・A1b・B2a と GitHub の P1 を強制する。API ごとに許可する操作を設定・保守し、ホストと共有する設定を保護する必要がある。履歴や memory はホストと共有する |
 | **系統5: Docker Sandbox** | VM 内の専用 clone で作業し、ホストの作業ツリーを保護する。提示した v2 構成には A1b の対策が必要。v3 の HTTP 制限を使う構成は今後の検証候補 |
@@ -127,6 +129,15 @@ fine-grained token で Contents: Read を与えた public repo には、Issues �
 fine-grained token の scope はその token を使った操作だけを制限する。隔離環境内のプログラムが攻撃者の用意した別の token を使えば、その token の権限で第三者の repo へ書き込める。また、公開 repo の read 権限は残るため P1 の取得制限にもならない。
 
 この違いは Anthropic API にも当てはまる。Files API のファイルは認証した workspace に属し、同じ workspace の別 key からも参照できる。したがって、許可した `api.anthropic.com` に攻撃者の key でアップロードできれば、攻撃者の workspace に情報が保存される。利用者の認証情報を proxy が付ける機能に加え、攻撃者のアカウントで通信する操作や、許可していない API への接続を拒否できるかも評価する。
+
+#### Anthropic の server tool
+
+`api.anthropic.com` は、それ自体が第三者への送信経路を持つ。Messages API の [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector) は、要求の本文の `mcp_servers` に書いた任意の URL の MCP server へ、Anthropic のサーバから接続する。事前の登録は不要である。隔離環境内のプログラムは、送りたい情報を会話に含め、攻撃者の MCP server のツールを呼ばせることができる。strait の中で実行した `curl` から、利用者の OAuth token で第三者の MCP server のツールを呼べることを[実測](experiments/anthropic-mcp-connector/README.md)した。web fetch など、Anthropic 側で外部に接続する他の server tool も同じ系統の経路である。
+
+hostname の allowlist は、Claude Code 本体の要求とこの要求を区別できない。対策は、Claude Code 本体と隔離するプロセスの位置関係で決まる。
+
+- 本体が Bash の隔離境界の外にあれば、Bash の通信先から `api.anthropic.com` を除けばよい。系統1と、container や VM の中で内蔵 sandbox を併用する構成が該当する。MCP server と hook は内蔵 sandbox の外で動くため、別途無効にするか信頼できるものに限る。
+- 本体と Bash が同じ境界の中にあれば、`api.anthropic.com` を拒否できない。proxy が TLS を終端して要求の header か本文を検査し、`mcp_servers` 等を含む要求を拒否する必要がある。境界の中で内蔵 sandbox を入れ子にする方法は、外側の制限（srt では `AF_UNIX` の拒否）と衝突する場合がある。
 
 ### 本番変更・公開・権限変更への対策
 
@@ -180,7 +191,7 @@ index や履歴に本物を含む場合は、`git show` や `git diff --cached` 
 
 Claude Code 本体はホストで動かし、内蔵 sandbox で Bash と子プロセスを隔離する。本体側の Read / Write / Edit 等には `permissions` を適用する。[設定例](threat-model-configurations.md#系統1)
 
-- **A1a: ◎** — sandbox 内の Bash の通信先を制限し、WebFetch ツールと MCP server も無効にする。`excludedCommands` による sandbox 外での実行を防ぐため、起動前に例外を除去し、managed settings で Edit／Write と Bash の両方から設定ファイルへの書込みを禁止する。[公式仕様](https://code.claude.com/docs/en/sandboxing#keep-developers-from-widening-the-policy)
+- **A1a: ◎** — sandbox 内の Bash の通信先を制限し、WebFetch ツールと MCP server も無効にする。Bash の通信先には `api.anthropic.com` を含めない（[Anthropic の server tool](#anthropic-の-server-tool)）。`excludedCommands` による sandbox 外での実行を防ぐため、起動前に例外を除去し、managed settings で Edit／Write と Bash の両方から設定ファイルへの書込みを禁止する。[公式仕様](https://code.claude.com/docs/en/sandboxing#keep-developers-from-widening-the-policy)
 - **A1b: ○** — 許可した hostname 内の認証主体・endpoint を限定していない。利用者の token をマスクして権限を絞っても、隔離環境内のプログラムは攻撃者の用意した別の token を使って通信できる。
 - **B2a: ○** — Bash の作業領域外への write は制限できるが、本体は OS sandbox の外にいる。本体の Edit／Write は permission ルールで制限するが、ルールは deny、ask、allow の順に評価され、deny の中を allow で開け直せない（[公式仕様](https://code.claude.com/docs/en/permissions)）。そのため、全体を deny して作業領域だけを許可する書き方はできない。読取りの `blockReadsOutsideWorkingDirectories` に当たる、書込み用の設定もない。個別のパスを `Edit(path)` で deny することはできるが、作業領域外への書込みを一律には拒否できず、その判断は auto mode の classifier に依存する。
 - **A2-Y・A3-Y: ○** — sandbox 内の `GH_TOKEN` と `API_PASSWORD` はダミー値とし、許可先への通信時に本物へ置換する。本体の Read には `.env` の deny を置く。不要な secret は Bash と本体の両方で読取拒否し、ツールの出力に残るシークレットは sumi でマスクし、auto mode の操作審査で誤保存を減らす。
@@ -193,7 +204,7 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 [Anthropic srt](https://github.com/anthropics/sandbox-runtime) で Claude Code 本体ごと隔離し、Read / Write / Edit を含む全プロセスに OS sandbox の filesystem / network policy を適用する。[設定例](threat-model-configurations.md#系統2)
 
-- **A1a: ◎** — 本体も含めた外向き通信を hostname allowlist で制限する。
+- **A1a: ○** — 本体も含めた外向き通信を hostname allowlist で制限する。ただし本体のために `api.anthropic.com` を許可する必要があり、隔離環境内のプログラムはそこから [MCP connector 等](#anthropic-の-server-tool)で第三者へ送信できる。既定の srt は TLS を終端しないため、要求の内容で区別できない。内蔵 sandbox を入れ子にして Bash だけを制限する方法は、srt が `AF_UNIX` を拒否するため初期化に失敗した（[実測](experiments/anthropic-mcp-connector/README.md#同じ境界の中から-bash-だけを塞げるか)）。TLS を終端する拡張（本節末）で `/v1/messages` の本文を検査すれば塞げる。
 - **A1b: ○** — `credentials` の mask はダミー値を本物へ置換する。隔離環境内のプログラムが攻撃者の token を付けて送った request は、その token のまま許可先へ届く。srt をライブラリとして組み込めば `filterRequest` で要求ごとに判定できるが、SOCKS 経由などの TLS を終端しない経路には適用されない（本節末の拡張案を参照）。
 - **B2a: ◎** — 作業領域外への write を制限し、[標準保護](https://github.com/anthropics/sandbox-runtime#mandatory-deny-paths-auto-protected-files)で `.git/config`・`.git/hooks` 等を保護する。作業領域の `.claude` は `denyWrite` に追加する。hook 実体を共通条件と異なる場所へ置くなら、その参照先も `denyWrite` に追加する。
 - **A2-Y・A3-Y: ○** — 認証情報のマスクと `denyRead` による読取りの拒否を、Claude Code 本体にも適用する。ツールの出力に残るシークレットは sumi でマスクし、auto mode の操作審査で誤保存を減らす。
@@ -213,7 +224,7 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 [Anthropic の Dev Container 参照実装](https://code.claude.com/docs/ja/devcontainer)を基に、filesystem を container で隔離し、外向き通信を container 内の iptables で制限する。[設定例](threat-model-configurations.md#系統3)
 
-- **A1a: ○** — TCP 443 の接続先を IP で制限するが、UDP 53 で DNS の問合せを送れる。プログラムが情報をドメイン名に埋め込んで問い合わせると、その情報は攻撃者の DNS サーバへ届く。使用する DNS resolver を限定しても、resolver が外部へ問合せを転送するため、この方法で情報を送れる。また、許可先が共有 IP 上にあれば、同じ IP 上の攻撃者の hostname にも接続できる。個々の接続先が専用 IP を使う場合でも、IP 許可全体を hostname の強制制限と同一視しない。
+- **A1a: ○** — TCP 443 の接続先を IP で制限するが、UDP 53 で DNS の問合せを送れる。プログラムが情報をドメイン名に埋め込んで問い合わせると、その情報は攻撃者の DNS サーバへ届く。使用する DNS resolver を限定しても、resolver が外部へ問合せを転送するため、この方法で情報を送れる。また、許可先が共有 IP 上にあれば、同じ IP 上の攻撃者の hostname にも接続できる。個々の接続先が専用 IP を使う場合でも、IP 許可全体を hostname の強制制限と同一視しない。`api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)も、container の中で Bash を内蔵 sandbox で隔離しなければ残る。
 - **A1b: ○** — IP と port の制限では、許可サービス内で攻撃者の token を使う操作を区別できない。
 - **B2a: ○** — ホストからは作業領域だけを RW mount し、Claude Code の状態は container 用 volume に置く。ただし、共有作業領域内の Git / Claude Code の設定・hook 等を保護していない。
 - **A2-Y・A3-Y: ○** — `GH_TOKEN` と `.env` の `API_PASSWORD` は本物を container 内で使う。sumi が必要で、モデルへの混入と auto mode による誤保存の低減にとどまる。
@@ -224,7 +235,7 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 [nas](https://github.com/Hogeyama/nix-agent-sandbox/blob/main/README.md) で Claude Code をコンテナに隔離し、外部通信をコンテナ外の proxy で検査する。[設定例](threat-model-configurations.md#系統4)
 
-- **A1a: ◎** — コンテナから外部への接続は proxy を通す。proxy は要求を許可してから接続先の名前解決を行うため、禁止したドメインへの DNS の問合せも防ぐ。
+- **A1a: ◎** — コンテナから外部への接続は proxy を通す。proxy は要求を許可してから接続先の名前解決を行うため、禁止したドメインへの DNS の問合せも防ぐ。Anthropic 向けプリセットは `/v1/messages` の本文を検査し、`mcp_servers` を持つ要求を承認に回さず拒否する（[Anthropic の server tool](#anthropic-の-server-tool)）。この検査を加える前の nas では、MCP connector の要求が[通った](experiments/anthropic-mcp-connector/README.md#nas)。web fetch など他の server tool は検査していない。
 - **A1b: ◎** — GitHub では repo と操作を検査し、許可範囲を越える要求には人間の承認を求める。認証情報も proxy が利用者のものに上書きする。Anthropic は Files API を拒否し、業務 API は共通条件で定めた認証方法と利用範囲に限定する。
 - **B2a: ◎‡** — Git や Claude Code の既存設定を書込みから保護する。作業領域の `.claude` は追加の設定で読取り専用にする。既存の設定や hook が[保護対象](threat-model-configurations.md#nas-で保護するファイル)に収まる配置が条件となる。
 - **A2-Y・A3-Y: ○** — ファイル、HTTP の要求、ツールの出力に含まれるシークレットをマスクする。ログイン情報はホストに保管し、proxy が通信時に付ける。auto mode の操作審査も使い、誤保存を減らす。
@@ -238,7 +249,7 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 
 [Docker Sandbox](https://www.docker.com/products/docker-sandboxes/) の microVM に Claude Code を隔離し、ホスト側 proxy で接続先を制限し、要求に認証情報を付ける。提示例は hostname 単位で許可する。[設定例](threat-model-configurations.md#系統5)
 
-- **A1a: ◎** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。`sbx v0.45.1` の[実測](experiments/sbx-shared-ip/README.md)では、proxy を通らない接続も IP ではなく SNI や Host header の名前で判定され、上流への接続先もその名前から解決し直された。そのため、許可先と IP を共有する別の hostname へは接続できなかった。
+- **A1a: ◎†** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。`sbx v0.45.1` の[実測](experiments/sbx-shared-ip/README.md)では、proxy を通らない接続も IP ではなく SNI や Host header の名前で判定され、上流への接続先もその名前から解決し直された。そのため、許可先と IP を共有する別の hostname へは接続できなかった。ただし `api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)は hostname の制限では防げない。VM の中で Bash を内蔵 sandbox で隔離し、Bash から `api.anthropic.com` を拒否することが条件となる。
 - **A1b: ○** — `sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では、GitHub への通常の proxy 通信は偽の Authorization header もホストの認証値へ上書きした。一方、`curl --noproxy '*'` は GitHub の公開証明書で TLS 接続し、指定した偽 token に対して `Bad credentials` が返った。ログは認証注入のない `transparent` 経路を示す。接続先のホスト名は制限されるが、この方法ではプログラムが指定した token が GitHub へ届く。実測した範囲は、偽の token に対する GitHub の認証エラーが返るところまでである。
 - **B2a: ◎** — clone mode で VM 内に作業用の clone を作り、ホスト repo は `/run/sandbox/source` に read-only mount する。shared skills と SSH agent forwarding も無効にする。
 - **A2-Y・A3-Y: ○** — secret store と代理注入を使う。ただし、ホスト repo の mount には untracked / `.gitignore` 対象も含まれ、`.env` 等の secret は VM 内から読める。代理注入だけでは隠せないため、[設定例](threat-model-configurations.md#系統5)の secret の移動・読取拒否・sumi 併用と auto mode を組み合わせる。

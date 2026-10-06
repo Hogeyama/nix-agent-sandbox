@@ -66,11 +66,13 @@
     "excludedCommands": [], // 他の設定ファイルにある例外も起動前に除去する
     "network": {
       "allowedDomains": [
-        "api.anthropic.com:443",
         "github.com:443",
         "api.github.com:443",
         "devapi.example.com:443"
       ],
+      // Bash から Messages API を使わせない（MCP connector 等で第三者へ送れるため）。
+      // Claude Code 本体の通信は sandbox の外なので影響しない
+      "deniedDomains": ["api.anthropic.com"],
       "strictAllowlist": true,
       "allowManagedDomainsOnly": true,
       "tlsTerminate": {} // TLS inspection を行う（ダミー値の置換に必要）
@@ -126,7 +128,9 @@ Bash 側は credential masking、本体の Read は `.env` の deny で保護す
 
 `excludedCommands` は各設定ファイルの指定が合算されるため、管理者側で空にするだけでは例外の追加を防げない。この例では、`Edit` の拒否ルールで Edit／Write ツールからの設定変更を、`denyWrite` で Bash とその子プロセスからの設定変更を禁止する。上記と異なる `CLAUDE_CONFIG_DIR` や追加の設定ファイルを使う場合は、保護対象のパスも合わせる。[Edit の仕様](https://code.claude.com/docs/en/permissions#read-and-edit)、[sandbox の仕様](https://code.claude.com/docs/en/sandboxing#configure-the-sandbox)
 
-この構成の A1a は、上記の仕様に基づいて ◎ と評価する。追加した書込み禁止ルールの動作は実測していない。
+Bash の通信先には `api.anthropic.com` を含めず、`deniedDomains` でも拒否する。Messages API は、要求の本文に書いた MCP server へ Anthropic 側から接続する機能を持つため、Bash から送れると第三者への送信経路になる（[実測](experiments/anthropic-mcp-connector/README.md)）。
+
+この構成の A1a は、上記の仕様に基づいて ◎ と評価する。追加した書込み禁止ルールと `deniedDomains` の動作は実測していない。
 
 ## 系統2
 
