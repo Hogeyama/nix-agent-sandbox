@@ -191,6 +191,8 @@ export interface ContainerPlan {
   readonly shmSize?: string;
   /** Host path of the seccomp profile to run under; Docker's default if unset. */
   readonly seccompProfile?: string;
+  /** AppArmor profile to run under (e.g. `unconfined`); Docker's default if unset. */
+  readonly apparmorProfile?: string;
   readonly extraRunArgs: readonly string[];
   readonly command: CommandSpec;
   readonly labels: Readonly<Record<string, string>>;

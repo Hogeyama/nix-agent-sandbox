@@ -289,17 +289,20 @@ test("compileLaunchOpts: baseline plan produces correct LaunchOpts", () => {
   expect(opts.labels).toEqual({ "nas.managed": "true" });
 });
 
-test("compileLaunchOpts: a seccomp profile follows the privilege arguments", () => {
+test("compileLaunchOpts: seccomp and AppArmor profiles follow the privilege arguments", () => {
   const plan = makeBasePlan({
     seccompProfile: "/run/user/1000/nas/bwrap/s/seccomp.json",
+    apparmorProfile: "unconfined",
   });
 
   const opts = compileLaunchOpts(plan, "nas-agent-x");
 
-  expect(opts.args.slice(3, 3 + PRIVILEGE_ARGS.length + 3)).toEqual([
+  expect(opts.args.slice(3, 3 + PRIVILEGE_ARGS.length + 5)).toEqual([
     ...PRIVILEGE_ARGS,
     "--security-opt",
     "seccomp=/run/user/1000/nas/bwrap/s/seccomp.json",
+    "--security-opt",
+    "apparmor=unconfined",
     "--init",
   ]);
 });

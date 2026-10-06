@@ -902,7 +902,12 @@ for (const withProfile of [true, false]) {
             extraArgs: [
               ...agentPrivilegeRunArgs(),
               ...(withProfile
-                ? ["--security-opt", `seccomp=${profilePath}`]
+                ? [
+                    "--security-opt",
+                    `seccomp=${profilePath}`,
+                    "--security-opt",
+                    "apparmor=unconfined",
+                  ]
                 : []),
               "--init",
             ],

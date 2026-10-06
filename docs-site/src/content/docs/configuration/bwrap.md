@@ -16,11 +16,12 @@ nas の proxy から見ると、この要求も Claude Code 本体の要求も `
 `bwrap.support` は既定で有効です。有効なとき、nas は次のようにコンテナを起動します。
 
 - Docker の既定の seccomp プロファイルに、bubblewrap が user namespace を作るためのシステムコール（`clone`、`unshare`、`mount`、`umount2`、`pivot_root`）の許可を加えたプロファイルを使う
+- AppArmor を `unconfined` にする。Docker がコンテナに適用する AppArmor プロファイルが `mount` を拒否するため
 - イメージに bubblewrap と socat を入れる
 
 capability は追加しません。コンテナ内で得られる権限は変わらず、増えるのはコンテナ内から呼べるカーネルの処理です。
 
-AppArmor が有効なホストでは、bubblewrap はまだ動きません。Docker がコンテナに適用する AppArmor プロファイルが `mount` を拒否するためです。Ubuntu 24.04 以降では、ホストの設定（`kernel.apparmor_restrict_unprivileged_userns`）が非特権の user namespace の作成も制限します。
+Ubuntu 24.04 以降では、ホストの設定（`kernel.apparmor_restrict_unprivileged_userns`）が非特権の user namespace の作成を制限します。これはホストの設定なので、nas からは変えられません。
 
 不要なら[対象プロファイル](/nix-agent-sandbox/configuration/profiles/#プロファイルの編集)で無効にします。
 

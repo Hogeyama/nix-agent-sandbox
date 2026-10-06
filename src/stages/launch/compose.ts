@@ -136,6 +136,9 @@ export function compileCompose(
       ...(container.seccompProfile !== undefined
         ? [`seccomp=${escapeComposeValue(container.seccompProfile)}`]
         : []),
+      ...(container.apparmorProfile !== undefined
+        ? [`apparmor=${escapeComposeValue(container.apparmorProfile)}`]
+        : []),
     ],
     cap_drop: ["ALL"],
     cap_add: [...AGENT_CAP_ADD],

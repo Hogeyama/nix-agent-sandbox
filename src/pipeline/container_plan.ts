@@ -25,7 +25,7 @@ import type {
  *   - mounts, namedVolumes, env.dynamicOps, extraRunArgs, extraHosts → append
  *   - env.static, labels                               → key-merge (patch wins)
  *   - network, command, image, workDir, shmSize,
- *     seccompProfile                                   → replace (undefined = keep base)
+ *     seccompProfile, apparmorProfile                  → replace (undefined = keep base)
  */
 export interface ContainerPatch {
   readonly image?: string;
@@ -40,6 +40,7 @@ export interface ContainerPatch {
   readonly extraHosts?: readonly ExtraHost[];
   readonly shmSize?: string;
   readonly seccompProfile?: string;
+  readonly apparmorProfile?: string;
   readonly extraRunArgs?: readonly string[];
   readonly command?: CommandSpec;
   readonly labels?: Readonly<Record<string, string>>;
@@ -115,6 +116,11 @@ export function mergeContainerPlan(
       ? { seccompProfile: patch.seccompProfile }
       : base.seccompProfile !== undefined
         ? { seccompProfile: base.seccompProfile }
+        : {}),
+    ...(patch.apparmorProfile !== undefined
+      ? { apparmorProfile: patch.apparmorProfile }
+      : base.apparmorProfile !== undefined
+        ? { apparmorProfile: base.apparmorProfile }
         : {}),
     extraRunArgs:
       patch.extraRunArgs !== undefined

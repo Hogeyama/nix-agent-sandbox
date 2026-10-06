@@ -850,8 +850,9 @@ class BwrapConfig {
   /// コンテナ内で動かすためのもの。nas は Docker の既定の seccomp
   /// プロファイルに、bubblewrap が使う `clone`・`unshare`・`mount`・
   /// `umount2`・`pivot_root` の許可を加えたプロファイルでコンテナを起動する。
-  /// capability は追加しないので、コンテナ内で得られる権限は変わらない。
-  /// 増えるのは、コンテナ内から呼べるカーネルの処理である。
+  /// Docker の AppArmor プロファイル (`docker-default`) は `mount` を拒否するので、
+  /// AppArmor も `unconfined` にする。capability は追加しないので、コンテナ内で
+  /// 得られる権限は変わらない。増えるのは、コンテナ内から呼べるカーネルの処理である。
   ///
   /// 何を隔離するかは、そのツールの設定で決める。Claude Code では
   /// managed settings 等の `sandbox` に `enableWeakerNestedSandbox = true`

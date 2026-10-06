@@ -110,15 +110,19 @@ test("compileCompose: preserves launch fields in Compose-native structure", () =
   });
 });
 
-test("compileCompose: a seccomp profile joins the security options", () => {
+test("compileCompose: seccomp and AppArmor profiles join the security options", () => {
   const document = compileCompose(
-    makePlan({ seccompProfile: "/run/user/1000/nas/bwrap/$s/seccomp.json" }),
+    makePlan({
+      seccompProfile: "/run/user/1000/nas/bwrap/$s/seccomp.json",
+      apparmorProfile: "unconfined",
+    }),
     "nas-agent-x",
     "nas-devcontainer-x",
   );
   expect(document.services.agent.security_opt).toEqual([
     "no-new-privileges",
     "seccomp=/run/user/1000/nas/bwrap/$$s/seccomp.json",
+    "apparmor=unconfined",
   ]);
 });
 

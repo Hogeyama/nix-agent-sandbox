@@ -54,6 +54,9 @@ export function createBwrapStage(
         return {
           container: mergeContainerPlan(input.container, {
             seccompProfile: handle.seccompProfilePath,
+            // Docker's docker-default AppArmor profile denies mount, which
+            // bubblewrap needs, on hosts that enable AppArmor (Debian, Ubuntu).
+            apparmorProfile: "unconfined",
           }),
         };
       });

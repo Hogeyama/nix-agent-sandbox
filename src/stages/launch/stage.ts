@@ -67,6 +67,9 @@ export function compileLaunchOpts(
   if (plan.seccompProfile !== undefined) {
     args.push("--security-opt", `seccomp=${plan.seccompProfile}`);
   }
+  if (plan.apparmorProfile !== undefined) {
+    args.push("--security-opt", `apparmor=${plan.apparmorProfile}`);
+  }
 
   // The entrypoint execs the agent, which would otherwise be PID 1 and
   // inherit every orphaned descendant (git, shells, sleep, nas-mask-filter)

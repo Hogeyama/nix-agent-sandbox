@@ -50,6 +50,7 @@ test("with support off, the container keeps Docker's default profile", async () 
   );
   expect(fake.writes).toEqual([]);
   expect(result.container?.seccompProfile).toBeUndefined();
+  expect(result.container?.apparmorProfile).toBeUndefined();
 });
 
 test("with support on, the container runs under the written profile, removed with the scope", async () => {
@@ -74,5 +75,6 @@ test("with support on, the container runs under the written profile, removed wit
   expect(result.container?.seccompProfile).toBe(
     "/run/user/1000/nas/bwrap/sess-1/seccomp.json",
   );
+  expect(result.container?.apparmorProfile).toBe("unconfined");
   expect(closed).toBe(true);
 });
