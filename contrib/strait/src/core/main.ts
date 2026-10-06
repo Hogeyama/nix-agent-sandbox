@@ -22,7 +22,7 @@ import {
   socketDir,
 } from "./approval.ts";
 import { readBody } from "./body.ts";
-import { parseConfig, type StraitConfig } from "./config.ts";
+import { type NotifyMode, parseConfig, type StraitConfig } from "./config.ts";
 import { buildCredentials, type CredentialOverwrite } from "./credentials.ts";
 import { HOSTEXEC_HOST, runOnHost } from "./hostexec.ts";
 import {
@@ -63,7 +63,7 @@ export interface LaunchHooks {
     env: Record<string, string>;
   };
   /** Called when a request is held, e.g. to notify the user. */
-  onPending?(session: SessionInfo): (p: Pending) => void;
+  onPending?(session: SessionInfo, mode: NotifyMode): (p: Pending) => void;
 }
 function usage(): never {
   console.error(
@@ -174,7 +174,9 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
   const approvals = new Approvals(
     session,
     undefined,
-    hooks.onPending?.(session),
+    config.notify === "off"
+      ? undefined
+      : hooks.onPending?.(session, config.notify),
   );
   await serve(approvals, socketPath);
   process.on("exit", () => {

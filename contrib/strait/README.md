@@ -197,7 +197,7 @@ strait review deny k3f9-2.x7mq4ndp
 
 要求の ID（`k3f9-2.x7mq4ndp`）の末尾は strait の起動ごとに変わります。同じ名前でセッションを再起動しても、再起動前の ID で新しい要求を承認することはありません。
 
-同じディレクトリで複数のセッションを実行する場合は、statusline の `[strait:<ID>]` と一覧の `[<ID>]` を照合してください。`strait --name release -- claude` のように、名前を指定することもできます。`notify-send` があれば、要求の保留時にデスクトップ通知も表示されます。
+同じディレクトリで複数のセッションを実行する場合は、statusline の `[strait:<ID>]` と一覧の `[<ID>]` を照合してください。`strait --name release -- claude` のように、名前を指定することもできます。要求の保留時には、`notify-send` があればデスクトップ通知も表示されます。`notify-send` が届かない環境（SSH 越しなど）では、`"notify": "terminal"` で端末の通知（OSC 9）に切り替えられます。iTerm2、WezTerm、kitty、Ghostty、Windows Terminal が、ウィンドウが前面にないときに通知を表示します。tmux の中では `set -g allow-passthrough on` が必要です。端末の通知は内容を表示せず、セッション ID だけを示します。
 
 `git push` は、`info/refs?service=git-receive-pack` と `git-receive-pack` の 2 件の要求として保留されます。両方を承認してください。
 
@@ -282,6 +282,7 @@ gh 2.102 以降の `gh issue view` は、つながった issue（親、子、依
 | `hostExec` | ホストでのコマンド実行の依頼を許可する | `false` |
 | `hosts` | 承認なしで接続できるホストと、その認証情報 | なし |
 | `statusLine` | `false` にすると、Claude Code の statusline にセッション ID を表示しない | `true` |
+| `notify` | 要求の保留を知らせる方法。`desktop`（`notify-send`）、`terminal`（端末の OSC 9）、`bell`（端末のベル）、`off` | `desktop` |
 | `filesystem` | srt と同じ `allowWrite`、`denyWrite`、`denyRead`、`allowRead` | [strait.example.json](strait.example.json) |
 
 `filesystem` の 4 つのキーは、それぞれ既定値を置換します。記述しなかったキーは既定値のままです。例えば `denyRead` を記述するときは、既定値の `/tmp`、`~/.ssh`、`~/.aws`、`~/.config/gh` も含めてください。`/tmp` は、ホストの一時ファイルの読み取りを禁止するための既定値です。srt が使用するソケットだけは、`allowRead` の既定値で許可しています。

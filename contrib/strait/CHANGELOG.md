@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- `"notify"` in `strait.json` picks how a held request is announced: `desktop` (`notify-send`, the default), `terminal` (an OSC 9 notification on the terminal strait runs in, wrapped for tmux passthrough), `bell` or `off`. The terminal notification names only the session, never the request.
+
 ## [0.2.0] - 2026-10-06
 
 ### Added

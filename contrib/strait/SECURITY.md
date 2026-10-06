@@ -39,7 +39,7 @@ strait のコードをレビュー・変更する人のための文書です。�
 
 - `review.ts`（`strait review`）：保留中の要求に、承認または拒否を返却するだけです。
 - `web.ts`、`web-ui/`（`strait review web`）：`review.ts` と同じく、一覧の取得と 1 件の承認または拒否だけをブラウザに提供します。
-- `statusline.ts`、`notify.ts`：通知するだけです。
+- `statusline.ts`、`notify.ts`：通知するだけです。`notify.ts` が端末に書き込む通知は固定の文言とセッション ID だけで、サンドボックスから送信された URL や理由を含めません。これらを含める変更は、下記の `strait review` の表示と同じ理由でレビューしてください。
 - `hostexec_client.ts`（`strait hostexec`）：サンドボックス内で実行されるので、もともと信頼の対象外です。
 
 `src/core/` は `src/ui/` を import しません。`src/boundary_test.ts` がこれを検証します。`main.ts` と UI の接点は、起動するコマンドを置換するフックと、要求の保留を通知するフックの 2 つだけです。どちらも判定を変更できません。そのため、`src/ui/` の変更にセキュリティのレビューは不要です。

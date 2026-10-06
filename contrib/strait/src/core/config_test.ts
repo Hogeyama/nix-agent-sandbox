@@ -8,12 +8,18 @@ test("empty config uses defaults", () => {
     filesystem: DEFAULT_FILESYSTEM,
     hostExec: false,
     statusLine: true,
+    notify: "desktop",
     hosts: {},
   });
 });
 
 test("the status line can be left alone", () => {
   expect(parseConfig('{"statusLine": false}').statusLine).toBe(false);
+});
+
+test("notify picks how a held request is announced", () => {
+  expect(parseConfig('{"notify": "terminal"}').notify).toBe("terminal");
+  expect(parseConfig('{"notify": "off"}').notify).toBe("off");
 });
 
 test("hostExec is opt-in", () => {
@@ -55,6 +61,8 @@ test.each([
   ["non-boolean hostExec", { hostExec: "yes" }],
   ["non-boolean trustLinkedIssues", { trustLinkedIssues: 1 }],
   ["non-boolean statusLine", { statusLine: "no" }],
+  ["unknown notify mode", { notify: "osc9" }],
+  ["non-string notify", { notify: true }],
   ["wildcard host", { hosts: { "*.example.com": {} } }],
   ["host with a port", { hosts: { "devapi.example.com:8443": {} } }],
   ["uppercase host", { hosts: { "DevAPI.example.com": {} } }],

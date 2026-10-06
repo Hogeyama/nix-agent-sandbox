@@ -25,9 +25,14 @@ export interface StraitConfig {
   hostExec: boolean;
   /** Put the session ID in Claude Code's status line (statusline.ts). */
   statusLine: boolean;
+  /** How a held request is announced (notify.ts). */
+  notify: NotifyMode;
   /** Extra hosts, by exact lowercase name, with the credential each takes. */
   hosts: Record<string, HostRule & { credential?: { env: string } }>;
 }
+
+export const NOTIFY_MODES = ["desktop", "terminal", "bell", "off"] as const;
+export type NotifyMode = (typeof NOTIFY_MODES)[number];
 
 // Exact names only: a wildcard would admit hosts nobody reviewed.
 const HOST_NAME =
@@ -80,6 +85,7 @@ export function parseConfig(text: string): StraitConfig {
       "filesystem",
       "hostExec",
       "statusLine",
+      "notify",
       "hosts",
     ],
     "strait.json",
@@ -120,12 +126,17 @@ export function parseConfig(text: string): StraitConfig {
   if (typeof statusLine !== "boolean") {
     throw new Error("statusLine must be true or false");
   }
+  const notify = top.notify ?? "desktop";
+  if (!NOTIFY_MODES.includes(notify as NotifyMode)) {
+    throw new Error(`notify must be one of ${NOTIFY_MODES.join(", ")}`);
+  }
   return {
     trustedGitHubRepos,
     trustLinkedIssues,
     filesystem,
     hostExec,
     statusLine,
+    notify: notify as NotifyMode,
     hosts: parseHosts(top.hosts ?? {}),
   };
 }
