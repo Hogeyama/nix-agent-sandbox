@@ -601,8 +601,8 @@ function checkExpectConditions(
 /**
  * `absent` の Pointer は、どのリクエストでも満たせる条件でなければならない。
  * ルート (`""`) はボディそのものなので常に存在し、`equals` / `oneOf` が名指す
- * Pointer はそれらが存在を要求する。どちらも、このルールが引き受けたリクエストを
- * 1 つ残らず違反にする。
+ * Pointer とその祖先はそれらが存在を要求する。どれも、このルールが引き受けた
+ * リクエストを 1 つ残らず違反にする。
  */
 function checkAbsent(
   diagnostics: Diagnostic[],
@@ -626,7 +626,10 @@ function checkAbsent(
           `${where} absent names the root. The body always exists, so it is always violated.`,
         ),
       );
-    } else if (required.has(pointer)) {
+    } else if (
+      required.has(pointer) ||
+      [...required].some((other) => other.startsWith(`${pointer}/`))
+    ) {
       diagnostics.push(
         error(
           `${where} absent ${pointer} is also required by equals or oneOf. It is always violated.`,

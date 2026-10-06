@@ -602,7 +602,9 @@ class NetworkConfig {
 // 追加するだけで、既にある UnionShape の `allowed` を書き換える手段がない。
 // 一方 `fallback` はふつうのフィールドなので、閉じ方を厳しくしたい構成は
 // `fallback = "deny"` を amend で被せられる。
-// プリセットのバージョンは不変であり、API の変更は v2 を生む。
+// プリセットのバージョンが変わるのは API の変更のときで、v2 を生む。
+// 情報の流出を塞ぐ変更は、受理する要求を狭める場合に限り同じバージョンで行う
+// (`mcp_servers` の拒否と `/v1/messages/batches` の拒否がこれに当たる)。
 // ---------------------------------------------------------------------------
 
 /// `anthropic@1` が許可する content block のタグ集合。
@@ -710,6 +712,17 @@ class AnthropicPresets {
         expect = (anthropicContentBlocks) {
           anthropicThirdPartyFields
         }
+      }
+
+      // バッチ API は各要求の `params` に `mcp_servers` を書ける。Claude Code は
+      // 使わないので、fallback の review に回さず拒否する。review にすると、
+      // fallback をホスト単位で承認した後は何も訊かずに通る。
+      ["batches"] {
+        match {
+          methods { "POST" }
+          paths { "/v1/messages/batches" }
+        }
+        onMatch = "deny"
       }
 
       // ボディの不在は「引き受けの条件」ではなく「引き受けたうえでの受理条件」

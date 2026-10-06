@@ -1478,6 +1478,20 @@ describe("受理条件", () => {
       );
     });
 
+    test("equals が求める Pointer の祖先もエラーになる", () => {
+      expect(
+        joined(absentExpect(["/params"], { equals: { "/params/mode": "x" } })),
+      ).toContain(
+        "rule api.a expect[0] absent /params is also required by equals or oneOf.",
+      );
+    });
+
+    test("名前の前方が一致するだけの Pointer は祖先ではない", () => {
+      expect(
+        errorsOf(absentExpect(["/param"], { equals: { "/params/mode": "x" } })),
+      ).toEqual([]);
+    });
+
     test("Pointer は 257 文字だとエラーになる", () => {
       expect(joined(absentExpect([`/${"p".repeat(256)}`]))).toContain(
         `rule api.a expect[0] absent Pointer /${"p".repeat(31)}… is 257 characters, over the 256-character limit.`,

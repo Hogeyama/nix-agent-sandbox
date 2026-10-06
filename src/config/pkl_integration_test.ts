@@ -476,6 +476,7 @@ profiles {
         oneOf: {},
         absent: ["/mcp_servers"],
       });
+      expect(plain?.rules?.batches?.onMatch).toEqual("deny");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

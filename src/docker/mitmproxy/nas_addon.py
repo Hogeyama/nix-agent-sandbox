@@ -586,13 +586,16 @@ def _is_valid_expect(value: object) -> bool:
         return (
             _is_valid_value_conditions(value["equals"], value["oneOf"])
             and isinstance(absent, list)
-            # The root is the body itself, always present, and a Pointer that
-            # equals/oneOf require cannot also be absent; the host refuses both.
+            # The root is the body itself, always present, and neither a
+            # Pointer that equals/oneOf require nor its ancestor can also be
+            # absent; the host refuses all three.
             and all(
                 _is_valid_json_pointer(pointer)
                 and pointer != ""
-                and pointer not in value["equals"]
-                and pointer not in value["oneOf"]
+                and not any(
+                    required == pointer or required.startswith(pointer + "/")
+                    for required in (*value["equals"], *value["oneOf"])
+                )
                 for pointer in absent
             )
             and all(

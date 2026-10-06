@@ -1294,6 +1294,8 @@ class AuthzDocumentContractTest(unittest.TestCase):
             ("absent root", {**valid, "absent": [""]}),
             ("absent pointer also required by equals",
              {**valid, "equals": {"/x": 1}, "absent": ["/x"]}),
+            ("absent ancestor of an equals pointer",
+             {**valid, "equals": {"/x/y": 1}, "absent": ["/x"]}),
             ("absent pointer over the length limit",
              {**valid, "absent": ["/" + "p" * 256]}),
         ]
