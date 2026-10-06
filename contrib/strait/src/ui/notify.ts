@@ -55,10 +55,16 @@ export function terminalSequence(
 }
 
 // One write, so the sequence does not land in pieces between the agent's own.
+// Non-blocking: strait's one event loop also serves the proxy and approvals,
+// and a terminal that stops draining (Ctrl-S) must not stall them. A write
+// that would block is dropped, like any other failure here.
 function writeTty(sequence: string) {
   let tty: number;
   try {
-    tty = openSync("/dev/tty", constants.O_WRONLY | constants.O_NOCTTY);
+    tty = openSync(
+      "/dev/tty",
+      constants.O_WRONLY | constants.O_NOCTTY | constants.O_NONBLOCK,
+    );
   } catch {
     return;
   }

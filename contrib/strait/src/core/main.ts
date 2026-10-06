@@ -174,9 +174,7 @@ export async function run(argv: string[], hooks: LaunchHooks = {}) {
   const approvals = new Approvals(
     session,
     undefined,
-    config.notify === "off"
-      ? undefined
-      : hooks.onPending?.(session, config.notify),
+    hooks.onPending?.(session, config.notify),
   );
   await serve(approvals, socketPath);
   process.on("exit", () => {
