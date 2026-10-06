@@ -428,10 +428,13 @@ local baseProfile: Profile = new {
   }
   docker {
     enable = true
-    // DinD は agent の network.scopes を引き継がない。テストが使うイメージは
-    // Docker Hub から取る。
+    // DinD は agent の network.scopes も network.defaults も引き継がない。
+    // テストが使うイメージは Docker Hub から取る。commonMask は proxy = false
+    // なので、秘密の扱いはスコープごとに ignore を指定する。
     networkScopes {
-      ["docker-hub"] = module.presets.dockerHub.pull
+      ["docker-hub"] = (module.presets.dockerHub.pull) {
+        secrets { ["*"] = "ignore" }
+      }
     }
   }
   display {
