@@ -260,7 +260,7 @@ export interface ViolationFinding {
    *
    * `BodyExpect` の `equals` / `oneOf` では、Pointer を頭に付けた
    * `/owner="other"` (値は JSON テキスト)、`/owner=(missing)`、
-   * `/owner=(not-scalar)` の形になる。1 つの `BodyExpect` の Pointer は同じ
+   * `/owner=(not-scalar)` の形になる。`absent` では `/mcp_servers=(present)` になる。1 つの `BodyExpect` の Pointer は同じ
    * 位置 (`expect`) を共有するので、Pointer を値に含めないと別の Pointer の
    * 同じ値が同じ承認になる。
    *
@@ -771,7 +771,7 @@ const MAX_FINDINGS = 1024;
  *
  * addon はボディ由来の部分を 276 コードポイントで畳む。サロゲートペアの文字は
  * ここでは 2 単位に数えるので、それは最大 552 単位になる。`UnionShape` と
- * GraphQL の値はこれだけでできている。`BodyExpect` の `equals` / `oneOf` の値は
+ * GraphQL の値はこれだけでできている。`BodyExpect` の `equals` / `oneOf` / `absent` の値は
  * 設定の Pointer (最大 `MAX_BODY_EXPECT_POINTER_CHARS`、切らない) と `=` を
  * その前に付ける。天井はその和である。
  */

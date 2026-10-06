@@ -90,7 +90,7 @@ MAX_FINDINGS_PER_EXPECT = 64
 FINDING_VALUE_MAX_CHARS = 256
 FINDING_VALUE_DIGEST_CHARS = 16
 FINDING_POINTER_MAX_CHARS = 1024
-# A BodyExpect equals/oneOf Pointer is carried uncut at the head of its
+# A BodyExpect equals/oneOf/absent Pointer is carried uncut at the head of its
 # findings' values, and the host sizes the value ceiling it accepts from this
 # length, counted as JavaScript counts it (UTF-16 code units). The host
 # refuses a longer Pointer at session start.
@@ -187,7 +187,9 @@ _LIMIT_KEYS = frozenset((
 _EXPECT_KEYS = {
     "emptyBody": frozenset(("kind", "onViolation")),
     "jsonRoot": frozenset(("kind", "onViolation", "rootType")),
-    "body": frozenset(("kind", "onViolation", "equals", "oneOf", "graphql")),
+    "body": frozenset((
+        "kind", "onViolation", "equals", "oneOf", "absent", "graphql",
+    )),
     "unionShape": frozenset((
         "kind",
         "onViolation",
@@ -580,11 +582,22 @@ def _is_valid_expect(value: object) -> bool:
     if kind == "jsonRoot":
         return value["rootType"] in ("object", "array")
     if kind == "body":
+        absent = value["absent"]
         return (
             _is_valid_value_conditions(value["equals"], value["oneOf"])
+            and isinstance(absent, list)
+            # The root is the body itself, always present, and a Pointer that
+            # equals/oneOf require cannot also be absent; the host refuses both.
+            and all(
+                _is_valid_json_pointer(pointer)
+                and pointer != ""
+                and pointer not in value["equals"]
+                and pointer not in value["oneOf"]
+                for pointer in absent
+            )
             and all(
                 _utf16_length(pointer) <= BODY_EXPECT_POINTER_MAX_CHARS
-                for field in ("equals", "oneOf")
+                for field in ("equals", "oneOf", "absent")
                 for pointer in value[field]
             )
             and _is_valid_graphql_condition(value["graphql"])
@@ -1794,7 +1807,9 @@ def _evaluate_body_expect(
     `equals` / `oneOf` findings carry a value that starts with the Pointer:
     `/owner="other"` for a scalar outside the set (the scalar as masked JSON
     text), `/owner=(missing)` for a missing target and `/owner=(not-scalar)`
-    for an object or array. An approval is keyed by (rule, expect position,
+    for an object or array. An `absent` Pointer that is present gives
+    `/mcp_servers=(present)`, whatever the value, with the value as the
+    excerpt. An approval is keyed by (rule, expect position,
     value), and one BodyExpect lists all its Pointers at one position, so a
     bare value would let approving `"other"` at `/model` also approve
     `"other"` at `/owner`, and approving one missing Pointer approve every
@@ -1807,7 +1822,7 @@ def _evaluate_body_expect(
     scalar out of the value, and with no excerpt for a scalar the approver
     would approve a value they cannot see. A Pointer may itself contain `=`,
     but no scalar's JSON text, cut or not, has an `=` followed by a complete
-    JSON text, a cut one, or `(missing)` / `(not-scalar)` (a string's text
+    JSON text, a cut one, or `(missing)` / `(not-scalar)` / `(present)` (a string's text
     ends in its closing quote and a cut one in its digest), so no two
     (Pointer, outcome) pairs spell the same value.
 
@@ -1904,6 +1919,13 @@ def _evaluate_body_expect(
         elif not any(_scalars_equal(found, value) for value in allowed):
             scalar = _cut_finding_value(_scalar_finding_value(found, patterns))
             record(pointer, f"{pointer}={scalar}", value_bounded=True)
+
+    for pointer in expect["absent"]:
+        found = _resolve_json_pointer(parsed, pointer)
+        if found is not _POINTER_MISSING:
+            record(
+                pointer, f"{pointer}=(present)", node=found, value_bounded=True,
+            )
 
     condition = expect["graphql"]
     if condition is not None and query_string:

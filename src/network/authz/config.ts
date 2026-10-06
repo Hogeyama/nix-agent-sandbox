@@ -70,7 +70,7 @@ export const LIMIT_CEILINGS: ResolvedLimits = {
 };
 
 /**
- * `BodyExpect` の `equals` / `oneOf` に書ける JSON Pointer の長さ (UTF-16 の
+ * `BodyExpect` の `equals` / `oneOf` / `absent` に書ける JSON Pointer の長さ (UTF-16 の
  * 単位、JavaScript の `length`)。
  *
  * 違反レコードは Pointer を切らずに値の頭に付ける (`/owner="other"`)。違反レコードは
@@ -114,6 +114,8 @@ export interface BodyExpect extends ExpectCommon {
   readonly kind: "body";
   readonly equals?: Readonly<Record<string, JsonScalar>>;
   readonly oneOf?: Readonly<Record<string, readonly JsonScalar[]>>;
+  /** 存在してはならない JSON Pointer。`match.body` には無い。 */
+  readonly absent?: readonly string[];
   readonly graphql?: GraphqlMatch;
 }
 

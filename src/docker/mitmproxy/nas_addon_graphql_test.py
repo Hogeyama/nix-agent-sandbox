@@ -888,6 +888,7 @@ def body_expect(**fields):
         "onViolation": "review",
         "equals": {},
         "oneOf": {},
+        "absent": [],
         "graphql": None,
     }
     expect.update(fields)
@@ -952,6 +953,22 @@ class BodyExpectTest(unittest.TestCase):
         )
         # A real value names itself, so none of these needs a label.
         self.assertEqual([f["label"] for f in findings], [None, None, None])
+
+    def test_an_absent_pointer_is_violated_by_any_value(self):
+        expect = body_expect(absent=["/mcp_servers"])
+        self.assertEqual(check(expect, {"model": "m"}), (False, []))
+        for value in ([], [{"url": "https://x.example"}], None, "", 0):
+            with self.subTest(value=value):
+                violated, findings = check(
+                    expect, {"model": "m", "mcp_servers": value}
+                )
+                self.assertTrue(violated)
+                self.assertEqual(values(findings), [
+                    ("schema-mismatch", "/mcp_servers",
+                     "/mcp_servers=(present)", 1),
+                ])
+                # The approver sees what was there, masked and bounded.
+                self.assertIsNotNone(findings[0]["excerpt"])
 
     def test_a_refused_scalar_keeps_its_json_type(self):
         # The value is an approval key: the string "true" and the boolean

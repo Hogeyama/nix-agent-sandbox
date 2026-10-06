@@ -149,6 +149,14 @@
               "kind": "jsonRoot",
               "onViolation": "deny",
               "rootType": "object"
+            },
+            {
+              "kind": "body",
+              "onViolation": "deny",
+              "equals": {},
+              "oneOf": {},
+              "absent": ["/mcp_servers"],
+              "graphql": null
             }
           ],
           "limits": {

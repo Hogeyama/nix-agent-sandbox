@@ -363,6 +363,11 @@ class BodyExpect extends Expect {
   /// JSON Pointer と許す値の集合。
   oneOf: Mapping<String, Listing<Any>> = new {}
 
+  /// 存在してはならない JSON Pointer。対象が存在すれば、値の型を問わず違反になる。
+  /// `match.body` には無い。存在しないことを引き受けの条件にすると、外れた
+  /// リクエストが同一スコープのより広いルールに拾われるからである。
+  absent: Listing<String> = new {}
+
   /// GraphQL document の条件。
   graphql: GraphqlMatch?
 }
@@ -652,6 +657,20 @@ const local anthropicContentBlocks: Listing<Expect> = new {
   new JsonRoot { rootType = "object" }
 }
 
+/// Anthropic 側から第三者へ接続させるフィールド。
+///
+/// Messages API の MCP connector は、`mcp_servers` に書いた任意の URL の MCP
+/// server へ Anthropic のサーバから接続する。事前の登録は要らない。隔離環境内の
+/// プログラムが `api.anthropic.com` に直接要求を送れば、許可していない相手へ
+/// 情報を渡せる (docs/architecture/experiments/anthropic-mcp-connector)。
+/// Claude Code 自身はこのフィールドを送らない。
+///
+/// 違反は `review` ではなく `deny` にする。承認すれば、その承認が覆う値
+/// (`/mcp_servers=(present)`) は以後どの URL を書いた要求も通してしまう。
+const local anthropicThirdPartyFields: BodyExpect = new {
+  absent { "/mcp_servers" }
+}
+
 class AnthropicPresets {
   /// Claude Code が `api.anthropic.com` に対して必要とするエンドポイントだけを
   /// 通し、それ以外は `fallback` の review に落とす。
@@ -687,7 +706,9 @@ class AnthropicPresets {
         onMatch = "allow"
         // ボディが壊れていて解析できないときの帰結。
         onIndeterminate = "deny"
-        expect = anthropicContentBlocks
+        expect = (anthropicContentBlocks) {
+          anthropicThirdPartyFields
+        }
       }
 
       // ボディの不在は「引き受けの条件」ではなく「引き受けたうえでの受理条件」

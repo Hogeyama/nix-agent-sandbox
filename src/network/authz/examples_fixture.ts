@@ -761,6 +761,7 @@ const CONTENT_BLOCKS: readonly Expect[] = [
     onViolation: "review",
   },
   { kind: "jsonRoot", rootType: "object" },
+  { kind: "body", absent: ["/mcp_servers"] },
 ];
 
 /** 要件 4 から 6: Anthropic preset の新しい形。 */

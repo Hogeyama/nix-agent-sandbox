@@ -88,6 +88,7 @@ export interface ResolvedBodyExpect {
   readonly onViolation: ViolationAction;
   readonly equals: Readonly<Record<string, JsonScalar>>;
   readonly oneOf: Readonly<Record<string, readonly JsonScalar[]>>;
+  readonly absent: readonly string[];
   readonly graphql: ResolvedGraphql | null;
 }
 
@@ -317,6 +318,7 @@ function resolveExpect(expect: Expect): ResolvedExpect {
     onViolation,
     equals: { ...expect.equals },
     oneOf: copyOneOf(expect.oneOf),
+    absent: [...(expect.absent ?? [])],
     // match 側と同じ正規化を通す。`at` の既定値を 2 か所に書かないためである。
     graphql:
       expect.graphql === undefined

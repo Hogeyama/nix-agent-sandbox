@@ -1507,6 +1507,85 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
 );
 
 test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+  "anthropic: an MCP connector request is refused without review",
+  async () => {
+    // mcp_servers は Anthropic 側から任意の URL へ接続させるので、承認に回さず
+    // upstream connect より前に 403 で閉じる。
+    const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
+    let fixture: AddonFixture | undefined;
+
+    try {
+      fixture = await setupAddonFixture("nas-addon-mcp-servers-");
+      const { runtimeDir, sessionId, token } = fixture;
+
+      await runProxyContainer({
+        name: containerName,
+        image: "mitmproxy/mitmproxy:11",
+        // 実在の api.anthropic.com には届かせない (上の review のテストと同じ)。
+        args: ["--add-host=api.anthropic.com:127.0.0.1"],
+        envVars: {},
+        mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
+        command: [
+          "mitmdump",
+          "--mode",
+          "regular@8080",
+          "--set",
+          "connection_strategy=lazy",
+          "--set",
+          "rawtcp=false",
+          "--set",
+          "websocket=true",
+          "--set",
+          "confdir=/nas-network/mitmproxy-ca",
+          "-s",
+          "/nas-network/nas_addon.py",
+        ],
+      });
+      const proxyPort = await publishedPort(containerName);
+      await waitForContainerTcp(containerName, 8080);
+      await waitForTcp(proxyPort);
+
+      const requestBody = JSON.stringify({
+        model: "claude-haiku-4-5",
+        mcp_servers: [
+          { type: "url", url: "https://attacker.example/mcp", name: "x" },
+        ],
+        tools: [{ type: "mcp_toolset", mcp_server_name: "x" }],
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      });
+      const response = await sendProxyRequest(
+        proxyPort,
+        "http://api.anthropic.com/v1/messages",
+        `${sessionId}:${token}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: requestBody,
+        },
+      );
+      const outcome = await expectSinglePolicyOutcome(
+        fixture.auditDir,
+        {
+          ruleId: "anthropic.messages",
+          requestPolicyResult: "block",
+          reason: "schema-mismatch",
+        },
+        "mcp_servers request",
+      );
+
+      expect(response).toContain("403");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      expect(JSON.stringify(outcome)).toContain("/mcp_servers=(present)");
+    } finally {
+      await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
+      await dockerRm(containerName).catch(() => {});
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   "anthropic: blocked endpoint policy is enforced before upstream connect",
   async () => {
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;

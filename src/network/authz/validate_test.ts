@@ -1441,6 +1441,50 @@ describe("受理条件", () => {
     });
   }
 
+  describe("BodyExpect の absent", () => {
+    const absentExpect = (
+      absent: readonly string[],
+      extra: { equals?: Record<string, string> } = {},
+    ) =>
+      oneRule({
+        a: {
+          match: { paths: ["/a"], body: { format: "json" } },
+          onMatch: "allow",
+          expect: [{ kind: "body", absent, ...extra }],
+        },
+      });
+
+    test("存在しない Pointer を受け付ける", () => {
+      expect(errorsOf(absentExpect(["/mcp_servers"]))).toEqual([]);
+    });
+
+    test("JSON Pointer でなければエラーになる", () => {
+      expect(joined(absentExpect(["mcp_servers"]))).toContain(
+        "rule api.a expect[0] absent mcp_servers is not a valid RFC 6901 JSON Pointer.",
+      );
+    });
+
+    test("ルートは常に存在するのでエラーになる", () => {
+      expect(joined(absentExpect([""]))).toContain(
+        "rule api.a expect[0] absent names the root.",
+      );
+    });
+
+    test("equals が存在を求める Pointer はエラーになる", () => {
+      expect(
+        joined(absentExpect(["/mode"], { equals: { "/mode": "fast" } })),
+      ).toContain(
+        "rule api.a expect[0] absent /mode is also required by equals or oneOf.",
+      );
+    });
+
+    test("Pointer は 257 文字だとエラーになる", () => {
+      expect(joined(absentExpect([`/${"p".repeat(256)}`]))).toContain(
+        `rule api.a expect[0] absent Pointer /${"p".repeat(31)}… is 257 characters, over the 256-character limit.`,
+      );
+    });
+  });
+
   test("match.body の Pointer には長さの上限を課さない", () => {
     expect(
       errorsOf(

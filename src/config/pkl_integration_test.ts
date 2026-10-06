@@ -467,6 +467,15 @@ profiles {
         "company-bootstrap",
       ]);
       expect(scope?.fallback).toEqual("review");
+      // MCP connector は Anthropic 側から任意の URL へ接続させるので、
+      // mcp_servers を持つ要求は承認を経ずに拒否する。
+      expect(plain?.rules?.messages?.expect?.at(-1)).toEqual({
+        kind: "body",
+        onViolation: "deny",
+        equals: {},
+        oneOf: {},
+        absent: ["/mcp_servers"],
+      });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -666,6 +675,7 @@ profiles {
           onViolation: "review",
           equals: {},
           oneOf: {},
+          absent: [],
           graphql: {
             at: "/query",
             operations: ["query"],

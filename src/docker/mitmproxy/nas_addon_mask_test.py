@@ -1190,6 +1190,7 @@ class AuthzDocumentContractTest(unittest.TestCase):
             "onViolation": "review",
             "equals": {"/variables/o": "my-org"},
             "oneOf": {},
+            "absent": [],
             "graphql": self._graphql_condition(at=""),
         })
         self._write(document)
@@ -1266,14 +1267,14 @@ class AuthzDocumentContractTest(unittest.TestCase):
                     else:
                         rule["expect"].append({
                             "kind": "body", "onViolation": "deny",
-                            "equals": {}, "oneOf": {}, "graphql": condition,
+                            "equals": {}, "oneOf": {}, "absent": [], "graphql": condition,
                         })
                     self.assert_invalid(document)
 
     def test_rejects_a_body_expect_it_cannot_run(self):
         valid = {
             "kind": "body", "onViolation": "deny",
-            "equals": {}, "oneOf": {}, "graphql": None,
+            "equals": {}, "oneOf": {}, "absent": [], "graphql": None,
         }
         cases = [
             ("missing graphql key",
@@ -1287,6 +1288,14 @@ class AuthzDocumentContractTest(unittest.TestCase):
              {**valid, "equals": {"/" + "p" * 256: "x"}}),
             ("oneOf pointer over the length limit",
              {**valid, "oneOf": {"/" + "\U0001F600" * 128: ["x"]}}),
+            ("missing absent key",
+             {k: v for k, v in valid.items() if k != "absent"}),
+            ("bad absent pointer", {**valid, "absent": ["x"]}),
+            ("absent root", {**valid, "absent": [""]}),
+            ("absent pointer also required by equals",
+             {**valid, "equals": {"/x": 1}, "absent": ["/x"]}),
+            ("absent pointer over the length limit",
+             {**valid, "absent": ["/" + "p" * 256]}),
         ]
         for name, expect in cases:
             with self.subTest(name=name):
@@ -1300,6 +1309,7 @@ class AuthzDocumentContractTest(unittest.TestCase):
             "kind": "body", "onViolation": "deny", "graphql": None,
             "equals": {"/" + "p" * 255: "x"},
             "oneOf": {"/" + "\U0001F600" * 127 + "p": ["x"]},
+            "absent": ["/" + "q" * 255],
         })
         self._write(document)
         self.assertEqual(self._load(), document)
@@ -2662,6 +2672,26 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
 
         self.assertEqual((result, reason), ("rewrite", "masked-json"))
         self.assertNotIn(b"SECRET123", out)
+
+    def test_an_mcp_connector_request_is_blocked_without_asking(self):
+        """`mcp_servers` makes Anthropic's servers connect to any URL it
+        names, so a request carrying it reaches a third party through an
+        allowed host. Approving it would approve every later URL too, since
+        the approval is keyed by `/mcp_servers=(present)`."""
+        body = self._claude_code_body(
+            mcp_servers=[{
+                "type": "url",
+                "url": "https://attacker.example/mcp",
+                "name": "x",
+            }],
+        )
+
+        outcome, findings = self._review(body)
+
+        self.assertEqual(outcome[0], "block")
+        self.assertEqual(findings, [(
+            "/mcp_servers", "/mcp_servers", "/mcp_servers=(present)",
+        )])
 
     def test_unknown_tag_under_messages_is_put_to_a_person(self):
         body = self._claude_code_body()
@@ -4225,7 +4255,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         else:
             rule["expect"].append({
                 "kind": "body", "onViolation": "review",
-                "equals": {}, "oneOf": {}, "graphql": condition,
+                "equals": {}, "oneOf": {}, "absent": [], "graphql": condition,
             })
         return rule
 

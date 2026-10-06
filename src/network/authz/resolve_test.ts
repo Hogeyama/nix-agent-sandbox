@@ -311,7 +311,7 @@ describe("要件 4 から 6 の Anthropic preset", () => {
   const document = documentOf(anthropicExample());
   const anthropic = at("api.anthropic.com");
 
-  test("POST /v1/messages は許可され、content block の受理条件が付く", () => {
+  test("POST /v1/messages は許可され、content block と mcp_servers の受理条件が付く", () => {
     const decision = decide(
       document,
       anthropic,
@@ -323,7 +323,12 @@ describe("要件 4 から 6 の Anthropic preset", () => {
       "unionShape",
       "unionShape",
       "jsonRoot",
+      "body",
     ]);
+    expect(decision.expect.at(-1)).toMatchObject({
+      absent: ["/mcp_servers"],
+      onViolation: "deny",
+    });
   });
 
   test("bootstrap 系の GET は EmptyBody を受理条件に持つ", () => {
@@ -748,6 +753,7 @@ describe("GraphQL 条件", () => {
         onViolation: "deny",
         equals: {},
         oneOf: {},
+        absent: [],
         graphql: {
           at: "/q",
           operations: ["query"],
@@ -760,6 +766,7 @@ describe("GraphQL 条件", () => {
         onViolation: "deny",
         equals: { "/variables/o": "my-org" },
         oneOf: {},
+        absent: [],
         graphql: null,
       },
     ]);

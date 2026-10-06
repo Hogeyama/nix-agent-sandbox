@@ -17,6 +17,7 @@ import { containsIdentifier, maskNonCode } from "../../lib/pkl_source.ts";
 import {
   type AuditMode,
   type AuthzConfig,
+  type BodyExpect,
   type BodyMatchConfig,
   DEFAULT_AUDIT_MODE,
   DEFAULT_SECRET_DISPOSITIONS,
@@ -578,17 +579,57 @@ function checkExpectConditions(
     expect,
     "this condition is never satisfied",
   );
+  checkAbsent(diagnostics, where, expect);
   // 違反レコードは Pointer を値に含めて broker へ送る。長さの上限を超えた
   // Pointer の違反レコードは broker に拒まれ、そのリクエストは承認できない。
   for (const [field, pointers] of [
     ["equals", Object.keys(expect.equals ?? {})],
     ["oneOf", Object.keys(expect.oneOf ?? {})],
+    ["absent", expect.absent ?? []],
   ] as const) {
     for (const pointer of pointers) {
       if (pointer.length <= MAX_BODY_EXPECT_POINTER_CHARS) continue;
       diagnostics.push(
         error(
           `${where} ${field} Pointer ${pointer.slice(0, 32)}… is ${pointer.length} characters, over the ${MAX_BODY_EXPECT_POINTER_CHARS}-character limit. Violation records carry this Pointer as a value, so a longer Pointer produces violation records that cannot be approved.`,
+        ),
+      );
+    }
+  }
+}
+
+/**
+ * `absent` の Pointer は、どのリクエストでも満たせる条件でなければならない。
+ * ルート (`""`) はボディそのものなので常に存在し、`equals` / `oneOf` が名指す
+ * Pointer はそれらが存在を要求する。どちらも、このルールが引き受けたリクエストを
+ * 1 つ残らず違反にする。
+ */
+function checkAbsent(
+  diagnostics: Diagnostic[],
+  where: string,
+  expect: BodyExpect,
+): void {
+  const required = new Set([
+    ...Object.keys(expect.equals ?? {}),
+    ...Object.keys(expect.oneOf ?? {}),
+  ]);
+  for (const pointer of expect.absent ?? []) {
+    if (!isValidJsonPointer(pointer)) {
+      diagnostics.push(
+        error(
+          `${where} absent ${pointer} is not a valid RFC 6901 JSON Pointer.`,
+        ),
+      );
+    } else if (pointer === "") {
+      diagnostics.push(
+        error(
+          `${where} absent names the root. The body always exists, so it is always violated.`,
+        ),
+      );
+    } else if (required.has(pointer)) {
+      diagnostics.push(
+        error(
+          `${where} absent ${pointer} is also required by equals or oneOf. It is always violated.`,
         ),
       );
     }

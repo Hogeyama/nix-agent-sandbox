@@ -736,6 +736,7 @@ profiles {
           onViolation: "review",
           equals: {},
           oneOf: {},
+          absent: [],
           graphql: {
             at: "/query",
             operations: ["query"],
