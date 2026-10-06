@@ -428,6 +428,11 @@ local baseProfile: Profile = new {
   }
   docker {
     enable = true
+    // DinD は agent の network.scopes を引き継がない。テストが使うイメージは
+    // Docker Hub から取る。
+    networkScopes {
+      ["docker-hub"] = module.presets.dockerHub.pull
+    }
   }
   display {
     sandbox = "none"
