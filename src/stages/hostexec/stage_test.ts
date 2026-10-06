@@ -41,6 +41,7 @@ function makeProfile(): Profile {
     direnv: { enable: false },
     nix: { enable: false, mountSocket: false },
     docker: { enable: false, shared: false },
+    bwrap: { support: true },
     display: DEFAULT_DISPLAY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     network: {

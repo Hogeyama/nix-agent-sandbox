@@ -53,6 +53,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     session: DEFAULT_SESSION_CONFIG,
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    bwrap: { support: true },
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],

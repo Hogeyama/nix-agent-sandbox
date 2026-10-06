@@ -1,4 +1,5 @@
 import { createAgentHooksStage } from "../stages/agent_hooks.ts";
+import { createBwrapStage } from "../stages/bwrap.ts";
 import { createDbusProxyStage } from "../stages/dbus_proxy.ts";
 import { createDindStage } from "../stages/dind.ts";
 import { createDisplayStage } from "../stages/display.ts";
@@ -49,6 +50,7 @@ export function createPreparationPipelineBuilder({
     .add(createHostExecStage(input))
     .add(createAgentHooksStage(input))
     .add(createGuideStage(input))
+    .add(createBwrapStage(input))
     .add(
       createObservabilityStage({
         config: input.config,

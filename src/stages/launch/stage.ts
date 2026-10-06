@@ -64,6 +64,9 @@ export function compileLaunchOpts(
 
   // Before extraRunArgs so a caller's own --cap-add still takes effect.
   args.push(...agentPrivilegeRunArgs());
+  if (plan.seccompProfile !== undefined) {
+    args.push("--security-opt", `seccomp=${plan.seccompProfile}`);
+  }
 
   // The entrypoint execs the agent, which would otherwise be PID 1 and
   // inherit every orphaned descendant (git, shells, sleep, nas-mask-filter)

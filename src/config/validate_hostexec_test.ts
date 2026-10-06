@@ -39,6 +39,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     docker: DEFAULT_DOCKER_CONFIG,
     network: DEFAULT_NETWORK_CONFIG,
     dbus: DEFAULT_DBUS_CONFIG,
+    bwrap: { support: true },
     display: DEFAULT_DISPLAY_CONFIG,
     extraMounts: [],
     env: [],

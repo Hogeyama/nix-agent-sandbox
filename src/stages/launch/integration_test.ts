@@ -23,6 +23,7 @@ import {
   chmod,
   copyFile,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   realpath,
@@ -31,6 +32,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
 import { shellEscape } from "../../dtach/client.ts";
@@ -45,6 +47,7 @@ import { startRelayGateway } from "../../network/port_bind_relay.ts";
 import { DockerServiceLive } from "../../services/docker.ts";
 import { FsServiceLive } from "../../services/fs.ts";
 import { DockerBuildServiceLive } from "../../stages/docker_build.ts";
+import { bwrapSeccompProfile } from "../bwrap.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "../docker_build.ts";
 import { encodeMaskSecrets } from "../maskfs/secrets_frame.ts";
 import {
@@ -871,6 +874,50 @@ for (const init of [true, false]) {
       }
     },
     30_000,
+  );
+}
+
+for (const withProfile of [true, false]) {
+  test.skipIf(!canRunImage)(
+    `Integration: bubblewrap ${withProfile ? "creates" : "cannot create"} a user namespace ${withProfile ? "under" : "without"} the bwrap seccomp profile`,
+    async () => {
+      // compileLaunchOpts passes the profile after the privilege arguments,
+      // which keep every capability dropped either way.
+      const profileDir = await mkdtemp(path.join(tmpdir(), "nas-bwrap-it-"));
+      try {
+        const profilePath = path.join(profileDir, "seccomp.json");
+        await writeFile(profilePath, bwrapSeccompProfile());
+        const result = await dockerRun(
+          [
+            "bwrap",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--unshare-all",
+            "true",
+          ],
+          {
+            extraArgs: [
+              ...agentPrivilegeRunArgs(),
+              ...(withProfile
+                ? ["--security-opt", `seccomp=${profilePath}`]
+                : []),
+              "--init",
+            ],
+          },
+        );
+        if (withProfile) {
+          expect(result.code, result.stderr).toEqual(0);
+        } else {
+          expect(result.code).not.toEqual(0);
+          expect(result.stderr).toContain("namespace");
+        }
+      } finally {
+        await rm(profileDir, { recursive: true, force: true });
+      }
+    },
   );
 }
 

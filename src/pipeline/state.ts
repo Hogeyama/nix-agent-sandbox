@@ -189,6 +189,8 @@ export interface ContainerPlan {
   readonly network?: NetworkAttachment;
   readonly extraHosts: readonly ExtraHost[];
   readonly shmSize?: string;
+  /** Host path of the seccomp profile to run under; Docker's default if unset. */
+  readonly seccompProfile?: string;
   readonly extraRunArgs: readonly string[];
   readonly command: CommandSpec;
   readonly labels: Readonly<Record<string, string>>;

@@ -110,6 +110,18 @@ test("compileCompose: preserves launch fields in Compose-native structure", () =
   });
 });
 
+test("compileCompose: a seccomp profile joins the security options", () => {
+  const document = compileCompose(
+    makePlan({ seccompProfile: "/run/user/1000/nas/bwrap/$s/seccomp.json" }),
+    "nas-agent-x",
+    "nas-devcontainer-x",
+  );
+  expect(document.services.agent.security_opt).toEqual([
+    "no-new-privileges",
+    "seccomp=/run/user/1000/nas/bwrap/$$s/seccomp.json",
+  ]);
+});
+
 test("serializeCompose: escapes dollar signs exactly once during compilation", () => {
   const plan = makePlan({
     env: { static: { VALUE: `$HOME\n\${MISSING}` }, dynamicOps: [] },

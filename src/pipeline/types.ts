@@ -7,6 +7,7 @@ import type { DockerService } from "../services/docker.ts";
 import type { FsService } from "../services/fs.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { AgentHooksService } from "../stages/agent_hooks.ts";
+import type { BwrapService } from "../stages/bwrap.ts";
 import type { DbusProxyService } from "../stages/dbus_proxy.ts";
 import type { DindService } from "../stages/dind.ts";
 import type { DisplayService } from "../stages/display.ts";
@@ -89,6 +90,7 @@ export type StageResult = Partial<PipelineState>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =
+  | BwrapService
   | CaService
   | ContainerLaunchService
   | ComposeSessionService

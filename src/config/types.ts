@@ -160,6 +160,11 @@ export interface DisplayConfig {
   size: string;
 }
 
+/** bubblewrap をコンテナ内で使えるようにする設定 */
+export interface BwrapConfig {
+  support: boolean;
+}
+
 /** 追加マウント設定 */
 export interface ExtraMountConfig {
   src: string;
@@ -261,6 +266,7 @@ export interface Profile {
   network: NetworkConfig;
   dbus: DbusConfig;
   display: DisplayConfig;
+  bwrap: BwrapConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
   hook: HookConfig;
@@ -362,6 +368,10 @@ export const DEFAULT_DBUS_CONFIG: DbusConfig = {
 export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   sandbox: "none",
   size: "1920x1080",
+};
+
+export const DEFAULT_BWRAP_CONFIG: BwrapConfig = {
+  support: true,
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {

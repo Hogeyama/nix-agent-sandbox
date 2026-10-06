@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { BWRAP_SYSCALLS, bwrapSeccompProfile } from "./seccomp_profile.ts";
+import {
+  BWRAP_SYSCALLS,
+  bwrapSeccompProfile,
+  DOCKER_DEFAULT_SECCOMP_REVISION,
+} from "./seccomp_profile.ts";
 
 const vendored = new URL("../../docker/seccomp/", import.meta.url);
 
@@ -42,4 +46,14 @@ test("the profile is Docker's default plus one rule allowing what bubblewrap nee
     "comment",
     "names",
   ]);
+});
+
+test("the release pins the same upstream revision", async () => {
+  const nix = await readFile(
+    new URL("../../../nix/release/default.nix", import.meta.url),
+    "utf8",
+  );
+  expect(nix).toContain(
+    `dockerSeccompRevision = "${DOCKER_DEFAULT_SECCOMP_REVISION}";`,
+  );
 });

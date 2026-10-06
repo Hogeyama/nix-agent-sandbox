@@ -289,6 +289,21 @@ test("compileLaunchOpts: baseline plan produces correct LaunchOpts", () => {
   expect(opts.labels).toEqual({ "nas.managed": "true" });
 });
 
+test("compileLaunchOpts: a seccomp profile follows the privilege arguments", () => {
+  const plan = makeBasePlan({
+    seccompProfile: "/run/user/1000/nas/bwrap/s/seccomp.json",
+  });
+
+  const opts = compileLaunchOpts(plan, "nas-agent-x");
+
+  expect(opts.args.slice(3, 3 + PRIVILEGE_ARGS.length + 3)).toEqual([
+    ...PRIVILEGE_ARGS,
+    "--security-opt",
+    "seccomp=/run/user/1000/nas/bwrap/s/seccomp.json",
+    "--init",
+  ]);
+});
+
 test("compileLaunchOpts: mounts encoded as -v args in order", () => {
   const plan = makeBasePlan({
     mounts: [
@@ -535,6 +550,7 @@ function createTestInput(overrides: { container?: ContainerPlan } = {}): {
     session: DEFAULT_SESSION_CONFIG,
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    bwrap: { support: true },
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],

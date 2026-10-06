@@ -405,6 +405,18 @@ MIT/BSD だからという理由だけで source asset への収録を一律に�
 
 **候補と選択（POLICY）:** 生成コードごとに本文を埋め込む方法と、同梱 notice にまとめる方法がある。他 component と同じ配布手順で保持できるよう、`licenses/native/nix-bundle-elf-runtime/LICENSE` に原文を置き、外側の archive と自己展開 payload の両方に収録する。固定 revision に適用する source patch にも LICENSE を含め、許諾と配布コードの対応を辿れるようにする。
 
+## Docker の seccomp プロファイル — Apache-2.0 の本文を渡し、改変しない
+
+`bwrap.support` のために、[moby/profiles](https://github.com/moby/profiles/tree/2ceae35d351c156cb5a8efc0fdc4a08cf94569d8) の `seccomp/default.json` を `src/docker/seccomp/default.json` に置き、nas の executable に埋め込む。nas は実行時に、このプロファイルへ bubblewrap 用の規則を加えたものを生成し、Docker に渡す。moby/profiles には `LICENSE`（Apache-2.0）があり、`NOTICE` はない。
+
+### SECCOMP-1: 本文を渡し、変更の表示が要らない形で配る
+
+**要求（LICENSE）:** Apache-2.0 §4(a) は本文の添付、§4(b) は変更したファイルへの変更の表示を求める。§4(d) の NOTICE は、上流にないので対象外である。
+
+**候補:** 規則を加えたプロファイルをファイルとして配り、変更を表示する方法と、上流のファイルを変更せずに配り、規則をコードで加える方法がある。
+
+**選択と理由（POLICY）:** 上流のファイルを変更せずに配り、規則は `src/stages/bwrap/seccomp_profile.ts` が実行時に加える。配るファイルが上流と同一なので、§4(b) の表示を維持する必要がなく、上流の更新もファイルの差し替えで済むためである。本文は `src/docker/seccomp/LICENSE` に同じものを置き、リリースでは `docker-seccomp-profile` component として notice tree に収録する。ファイルと本文のハッシュはテストで固定し、変更を検出する。source asset には入れない。上流の revision は `nix/release/default.nix` と `DOCKER_DEFAULT_SECCOMP_REVISION` の2か所に書き、揃えて更新する。
+
 ## その他の native code・同梱 helper・自己展開部分
 
 nas の helper に含まれる runtime code、コピーされる native library、自己展開のためのコードも再配布対象にする。glibc 以外を一括して「native library」とだけ記録して終えない。
@@ -413,7 +425,7 @@ nas の helper に含まれる runtime code、コピーされる native library�
 
 本文・表示の収録で足りるのか、source や再リンク材料も必要なのかを決め、その component の節に候補と選択理由を残す。共有 library の方法を流用する際も、適用条件が同じであることを確認する。この対象の列挙と個別判断は、配布前に完了させる。
 
-- **表示だけを収録する:** zlib（Zlib）、OpenSSL（Apache-2.0）、Zig と同梱の musl（MIT）、vendored graphql-core（MIT）は、表示の保持で配布条件を満たす。これらの source は source asset に入れない。
+- **表示だけを収録する:** zlib（Zlib）、OpenSSL（Apache-2.0）、Zig と同梱の musl（MIT）、vendored graphql-core（MIT）、Docker の seccomp プロファイル（Apache-2.0、SECCOMP-1）は、表示の保持で配布条件を満たす。これらの source は source asset に入れない。
 - **payload に入るときだけ扱う:** OpenSSL・zlib・GCC runtime（`libgcc_s`）は、bundler が解決できる library であっても、payload に実際にコピーされたときだけ component にする。GCC runtime の library 自体をコピーして配る場合は GPL の object code になるので、GCC の source を収録する。runtime library exception の下で executable に組み込まれたコードには、source 提供の義務はない。
 
 ## 共通の梱包と公開

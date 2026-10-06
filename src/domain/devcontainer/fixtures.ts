@@ -13,6 +13,7 @@ export function devcontainerProfile(): Profile {
     network: defaults.DEFAULT_NETWORK_CONFIG,
     session: defaults.DEFAULT_SESSION_CONFIG,
     dbus: defaults.DEFAULT_DBUS_CONFIG,
+    bwrap: defaults.DEFAULT_BWRAP_CONFIG,
     display: defaults.DEFAULT_DISPLAY_CONFIG,
     extraMounts: [],
     env: [],

@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl ca-certificates bash docker.io docker-compose-v2 \
   gh ripgrep fd-find python3 python-is-python3 \
   gnupg unzip jq direnv \
+  bubblewrap socat \
   fonts-noto-cjk fonts-noto-color-emoji fontconfig \
   locales \
   && ln -s "$(command -v fdfind)" /usr/local/bin/fd \

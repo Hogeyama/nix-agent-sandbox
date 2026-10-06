@@ -131,7 +131,12 @@ export function compileCompose(
     ],
     restart: "no",
     logging: { driver: "none" },
-    security_opt: [AGENT_NO_NEW_PRIVILEGES],
+    security_opt: [
+      AGENT_NO_NEW_PRIVILEGES,
+      ...(container.seccompProfile !== undefined
+        ? [`seccomp=${escapeComposeValue(container.seccompProfile)}`]
+        : []),
+    ],
     cap_drop: ["ALL"],
     cap_add: [...AGENT_CAP_ADD],
     init: true,

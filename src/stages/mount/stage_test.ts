@@ -72,6 +72,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
       ...network,
     },
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    bwrap: { support: true },
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],

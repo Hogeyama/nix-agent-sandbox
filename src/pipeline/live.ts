@@ -7,6 +7,7 @@ import {
   SecretResolverService,
 } from "../services/secret_resolver.ts";
 import { AgentHooksServiceLive } from "../stages/agent_hooks.ts";
+import { BwrapServiceLive } from "../stages/bwrap.ts";
 import { DbusProxyServiceLive } from "../stages/dbus_proxy.ts";
 import { DindServiceLive } from "../stages/dind.ts";
 import { DisplayServiceLive } from "../stages/display.ts";
@@ -59,6 +60,7 @@ export function createPipelineLiveLayer() {
     FsServiceLive,
     GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
     GuideServiceLive.pipe(Layer.provide(FsServiceLive)),
+    BwrapServiceLive.pipe(Layer.provide(FsServiceLive)),
     HostExecBrokerServiceLive,
     HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
     MaskFilterServiceLive.pipe(Layer.provide(hostServiceLayer)),

@@ -63,6 +63,16 @@ let
     url = "https://github.com/apple/pkl/archive/refs/tags/${pklVersion}.tar.gz";
     hash = "sha256-XdIxgHoWcoO7n9Z7LGuIeK1ACO+3eAzondP1u7vKgNc=";
   };
+  # src/docker/seccomp/default.json is seccomp/default.json of this tree,
+  # unmodified. Keep the revision in step with DOCKER_DEFAULT_SECCOMP_REVISION
+  # (src/stages/bwrap/seccomp_profile.ts).
+  dockerSeccompRevision = "2ceae35d351c156cb5a8efc0fdc4a08cf94569d8";
+  dockerSeccompSource = pkgs.fetchFromGitHub {
+    owner = "moby";
+    repo = "profiles";
+    rev = dockerSeccompRevision;
+    hash = "sha256-uQlCJJYIqRlwohaJVlPAsFPNRL5mUAKMaZGel1vUPGM=";
+  };
   icuSource = pkgs.fetchurl {
     name = "icu-release-78.3.tar.gz";
     url = "https://github.com/unicode-org/icu/archive/refs/tags/release-78.3.tar.gz";
@@ -218,6 +228,16 @@ in
           origin = "https://pypi.org/project/graphql-core/${mitmproxyVendor.version}/";
           license = "MIT";
           requirements = [ "PKG-1" ];
+          notices = [ "LICENSE" ];
+          source = false;
+        }
+        {
+          id = "docker-seccomp-profile";
+          version = dockerSeccompRevision;
+          path = toString dockerSeccompSource;
+          origin = "https://github.com/moby/profiles/blob/${dockerSeccompRevision}/seccomp/default.json; embedded unmodified in the nas executable";
+          license = "Apache-2.0";
+          requirements = [ "SECCOMP-1" ];
           notices = [ "LICENSE" ];
           source = false;
         }
