@@ -206,11 +206,16 @@ test("SessionBroker: DinD allows registry reads, denies writes and agent-only ta
     ).toBe("deny");
     const { queryAuditLogs } = await import("../audit/store.ts");
     const logs = await queryAuditLogs({}, auditDir);
-    expect(logs.map((entry) => [entry.requestId, entry.principal])).toEqual([
-      ["read", "dind"],
-      ["write", "dind"],
+    // Entries written in the same millisecond have no defined order.
+    expect(
+      logs
+        .map((entry) => [entry.requestId, entry.principal])
+        .sort(([a], [b]) => String(a).localeCompare(String(b))),
+    ).toEqual([
       ["agent", "agent"],
+      ["read", "dind"],
       ["stolen", "dind"],
+      ["write", "dind"],
     ]);
   });
 });
