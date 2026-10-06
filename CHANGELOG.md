@@ -7,17 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.20.0] - 2026-10-07
+
 ### Added
+
+- **Mask filter**: `mask.filter` now also registers hooks in Claude Code, Codex and Copilot CLI that mask tool results and prompts, including for `extraAgents`, so a secret read by Claude's Read tool no longer stays in plain text in the transcript under `~/.claude/projects/`. The secret list stays on the host; the hooks ask the host-side filter over a socket and withhold the text when it cannot answer. Copilot CLI 1.0.88 or later is required (older versions ignore the replacement, so the session does not start); Codex was checked with 0.155.1. Failed tool results in Claude Code and Copilot cannot be replaced by hooks. A pre-existing `/etc/codex/requirements.toml` in the container stops a Codex session instead of being merged.
+
+- **Hooks**: session-state and attention hooks are registered in each agent automatically, so the hand-maintained hook snippets are no longer needed. `hook.enable = false` turns this off; it does not affect the mask filter's hooks.
 
 - **bubblewrap**: `bwrap.support`, on by default, lets bubblewrap create user namespaces in the agent container, so Claude Code's built-in sandbox can isolate Bash. The container runs under Docker's default seccomp profile plus `clone`, `unshare`, `mount`, `umount2` and `pivot_root`, with AppArmor unconfined because Docker's `docker-default` profile denies `mount`; capabilities stay dropped. The image now includes bubblewrap and socat. What to isolate is set in Claude Code: the recommended `--settings` denies `api.anthropic.com` to Bash, whose MCP connector and web fetch reach any third party. See the "Bash の隔離" page. Set `bwrap.support = false` to keep Docker's default profile.
 
 - **Agent settings**: with `agentState.protectSettings = true`, the container's `~/.claude.json` is a session-private file instead of the host's, discarded when the session ends. The host file declares MCP servers that the host's Claude Code starts, so an agent that rewrote it got host code execution the next time the user started Claude outside the container. The private file does not inherit anything from the host file; `agentState.claudeJson` sets its initial content, for example `claudeJson { ["hasCompletedOnboarding"] = true }`. A non-empty `claudeJson` without `protectSettings` is a config error.
 
-- **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. Dev Container profiles reject `extraAgents` for now.
+- **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. In Dev Container profiles, the Claude and Codex IDE extensions work alongside extra agents run from the terminal; Copilot stays CLI-only, and a Codex extra agent with `"injected"` auth is rejected because its CLI and IDE extension share one state directory.
 
 ### Changed
 
-- **Anthropic preset**: `/v1/messages` requests carrying `mcp_servers` are refused without review. The MCP connector makes Anthropic's servers connect to any URL in that field, which let a process in the container reach a host the allowlist never admitted.
+- **Anthropic preset**: `/v1/messages` requests carrying `mcp_servers`, and every `/v1/messages/batches` request (whose `params` can carry it too), are refused without review. The MCP connector makes Anthropic's servers connect to any URL in that field, which let a process in the container reach a host the allowlist never admitted.
 
 - **DinD network authorization**: Docker sidecars and registry mirrors use a separate proxy token and `docker.networkScopes`, with no inherited agent permissions, approvals, or automatic OAuth injection. Unmatched traffic is denied and `review` is rejected. Existing Docker users must explicitly configure registry access; `networkScopes { ["docker-hub"] = module.presets.dockerHub.pull }` enables Docker Hub image pulls without allowing push.
 
@@ -35,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Config**: `agentState.auth` also accepts a per-agent Mapping, for example `auth = new Mapping { ["codex"] = "passthrough" }`. Agents not listed keep their default; the string form still applies to every agent. This lets a Claude profile with `extraAgents { "codex" }` share only Codex's credentials (for an API key or the keyring) while Claude's stay on the host. An explicit `"injected"` for Copilot in the Mapping is a config error.
 
 ### Fixed
+
+- **Sessions**: a second nas started on the id of a live session is refused instead of overwriting that session's sockets, records and hostexec wrapper and then deleting them on exit. `NAS_SESSION_ID` from the environment is honoured only with `NAS_INSIDE_DTACH=1`, so a nas started from inside a container no longer reuses the container's session id.
+
+- **Proxy**: a rewrite of a session's network authorization document within the same filesystem timestamp tick is now picked up; the addon could keep enforcing the previous policy until a later write moved the timestamp.
 
 - **Container**: agent containers (`docker run`, ACP and Dev Container) and the DinD sidecar start with Docker's `--init`, so `docker-init` is PID 1 and reaps orphaned processes. Before, the agent (or `rootlesskit` in the sidecar) was PID 1 and did not reap them, so they stayed as zombies until the session ended: exited `git`, shells and `nas-mask-filter` in the agent container, and the `containerd-shim` of each finished inner container in the sidecar.
 - **HostExec / Network**: a session no longer fails or loses its broker when runtime cleanup runs while it starts. Cleanup, which the UI and the `nas hostexec` / `nas network` commands run when listing or answering pending requests, removed the session's broker directory before the session was registered. HostExec startup then failed with `nas-hostexec-gateway: failed (FileNotFound)`, and a network session started with its approval socket deleted, so approvals could not reach it.
