@@ -1,0 +1,94 @@
+{
+  "run_id": "ab0c4f3d726f",
+  "marker": "nas-nono-live-ab0c4f3d726f",
+  "allowed_repo": "Hogeyama/nix-agent-sandbox",
+  "forbidden_repo": "Hogeyama/test-github",
+  "credential_model": "same managed gh token can write both repositories; child receives only phantom credentials",
+  "profiles": [
+    {
+      "profile": "rest-only",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "rest-allowed",
+          "repo": "Hogeyama/nix-agent-sandbox",
+          "title": "[sandbox probe] nono rest-allowed ab0c4f3d726f",
+          "status": 201,
+          "issue": {
+            "number": 8,
+            "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/8",
+            "node_id": "I_kwDORcowSM8AAAABVXlNaw"
+          }
+        },
+        {
+          "case": "rest-forbidden",
+          "repo": "Hogeyama/test-github",
+          "title": "[sandbox probe] nono rest-forbidden ab0c4f3d726f",
+          "status": 403
+        },
+        {
+          "case": "graphql-disabled",
+          "repo": "Hogeyama/test-github",
+          "title": "[sandbox probe] nono graphql-disabled ab0c4f3d726f",
+          "error": "ConnectionResetError"
+        }
+      ],
+      "stderr": "\n  nono v0.79.0\n  warning: profile allow_domain entry 'api.github.com:443' includes a :port suffix. nono now ignores ports in allow-domain rules and only applies hostname filtering through the proxy.\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n"
+    },
+    {
+      "profile": "graphql-enabled",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "graphql-allowed",
+          "repo": "Hogeyama/nix-agent-sandbox",
+          "title": "[sandbox probe] nono graphql-allowed ab0c4f3d726f",
+          "status": 200,
+          "issue": {
+            "number": 9,
+            "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/9",
+            "node_id": "I_kwDORcowSM8AAAABVXlPqQ"
+          }
+        },
+        {
+          "case": "graphql-forbidden",
+          "repo": "Hogeyama/test-github",
+          "title": "[sandbox probe] nono graphql-forbidden ab0c4f3d726f",
+          "status": 200,
+          "issue": {
+            "number": 1,
+            "url": "https://github.com/Hogeyama/test-github/issues/1",
+            "node_id": "I_kwDOU-IINM8AAAABVXlQ6w"
+          }
+        }
+      ],
+      "stderr": "\n  nono v0.79.0\n  warning: profile allow_domain entry 'api.github.com:443' includes a :port suffix. nono now ignores ports in allow-domain rules and only applies hostname filtering through the proxy.\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n"
+    }
+  ],
+  "cleanup": [
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "number": 8,
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/8",
+      "title": "[sandbox probe] nono rest-allowed ab0c4f3d726f",
+      "state": "closed"
+    },
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "number": 9,
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/9",
+      "title": "[sandbox probe] nono graphql-allowed ab0c4f3d726f",
+      "state": "closed"
+    },
+    {
+      "repo": "Hogeyama/test-github",
+      "number": 1,
+      "url": "https://github.com/Hogeyama/test-github/issues/1",
+      "title": "[sandbox probe] nono graphql-forbidden ab0c4f3d726f",
+      "state": "closed"
+    }
+  ],
+  "errors": [],
+  "unexpected_secret_files": [],
+  "cleanup_note": "Immediate REST list omitted the two GraphQL-created issues; direct issue GET identified them and all three were closed."
+}

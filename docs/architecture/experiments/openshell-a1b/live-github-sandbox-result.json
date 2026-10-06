@@ -1,0 +1,10 @@
+{
+  "run_id": "nas-live-bed2d76ae",
+  "observations": {},
+  "cleanup_issues": [],
+  "resources": {
+    "created": false
+  },
+  "execution_status": "failed",
+  "failure": "command failed: docker info exit=1"
+}

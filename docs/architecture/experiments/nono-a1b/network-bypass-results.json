@@ -1,0 +1,1012 @@
+{
+  "version": "nono 0.79.0",
+  "profiles": [
+    {
+      "profile": "host-allow",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "B00-reverse-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B00-reverse-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B01-connect-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B01-connect-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B02-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B03-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B04-graphql",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B05-direct-host",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B06-direct-ip",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B07-curl-noproxy",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:0",
+          "stderr": "curl: (7) Failed to connect to localhost:37439 after 0 ms: Could not connect to server\n"
+        },
+        {
+          "case": "B08-socks5",
+          "error": "TimeoutError",
+          "detail": "timed out"
+        },
+        {
+          "case": "B09-plain-forward",
+          "status": 200,
+          "body": "{\"port\": 40977, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B09-plain-forward\", \"host\": \"localhost:40977\", \"identity\": \"attacker\", \"body\": \"synthetic-B09-plain-forward\"}"
+        },
+        {
+          "case": "B10-plain-connect",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "HTTP/1.0 200 OK\r\nServer: BaseHTTP/0.6 Python/3.14.7\r\nDate: Tue, 06 Oct 2026 14:23:08 GMT\r\nContent-Length: 160\r\n\r\n{\"port\": 40977, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B10-plain-connect\", \"host\": \"localhost\", \"identity\": \"attacker\", \"body\": \"\"}"
+        },
+        {
+          "case": "B11-ssh-other-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "SSH-2.0-local-test-fixture\r\n"
+        },
+        {
+          "case": "B12-ssh-protected-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "\u0015\u0003\u0003\u0000\u0002\u00022"
+        },
+        {
+          "case": "B13-other-tls-port",
+          "status": 200,
+          "body": "{\"port\": 34331, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B13-other-tls-port\", \"host\": \"localhost:34331\", \"identity\": \"attacker\", \"body\": \"synthetic-B13-other-tls-port\"}"
+        },
+        {
+          "case": "B14-connect-ip",
+          "error": "OSError",
+          "detail": "Tunnel connection failed: 403 Forbidden: host 127.0.0.1:37439 is not in the allowlist"
+        },
+        {
+          "case": "B15-trailing-dot",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B16-uppercase",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B17-inner-host",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B17-inner-host\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B18-redirect-same",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B19-redirect-other-port",
+          "exit": 0,
+          "stdout": "{\"port\": 34331, \"method\": \"GET\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B19-redirect-other-port\", \"host\": \"localhost:34331\", \"identity\": \"other\", \"body\": \"\"}\nHTTP_STATUS:200\nHTTP_VERSION:1",
+          "stderr": ""
+        },
+        {
+          "case": "B20-redirect-other-host",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:1",
+          "stderr": "curl: (7) CONNECT tunnel failed, response 403\n"
+        },
+        {
+          "case": "B21-encoded-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B22-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B23-query",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls?state=open&per_page=30\", \"case\": \"B23-query\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B24-http2",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B25-final-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B25-final-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        }
+      ],
+      "events": [
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B00-reverse-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B01-connect-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 40977,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B09-plain-forward",
+          "host": "localhost:40977",
+          "identity": "attacker",
+          "body": "synthetic-B09-plain-forward"
+        },
+        {
+          "port": 40977,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B10-plain-connect",
+          "host": "localhost",
+          "identity": "attacker",
+          "body": ""
+        },
+        {
+          "port": 54097,
+          "raw": "SSH-2.0-synthetic-B11-ssh-other-port\r\n"
+        },
+        {
+          "port": 34331,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B13-other-tls-port",
+          "host": "localhost:34331",
+          "identity": "attacker",
+          "body": "synthetic-B13-other-tls-port"
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B17-inner-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-same",
+          "case": "B18-redirect-same",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-port",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 34331,
+          "method": "GET",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:34331",
+          "identity": "other",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-host",
+          "case": "B20-redirect-other-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls?state=open&per_page=30",
+          "case": "B23-query",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B25-final-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        }
+      ],
+      "stderr": "\n  nono v0.79.0\n  Capabilities:\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T14:23:08.862148Z\u001b[0m \u001b[33m WARN\u001b[0m tls_intercept: handshake failed for localhost:37439 \u2014 received corrupt message of type InvalidContentType. Agent likely pins certs or carries a hard-coded trust list. Remove endpoint_rules / credential_key from the route to fall back to a transparent CONNECT tunnel.\n"
+    },
+    {
+      "profile": "port-allow",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "B00-reverse-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B00-reverse-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B01-connect-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B01-connect-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B02-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B03-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B04-graphql",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B05-direct-host",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B06-direct-ip",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B07-curl-noproxy",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:0",
+          "stderr": "curl: (7) Failed to connect to localhost:37439 after 0 ms: Could not connect to server\n"
+        },
+        {
+          "case": "B08-socks5",
+          "error": "TimeoutError",
+          "detail": "timed out"
+        },
+        {
+          "case": "B09-plain-forward",
+          "status": 200,
+          "body": "{\"port\": 40977, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B09-plain-forward\", \"host\": \"localhost:40977\", \"identity\": \"attacker\", \"body\": \"synthetic-B09-plain-forward\"}"
+        },
+        {
+          "case": "B10-plain-connect",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "HTTP/1.0 200 OK\r\nServer: BaseHTTP/0.6 Python/3.14.7\r\nDate: Tue, 06 Oct 2026 14:23:19 GMT\r\nContent-Length: 160\r\n\r\n{\"port\": 40977, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B10-plain-connect\", \"host\": \"localhost\", \"identity\": \"attacker\", \"body\": \"\"}"
+        },
+        {
+          "case": "B11-ssh-other-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "SSH-2.0-local-test-fixture\r\n"
+        },
+        {
+          "case": "B12-ssh-protected-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "\u0015\u0003\u0003\u0000\u0002\u00022"
+        },
+        {
+          "case": "B13-other-tls-port",
+          "status": 200,
+          "body": "{\"port\": 34331, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B13-other-tls-port\", \"host\": \"localhost:34331\", \"identity\": \"attacker\", \"body\": \"synthetic-B13-other-tls-port\"}"
+        },
+        {
+          "case": "B14-connect-ip",
+          "error": "OSError",
+          "detail": "Tunnel connection failed: 403 Forbidden: host 127.0.0.1:37439 is not in the allowlist"
+        },
+        {
+          "case": "B15-trailing-dot",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B16-uppercase",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B17-inner-host",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B17-inner-host\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B18-redirect-same",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B19-redirect-other-port",
+          "exit": 0,
+          "stdout": "{\"port\": 34331, \"method\": \"GET\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B19-redirect-other-port\", \"host\": \"localhost:34331\", \"identity\": \"other\", \"body\": \"\"}\nHTTP_STATUS:200\nHTTP_VERSION:1",
+          "stderr": ""
+        },
+        {
+          "case": "B20-redirect-other-host",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:1",
+          "stderr": "curl: (7) CONNECT tunnel failed, response 403\n"
+        },
+        {
+          "case": "B21-encoded-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B22-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B23-query",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls?state=open&per_page=30\", \"case\": \"B23-query\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B24-http2",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B25-final-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B25-final-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        }
+      ],
+      "events": [
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B00-reverse-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B01-connect-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 40977,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B09-plain-forward",
+          "host": "localhost:40977",
+          "identity": "attacker",
+          "body": "synthetic-B09-plain-forward"
+        },
+        {
+          "port": 40977,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B10-plain-connect",
+          "host": "localhost",
+          "identity": "attacker",
+          "body": ""
+        },
+        {
+          "port": 54097,
+          "raw": "SSH-2.0-synthetic-B11-ssh-other-port\r\n"
+        },
+        {
+          "port": 34331,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B13-other-tls-port",
+          "host": "localhost:34331",
+          "identity": "attacker",
+          "body": "synthetic-B13-other-tls-port"
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B17-inner-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-same",
+          "case": "B18-redirect-same",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-port",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 34331,
+          "method": "GET",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:34331",
+          "identity": "other",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-host",
+          "case": "B20-redirect-other-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls?state=open&per_page=30",
+          "case": "B23-query",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B25-final-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        }
+      ],
+      "stderr": "\n  nono v0.79.0\n  warning: profile allow_domain entry 'localhost:37439' includes a :port suffix. nono now ignores ports in allow-domain rules and only applies hostname filtering through the proxy.\n  Capabilities:\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T14:23:20.140113Z\u001b[0m \u001b[33m WARN\u001b[0m tls_intercept: handshake failed for localhost:37439 \u2014 received corrupt message of type InvalidContentType. Agent likely pins certs or carries a hard-coded trust list. Remove endpoint_rules / credential_key from the route to fall back to a transparent CONNECT tunnel.\n"
+    },
+    {
+      "profile": "unrelated-allow",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "B00-reverse-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B00-reverse-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B01-connect-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B01-connect-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B02-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B03-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B04-graphql",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B05-direct-host",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B06-direct-ip",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B07-curl-noproxy",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:0",
+          "stderr": "curl: (7) Failed to connect to localhost:37439 after 0 ms: Could not connect to server\n"
+        },
+        {
+          "case": "B08-socks5",
+          "error": "TimeoutError",
+          "detail": "timed out"
+        },
+        {
+          "case": "B09-plain-forward",
+          "status": 200,
+          "body": "{\"port\": 40977, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B09-plain-forward\", \"host\": \"localhost:40977\", \"identity\": \"attacker\", \"body\": \"synthetic-B09-plain-forward\"}"
+        },
+        {
+          "case": "B10-plain-connect",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "HTTP/1.0 200 OK\r\nServer: BaseHTTP/0.6 Python/3.14.7\r\nDate: Tue, 06 Oct 2026 14:23:30 GMT\r\nContent-Length: 160\r\n\r\n{\"port\": 40977, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B10-plain-connect\", \"host\": \"localhost\", \"identity\": \"attacker\", \"body\": \"\"}"
+        },
+        {
+          "case": "B11-ssh-other-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "SSH-2.0-local-test-fixture\r\n"
+        },
+        {
+          "case": "B12-ssh-protected-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "\u0015\u0003\u0003\u0000\u0002\u00022"
+        },
+        {
+          "case": "B13-other-tls-port",
+          "status": 200,
+          "body": "{\"port\": 34331, \"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B13-other-tls-port\", \"host\": \"localhost:34331\", \"identity\": \"attacker\", \"body\": \"synthetic-B13-other-tls-port\"}"
+        },
+        {
+          "case": "B14-connect-ip",
+          "error": "OSError",
+          "detail": "Tunnel connection failed: 403 Forbidden: host 127.0.0.1:37439 is not in the allowlist"
+        },
+        {
+          "case": "B15-trailing-dot",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B16-uppercase",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B17-inner-host",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B17-inner-host\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B18-redirect-same",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B19-redirect-other-port",
+          "exit": 0,
+          "stdout": "{\"port\": 34331, \"method\": \"GET\", \"path\": \"/repos/attacker/stolen/issues\", \"case\": \"B19-redirect-other-port\", \"host\": \"localhost:34331\", \"identity\": \"other\", \"body\": \"\"}\nHTTP_STATUS:200\nHTTP_VERSION:1",
+          "stderr": ""
+        },
+        {
+          "case": "B20-redirect-other-host",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:1",
+          "stderr": "curl: (7) CONNECT tunnel failed, response 403\n"
+        },
+        {
+          "case": "B21-encoded-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B22-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B23-query",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls?state=open&per_page=30\", \"case\": \"B23-query\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B24-http2",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B25-final-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B25-final-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        }
+      ],
+      "events": [
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B00-reverse-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B01-connect-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 40977,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B09-plain-forward",
+          "host": "localhost:40977",
+          "identity": "attacker",
+          "body": "synthetic-B09-plain-forward"
+        },
+        {
+          "port": 40977,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B10-plain-connect",
+          "host": "localhost",
+          "identity": "attacker",
+          "body": ""
+        },
+        {
+          "port": 54097,
+          "raw": "SSH-2.0-synthetic-B11-ssh-other-port\r\n"
+        },
+        {
+          "port": 34331,
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B13-other-tls-port",
+          "host": "localhost:34331",
+          "identity": "attacker",
+          "body": "synthetic-B13-other-tls-port"
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B17-inner-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-same",
+          "case": "B18-redirect-same",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-port",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 34331,
+          "method": "GET",
+          "path": "/repos/attacker/stolen/issues",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:34331",
+          "identity": "other",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-host",
+          "case": "B20-redirect-other-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls?state=open&per_page=30",
+          "case": "B23-query",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B25-final-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        }
+      ],
+      "stderr": "\n  nono v0.79.0\n  Capabilities:\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T14:23:31.423337Z\u001b[0m \u001b[33m WARN\u001b[0m tls_intercept: handshake failed for localhost:37439 \u2014 received corrupt message of type InvalidContentType. Agent likely pins certs or carries a hard-coded trust list. Remove endpoint_rules / credential_key from the route to fall back to a transparent CONNECT tunnel.\n"
+    },
+    {
+      "profile": "known-ports-denied",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "B00-reverse-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B00-reverse-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B01-connect-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B01-connect-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B02-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B03-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B04-graphql",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B05-direct-host",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B06-direct-ip",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "B07-curl-noproxy",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:0",
+          "stderr": "curl: (7) Failed to connect to localhost:37439 after 0 ms: Could not connect to server\n"
+        },
+        {
+          "case": "B08-socks5",
+          "error": "TimeoutError",
+          "detail": "timed out"
+        },
+        {
+          "case": "B09-plain-forward",
+          "status": 403,
+          "body": ""
+        },
+        {
+          "case": "B10-plain-connect",
+          "outer": "HTTP/1.1 403 Forbidden: host localhost:40977 is in the deny list"
+        },
+        {
+          "case": "B11-ssh-other-port",
+          "outer": "HTTP/1.1 403 Forbidden: host localhost:54097 is in the deny list"
+        },
+        {
+          "case": "B12-ssh-protected-port",
+          "outer": "HTTP/1.1 200 Connection Established",
+          "reply": "\u0015\u0003\u0003\u0000\u0002\u00022"
+        },
+        {
+          "case": "B13-other-tls-port",
+          "error": "OSError",
+          "detail": "Tunnel connection failed: 403 Forbidden: host localhost:34331 is in the deny list"
+        },
+        {
+          "case": "B14-connect-ip",
+          "error": "OSError",
+          "detail": "Tunnel connection failed: 403 Forbidden: host 127.0.0.1:37439 is not in the allowlist"
+        },
+        {
+          "case": "B15-trailing-dot",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B16-uppercase",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B17-inner-host",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B17-inner-host\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B18-redirect-same",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B19-redirect-other-port",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:1",
+          "stderr": "curl: (7) CONNECT tunnel failed, response 403\n"
+        },
+        {
+          "case": "B20-redirect-other-host",
+          "exit": 7,
+          "stdout": "\nHTTP_STATUS:000\nHTTP_VERSION:1",
+          "stderr": "curl: (7) CONNECT tunnel failed, response 403\n"
+        },
+        {
+          "case": "B21-encoded-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B22-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "B23-query",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls?state=open&per_page=30\", \"case\": \"B23-query\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        },
+        {
+          "case": "B24-http2",
+          "exit": 0,
+          "stdout": "{\"error\":\"Forbidden\"}\nHTTP_STATUS:403\nHTTP_VERSION:1.1",
+          "stderr": ""
+        },
+        {
+          "case": "B25-final-control",
+          "status": 200,
+          "body": "{\"port\": 37439, \"method\": \"GET\", \"path\": \"/repos/trusted/private/pulls\", \"case\": \"B25-final-control\", \"host\": \"localhost:37439\", \"identity\": \"managed\", \"body\": \"\"}"
+        }
+      ],
+      "events": [
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B00-reverse-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B01-connect-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B17-inner-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-same",
+          "case": "B18-redirect-same",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-port",
+          "case": "B19-redirect-other-port",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/redirect-other-host",
+          "case": "B20-redirect-other-host",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls?state=open&per_page=30",
+          "case": "B23-query",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        },
+        {
+          "port": 37439,
+          "method": "GET",
+          "path": "/repos/trusted/private/pulls",
+          "case": "B25-final-control",
+          "host": "localhost:37439",
+          "identity": "managed",
+          "body": ""
+        }
+      ],
+      "stderr": "\n  nono v0.79.0\n  Capabilities:\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T14:23:42.724531Z\u001b[0m \u001b[33m WARN\u001b[0m tls_intercept: handshake failed for localhost:37439 \u2014 received corrupt message of type InvalidContentType. Agent likely pins certs or carries a hard-coded trust list. Remove endpoint_rules / credential_key from the route to fall back to a transparent CONNECT tunnel.\n"
+    }
+  ],
+  "host_controls": [
+    {
+      "fixture": "http",
+      "status": 200
+    },
+    {
+      "fixture": "tls",
+      "status": 200
+    },
+    {
+      "fixture": "tls_alt",
+      "status": 200
+    },
+    {
+      "fixture": "tcp",
+      "ssh_banner": true
+    }
+  ],
+  "environment_errors": [],
+  "ports": {
+    "http": 40977,
+    "tls": 37439,
+    "tls_alt": 34331,
+    "tcp": 54097
+  }
+}

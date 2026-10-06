@@ -1,0 +1,205 @@
+{
+  "active_version": 1,
+  "config_revision": 5499951899979270729,
+  "hash": "6585f3274cf10dcda67ade4c736037f356c183ede02d4195706572520e6f9787",
+  "policy": {
+    "filesystem_policy": {
+      "include_workdir": true,
+      "read_only": [
+        "/bin",
+        "/usr",
+        "/lib",
+        "/lib64",
+        "/proc",
+        "/dev/urandom",
+        "/app",
+        "/etc",
+        "/var/log"
+      ],
+      "read_write": [
+        "/sandbox",
+        "/tmp",
+        "/dev/null"
+      ]
+    },
+    "landlock": {
+      "compatibility": "best_effort"
+    },
+    "network_policies": {
+      "_provider_nas_a1b_fake": {
+        "binaries": [
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/bin/python*"
+          }
+        ],
+        "endpoints": [
+          {
+            "allowed_ips": [
+              "172.17.0.1/32"
+            ],
+            "enforcement": "enforce",
+            "host": "172.17.0.1",
+            "port": 27680,
+            "protocol": "rest",
+            "rules": [
+              {
+                "allow": {
+                  "method": "GET",
+                  "path": "/repos/my-org/private-repo"
+                }
+              },
+              {
+                "allow": {
+                  "method": "POST",
+                  "path": "/repos/my-org/private-repo/issues"
+                }
+              }
+            ]
+          },
+          {
+            "allowed_ips": [
+              "172.17.0.1/32"
+            ],
+            "enforcement": "enforce",
+            "host": "172.17.0.1",
+            "path": "/graphql",
+            "port": 27680,
+            "protocol": "graphql",
+            "rules": [
+              {
+                "allow": {
+                  "fields": [
+                    "repository"
+                  ],
+                  "operation_type": "query"
+                }
+              },
+              {
+                "allow": {
+                  "fields": [
+                    "createIssue"
+                  ],
+                  "operation_type": "mutation"
+                }
+              }
+            ]
+          }
+        ],
+        "name": "_provider_nas_a1b_fake"
+      },
+      "fixture_graphql": {
+        "binaries": [
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/bin/python*"
+          }
+        ],
+        "endpoints": [
+          {
+            "allowed_ips": [
+              "172.17.0.1/32"
+            ],
+            "enforcement": "enforce",
+            "host": "172.17.0.1",
+            "path": "/graphql",
+            "port": 27680,
+            "protocol": "graphql",
+            "rules": [
+              {
+                "allow": {
+                  "fields": [
+                    "repository"
+                  ],
+                  "operation_type": "query"
+                }
+              },
+              {
+                "allow": {
+                  "fields": [
+                    "createIssue"
+                  ],
+                  "operation_type": "mutation"
+                }
+              }
+            ]
+          }
+        ],
+        "name": "fixture-graphql"
+      },
+      "fixture_rest": {
+        "binaries": [
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/bin/python*"
+          }
+        ],
+        "endpoints": [
+          {
+            "allowed_ips": [
+              "172.17.0.1/32"
+            ],
+            "enforcement": "enforce",
+            "host": "172.17.0.1",
+            "port": 27680,
+            "protocol": "rest",
+            "rules": [
+              {
+                "allow": {
+                  "method": "GET",
+                  "path": "/repos/my-org/private-repo"
+                }
+              },
+              {
+                "allow": {
+                  "method": "POST",
+                  "path": "/repos/my-org/private-repo/issues"
+                }
+              }
+            ]
+          }
+        ],
+        "name": "fixture-rest"
+      },
+      "github_rest": {
+        "binaries": [
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/bin/python*"
+          }
+        ],
+        "endpoints": [
+          {
+            "enforcement": "enforce",
+            "host": "api.github.com",
+            "port": 443,
+            "protocol": "rest",
+            "rules": [
+              {
+                "allow": {
+                  "method": "GET",
+                  "path": "/user"
+                }
+              }
+            ]
+          }
+        ],
+        "name": "github-rest"
+      }
+    },
+    "version": 1
+  },
+  "policy_source": "sandbox",
+  "sandbox": "nas-a1b-1e80e14e02",
+  "scope": "sandbox",
+  "status": "effective",
+  "version": 1
+}

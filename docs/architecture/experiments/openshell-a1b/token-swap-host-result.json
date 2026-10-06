@@ -1,0 +1,43 @@
+{
+  "run_id": "nas-swap-c775d5b6a",
+  "observations": {
+    "readonly_provider": {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "exit_code": 0,
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/12",
+      "number": 12,
+      "status": "created",
+      "nodeId": "I_kwDORcowSM8AAAABVX29iw"
+    }
+  },
+  "cleanup_issues": [
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/12",
+      "number": 12,
+      "nodeId": "I_kwDORcowSM8AAAABVX29iw",
+      "status": "closed"
+    }
+  ],
+  "resources": {
+    "network": [],
+    "volume": [],
+    "containers": []
+  },
+  "execution_status": "failed",
+  "credentials_distinct": true,
+  "gh_version": "gh version 2.90.0 (2026-04-16)",
+  "metadata": [
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "nodeId": "R_kgDORcowSA",
+      "status": "issues_enabled_push_allowed"
+    },
+    {
+      "repo": "Hogeyama/test-github",
+      "nodeId": "R_kgDOU-IINA",
+      "status": "issues_enabled_push_allowed"
+    }
+  ],
+  "failure": "read-only provider unexpectedly wrote; stop attack"
+}

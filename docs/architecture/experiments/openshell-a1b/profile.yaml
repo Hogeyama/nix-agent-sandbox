@@ -1,0 +1,29 @@
+id: nas-a1b-fixture
+display_name: NAS fake local fixture
+description: All credentials in this experiment are fake.
+category: source_control
+credentials:
+  - name: api_token
+    env_vars: [NAS_FIXTURE_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+endpoints:
+  - host: 172.17.0.1
+    port: 27680
+    protocol: rest
+    enforcement: enforce
+    allowed_ips: ['172.17.0.1/32']
+    rules:
+      - allow: { method: GET, path: /repos/my-org/private-repo }
+      - allow: { method: POST, path: /repos/my-org/private-repo/issues }
+  - host: 172.17.0.1
+    port: 27680
+    path: /graphql
+    protocol: graphql
+    enforcement: enforce
+    allowed_ips: ['172.17.0.1/32']
+    rules:
+      - allow: { operation_type: query, fields: [repository] }
+      - allow: { operation_type: mutation, fields: [createIssue] }
+binaries: [/usr/bin/curl, '/usr/bin/python*']

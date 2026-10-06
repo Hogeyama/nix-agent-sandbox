@@ -1,0 +1,40 @@
+{
+  "observed_date": "2026-10-06",
+  "host": "NixOS Linux x86_64",
+  "kernel": "6.18.40",
+  "docker": "29.6.2",
+  "openshell": "0.1.2",
+  "cli_sha256": "f334da80f867776dde9034e0ca3c2406d48ba77b0d0abe64b5aa610490a34fca",
+  "source_tag": "v0.1.2",
+  "source_archive_directory": "NVIDIA-OpenShell-6648bd0",
+  "gateway_image_digest": "sha256:2fe4dad9118e14ab80a8258b545ea6e6cd74c3469e24ad4e6610f964d98913a2",
+  "supervisor_image_digest": "sha256:d7b5264bb6bc56f4796e6fa3617b8e4a8d785be0b7293542efd8cc250b0fb67a",
+  "sandbox_image_digest": "sha256:bf4797b6c511f2d8ba02955dbba4bf76c1f0dd6d83531420c5408d5f1fb9d72f",
+  "client_image_id": "sha256:421f193be1d5a588342e5a5e67e6605282222e68cc8f5f3495de109d15d0ed12",
+  "executed_cases": 22,
+  "skipped_cases": 1,
+  "reproduction_successful": true,
+  "images_retained": [
+    "ghcr.io/nvidia/openshell/gateway:0.1.2",
+    "ghcr.io/nvidia/openshell/supervisor:0.1.2",
+    "ghcr.io/nvidia/openshell/sandbox:0.1.2",
+    "nas-a1b-openshell-client:20261006"
+  ],
+  "source_archive_and_cli_retained_under": "/tmp/nas-local-sandbox-probe",
+  "execution_environments": {
+    "codex_sandbox": {
+      "exit_code": 1,
+      "executed_cases": 0,
+      "blocked_at": "docker network inspect bridge",
+      "reason": "permission denied connecting to unix:///var/run/docker.sock",
+      "docker_resources_created": false
+    },
+    "approved_host_execution": {
+      "exit_code": 0,
+      "executed_cases": 22,
+      "skipped_cases": 1,
+      "skipped_reason": "No HTTPS_PROXY provided for SOCKS case",
+      "hostexec_available": false
+    }
+  }
+}

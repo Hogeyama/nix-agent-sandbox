@@ -1,0 +1,71 @@
+{
+  "run_id": "nas-live-35a4ffb1f",
+  "observations": {
+    "rest_allowed": {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/10",
+      "number": 10,
+      "nodeId": "I_kwDORcowSM8AAAABVXmLRQ",
+      "status": "open"
+    },
+    "rest_other": {
+      "repo": "Hogeyama/test-github",
+      "status": "http_403_policy_denied"
+    },
+    "graphql_allowed": {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/11",
+      "number": 11,
+      "nodeId": "I_kwDORcowSM8AAAABVXmMjg",
+      "status": "open"
+    },
+    "graphql_other": {
+      "repo": "Hogeyama/test-github",
+      "url": "https://github.com/Hogeyama/test-github/issues/2",
+      "number": 2,
+      "nodeId": "I_kwDOU-IINM8AAAABVXmNtg",
+      "status": "open"
+    }
+  },
+  "cleanup_issues": [
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/10",
+      "number": 10,
+      "nodeId": "I_kwDORcowSM8AAAABVXmLRQ",
+      "status": "closed"
+    },
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/11",
+      "number": 11,
+      "nodeId": "I_kwDORcowSM8AAAABVXmMjg",
+      "status": "closed"
+    },
+    {
+      "repo": "Hogeyama/test-github",
+      "url": "https://github.com/Hogeyama/test-github/issues/2",
+      "number": 2,
+      "nodeId": "I_kwDOU-IINM8AAAABVXmNtg",
+      "status": "closed"
+    }
+  ],
+  "resources": {
+    "network": [],
+    "volume": [],
+    "containers": []
+  },
+  "execution_status": "completed",
+  "metadata": [
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "nodeId": "R_kgDORcowSA",
+      "status": "issues_enabled_push_allowed"
+    },
+    {
+      "repo": "Hogeyama/test-github",
+      "nodeId": "R_kgDOU-IINA",
+      "status": "issues_enabled_push_allowed"
+    }
+  ]
+}

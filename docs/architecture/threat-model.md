@@ -251,3 +251,22 @@ Claude Code 単体で構成でき、導入コストは小さい。設定ファ�
 Docker Sandbox は、今後の対応次第で A1b を満たす構成を作れると期待している。v3 kit の [`network-policy@2`](https://github.com/docker/sandbox-kit-spec/blob/main/docs/spec/capabilities/com.docker.sandbox/network-policy%402.md) には HTTP method/path の制限があり、検査できない接続は拒否する仕様である。これが実装どおり働けば、proxy を通らない直接接続を拒否し、REST・Git の操作先を必要な非公開 repo に限定する道がある。ただし、他の kit や policy に hostname 全体の allow が残ると、狭い allow を追加しても制限にはならない。
 
 参照した組込み `claude` は v2 kit で、v3 mixin を追加できない。[公式の互換性説明](https://docs.docker.com/ai/sandboxes/customize/#version-compatibility)では、workload と mixin をすべて v3 に揃える必要がある。したがって、組込み Claude の対応を待つか、Claude を動かす v3 workload を自分で用意することになる。公式対応の時期は不明で、v3 構成の HTTP 制限も本稿では未実測である。比較表は現在の提示構成の評価とし、この見込みでは加点しない。GraphQL 本文による対象・操作の判別は、method/path 制限だけでは解決しない。
+
+## 追加調査: nono と OpenShell
+
+2026-10-06 にローカルで使える nono 0.79.0 と NVIDIA OpenShell 0.1.2 を実行し、A1b に関係する認証・送信先制限を調べた。結果は「既製品では対策できず、隔離機構から自作するしかない」という結論を支持しない。**REST の repo・操作に用途を絞れば、既製品の設定で制限する道がある。一方、本稿が必要とする GraphQL の repo 制限は、今回の構成では満たせなかった。** B2a 等も含む全体評価は未実施なので、上の5系統の比較表には追加しない。
+
+| 候補 | 実測できた制限 | 残った条件 |
+| --- | --- | --- |
+| [nono](experiments/nono-a1b/README.md) | 明示 `endpoint_policy` の HTTPS credential route で、未許可 REST path を拒否し、持込 token を管理側の認証へ上書き | [別経路の追試](experiments/nono-a1b/network-bypass.md)で同じホストの別ポートへの平文 HTTP・TLS・SSH 相当通信が通った。特定 port の明示 deny は有効。旧 `endpoint_rules` だけでは対象外要求が通り、GraphQL の repo 引数も制限しない。command-scoped は本環境で起動できず未検証 |
+| [OpenShell](experiments/openshell-a1b/README.md) | `enforce` の REST method/path 制限が NO_PROXY・生 TLS にも適用される。GraphQL の未許可操作も拒否 | placeholder の置換は認証主体の固定ではなく、持込 token が通る。許可した GraphQL 操作の repo 引数を変えても通る |
+
+最初の認証・本文の観測には偽 token と模擬 API を使った。その後、ユーザー指定の正規 `Hogeyama/nix-agent-sandbox` と非正規 `Hogeyama/test-github` で実 GitHub の Issue 作成を試した。両製品とも REST の非正規 repo は拒否したが、GraphQL を許可すると非正規 repo への作成が成功した。作成した検証用 Issue はすべて閉じた。詳細は [nono の追試](experiments/nono-a1b/live-github.md)と [OpenShell の追試](experiments/openshell-a1b/live-github.md)を参照。
+
+この追試では、同じ managed token が両 repo に書き込める。認証主体を固定しても、token が書き込める未許可相手への送信を阻止できるとは限らないことを実証した。攻撃者アカウントの実 token を持ち込む試験ではなく、両 repo はユーザーの管理下にある。
+
+token 自体の権限による制限は、対象 API で実際に拒否されることも確かめる。その後の[直接対照](experiments/nono-a1b/readonly-token-check.md)では、ユーザーが Contents / Issues / Metadata を Read-only にして作成した新規 fine-grained PAT でも、公開 repo への Issue 作成が `gh issue create` と REST の両方で成功した。原因は未確定であり、これを token すり替えの成功とは数えない。「登録 token を read-only にすればこの書込み経路を防げる」という前提は、この対照では成立しなかった。
+
+採用を進めるなら、まず GraphQL を禁止して REST に限定できるかを決める。GraphQL が必要なら、本文の対象まで検査する追加処理、または許可操作を限定した仲介 API が必要になる。製品内の拡張機能でどこまで実現できるかは今回の実験の対象外である。
+
+REST に限定しても、method/path の検査を通らない経路を閉じる必要がある。nono の追試では直接接続・NO_PROXY・同一 origin 内の redirect を拒否したが、credential upstream の裸の hostname が一般 proxy の許可へ自動追加され、別ポートへの通信が残った。これは実 GitHub での送信先制限突破を示すものではないが、通常 session の設定だけで全通信を指定 REST に限定できたとは評価しない。Claude 用 pack も既定ではネットワーク無制限であり、[profile の監査](experiments/nono-a1b/claude-profile-audit.md)と追加の構成検証が必要である。

@@ -1,0 +1,9 @@
+{
+  "repo": "Hogeyama/nix-agent-sandbox",
+  "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/12",
+  "number": 12,
+  "nodeId": "I_kwDORcowSM8AAAABVX29iw",
+  "status": "closed",
+  "verification": "marker_match_both_token_literals_absent_temporary_auth_state_removed",
+  "attacker_token_sent_to_child": false
+}

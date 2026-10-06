@@ -1,0 +1,1212 @@
+{
+  "version": "nono 0.79.0",
+  "platform": "Linux 6.18.40",
+  "profiles": [
+    {
+      "profile": "credential-only",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"synthetic-source-marker\"}"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "synthetic-source-marker"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        }
+      ]
+    },
+    {
+      "profile": "graphql-allowed",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"synthetic-source-marker\"}"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "synthetic-source-marker"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        }
+      ]
+    },
+    {
+      "profile": "broad-domain",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"synthetic-source-marker\"}"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "synthetic-source-marker"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        }
+      ]
+    },
+    {
+      "profile": "https-origin",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"synthetic-source-marker\"}"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "synthetic-source-marker"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        }
+      ]
+    },
+    {
+      "profile": "https-origin-graphql",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/attacker/stolen/issues\", \"identity\": \"attacker\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"synthetic-source-marker\"}"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/attacker/stolen/issues",
+          "identity": "attacker",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "synthetic-source-marker"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        }
+      ]
+    },
+    {
+      "profile": "https-policy",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        }
+      ]
+    },
+    {
+      "profile": "https-policy-graphql",
+      "exit": 0,
+      "cases": [
+        {
+          "case": "C0-owner-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C1-owner-write-control",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/repos/trusted/private/issues\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"canary\\\": \\\"synthetic-source-marker\\\", \\\"case\\\": \\\"C1-owner-write-control\\\"}\"}"
+        },
+        {
+          "case": "C2-attacker-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C3-basic-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C4-missing-token",
+          "status": 401,
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "case": "C5-duplicate-auth",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C6-cookie-with-owner",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": true, \"body\": \"\"}"
+        },
+        {
+          "case": "C7-forbidden-repo",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C8-forbidden-method",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C9-direct-local-fixture",
+          "error": "PermissionError",
+          "detail": "[Errno 13] Permission denied"
+        },
+        {
+          "case": "C10-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C11-encoded-dot-path",
+          "status": 403,
+          "body": "{\"error\":\"Forbidden\"}"
+        },
+        {
+          "case": "C12-graphql-attacker-repo",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        },
+        {
+          "case": "C13-redirect",
+          "status": 307,
+          "body": ""
+        },
+        {
+          "case": "C14-after-control",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C15-forward-tunnel-attacker",
+          "error": "ConnectionResetError",
+          "detail": "[Errno 104] Connection reset by peer"
+        },
+        {
+          "case": "C16-forward-allowed-path-attacker",
+          "status": 200,
+          "body": "{\"method\": \"GET\", \"path\": \"/whoami\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"\"}"
+        },
+        {
+          "case": "C17-forward-graphql-attacker",
+          "status": 200,
+          "body": "{\"method\": \"POST\", \"path\": \"/graphql\", \"identity\": \"owner\", \"authorization_count\": 1, \"attacker_cookie\": false, \"body\": \"{\\\"query\\\": \\\"mutation { createIssue(input:{repositoryId:\\\\\\\"ATTACKER_REPO\\\\\\\",title:\\\\\\\"synthetic-source-marker\\\\\\\"}) { issue { id } } }\\\"}\"}"
+        }
+      ],
+      "upstream_events": [
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/repos/trusted/private/issues",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"canary\": \"synthetic-source-marker\", \"case\": \"C1-owner-write-control\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": true,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/redirect",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/whoami",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": ""
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "identity": "owner",
+          "authorization_count": 1,
+          "attacker_cookie": false,
+          "body": "{\"query\": \"mutation { createIssue(input:{repositoryId:\\\"ATTACKER_REPO\\\",title:\\\"synthetic-source-marker\\\"}) { issue { id } } }\"}"
+        }
+      ]
+    },
+    {
+      "profile": "command-scoped",
+      "exit": 126,
+      "cases": [],
+      "upstream_events": []
+    }
+  ],
+  "stderr": {
+    "https-policy-graphql": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:02:08.134200Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:02:08.385234Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:02:08.636241Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:02:09.392600Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:09.643367Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:10.144305Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:10.394970Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n",
+    "broad-domain": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:01:49.689652Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:49.940582Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:50.191712Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:01:50.945808Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:51.196659Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:51.698230Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:51.949085Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n\u001b[2m2026-10-06T13:01:52.199947Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /graphql on service 'probe'\n",
+    "credential-only": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:01:40.455497Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:40.706331Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:40.957424Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:01:41.711733Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:41.962818Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:42.464240Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:42.715276Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n\u001b[2m2026-10-06T13:01:42.966464Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /graphql on service 'probe'\n",
+    "https-origin": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:01:54.307352Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:54.558123Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:54.808913Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:01:55.564303Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:55.815202Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:56.316482Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:56.566987Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n\u001b[2m2026-10-06T13:01:56.818020Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /graphql on service 'probe'\n",
+    "command-scoped": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  outbound allowed\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\nnono: Sandbox initialization failed: Command sandbox execute restriction: cannot open / for Refer grant: failed to open \"/\": Permission denied (os error 13)\n",
+    "https-origin-graphql": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:01:58.912865Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:59.163619Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:59.414560Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:02:00.171039Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:00.421756Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:00.922950Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:01.173910Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n",
+    "graphql-allowed": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:01:45.074990Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:45.325969Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:01:45.576845Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:01:46.330659Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:46.581513Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:47.083166Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:01:47.333888Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n",
+    "https-policy": "\n  nono v0.79.0\n  Capabilities:\n  ────────────────────────────────────────────────────\n   r+w  <probe-dir>/workspace (dir)\n    r   /nix/store (dir)\n   r+w  /dev/null (file)\n       + 40 system/group paths (-v to show)\n   net  proxy\n  ────────────────────────────────────────────────────\n\n  mode supervised (proxy, supervisor)\n  Applying sandbox...\n\n\u001b[2m2026-10-06T13:02:03.522429Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:02:03.773367Z\u001b[0m \u001b[33m WARN\u001b[0m Invalid phantom token in Authorization header\n\u001b[2m2026-10-06T13:02:04.024264Z\u001b[0m \u001b[33m WARN\u001b[0m Missing Authorization header for phantom token validation\n\u001b[2m2026-10-06T13:02:04.779936Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:05.030572Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: DELETE /repos/trusted/private/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:05.532000Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /repos/trusted/private/../../attacker/stolen/issues on service 'probe'\n\u001b[2m2026-10-06T13:02:05.783101Z\u001b[0m \u001b[33m WARN\u001b[0m request path contains segments an upstream may resolve differently than the endpoint policy matcher (path parameters, encoded separators, or double-encoding); refusing to forward\n\u001b[2m2026-10-06T13:02:06.033977Z\u001b[0m \u001b[33m WARN\u001b[0m endpoint denied by endpoint_policy.default: POST /graphql on service 'probe'\n"
+  }
+}

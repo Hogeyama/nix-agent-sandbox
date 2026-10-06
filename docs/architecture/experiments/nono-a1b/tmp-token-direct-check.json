@@ -1,0 +1,37 @@
+{
+  "source": "pass tmp",
+  "repo": "Hogeyama/nix-agent-sandbox",
+  "marker": "nas-readonly-check-fe3e76e11826",
+  "title": "[sandbox probe] read-only token check nas-readonly-check-fe3e76e11826",
+  "transport": "direct",
+  "token_kind": "fine_grained_PAT",
+  "cleanup": [
+    {
+      "number": 16,
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/16",
+      "state": "closed"
+    }
+  ],
+  "errors": [],
+  "read_control": {
+    "exit": 0,
+    "stdout": "Hogeyama/nix-agent-sandbox",
+    "stderr": ""
+  },
+  "http_status": 201,
+  "response_headers": {
+    "X-Accepted-GitHub-Permissions": "issues=write",
+    "X-GitHub-Request-Id": "7D3E:E8CB6:8BE1CD:9ED5D3:6AC4FBDB"
+  },
+  "write_attempt": {
+    "exit": 0,
+    "stdout": "{\"html_url\": \"https://github.com/Hogeyama/nix-agent-sandbox/issues/16\", \"number\": 16, \"node_id\": \"I_kwDORcowSM8AAAABVYFBZw\", \"state\": \"open\"}",
+    "stderr": ""
+  },
+  "issue": {
+    "number": 16,
+    "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/16"
+  },
+  "unexpected_secret_files": [],
+  "gh_version": "gh version 2.90.0 (2026-04-16)"
+}

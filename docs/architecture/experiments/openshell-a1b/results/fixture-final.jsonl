@@ -1,0 +1,11 @@
+{"method": "GET", "path": "/control", "identity": "absent", "body": ""}
+{"method": "GET", "path": "/repos/my-org/private-repo", "identity": "managed", "body": ""}
+{"method": "GET", "path": "/repos/my-org/private-repo", "identity": "attacker", "body": ""}
+{"method": "GET", "path": "/repos/my-org/private-repo", "identity": "absent", "body": ""}
+{"method": "POST", "path": "/repos/my-org/private-repo/issues", "identity": "attacker", "body": "{\"canary\": \"nas-a1b-fake-canary\"}"}
+{"method": "POST", "path": "/graphql", "identity": "attacker", "body": "{\"query\": \"query Probe { repository(owner:\\\"my-org\\\",name:\\\"private-repo\\\") { name } }\"}"}
+{"method": "POST", "path": "/graphql", "identity": "attacker", "body": "{\"query\": \"query Probe { repository(owner:\\\"attacker\\\",name:\\\"exfil\\\") { name } }\"}"}
+{"method": "POST", "path": "/graphql", "identity": "attacker", "body": "{\"query\": \"mutation Probe { createIssue(input:{repositoryId:\\\"trusted-repo-id\\\",title:\\\"nas-a1b-fake-canary\\\"}) { issue { id } } }\"}"}
+{"method": "POST", "path": "/graphql", "identity": "attacker", "body": "{\"query\": \"mutation Probe { createIssue(input:{repositoryId:\\\"attacker-repo-id\\\",title:\\\"nas-a1b-fake-canary\\\"}) { issue { id } } }\"}"}
+{"method": "GET", "path": "/repos/my-org/private-repo", "identity": "attacker", "body": ""}
+{"method": "POST", "path": "/graphql", "identity": "attacker", "body": "{\"query\": \"query Probe($owner:String!,$name:String!) { repository(owner:$owner,name:$name) { name } }\", \"variables\": {\"owner\": \"attacker\", \"name\": \"exfil\"}}"}

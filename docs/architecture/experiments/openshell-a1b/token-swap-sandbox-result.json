@@ -1,0 +1,10 @@
+{
+  "run_id": "nas-swap-7874a53c8",
+  "observations": {},
+  "cleanup_issues": [],
+  "resources": {
+    "created": false
+  },
+  "execution_status": "failed",
+  "failure": "command failed: docker info exit=1"
+}

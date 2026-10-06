@@ -1,0 +1,7 @@
+{
+  "invalid_token_control": {
+    "exit": 1,
+    "bad_credentials_reported": true
+  },
+  "isolated_gh_token_matches_pass_tmp": true
+}

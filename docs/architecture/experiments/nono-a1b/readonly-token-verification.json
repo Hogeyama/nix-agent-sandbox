@@ -1,0 +1,30 @@
+{
+  "issues": [
+    {
+      "html_url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/12",
+      "number": 12,
+      "state": "closed",
+      "title": "[sandbox probe] OpenShell token swap readonly_provider nas-swap-c775d5b6a"
+    },
+    {
+      "html_url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/13",
+      "number": 13,
+      "state": "closed",
+      "title": "[sandbox probe] nono token-swap host-write-registered-allowed 48660c91e6c8"
+    },
+    {
+      "html_url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/14",
+      "number": 14,
+      "state": "closed",
+      "title": "[sandbox probe] read-only token check nas-readonly-check-246f6f3d83fa"
+    },
+    {
+      "html_url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/15",
+      "number": 15,
+      "state": "closed",
+      "title": "[sandbox probe] read-only token check nas-readonly-check-97b082d51c40"
+    }
+  ],
+  "credential_literals_in_artifacts": false,
+  "new_writes": 0
+}

@@ -1,0 +1,11 @@
+Command: python3 docs/architecture/experiments/openshell-a1b/probe.py --cli /tmp/nas-local-sandbox-probe/openshell/openshell --work /tmp/nas-local-sandbox-probe/openshell-sandbox-check
+Exit code: 1
+
+Evidence: /tmp/nas-local-sandbox-probe/openshell-sandbox-check/logs
+Traceback (most recent call last):
+  File "/home/hogeyama/repo/nix-agent-sandbox/docs/architecture/experiments/openshell-a1b/probe.py", line 44, in <module>
+    bridge = command(['docker','network','inspect','bridge','--format','{{(index .IPAM.Config 0).Gateway}}']).stdout.strip()
+             ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hogeyama/repo/nix-agent-sandbox/docs/architecture/experiments/openshell-a1b/probe.py", line 37, in command
+    raise RuntimeError(f'{args[0]} {args[1]} failed ({r.returncode}); see {log or "command output"}: {r.stderr[:1000]}')
+RuntimeError: docker network failed (1); see command output: permission denied while trying to connect to the docker API at unix:///var/run/docker.sock

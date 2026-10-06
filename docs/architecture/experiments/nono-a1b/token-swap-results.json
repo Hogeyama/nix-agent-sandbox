@@ -1,0 +1,49 @@
+{
+  "run_id": "48660c91e6c8",
+  "marker": "nas-two-token-nono-48660c91e6c8",
+  "tokens_distinct": true,
+  "registered_source": "pass github/token/for-agent",
+  "attacker_source": "gh auth token",
+  "host_cases": [
+    {
+      "case": "host-read-registered",
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "credential": "registered",
+      "operation": "read",
+      "title": "[sandbox probe] nono token-swap host-read-registered 48660c91e6c8",
+      "exit": 0,
+      "stdout": "Hogeyama/nix-agent-sandbox",
+      "stderr": ""
+    },
+    {
+      "case": "host-write-registered-allowed",
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "credential": "registered",
+      "operation": "write",
+      "title": "[sandbox probe] nono token-swap host-write-registered-allowed 48660c91e6c8",
+      "exit": 0,
+      "stdout": "https://github.com/Hogeyama/nix-agent-sandbox/issues/13",
+      "stderr": "",
+      "issue": {
+        "number": 13,
+        "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/13"
+      }
+    }
+  ],
+  "sandbox_cases": [],
+  "cleanup": [
+    {
+      "repo": "Hogeyama/nix-agent-sandbox",
+      "number": 13,
+      "url": "https://github.com/Hogeyama/nix-agent-sandbox/issues/13",
+      "title": "[sandbox probe] nono token-swap host-write-registered-allowed 48660c91e6c8",
+      "state": "closed"
+    }
+  ],
+  "errors": [
+    "RuntimeError: registered token can create this issue; read-only premise did not hold"
+  ],
+  "unexpected_secret_files": [],
+  "gh_version": "gh version 2.90.0 (2026-04-16)",
+  "nono_version": "nono 0.79.0"
+}

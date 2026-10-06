@@ -1,0 +1,49 @@
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only: [/bin, /usr, /lib, /lib64, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_write: [/sandbox, /tmp, /dev/null]
+landlock:
+  compatibility: best_effort
+network_policies:
+  fixture_rest:
+    name: fixture-rest
+    endpoints:
+      - host: 172.17.0.1
+        port: 27680
+        protocol: rest
+        enforcement: enforce
+        allowed_ips: ['172.17.0.1/32']
+        rules:
+          - allow: { method: GET, path: /repos/my-org/private-repo }
+          - allow: { method: POST, path: /repos/my-org/private-repo/issues }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: '/usr/bin/python*' }
+  fixture_graphql:
+    name: fixture-graphql
+    endpoints:
+      - host: 172.17.0.1
+        port: 27680
+        path: /graphql
+        protocol: graphql
+        enforcement: enforce
+        allowed_ips: ['172.17.0.1/32']
+        rules:
+          - allow: { operation_type: query, fields: [repository] }
+          - allow: { operation_type: mutation, fields: [createIssue] }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: '/usr/bin/python*' }
+  github_rest:
+    name: github-rest
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: /user }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: '/usr/bin/python*' }

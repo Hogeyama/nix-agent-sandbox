@@ -1,0 +1,8 @@
+{
+  "version": "nono 0.79.0",
+  "profiles": [],
+  "host_controls": [],
+  "environment_errors": [
+    "PermissionError: listener denied"
+  ]
+}
