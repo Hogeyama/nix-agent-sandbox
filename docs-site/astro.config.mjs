@@ -138,6 +138,10 @@ export default defineConfig({
               slug: "configuration/development",
             },
             {
+              label: "Bash の隔離",
+              slug: "configuration/bwrap",
+            },
+            {
               label: "GUI アプリの表示",
               slug: "configuration/gui",
             },

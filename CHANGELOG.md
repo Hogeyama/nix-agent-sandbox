@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **bubblewrap**: `bwrap.support`, on by default, lets bubblewrap create user namespaces in the agent container, so Claude Code's built-in sandbox can isolate Bash. The container runs under Docker's default seccomp profile plus `clone`, `unshare`, `mount`, `umount2` and `pivot_root`; capabilities stay dropped. The image now includes bubblewrap and socat. What to isolate is set in Claude Code: the recommended `--settings` denies `api.anthropic.com` to Bash, whose MCP connector and web fetch reach any third party. See the "Bash の隔離" page. Set `bwrap.support = false` to keep Docker's default profile.
+
 - **Agent settings**: with `agentState.protectSettings = true`, the container's `~/.claude.json` is a session-private file instead of the host's, discarded when the session ends. The host file declares MCP servers that the host's Claude Code starts, so an agent that rewrote it got host code execution the next time the user started Claude outside the container. The private file does not inherit anything from the host file; `agentState.claudeJson` sets its initial content, for example `claudeJson { ["hasCompletedOnboarding"] = true }`. A non-empty `claudeJson` without `protectSettings` is a config error.
 
 - **Profiles**: `extraAgents` makes more agents usable inside a session without launching them, for example `extraAgents { "claude" }` on a Codex profile so Codex can run `claude -p`. Each listed agent gets its host binary and state directory the same way `agent` does; `agentArgs`, observability, and the Claude guide apply only to the launched agent. Dev Container profiles reject `extraAgents` for now.
 
 ### Changed
+
+- **Anthropic preset**: `/v1/messages` requests carrying `mcp_servers` are refused without review. The MCP connector makes Anthropic's servers connect to any URL in that field, which let a process in the container reach a host the allowlist never admitted.
 
 - **Claude credentials**: `agentState.auth` now defaults to `"injected"` for Claude. The host `~/.claude/.credentials.json` is no longer mounted into the container; the container sees a dummy credentials file, and nas's network proxy injects the host's access token into requests to `api.anthropic.com` and `mcp-proxy.anthropic.com`. Profiles that use an API key (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`) must set `agentState.auth = "passthrough"` to keep sharing the credentials file.
   - Known limitation: config validation only detects `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` in `env`. Profiles that use Bedrock (`CLAUDE_CODE_USE_BEDROCK`), Vertex (`CLAUDE_CODE_USE_VERTEX`), an `apiKeyHelper`, or a gateway via `ANTHROPIC_BASE_URL` are not detected; set `agentState.auth = "passthrough"` for them.
