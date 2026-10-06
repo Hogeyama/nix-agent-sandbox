@@ -11,6 +11,12 @@
 	},
 	"overrides": [
 		{
+			"includes": ["src/docker/seccomp/default.json"],
+			"formatter": {
+				"enabled": false
+			}
+		},
+		{
 			"includes": [
 				"src/**/*_test.ts",
 				"src/**/*_integration_test.ts",
