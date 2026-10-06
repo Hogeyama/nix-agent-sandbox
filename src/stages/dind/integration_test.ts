@@ -150,7 +150,8 @@ function makeStageState(
   };
   const proxy = overrides.proxy ?? {
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
-    proxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
+    proxyEndpoint: "http://test-session-1234:agent-tok@nas-proxy:8080",
+    dindProxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
     // These cases do not pull through the dummy proxy. The exact bind still
     // requires a guaranteed-existing regular file on the Docker host.
     caCertPath: import.meta.path,
@@ -640,7 +641,8 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
         },
         proxy: {
           brokerSocket: `/tmp/${withoutCaSessionId}.sock`,
-          proxyEndpoint,
+          proxyEndpoint: `${proxyEndpoint}/agent`,
+          dindProxyEndpoint: proxyEndpoint,
           caCertPath,
         },
       });
@@ -658,7 +660,8 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
         },
         proxy: {
           brokerSocket: `/tmp/${withCaSessionId}.sock`,
-          proxyEndpoint,
+          proxyEndpoint: `${proxyEndpoint}/agent`,
+          dindProxyEndpoint: proxyEndpoint,
           caCertPath,
         },
       });

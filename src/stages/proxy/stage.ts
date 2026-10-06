@@ -23,6 +23,7 @@ import type {
 import { sessionDockerResources } from "../../docker/nas_resources.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { formatElapsed, logDebug } from "../../log.ts";
+import { resolveDindAuthzConfig } from "../../network/authz/dind.ts";
 import {
   type ResolvedDocument,
   resolveAuthzConfig,
@@ -82,6 +83,8 @@ export interface ProxyPlan {
   readonly runtimePaths: NetworkRuntimePaths;
   readonly brokerSocket: string;
   readonly token: string;
+  readonly dindToken?: string;
+  readonly dindDocument?: ResolvedDocument;
   readonly document: ResolvedDocument;
   readonly requestBodyAudit: RequestBodyAuditConfig;
   readonly pendingTimeoutSeconds: number;
@@ -140,6 +143,20 @@ export function planProxy(
     );
   }
   const document = resolved.document;
+  const dindResolved = input.profile.docker.enable
+    ? resolveDindAuthzConfig(input.profile)
+    : undefined;
+  if (dindResolved && dindResolved.document === null) {
+    throw new Error(
+      [
+        "[nas] could not resolve the DinD network authorization config:",
+        ...dindResolved.diagnostics
+          .filter((diagnostic) => diagnostic.severity === "error")
+          .map((diagnostic) => diagnostic.message),
+      ].join("\n"),
+    );
+  }
+  const dindDocument = dindResolved?.document ?? undefined;
   const proxyContainerName =
     options.proxyContainerName ??
     sharedDockerResources(Object.fromEntries(input.host.env)).proxyContainer;
@@ -149,6 +166,12 @@ export function planProxy(
   const runtimePaths = buildNetworkRuntimePaths(input.host);
   const brokerSocket = brokerSocketPath(runtimePaths, input.sessionId);
   const token = generateSessionToken();
+  const dindToken = input.profile.docker.enable
+    ? generateSessionToken()
+    : undefined;
+  if (dindToken !== undefined && dindToken === token) {
+    throw new Error("[nas] DinD requires an independent proxy token");
+  }
   const sessionNetworkName = sessionDockerResources(
     input.sessionId,
   ).sessionNetwork;
@@ -198,6 +221,11 @@ export function planProxy(
   const proxy: ProxyState = {
     brokerSocket,
     proxyEndpoint: proxyUrl,
+    ...(dindToken !== undefined
+      ? {
+          dindProxyEndpoint: `http://${input.sessionId}:${dindToken}@${PROXY_ALIAS}:${PROXY_PORT}`,
+        }
+      : {}),
     caCertPath: caCertFilePath(runtimePaths),
   };
 
@@ -224,6 +252,8 @@ export function planProxy(
     runtimePaths,
     brokerSocket,
     token,
+    dindToken,
+    dindDocument,
     document,
     requestBodyAudit: { ...input.profile.network.requestBodyAudit },
     pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
@@ -365,6 +395,23 @@ function runProxy(
       `[nas]   ↳ ProxyStage:write-authz done (${formatElapsed(phaseStart)})`,
     );
 
+    if (plan.dindDocument) {
+      yield* Effect.acquireRelease(
+        networkRuntime.writeAuthzDocument(
+          plan.runtimePaths,
+          plan.sessionId,
+          plan.dindDocument,
+          "dind",
+        ),
+        () =>
+          networkRuntime.removeAuthzDocument(
+            plan.runtimePaths,
+            plan.sessionId,
+            "dind",
+          ),
+      );
+    }
+
     // 5.5. Resolve the secret registry (fail-closed: 解決失敗はセッション起動中止)
     phaseStart = performance.now();
     const secretValues =
@@ -390,6 +437,11 @@ function runProxy(
     logDebug(
       `[nas]   ↳ ProxyStage:hash-token done (${formatElapsed(phaseStart)})`,
     );
+    const dindToken = plan.dindToken;
+    const dindTokenHash =
+      dindToken !== undefined
+        ? yield* Effect.tryPromise(() => hashToken(dindToken))
+        : undefined;
     phaseStart = performance.now();
     yield* Effect.acquireRelease(
       sessionBrokerService.start({
@@ -399,6 +451,8 @@ function runProxy(
         profileName: plan.profileName,
         agent: plan.agent,
         document: plan.document,
+        dindDocument: plan.dindDocument,
+        dindTokenHash,
         requestBodyAudit: plan.requestBodyAudit,
         pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
         pendingNotify: plan.pendingNotify,

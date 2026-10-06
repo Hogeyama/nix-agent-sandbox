@@ -70,12 +70,21 @@ nas を更新した後、プロジェクトのルートで `nas config init` を
 ```pkl
 docker = new DockerConfig {
   enable = true
+  networkScopes {
+    ["docker-hub"] = module.presets.dockerHub.pull
+  }
 }
 ```
 
 docker.enable の既定は false です。古い設定の `docker.shared = true` との併用はエラーなので削除します。
 
-起動後、エージェント側で Docker を使えることを確認し、必要なイメージを取得してテストします。取得先は[外部への通信許可](/nix-agent-sandbox/configuration/network/)も必要です。拒否されると 403 Forbidden で取得に失敗します。
+`docker.networkScopes` にイメージの取得先を指定します。上の例は Docker Hub の registry、認証サービス、イメージ配布先への本文のない GET / HEAD を許可します。push やコンテナ内の apt / npm などの通信は許可しません。
+
+既定の `networkScopes` は空で、外部への取得をすべて拒否します。以前 `network.scopes` でレジストリを許可していた場合も、`docker.networkScopes` への追加が必要です。agent 側の通信許可と承認結果は引き継ぎません。
+
+別のレジストリを使う場合は、[外部への通信許可](/nix-agent-sandbox/configuration/network/)と同じ `Scope` の書式で、registry、認証サービス、リダイレクト先を追加します。どの scope の `targets` にも一致しない宛先は常に拒否され、`fallback`、`onMatch`、`onIndeterminate`、`expect.onViolation` に `review` を指定すると設定エラーになります。必要な許可は設定に書いて新しいセッションを起動します。非公開レジストリへの認証ヘッダーは `secrets` / `inject` で明示でき、エージェントの OAuth 認証情報は自動では使われません。
+
+設定を信頼し直して新しいセッションを起動し、`docker pull alpine` などで取得を確認します。通信が拒否されると 403 Forbidden で取得に失敗します。
 
 ### データと取得キャッシュ
 

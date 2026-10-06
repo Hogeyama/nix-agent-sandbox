@@ -13,6 +13,7 @@ import {
 import { DIND_INTERNAL_PORT } from "../docker/dind.ts";
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
+import { resolveDindAuthzConfig } from "../network/authz/dind.ts";
 import { validateAuthzConfig } from "../network/authz/validate.ts";
 import { LOCAL_PROXY_PORT } from "../network/ports.ts";
 import { normalizePortForwards } from "./port_forwards.ts";
@@ -353,11 +354,15 @@ function validateAuthz(profileName: string, profile: Profile): string[] {
   const errors: string[] = [];
   const prefix = `profile "${profileName}": `;
 
-  for (const diagnostic of validateAuthzConfig({
-    secrets: profile.secrets,
-    mask: profile.mask,
-    network: profile.network,
-  })) {
+  const diagnostics = [
+    ...validateAuthzConfig({
+      secrets: profile.secrets,
+      mask: profile.mask,
+      network: profile.network,
+    }),
+    ...resolveDindAuthzConfig(profile).diagnostics,
+  ];
+  for (const diagnostic of diagnostics) {
     if (diagnostic.severity === "warning") {
       logWarn(`[warn] ${prefix}${diagnostic.message}`);
       continue;
@@ -365,7 +370,10 @@ function validateAuthz(profileName: string, profile: Profile): string[] {
     errors.push(prefix + diagnostic.message);
   }
 
-  for (const [scopeName, scope] of Object.entries(profile.network.scopes)) {
+  for (const [scopeName, scope] of [
+    ...Object.entries(profile.network.scopes),
+    ...Object.entries(profile.docker.networkScopes ?? {}),
+  ]) {
     const injects = [
       ...(scope.inject ?? []),
       ...Object.values(scope.rules ?? {}).flatMap((rule) => rule.inject ?? []),

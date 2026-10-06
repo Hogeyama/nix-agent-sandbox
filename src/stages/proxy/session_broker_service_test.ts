@@ -444,3 +444,65 @@ test("a host credential revoked while the container runs kills it and waits for 
     harness.kills.every((name) => name === containerNameForSession(sessionId)),
   ).toBe(true);
 });
+
+test("startSessionBroker: publishes both token hashes and revokes them together with credential cleanup", async () => {
+  const source = makeSource();
+  const dindDocument = documentWithScopes({});
+  let passed:
+    | ConstructorParameters<
+        typeof import("../../network/broker.ts").SessionBroker
+      >[0]
+    | undefined;
+  const config = {
+    ...makeConfig("sess_roles"),
+    dindTokenHash: "dind-hash",
+    dindDocument,
+  };
+  const handle = await startSessionBroker(
+    config,
+    makeDeps(source, (options) => {
+      passed = options;
+      return { start: async () => {}, close: async () => {} };
+    }),
+  );
+  try {
+    expect(await readSessionRegistry(paths, config.sessionId)).toMatchObject({
+      tokenHash: "hash",
+      dindTokenHash: "dind-hash",
+    });
+    expect(passed?.dindDocument).toBe(dindDocument);
+    expect(passed?.agentCredentials).toHaveLength(2);
+  } finally {
+    await Effect.runPromise(handle.close());
+  }
+  expect(source.closed).toBe(2);
+  expect(await readSessionRegistry(paths, config.sessionId)).toBeNull();
+});
+
+test("startSessionBroker: rejects a missing DinD policy or token and equal hashes before credentials open", async () => {
+  for (const extra of [
+    { dindTokenHash: "dind-hash" },
+    { dindDocument: documentWithScopes({}) },
+    { dindTokenHash: "hash", dindDocument: documentWithScopes({}) },
+  ]) {
+    let opened = 0;
+    const deps = makeDeps(makeSource(), () => ({
+      start: async () => {},
+      close: async () => {},
+    }));
+    await expect(
+      startSessionBroker(
+        { ...makeConfig("sess_invalid"), ...extra },
+        {
+          ...deps,
+          openAgentCredential: async () => {
+            opened += 1;
+            return makeSource();
+          },
+        },
+      ),
+    ).rejects.toThrow("independent token and authorization document");
+    expect(opened).toBe(0);
+    expect(await readSessionRegistry(paths, "sess_invalid")).toBeNull();
+  }
+});

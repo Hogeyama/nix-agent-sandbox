@@ -1,5 +1,6 @@
 import type {
   BodyDiagnostic,
+  NetworkPrincipal,
   RequestBodyAuditStatus,
 } from "../network/protocol.ts";
 
@@ -51,6 +52,8 @@ export interface AuditLogEntry {
   timestamp: string;
   /** Which subsystem produced the entry. */
   domain: AuditDomain;
+  /** Network identity; absent on legacy entries and other audit domains. */
+  principal?: NetworkPrincipal;
   /** The sandbox session that triggered the action. */
   sessionId: string;
   /** Correlation id for the individual request. */

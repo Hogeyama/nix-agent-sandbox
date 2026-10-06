@@ -55,7 +55,7 @@ agentArgs {
 ## 隔離が及ばないもの
 
 - **`excludedCommands` に書いたコマンド**: sandbox の外で実行され、`api.anthropic.com` に届きます。`curl` や `bash` などの汎用的なコマンドを書かないでください。
-- **Docker**: Bash から DinD の docker デーモンには届かないので、`docker` コマンドは使えません。`excludedCommands` で docker を sandbox の外で実行させると、DinD の中のコンテナから nas の proxy を経由して `api.anthropic.com` に届く経路が残ります。
+- **Docker**: Bash から DinD の docker デーモンには届かないので、`docker` コマンドはそのままでは使えません。`excludedCommands` に加えた場合、Docker CLI 自体は sandbox の外で実行されます。DinD から nas の proxy を通る通信は、[取得先の設定 `docker.networkScopes`](/nix-agent-sandbox/configuration/development/#テスト用-docker)で別に制限し、agent 側の通信許可は引き継ぎません。
 - **hostexec**: 承認したコマンドはホストで実行されるので、内蔵 sandbox も nas の proxy も通りません。
 - **MCP server と hook**: Claude Code が sandbox の外で起動するので、隔離されません。
 - **`enableWeakerNetworkIsolation`**: Bash がコンテナのネットワークを共有し、内蔵 sandbox の通信の制限を通らなくなります。指定しないでください。

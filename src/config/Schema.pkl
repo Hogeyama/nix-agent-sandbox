@@ -209,6 +209,11 @@ class DockerConfig {
   /// DinD rootless サイドカーを起動して隔離された Docker 環境を提供する。
   enable: Boolean = false
 
+  /// DinD と registry mirror 専用。agent の network.scopes は引き継がない。
+  /// 未一致は deny。review は使えない。Docker Hub の pull には
+  /// ["docker-hub"] = module.presets.dockerHub.pull を指定する。
+  networkScopes: Mapping<String, Scope> = new {}
+
   /// 非推奨。`enable` と併用すると設定エラーになる。
   /// エージェントは sidecar の network namespace に join するため、
   /// 複数セッションで sidecar を共有すると分離が失われる。
@@ -791,8 +796,34 @@ class AnthropicPresets {
   }
 }
 
+class DockerHubPresets {
+  /// Docker Hub の registry、token service、blob 配布先への読み取り。
+  /// 宛先の出典: https://docs.docker.com/desktop/enterprise/allow-list/
+  /// R2 配布先: https://github.com/docker/docs/issues/21960
+  pull: Scope = new {
+    targets {
+      "registry-1.docker.io:443"
+      "auth.docker.io:443"
+      "production.cloudfront.docker.com:443"
+      "production.cloudflare.docker.com:443"
+      "docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com:443"
+    }
+    rules {
+      ["pull"] {
+        match {
+          methods { "GET"; "HEAD" }
+          paths { "/v2/**"; "/token"; "/registry-v2/**"; "/docker/registry/v2/**" }
+        }
+        onMatch = "allow"
+        expect { new EmptyBody {} }
+      }
+    }
+  }
+}
+
 class Presets {
   anthropic: AnthropicPresets = new {}
+  dockerHub: DockerHubPresets = new {}
 }
 
 /// 組み込みプリセットの名前空間。`hidden` なので設定の出力には現れない。

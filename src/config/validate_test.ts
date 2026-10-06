@@ -2039,3 +2039,52 @@ test("validate: shared Claude credentials accept an API key env", () => {
   });
   expect(() => validateConfig(config)).not.toThrow();
 });
+
+test("validate: DinD rejects review even when agent network permits it", () => {
+  expect(() =>
+    validateConfig({
+      ui: DEFAULT_UI_CONFIG,
+      observability: DEFAULT_OBSERVABILITY_CONFIG,
+      profiles: {
+        dev: makeProfile({
+          docker: {
+            enable: true,
+            shared: false,
+            networkScopes: {
+              registry: {
+                targets: ["registry.example.com"],
+                fallback: "review",
+              },
+            },
+          },
+        }),
+      },
+    }),
+  ).toThrow("docker.networkScopes.registry.fallback");
+});
+
+test("validate: DinD cannot inject connection-framing or proxy auth headers", () => {
+  for (const name of ["Proxy-Authorization", "Content-Length"]) {
+    expect(() =>
+      validateConfig({
+        ui: DEFAULT_UI_CONFIG,
+        observability: DEFAULT_OBSERVABILITY_CONFIG,
+        profiles: {
+          dev: makeProfile({
+            docker: {
+              enable: true,
+              shared: false,
+              networkScopes: {
+                registry: {
+                  targets: ["registry.example.com"],
+                  fallback: "allow",
+                  inject: [{ name, value: "literal:forbidden" }],
+                },
+              },
+            },
+          }),
+        },
+      }),
+    ).toThrow("cannot be injected");
+  }
+});

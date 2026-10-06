@@ -5394,6 +5394,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
             {
                 "clientId": "client-test",
                 "sessionId": self.session_id,
+                "principal": "agent",
+                "tokenHash": nas_addon._hash_token(self.token),
                 "ruleId": "api.models",
                 "maxBodyBytes": _DEFAULT_LIMITS["maxBodyBytes"],
                 "maskPatterns": tuple(nas_addon._build_mask_patterns(["SECRET123"])),
@@ -5927,6 +5929,162 @@ class BrokerReplyCeilingTest(unittest.TestCase):
             nas_addon.BROKER_HUMAN_REPLY_TIMEOUT_SECONDS,
             nas_addon.BROKER_REPLY_TIMEOUT_SECONDS,
         )
+
+
+class DindIdentityTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.session_id = "sess-principals"
+        self.agent_token = "agent-token"
+        self.dind_token = "dind-token"
+        self.registry = {
+            "tokenHash": nas_addon._hash_token(self.agent_token),
+            "dindTokenHash": nas_addon._hash_token(self.dind_token),
+        }
+        self.agent_document = _flow_document([_models_rule()], fallback="allow")
+        self.dind_document = _flow_document([_models_rule()])
+        for document in (self.agent_document, self.dind_document):
+            document["scopes"][0]["rules"][0]["match"]["graphql"] = None
+        self.addCleanup(nas_addon._authz_cache.clear)
+        self.addCleanup(nas_addon._registry_cache.clear)
+        nas_addon._authz_cache.clear()
+        nas_addon._registry_cache.clear()
+        Path(self.temp.name, f"{self.session_id}.json").write_text(json.dumps(self.agent_document))
+        Path(self.temp.name, f"{self.session_id}.dind.json").write_text(json.dumps(self.dind_document))
+        self.dir_patch = patch.object(nas_addon, "AUTHZ_DIR", self.temp.name)
+        self.dir_patch.start()
+        self.addCleanup(self.dir_patch.stop)
+
+    def _auth(self, token):
+        return "Basic " + base64.b64encode(f"{self.session_id}:{token}".encode()).decode()
+
+    def _flow(self, token=None, *, addon=None, method="GET", path="/v1/models", body=b"", headers=(), connect=False):
+        request_headers = list(headers)
+        if token is not None:
+            request_headers.append(("proxy-authorization", self._auth(token)))
+        flow = FakeFlow(FakeRequest(method=method, path=path, content=body, host="api.example.com", headers=request_headers))
+        addon = addon or nas_addon.NasAddon()
+        messages = []
+        async def broker(_socket, message, reply_timeout=None):
+            messages.append(message)
+            if message["type"] == "authorize":
+                document = self.dind_document if message.get("principal", "agent") == "dind" else self.agent_document
+                result = nas_addon._decide(document, message["target"]["host"], message["target"]["port"], message["method"], message["reviewContext"]["path"], message["bodyTruth"], message["transport"])
+                decision = {"decision": "allow" if result["action"] == "allow" else "deny", "ruleId": result["ruleId"]}
+                if message.get("principal", "agent") == "agent":
+                    decision["injectHeaders"] = [{"name": "Authorization", "value": "Bearer AGENT-SECRET"}]
+                return decision
+            return {"version": 1, "type": "request_policy_outcome_recorded", "requestId": message["requestId"]}
+        with patch.object(nas_addon, "_load_registry", return_value=self.registry), patch.object(nas_addon, "_query_broker", side_effect=broker), patch.object(nas_addon.http.Response, "make", side_effect=lambda code, body=b"", headers=None: FakeResponse(code, body, headers)):
+            if connect:
+                addon.http_connect(flow)
+            else:
+                asyncio.run(addon.request(flow))
+        return flow, messages, addon
+
+    def test_agent_messages_omit_principal_for_live_legacy_brokers(self):
+        flow, messages, _ = self._flow(self.agent_token)
+        self.assertIsNone(flow.response)
+        self.assertTrue(messages)
+        self.assertTrue(all("principal" not in message for message in messages))
+        self.assertNotIn("principal", nas_addon._violation_review_message("r", self.session_id, "api.models", "api.example.com", 443, "GET", {}, []))
+
+    def test_token_verification_selects_identity_and_legacy_sessions_refuse_dind(self):
+        self.assertEqual(nas_addon._principal_for_token(self.registry, self.agent_token), "agent")
+        self.assertEqual(nas_addon._principal_for_token(self.registry, self.dind_token), "dind")
+        self.assertIsNone(nas_addon._principal_for_token(self.registry, "unknown"))
+        legacy = {"tokenHash": self.registry["tokenHash"]}
+        self.assertIsNone(nas_addon._principal_for_token(legacy, self.dind_token))
+        duplicate = {"tokenHash": self.registry["tokenHash"], "dindTokenHash": self.registry["tokenHash"]}
+        self.assertIsNone(nas_addon._principal_for_token(duplicate, self.agent_token))
+
+    def test_agent_and_dind_policy_caches_are_independent_even_with_colliding_rule_ids(self):
+        agent = nas_addon._load_authz_document(self.session_id, "agent")
+        dind = nas_addon._load_authz_document(self.session_id, "dind")
+        self.assertEqual(agent, self.agent_document)
+        self.assertEqual(dind, self.dind_document)
+        self.assertEqual(agent["scopes"][0]["rules"][0]["id"], dind["scopes"][0]["rules"][0]["id"])
+        self.assertIs(nas_addon._load_authz_document(self.session_id, "other"), nas_addon._INVALID_AUTHZ_DOCUMENT)
+
+    def test_http_dind_read_succeeds_and_stolen_token_cannot_use_agent_only_allow_or_credentials(self):
+        flow, messages, addon = self._flow(self.dind_token, headers=[("x-nas-principal", "agent")])
+        self.assertIsNone(flow.response)
+        self.assertEqual([m["principal"] for m in messages], ["dind", "dind"])
+        self.assertIsNone(flow.request.headers.get("Authorization"))
+        agent, _, _ = self._flow(self.agent_token, addon=addon, path="/agent-only")
+        self.assertIsNone(agent.response)
+        self.assertEqual(agent.request.headers.get("Authorization"), "Bearer AGENT-SECRET")
+        stolen, messages, _ = self._flow(self.dind_token, addon=addon, path="/agent-only", headers=[("x-nas-principal", "agent")])
+        self.assertEqual(stolen.response.status_code, 403)
+        self.assertEqual(messages[0]["principal"], "dind")
+        write, _, _ = self._flow(self.dind_token, method="POST")
+        self.assertEqual(write.response.status_code, 403)
+
+    def test_connect_credentials_route_inner_requests_to_dind(self):
+        connect, _, addon = self._flow(self.dind_token, connect=True)
+        self.assertIsNone(connect.response)
+        inner, messages, _ = self._flow(addon=addon)
+        self.assertIsNone(inner.response)
+        self.assertEqual(messages[0]["principal"], "dind")
+        denied, _, _ = self._flow(addon=addon, path="/agent-only")
+        self.assertEqual(denied.response.status_code, 403)
+
+    def test_missing_dind_policy_and_unknown_token_fail_closed_in_http_and_connect(self):
+        nas_addon._load_authz_document(self.session_id, "agent")
+        Path(self.temp.name, f"{self.session_id}.dind.json").unlink()
+        for connect in (False, True):
+            with self.subTest(connect=connect):
+                missing, messages, _ = self._flow(self.dind_token, connect=connect)
+                self.assertEqual(missing.response.status_code, 403)
+                self.assertEqual(messages, [])
+                if connect:
+                    # Killing a CONNECT flow suppresses the synthetic 403.
+                    # The non-2xx response itself refuses tunnel establishment.
+                    self.assertFalse(missing.killed)
+                unknown, messages, _ = self._flow("unknown", connect=connect)
+                self.assertEqual(unknown.response.status_code, 407)
+                self.assertEqual(messages, [])
+
+    def test_dind_expect_uses_own_body_policy_when_ids_collide(self):
+        # Agent permits an opaque body; DinD requires no body on the same rule.
+        self.agent_document["scopes"][0]["rules"][0]["expect"] = []
+        Path(self.temp.name, f"{self.session_id}.json").write_text(json.dumps(self.agent_document))
+        agent, _, _ = self._flow(self.agent_token, body=b"opaque-body")
+        self.assertIsNone(agent.response)
+        dind, messages, _ = self._flow(self.dind_token, body=b"opaque-body")
+        self.assertEqual(dind.response.status_code, 403)
+        outcomes = [m for m in messages if m["type"] == "request_policy_outcome"]
+        self.assertEqual(outcomes[0]["principal"], "dind")
+        self.assertEqual(outcomes[0]["result"], "block")
+
+    def test_dind_violation_review_never_queries_or_reuses_agent_approval(self):
+        with patch.object(nas_addon, "_query_broker") as broker:
+            result = asyncio.run(nas_addon._settle_violation_review("/broker", "req", self.session_id, "api.models", "api.example.com", 443, "GET", {}, [], "dind"))
+        self.assertEqual(result, nas_addon.SETTLED_DENY)
+        broker.assert_not_called()
+
+    def test_dind_websocket_revocation_checks_own_token_and_policy(self):
+        flow = FakeFlow(FakeRequest(), flow_id="ws-dind", websocket=FakeWebSocketData(FakeWebSocketMessage(b"message", True)))
+        addon = nas_addon.NasAddon()
+        state = {"clientId": flow.client_conn.id, "sessionId": self.session_id, "principal": "dind", "tokenHash": self.registry["dindTokenHash"], "ruleId": "api.models", "maxBodyBytes": 1024, "maskPatterns": (), "forbidPatterns": ()}
+        addon._websocket_states[flow.id] = state
+        with patch.object(nas_addon, "_load_registry", return_value=self.registry):
+            addon.websocket_message(flow)
+        self.assertFalse(flow.killed)
+        del self.registry["dindTokenHash"]
+        with patch.object(nas_addon, "_load_registry", return_value=self.registry):
+            addon.websocket_message(flow)
+        self.assertTrue(flow.killed)
+        self.assertNotIn(flow.id, addon._websocket_states)
+        # An agent document in a warm cache cannot keep a deleted DinD policy alive.
+        self.registry["dindTokenHash"] = state["tokenHash"]
+        flow = FakeFlow(FakeRequest(), flow_id="ws-policy", websocket=FakeWebSocketData(FakeWebSocketMessage(b"message", True)))
+        addon._websocket_states[flow.id] = state
+        Path(self.temp.name, f"{self.session_id}.dind.json").unlink()
+        with patch.object(nas_addon, "_load_registry", return_value=self.registry):
+            addon.websocket_message(flow)
+        self.assertTrue(flow.killed)
 
 
 if __name__ == "__main__":

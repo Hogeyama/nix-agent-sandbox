@@ -95,7 +95,8 @@ function openDatabase(dir: string): Database {
         injected_headers TEXT,
         violations       TEXT,
         body_diagnostic  TEXT,
-        body_audit_status TEXT
+        body_audit_status TEXT,
+        principal TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp
         ON audit_log(timestamp);
@@ -127,6 +128,7 @@ function openDatabase(dir: string): Database {
     addColumnIfMissing(db, "violations TEXT");
     addColumnIfMissing(db, "body_diagnostic TEXT");
     addColumnIfMissing(db, "body_audit_status TEXT");
+    addColumnIfMissing(db, "principal TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -176,9 +178,9 @@ export async function appendAuditLog(
         decision, reason, phase, rule_id, method, route, path,
         request_policy_kind, request_policy_result,
         scope, target, command, injected_headers, violations, body_diagnostic,
-        body_audit_status)
+        body_audit_status, principal)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -207,6 +209,7 @@ export async function appendAuditLog(
     entry.requestBodyAuditStatus !== undefined
       ? JSON.stringify(entry.requestBodyAuditStatus)
       : null,
+    entry.principal ?? null,
   );
 }
 
@@ -538,7 +541,7 @@ export async function queryAuditLogs(
                       decision, reason, phase, rule_id, method, route, path,
                       request_policy_kind, request_policy_result,
                       scope, target, command, injected_headers, violations,
-                      body_diagnostic, body_audit_status
+                      body_diagnostic, body_audit_status, principal
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY timestamp ${direction}, id ${direction}
@@ -572,6 +575,7 @@ interface AuditLogRow {
   violations: string | null;
   body_diagnostic: string | null;
   body_audit_status: string | null;
+  principal: string | null;
 }
 
 function rowToEntry(row: AuditLogRow): AuditLogEntry {
@@ -586,6 +590,8 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
   };
   entry.phase =
     row.phase === null ? "authorization" : (row.phase as AuditPhase);
+  if (row.principal !== null)
+    entry.principal = row.principal as AuditLogEntry["principal"];
   if (row.rule_id !== null) entry.ruleId = row.rule_id;
   if (row.method !== null) entry.method = row.method;
   if (row.route !== null) entry.route = row.route;

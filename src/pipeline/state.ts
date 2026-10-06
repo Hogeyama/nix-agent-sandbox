@@ -83,6 +83,8 @@ export interface PromptState {
 
 /** Session-broker endpoints. */
 export interface ProxyState {
+  /** Credential confined to the DinD sidecar and registry mirror. */
+  dindProxyEndpoint?: string;
   readonly brokerSocket: string;
   readonly proxyEndpoint: string;
   readonly caCertPath: string;

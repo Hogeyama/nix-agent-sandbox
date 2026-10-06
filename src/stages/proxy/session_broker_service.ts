@@ -58,6 +58,7 @@ export interface SessionBrokerConfig {
   readonly profileName: string;
   readonly agent?: string;
   readonly document: ResolvedDocument;
+  readonly dindDocument?: ResolvedDocument;
   readonly requestBodyAudit: RequestBodyAuditConfig;
   readonly pendingTimeoutSeconds: number;
   readonly pendingNotify: ResolvedNotifyBackend;
@@ -66,6 +67,7 @@ export interface SessionBrokerConfig {
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
   readonly tokenHash: string;
+  readonly dindTokenHash?: string;
   readonly secretValues?: SecretValues;
   readonly proxyMasking?: boolean;
   /**
@@ -241,6 +243,14 @@ export async function startSessionBroker(
   deps: SessionBrokerStartDeps,
   hooks: SessionBrokerStartHooks = {},
 ): Promise<SessionBrokerHandle> {
+  if (
+    !!config.dindDocument !== !!config.dindTokenHash ||
+    config.dindTokenHash === config.tokenHash
+  ) {
+    throw new Error(
+      "DinD requires an independent token and authorization document",
+    );
+  }
   const agentCredentials: AgentCredential[] = [];
   let credentialsClosed = false;
   let killStarted = false;
@@ -299,6 +309,7 @@ export async function startSessionBroker(
     version: 1,
     sessionId: config.sessionId,
     tokenHash: config.tokenHash,
+    ...(config.dindTokenHash ? { dindTokenHash: config.dindTokenHash } : {}),
     brokerSocket: config.socketPath,
     profileName: config.profileName,
     requestBodyAudit: config.requestBodyAudit,
@@ -318,6 +329,7 @@ export async function startSessionBroker(
       paths: config.paths,
       sessionId: config.sessionId,
       document: config.document,
+      dindDocument: config.dindDocument,
       pendingTimeoutSeconds: config.pendingTimeoutSeconds,
       pendingNotify: config.pendingNotify,
       uiEnabled: config.uiEnabled,

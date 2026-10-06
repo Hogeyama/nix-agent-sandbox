@@ -41,6 +41,7 @@ export const APPROVAL_SCOPES = [
 ] as const;
 
 export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
+export type NetworkPrincipal = "agent" | "dind";
 export type RequestKind = "connect" | "forward";
 export type RequestTransport = "http" | "websocket";
 export type Decision = "allow" | "deny";
@@ -154,6 +155,8 @@ export interface AuthorizeRequest {
   type: "authorize";
   requestId: string;
   sessionId: string;
+  /** Selected by token verification in the trusted proxy, never by a client header. */
+  principal?: NetworkPrincipal;
   target: NormalizedTarget;
   method: string;
   transport: RequestTransport;
@@ -335,6 +338,7 @@ export interface RequestPolicyOutcomeRequest {
   type: "request_policy_outcome";
   requestId: string;
   sessionId: string;
+  principal?: NetworkPrincipal;
   ruleId: string;
   result: "pass" | "rewrite" | "block";
   reason: RequestPolicyReason;
@@ -370,6 +374,7 @@ export interface RequestPolicyReviewRequest {
   type: "request_policy_review";
   requestId: string;
   sessionId: string;
+  principal?: NetworkPrincipal;
   ruleId: string;
   target: NormalizedTarget;
   method: string;
@@ -382,6 +387,7 @@ const REQUEST_POLICY_REVIEW_FIELDS = new Set([
   "type",
   "requestId",
   "sessionId",
+  "principal",
   "ruleId",
   "target",
   "method",
@@ -394,6 +400,7 @@ const AUTHORIZE_FIELDS = new Set([
   "type",
   "requestId",
   "sessionId",
+  "principal",
   "target",
   "method",
   "transport",
@@ -417,6 +424,13 @@ export function validateAuthorizeRequest(
     return "invalid authorize request";
   }
   const message = value as Record<string, unknown>;
+  if (
+    message.principal !== undefined &&
+    message.principal !== "agent" &&
+    message.principal !== "dind"
+  ) {
+    return "invalid network principal";
+  }
   if (
     message.version !== 1 ||
     message.type !== "authorize" ||
@@ -663,6 +677,13 @@ export function validateRequestPolicyReview(
   }
   const message = value as Record<string, unknown>;
   if (
+    message.principal !== undefined &&
+    message.principal !== "agent" &&
+    message.principal !== "dind"
+  ) {
+    return "invalid network principal";
+  }
+  if (
     message.version !== 1 ||
     message.type !== "request_policy_review" ||
     typeof message.requestId !== "string"
@@ -752,6 +773,7 @@ const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
   "type",
   "requestId",
   "sessionId",
+  "principal",
   "ruleId",
   "result",
   "reason",
@@ -883,6 +905,13 @@ export function validateRequestPolicyOutcome(
   }
   const message = value as Record<string, unknown>;
   if (
+    message.principal !== undefined &&
+    message.principal !== "agent" &&
+    message.principal !== "dind"
+  ) {
+    return "invalid network principal";
+  }
+  if (
     message.version !== 1 ||
     message.type !== "request_policy_outcome" ||
     typeof message.requestId !== "string"
@@ -990,6 +1019,8 @@ export interface SessionRegistryEntry {
   version: 1;
   sessionId: string;
   tokenHash: string;
+  /** Optional for sessions created before separate DinD identities. */
+  dindTokenHash?: string;
   brokerSocket: string;
   profileName: string;
   requestBodyAudit: RequestBodyAuditConfig;

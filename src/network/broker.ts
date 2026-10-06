@@ -51,6 +51,7 @@ import {
   denyReasonForTarget,
   type InjectHeaderPreview,
   isApprovableFinding,
+  type NetworkPrincipal,
   type NormalizedTarget,
   type PendingEntry,
   type RequestBodyAuditStatus,
@@ -85,6 +86,9 @@ interface BrokerOptions {
   sessionId: string;
   /** セッション開始時に 1 度だけ解決した認可ドキュメント。 */
   document: ResolvedDocument;
+  dindDocument?: ResolvedDocument;
+  /** Internal immutable policy context; external callers use dindDocument. */
+  principal?: NetworkPrincipal;
   pendingTimeoutSeconds: number;
   pendingNotify: ResolvedNotifyBackend;
   uiEnabled?: boolean;
@@ -241,6 +245,8 @@ export class SessionBroker {
   private readonly paths: NetworkRuntimePaths;
   private readonly sessionId: string;
   private readonly document: ResolvedDocument;
+  private readonly principal: NetworkPrincipal;
+  private readonly dindBroker?: SessionBroker;
   private readonly timeoutSeconds: number;
   private readonly notify: ResolvedNotifyBackend;
   private readonly uiEnabled?: boolean;
@@ -287,6 +293,16 @@ export class SessionBroker {
     this.paths = options.paths;
     this.sessionId = options.sessionId;
     this.document = options.document;
+    this.principal = options.principal ?? "agent";
+    if (this.principal === "agent" && options.dindDocument) {
+      this.dindBroker = new SessionBroker({
+        ...options,
+        document: options.dindDocument,
+        dindDocument: undefined,
+        principal: "dind",
+        agentCredentials: [],
+      });
+    }
     this.timeoutSeconds = options.pendingTimeoutSeconds;
     this.notify = options.pendingNotify;
     this.uiEnabled = options.uiEnabled;
@@ -294,7 +310,8 @@ export class SessionBroker {
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
     this.secretValues = options.secretValues ?? {};
-    this.agentCredentials = options.agentCredentials ?? [];
+    this.agentCredentials =
+      this.principal === "agent" ? (options.agentCredentials ?? []) : [];
     this.proxyMasking = options.proxyMasking !== false;
     this.requestBodyAudit =
       options.requestBodyAudit ?? DEFAULT_REQUEST_BODY_AUDIT_CONFIG;
@@ -339,13 +356,8 @@ export class SessionBroker {
       }
     }
     await Promise.allSettled(this.notificationTasks);
-    this.groups.clear();
-    this.requestIndex.clear();
-    this.approved.clear();
-    this.denied.clear();
-    this.approvedViolations.clear();
-    this.deniedViolations.clear();
-    this.negativeCache.clear();
+    this.clearPolicyState();
+    this.dindBroker?.clearPolicyState();
     await removePendingDir(this.paths, this.sessionId);
     const sock =
       this.socketPath ?? brokerSocketPath(this.paths, this.sessionId);
@@ -361,6 +373,16 @@ export class SessionBroker {
         );
       }
     });
+  }
+
+  private clearPolicyState(): void {
+    this.groups.clear();
+    this.requestIndex.clear();
+    this.approved.clear();
+    this.denied.clear();
+    this.approvedViolations.clear();
+    this.deniedViolations.clear();
+    this.negativeCache.clear();
   }
 
   async listPending(): Promise<PendingEntry[]> {
@@ -397,6 +419,30 @@ export class SessionBroker {
   }
 
   private async handleMessage(message: BrokerMessage): Promise<BrokerResponse> {
+    if (
+      message.type === "authorize" ||
+      message.type === "request_policy_outcome" ||
+      message.type === "request_policy_review"
+    ) {
+      const principal = message.principal ?? "agent";
+      if (principal !== "agent" && principal !== "dind") {
+        return {
+          type: "error",
+          requestId: message.requestId,
+          message: "invalid network principal",
+        };
+      }
+      if (principal !== this.principal) {
+        if (principal === "dind" && this.dindBroker) {
+          return await this.dindBroker.handleMessage(message);
+        }
+        return {
+          type: "error",
+          requestId: message.requestId,
+          message: "network principal policy unavailable",
+        };
+      }
+    }
     if (message.type === "authorize") {
       const validationError = validateAuthorizeRequest(
         message,
@@ -465,6 +511,7 @@ export class SessionBroker {
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         domain: "network",
+        principal: this.principal,
         sessionId: this.sessionId,
         requestId: message.requestId,
         decision: message.result === "block" ? "deny" : "allow",
@@ -512,6 +559,9 @@ export class SessionBroker {
   ): Promise<
     DecisionResponse | { type: "error"; requestId: string; message: string }
   > {
+    if (this.principal === "dind") {
+      return denyDecision(message.requestId, "dind-review-forbidden");
+    }
     const validationError = validateRequestPolicyReview(
       message,
       this.sessionId,
@@ -781,7 +831,10 @@ export class SessionBroker {
     );
     const shouldAudit = decided.audit !== "off" || this.requestBodyAudit.enable;
 
-    if (decided.action === "deny") {
+    if (
+      decided.action === "deny" ||
+      (this.principal === "dind" && decided.action === "review")
+    ) {
       if (shouldAudit) {
         await this.recordAudit(
           message,
@@ -1337,6 +1390,7 @@ export class SessionBroker {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       domain: "network",
+      principal: this.principal,
       sessionId: this.sessionId,
       requestId: message.requestId,
       decision,
@@ -1378,6 +1432,7 @@ export class SessionBroker {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       domain: "network",
+      principal: this.principal,
       sessionId: this.sessionId,
       requestId: request.requestId,
       decision,

@@ -10,7 +10,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
-import { resolveAuthzConfig } from "../network/authz/resolve.ts";
+import { resolveDindAuthzConfig } from "../network/authz/dind.ts";
+import { decide, resolveAuthzConfig } from "../network/authz/resolve.ts";
 import { loadConfig } from "./load.ts";
 import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
 
@@ -756,6 +757,114 @@ profiles {
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "pkl: Docker Hub pull policy is explicit and read-only",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-dind-"));
+    try {
+      await setupNasDir(
+        tmpDir,
+        `amends "Schema.pkl"
+profiles {
+  ["empty"] { agent = "claude"; docker { enable = true } }
+  ["pull"] {
+    agent = "claude"
+    docker {
+      enable = true
+      networkScopes { ["docker-hub"] = module.presets.dockerHub.pull }
+    }
+  }
+}
+`,
+      );
+      const config = await loadConfig({ startDir: tmpDir });
+      expect(config.profiles.empty.docker.networkScopes).toEqual({});
+      const result = resolveDindAuthzConfig(config.profiles.pull);
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        [],
+      );
+      const document = result.document!;
+      for (const [host, port, method, requestPath, action] of [
+        ["registry-1.docker.io", 443, "GET", "/v2/", "allow"],
+        [
+          "registry-1.docker.io",
+          443,
+          "HEAD",
+          "/v2/library/alpine/manifests/latest",
+          "allow",
+        ],
+        [
+          "registry-1.docker.io",
+          443,
+          "GET",
+          "/v2/library/alpine/blobs/sha256:abc",
+          "allow",
+        ],
+        [
+          "auth.docker.io",
+          443,
+          "GET",
+          "/token?service=registry.docker.io&scope=repository:library/alpine:pull",
+          "allow",
+        ],
+        [
+          "production.cloudfront.docker.com",
+          443,
+          "GET",
+          "/registry-v2/docker/registry/v2/blobs/sha256/ab/abc/data",
+          "allow",
+        ],
+        [
+          "production.cloudflare.docker.com",
+          443,
+          "GET",
+          "/registry-v2/docker/registry/v2/blobs/sha256/ab/abc/data",
+          "allow",
+        ],
+        [
+          "docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com",
+          443,
+          "GET",
+          "/registry-v2/docker/registry/v2/blobs/sha256/ab/abc/data?signature=example",
+          "allow",
+        ],
+        [
+          "registry-1.docker.io",
+          443,
+          "POST",
+          "/v2/library/alpine/blobs/uploads/",
+          "deny",
+        ],
+        [
+          "registry-1.docker.io",
+          443,
+          "PUT",
+          "/v2/library/alpine/manifests/latest",
+          "deny",
+        ],
+        [
+          "registry-1.docker.io",
+          443,
+          "DELETE",
+          "/v2/library/alpine/manifests/sha256:abc",
+          "deny",
+        ],
+        ["registry-1.docker.io", 80, "GET", "/v2/", "deny"],
+        ["api.anthropic.com", 443, "POST", "/v1/messages", "deny"],
+      ] as const) {
+        expect(
+          decide(document, { host, port }, { method, path: requestPath })
+            .action,
+        ).toBe(action);
+      }
+      const rule = document.scopes[0]!.rules[0]!;
+      expect(rule.expect).toEqual([{ kind: "emptyBody", onViolation: "deny" }]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
 );

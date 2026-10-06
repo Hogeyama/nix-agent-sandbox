@@ -1,6 +1,7 @@
 import type { AgentType } from "../agents/types.ts";
 import type {
   NetworkConfig as AuthzNetworkConfig,
+  ScopeConfig,
   SecretConfig,
 } from "../network/authz/config.ts";
 import type { PortPair } from "../network/port_forward_model.ts";
@@ -28,6 +29,8 @@ export interface DirenvConfig {
 export interface DockerConfig {
   enable: boolean;
   shared: boolean;
+  /** DinD-only scopes. Omission denies all upstream traffic. */
+  networkScopes?: Record<string, ScopeConfig>;
 }
 
 /** Proxy 設定 */
@@ -326,6 +329,7 @@ export const DEFAULT_NIX_CONFIG: NixConfig = {
 export const DEFAULT_DOCKER_CONFIG: DockerConfig = {
   enable: false,
   shared: false,
+  networkScopes: {},
 };
 
 export const DEFAULT_PROXY_CONFIG: ProxyConfig = {

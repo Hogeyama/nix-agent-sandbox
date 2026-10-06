@@ -8,7 +8,11 @@ import {
   listSessionRegistries as genericListSessionRegistries,
   readSessionRegistry as genericReadSessionRegistry,
 } from "../lib/runtime_registry.ts";
-import type { PendingEntry, SessionRegistryEntry } from "./protocol.ts";
+import type {
+  NetworkPrincipal,
+  PendingEntry,
+  SessionRegistryEntry,
+} from "./protocol.ts";
 
 // Re-export generic functions that don't need return-type narrowing.
 export {
@@ -92,4 +96,16 @@ export async function gcNetworkRuntime(
   paths: NetworkRuntimePaths,
 ): Promise<GcResult> {
   return await gcRuntime<SessionRegistryEntry>(paths);
+}
+
+/** Authorization file names are shared by policy persistence and session cleanup. */
+export function authzDocumentPath(
+  paths: Pick<NetworkRuntimePaths, "authzDir">,
+  sessionId: string,
+  principal: NetworkPrincipal = "agent",
+): string {
+  return path.join(
+    paths.authzDir,
+    `${sessionId}${principal === "dind" ? ".dind" : ""}.json`,
+  );
 }

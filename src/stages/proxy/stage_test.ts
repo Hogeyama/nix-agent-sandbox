@@ -1145,3 +1145,135 @@ test("ProxyStage: child environment isolates the shared proxy", () => {
   });
   expect(plan.proxyContainerName).toBe("nas-proxy-test-isolated");
 });
+
+test("planProxy: allocates a separate DinD token and policy only when Docker is enabled", () => {
+  const profile = makeProfile({
+    docker: { enable: true, shared: false },
+    network: { scopes: ALLOW_EXAMPLE },
+  });
+  const { shared, container, observability } = makeInput(profile);
+  let count = 0;
+  const plan = planProxy(
+    { ...shared, container, observability },
+    { generateSessionToken: () => `token-${++count}` },
+  );
+  expect(plan.token).toBe("token-1");
+  expect(plan.dindToken).toBe("token-2");
+  expect(plan.dindDocument?.scopes).toEqual([]);
+  expect(plan.outputOverrides.proxy?.dindProxyEndpoint).toContain("token-2@");
+  expect(plan.outputOverrides.proxy?.proxyEndpoint).toContain("token-1@");
+  expect(JSON.stringify(plan.container)).not.toContain("token-2");
+  const disabled = makeInput(makeProfile());
+  count = 0;
+  const disabledPlan = planProxy(
+    {
+      ...disabled.shared,
+      container: disabled.container,
+      observability: disabled.observability,
+    },
+    { generateSessionToken: () => `token-${++count}` },
+  );
+  expect(count).toBe(1);
+  expect(disabledPlan.dindToken).toBeUndefined();
+  expect(disabledPlan.dindDocument).toBeUndefined();
+  expect(disabledPlan.outputOverrides.proxy?.dindProxyEndpoint).toBeUndefined();
+  expect(() =>
+    planProxy(
+      { ...shared, container, observability },
+      { generateSessionToken: () => "duplicate" },
+    ),
+  ).toThrow("independent proxy token");
+});
+
+test("ProxyStage: persists both principal policies, passes independent hashes, and removes both on teardown", async () => {
+  const { shared, container, observability } = makeInput(
+    makeProfile({
+      docker: { enable: true, shared: false },
+      network: { scopes: ALLOW_EXAMPLE },
+    }),
+  );
+  const calls: string[] = [];
+  const documents = new Map<string, SessionBrokerConfig["document"]>();
+  let count = 0;
+  let brokerConfig: SessionBrokerConfig | undefined;
+  const layer = Layer.mergeAll(
+    makeCaServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      writeAuthzDocument: (_paths, _sessionId, document, principal = "agent") =>
+        Effect.sync(() => {
+          calls.push(`write:${principal}`);
+          documents.set(principal, document);
+        }),
+      removeAuthzDocument: (_paths, _sessionId, principal = "agent") =>
+        Effect.sync(() => {
+          calls.push(`remove:${principal}`);
+          documents.delete(principal);
+        }),
+    }),
+    makeProxyServiceFake(),
+    makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          brokerConfig = config;
+          expect(documents.get("agent")).toBe(config.document);
+          expect(config.dindDocument).toBe(documents.get("dind"));
+          return {
+            close: () => Effect.sync(() => void calls.push("close:broker")),
+          };
+        }),
+    }),
+  );
+  await Effect.runPromise(
+    createProxyStageWithOptions(shared, {
+      generateSessionToken: () => `token-${++count}`,
+    })
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
+  );
+  expect(brokerConfig?.tokenHash).toStartWith("sha256:");
+  expect(brokerConfig?.dindTokenHash).toStartWith("sha256:");
+  expect(brokerConfig?.dindTokenHash).not.toBe(brokerConfig?.tokenHash);
+  expect(calls).toEqual([
+    "write:agent",
+    "write:dind",
+    "close:broker",
+    "remove:dind",
+    "remove:agent",
+  ]);
+  expect(documents.size).toBe(0);
+});
+
+test("ProxyStage: failed startup rolls back both principal policy files", async () => {
+  const { shared, container, observability } = makeInput(
+    makeProfile({ docker: { enable: true, shared: false } }),
+  );
+  const documents = new Set<string>();
+  let count = 0;
+  const layer = Layer.mergeAll(
+    makeCaServiceFake(),
+    makeProxyServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      writeAuthzDocument: (
+        _paths,
+        _sessionId,
+        _document,
+        principal = "agent",
+      ) => Effect.sync(() => void documents.add(principal)),
+      removeAuthzDocument: (_paths, _sessionId, principal = "agent") =>
+        Effect.sync(() => void documents.delete(principal)),
+    }),
+    makeSessionBrokerServiceFake({
+      start: () => Effect.die(new Error("startup failed")),
+    }),
+  );
+  await expect(
+    Effect.runPromise(
+      createProxyStageWithOptions(shared, {
+        generateSessionToken: () => `token-${++count}`,
+      })
+        .run({ container, observability })
+        .pipe(Effect.scoped, Effect.provide(layer)),
+    ),
+  ).rejects.toThrow("startup failed");
+  expect(documents.size).toBe(0);
+});

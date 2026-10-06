@@ -13,7 +13,11 @@ import {
   type ResolvedDocument,
   withoutInjectLiterals,
 } from "../../network/authz/resolve.ts";
-import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import type { NetworkPrincipal } from "../../network/protocol.ts";
+import {
+  authzDocumentPath,
+  type NetworkRuntimePaths,
+} from "../../network/registry.ts";
 import { FsService } from "../../services/fs.ts";
 import { SecretResolverService } from "../../services/secret_resolver.ts";
 
@@ -39,11 +43,13 @@ export class NetworkRuntimeService extends Context.Tag(
       paths: NetworkRuntimePaths,
       sessionId: string,
       document: ResolvedDocument,
+      principal?: NetworkPrincipal,
     ) => Effect.Effect<void>;
     /** セッション終了時に解決済みドキュメントを消す。無ければ何もしない。 */
     readonly removeAuthzDocument: (
       paths: NetworkRuntimePaths,
       sessionId: string,
+      principal?: NetworkPrincipal,
     ) => Effect.Effect<void>;
     readonly computeAddonHash: () => Effect.Effect<string>;
     readonly resolveSecrets: (
@@ -52,14 +58,6 @@ export class NetworkRuntimeService extends Context.Tag(
     ) => Effect.Effect<Record<string, string[]>>;
   }
 >() {}
-
-/** セッションの解決済みドキュメントの置き場所。書く側と消す側で共有する。 */
-function authzDocumentPath(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-): string {
-  return `${paths.authzDir}/${sessionId}.json`;
-}
 
 // ---------------------------------------------------------------------------
 // Addon + vendored dependency helpers
@@ -317,12 +315,12 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           ]);
         }),
 
-      writeAuthzDocument: (paths, sessionId, document) =>
+      writeAuthzDocument: (paths, sessionId, document, principal) =>
         Effect.gen(function* () {
           // 注入の地の文はファイルに載せない。addon は inject の形を検証する
           // だけで中身を読まず、実際に注入されるヘッダーは broker が組み立てる。
           yield* fs.writeFile(
-            authzDocumentPath(paths, sessionId),
+            authzDocumentPath(paths, sessionId, principal),
             JSON.stringify(withoutInjectLiterals(document)),
             // このファイルはセッションの認可規則そのものである。ホストの他の
             // 利用者に読ませる理由はないので、他のセッション固有のランタイム
@@ -332,11 +330,11 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           );
         }),
 
-      removeAuthzDocument: (paths, sessionId) =>
+      removeAuthzDocument: (paths, sessionId, principal) =>
         // セッションが終わればこの規則は誰の役にも立たない。残しておくと、
         // 次に同じ runtime dir を見た人が生きている設定と見分けられない。
         fs
-          .rm(authzDocumentPath(paths, sessionId), { force: true })
+          .rm(authzDocumentPath(paths, sessionId, principal), { force: true })
           .pipe(Effect.orDie),
 
       resolveSecrets: (secrets, env) =>
@@ -361,10 +359,12 @@ export interface NetworkRuntimeServiceFakeConfig {
     paths: NetworkRuntimePaths,
     sessionId: string,
     document: ResolvedDocument,
+    principal?: NetworkPrincipal,
   ) => Effect.Effect<void>;
   readonly removeAuthzDocument?: (
     paths: NetworkRuntimePaths,
     sessionId: string,
+    principal?: NetworkPrincipal,
   ) => Effect.Effect<void>;
   readonly computeAddonHash?: () => Effect.Effect<string>;
   readonly resolveSecrets?: (

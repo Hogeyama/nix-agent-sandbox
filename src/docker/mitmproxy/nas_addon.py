@@ -9,6 +9,7 @@ decisions, and inspects request bodies against the rule the broker named.
 import asyncio
 import base64
 import hashlib
+import hmac
 import ipaddress
 import itertools
 import json
@@ -354,7 +355,7 @@ def _contains_forbidden(flow, patterns: list[bytes]) -> bool:
 _registry_cache: dict[str, tuple[float, dict]] = {}
 _INVALID_AUTHZ_DOCUMENT = object()
 _authz_cache: dict[
-    str, tuple[Optional[tuple[int, int]], float, object]
+    tuple[str, str], tuple[Optional[tuple[int, int]], float, object]
 ] = {}
 CACHE_TTL = 5.0
 
@@ -817,8 +818,12 @@ def _is_valid_authz_document(value: object) -> bool:
         return False
 
 
-def _load_authz_document(session_id: str) -> object:
-    path = os.path.join(AUTHZ_DIR, f"{session_id}.json")
+def _load_authz_document(session_id: str, principal: str = "agent") -> object:
+    if principal not in ("agent", "dind"):
+        return _INVALID_AUTHZ_DOCUMENT
+    suffix = ".dind" if principal == "dind" else ""
+    path = os.path.join(AUTHZ_DIR, f"{session_id}{suffix}.json")
+    cache_key = (session_id, principal)
     try:
         st = os.stat(path)
         key: Optional[tuple[int, int]] = (st.st_mtime_ns, st.st_size)
@@ -829,7 +834,7 @@ def _load_authz_document(session_id: str) -> object:
     # 返す。size で拾えない同じ長さの書き直しも、TTL で _load_registry と同じく
     # CACHE_TTL 秒以内に読み直す。
     now = time.monotonic()
-    cached = _authz_cache.get(session_id)
+    cached = _authz_cache.get(cache_key)
     if cached and cached[0] == key and now - cached[1] < CACHE_TTL:
         return cached[2]
 
@@ -842,7 +847,7 @@ def _load_authz_document(session_id: str) -> object:
                 state = document
         except Exception:
             pass
-    _authz_cache[session_id] = (key, now, state)
+    _authz_cache[cache_key] = (key, now, state)
     return state
 
 
@@ -991,6 +996,7 @@ def _request_policy_outcome_message(
     result: str,
     reason: str,
     findings: list[dict],
+    principal: str = "agent",
 ) -> dict:
     """The outcome report, as a value. See `_violation_review_message`."""
     return {
@@ -998,6 +1004,7 @@ def _request_policy_outcome_message(
         "type": "request_policy_outcome",
         "requestId": request_id,
         "sessionId": session_id,
+        **({"principal": principal} if principal != "agent" else {}),
         "ruleId": rule_id,
         "result": result,
         "reason": reason,
@@ -1013,6 +1020,7 @@ async def _report_request_policy_outcome(
     result: str,
     reason: str,
     findings: list[dict],
+    principal: str = "agent",
 ) -> None:
     """Report a sanitized request-policy outcome to the broker.
 
@@ -1025,7 +1033,7 @@ async def _report_request_policy_outcome(
         response = await _query_broker(
             socket_path,
             _request_policy_outcome_message(
-                request_id, session_id, rule_id, result, reason, findings,
+                request_id, session_id, rule_id, result, reason, findings, principal,
             ),
         )
         if not (
@@ -1048,6 +1056,7 @@ async def _settle_violation_review(
     method: str,
     review_context: dict,
     findings: list[dict],
+    principal: str = "agent",
 ) -> str:
     """Ask the broker whether these violations may pass.
 
@@ -1073,11 +1082,13 @@ async def _settle_violation_review(
     question the person had not yet been given time to answer.
     `BROKER_HUMAN_REPLY_TIMEOUT_SECONDS` sits above any such deadline and only
     catches a broker that will never answer at all."""
+    if principal == "dind":
+        return SETTLED_DENY
     response = await _query_broker(
         socket_path,
         _violation_review_message(
             request_id, session_id, rule_id, host, port, method,
-            review_context, findings,
+            review_context, findings, principal,
         ),
         reply_timeout=BROKER_HUMAN_REPLY_TIMEOUT_SECONDS,
     )
@@ -1118,6 +1129,7 @@ def _violation_review_message(
     method: str,
     review_context: dict,
     findings: list[dict],
+    principal: str = "agent",
 ) -> dict:
     """The review query, as a value.
 
@@ -1131,6 +1143,7 @@ def _violation_review_message(
         "type": "request_policy_review",
         "requestId": request_id,
         "sessionId": session_id,
+        **({"principal": principal} if principal != "agent" else {}),
         "ruleId": rule_id,
         "target": {"host": host, "port": port},
         "method": method,
@@ -1150,6 +1163,7 @@ def _authorize_message(
     review_context: dict,
     request_body_capture: dict,
     body_diagnostics: Optional[dict[str, dict]] = None,
+    principal: str = "agent",
 ) -> dict:
     """Build the authorization message shared with the broker validator."""
     return {
@@ -1157,6 +1171,7 @@ def _authorize_message(
         "type": "authorize",
         "requestId": request_id,
         "sessionId": session_id,
+        **({"principal": principal} if principal != "agent" else {}),
         "target": {"host": host, "port": port},
         "method": method,
         "transport": transport,
@@ -3494,12 +3509,22 @@ def _generate_request_id() -> str:
     return f"req_{os.urandom(6).hex()}"
 
 
+def _principal_for_token(registry: dict, token: str) -> Optional[str]:
+    token_hash = _hash_token(token)
+    agent_hash = registry.get("tokenHash")
+    dind_hash = registry.get("dindTokenHash")
+    # A broken registry must not give a single token both identities.
+    if isinstance(agent_hash, str) and agent_hash == dind_hash:
+        return None
+    for principal, expected in (("agent", agent_hash), ("dind", dind_hash)):
+        if isinstance(expected, str) and hmac.compare_digest(token_hash, expected):
+            return principal
+    return None
+
+
 def _verify_creds(session_id: str, token: str) -> Optional[dict]:
     registry = _load_registry(session_id)
-    if not registry:
-        return None
-    token_hash = _hash_token(token)
-    if token_hash != registry.get("tokenHash"):
+    if not registry or _principal_for_token(registry, token) is None:
         return None
     return registry
 
@@ -3599,9 +3624,9 @@ class NasAddon:
         # mask_values is fixed for the whole session, so cache the derived
         # patterns instead of re-deriving raw + quote + quote_plus + base64
         # variants per secret on every allowed request.
-        self._mask_values_cache: Optional[list[str]] = None
+        self._mask_values_cache: Optional[tuple[str, list[str]]] = None
         self._mask_patterns_cache: list[bytes] = []
-        self._forbid_values_cache: Optional[list[str]] = None
+        self._forbid_values_cache: Optional[tuple[str, list[str]]] = None
         self._forbid_patterns_cache: list[bytes] = []
         self._request_policy_block_counts: dict[tuple[str, ...], int] = {}
         self._client_sessions: dict[str, set[str]] = {}
@@ -3610,19 +3635,19 @@ class NasAddon:
         # messages following an authorized WebSocket handshake.
         self._websocket_states: dict[str, dict] = {}
 
-    def _patterns_for(self, mask_values: list[str]) -> list[bytes]:
-        if mask_values == self._mask_values_cache:
+    def _patterns_for(self, mask_values: list[str], principal: str = "agent") -> list[bytes]:
+        if (principal, mask_values) == self._mask_values_cache:
             return self._mask_patterns_cache
         patterns = _build_mask_patterns(mask_values)
-        self._mask_values_cache = mask_values
+        self._mask_values_cache = (principal, mask_values)
         self._mask_patterns_cache = patterns
         return patterns
 
-    def _forbid_patterns_for(self, forbid_values: list[str]) -> list[bytes]:
-        if forbid_values == self._forbid_values_cache:
+    def _forbid_patterns_for(self, forbid_values: list[str], principal: str = "agent") -> list[bytes]:
+        if (principal, forbid_values) == self._forbid_values_cache:
             return self._forbid_patterns_cache
         patterns = _build_mask_patterns(forbid_values)
-        self._forbid_values_cache = forbid_values
+        self._forbid_values_cache = (principal, forbid_values)
         self._forbid_patterns_cache = patterns
         return patterns
 
@@ -3642,7 +3667,8 @@ class NasAddon:
             return
 
         session_id, token = creds
-        if not _verify_creds(session_id, token):
+        registry = _verify_creds(session_id, token)
+        if not registry:
             print(f"[nas-addon] CONNECT 407: invalid creds, "
                   f"client={flow.client_conn.id}, "
                   f"session={session_id}, "
@@ -3655,6 +3681,12 @@ class NasAddon:
             flow.kill()
             return
 
+        principal = _principal_for_token(registry, token)
+        if principal is None or (principal == "dind" and not isinstance(_load_authz_document(session_id, principal), dict)):
+            # A non-2xx CONNECT response refuses the tunnel. Killing the flow
+            # would suppress this response before mitmproxy sends it.
+            flow.response = http.Response.make(403, REQUEST_POLICY_BLOCK_BODY)
+            return
         self._connect_creds[flow.client_conn.id] = creds
         self._client_sessions.setdefault(flow.client_conn.id, set()).add(
             session_id
@@ -3792,8 +3824,8 @@ class NasAddon:
             flow.response = http.Response.make(403, b"stale-session")
             return
 
-        token_hash = _hash_token(token)
-        if token_hash != registry.get("tokenHash"):
+        principal = _principal_for_token(registry, token)
+        if principal is None:
             flow.response = http.Response.make(
                 407, b"invalid proxy credentials",
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
@@ -3806,7 +3838,7 @@ class NasAddon:
         request_path = flow.request.path
         transport = _request_transport(flow.request)
 
-        document = _load_authz_document(session_id)
+        document = _load_authz_document(session_id, principal)
         if (
             document is _INVALID_AUTHZ_DOCUMENT
             or not isinstance(document, dict)
@@ -3901,7 +3933,7 @@ class NasAddon:
 
         authorize_req = _authorize_message(
             request_id, session_id, host, port, method, transport, body_truth,
-            review_context, request_body_capture, body_diagnostics,
+            review_context, request_body_capture, body_diagnostics, principal,
         )
 
         # The broker may have to ask a person before it can answer, so this
@@ -3939,14 +3971,14 @@ class NasAddon:
         # Mask secrets out of the outgoing request (URL / headers / body)
         # before credential injection so injected headers stay intact.
         mask_values = decision.get("maskValues") or []
-        patterns = self._patterns_for(mask_values) if mask_values else []
+        patterns = self._patterns_for(mask_values, principal) if mask_values else []
 
         # A `forbid` secret may not leave the sandbox at all, so its presence
         # is checked before anything is rewritten — masking would erase the
         # very occurrence that has to stop the request.
         forbid_values = decision.get("forbidValues") or []
         if forbid_values and _contains_forbidden(
-            flow, self._forbid_patterns_for(forbid_values)
+            flow, self._forbid_patterns_for(forbid_values, principal)
         ):
             print(
                 "[nas-addon] FORBIDDEN-SECRET: "
@@ -3976,7 +4008,7 @@ class NasAddon:
                 # does — and before any credential is injected below.
                 settled = await _settle_violation_review(
                     broker_socket, request_id, session_id, rule_id,
-                    host, port, method, review_context, findings,
+                    host, port, method, review_context, findings, principal,
                 )
                 if settled == SETTLED_ALLOW:
                     result = "rewrite" if rewritten is not None else "pass"
@@ -4004,10 +4036,11 @@ class NasAddon:
                 result,
                 reason,
                 findings,
+                principal,
             )
 
             if result == "block":
-                block_key = (session_id, rule_id, result, reason)
+                block_key = (session_id, principal, rule_id, result, reason)
                 count = self._request_policy_block_counts.get(block_key, 0) + 1
                 self._request_policy_block_counts[block_key] = count
                 if _should_emit_block_log(count):
@@ -4087,11 +4120,13 @@ class NasAddon:
             self._websocket_states[flow.id] = {
                 "clientId": flow.client_conn.id,
                 "sessionId": session_id,
+                "principal": principal,
+                "tokenHash": _hash_token(token),
                 "ruleId": rule_id,
                 "maxBodyBytes": local["limits"]["maxBodyBytes"],
                 "maskPatterns": tuple(patterns),
                 "forbidPatterns": tuple(
-                    self._forbid_patterns_for(forbid_values)
+                    self._forbid_patterns_for(forbid_values, principal)
                     if forbid_values else []
                 ),
             }
@@ -4168,9 +4203,22 @@ class NasAddon:
             # TTL. The handshake has already been authorized; this is only a
             # liveness check for its private session state.
             _registry_cache.pop(session_id, None)
-            if _load_registry(session_id) is None:
+            registry = _load_registry(session_id)
+            if registry is None:
                 self._close_websocket(flow, "stale-session")
                 return
+            principal = state.get("principal", "agent")
+            if principal not in ("agent", "dind"):
+                self._close_websocket(flow, "invalid-principal")
+                return
+            if "tokenHash" in state or principal == "dind":
+                expected = registry.get("dindTokenHash" if principal == "dind" else "tokenHash")
+                if not isinstance(expected, str) or expected != state.get("tokenHash"):
+                    self._close_websocket(flow, "revoked-credentials")
+                    return
+                if not isinstance(_load_authz_document(session_id, principal), dict):
+                    self._close_websocket(flow, "policy-unavailable")
+                    return
             if len(message.content) > state["maxBodyBytes"]:
                 self._close_websocket(flow, "resource-limit")
                 return

@@ -28,6 +28,7 @@ import {
 import { SessionBroker, sendBrokerRequest } from "../../network/broker.ts";
 import { hashToken } from "../../network/protocol.ts";
 import {
+  authzDocumentPath,
   brokerSocketPath,
   resolveNetworkRuntimePaths,
   sessionRegistryPath,
@@ -750,6 +751,7 @@ interface AddonFixture {
   paths: Awaited<ReturnType<typeof resolveNetworkRuntimePaths>>;
   sessionId: string;
   token: string;
+  dindToken?: string;
   broker: SessionBroker;
 }
 
@@ -759,6 +761,10 @@ interface AddonFixtureSetupOptions {
    * 注入を持つ設定では、本番と同じく `withoutInjectLiterals` を通した形を渡す。
    */
   addonDocument?: ResolvedDocument;
+  dindDocument?: ResolvedDocument;
+  agentCredentials?: ConstructorParameters<
+    typeof SessionBroker
+  >[0]["agentCredentials"];
   afterBrokerStarted?: (partial: {
     runtimeDir: string;
     broker: SessionBroker;
@@ -845,6 +851,9 @@ async function setupAddonFixture(
     const paths = await resolveNetworkRuntimePaths(runtimeDir);
     const sessionId = `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const token = "integration-token";
+    const dindToken = options.dindDocument
+      ? "integration-dind-token"
+      : undefined;
     const socketPath = brokerSocketPath(paths, sessionId);
 
     await chmod(runtimeDir, 0o755);
@@ -871,10 +880,17 @@ async function setupAddonFixture(
       `${paths.authzDir}/${sessionId}.json`,
       JSON.stringify(options.addonDocument ?? document),
     );
+    if (options.dindDocument) {
+      await writeFile(
+        authzDocumentPath(paths, sessionId, "dind"),
+        JSON.stringify(withoutInjectLiterals(options.dindDocument)),
+      );
+    }
     await writeSessionRegistry(paths, {
       version: 1,
       sessionId,
       tokenHash: await hashToken(token),
+      ...(dindToken ? { dindTokenHash: await hashToken(dindToken) } : {}),
       brokerSocket: socketPath,
       profileName: "integration-test",
       createdAt: new Date().toISOString(),
@@ -887,6 +903,8 @@ async function setupAddonFixture(
       paths,
       sessionId,
       document,
+      dindDocument: options.dindDocument,
+      agentCredentials: options.agentCredentials,
       pendingTimeoutSeconds: 30,
       pendingNotify: "off",
       secretValues,
@@ -896,7 +914,7 @@ async function setupAddonFixture(
     await options.afterBrokerStarted?.({ runtimeDir, broker });
     await chmod(socketPath, 0o666);
 
-    return { runtimeDir, auditDir, paths, sessionId, token, broker };
+    return { runtimeDir, auditDir, paths, sessionId, token, dindToken, broker };
   } catch (error) {
     await broker?.close().catch(() => {});
     await Promise.allSettled([
@@ -2716,3 +2734,138 @@ test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
   },
   60_000,
 );
+
+for (const mode of ["forward", "connect"] as const) {
+  test.skipIf(!dockerAvailable || !canBindMount || !vendoredDeps)(
+    `DinD identity: ${mode} uses its own policy, body inspection, and credential context`,
+    async () => {
+      const resources = protocolResources(`nas-dind-identity-${mode}`);
+      let fixture: AddonFixture | undefined;
+      const targetHost = "registry.test";
+      const targetPort = 8092;
+      const document = documentWithScopes({
+        registry: {
+          targets: [`${targetHost}:${targetPort}`],
+          fallback: "allow",
+          rules: {
+            read: {
+              match: { methods: ["GET"], paths: ["/**"] },
+              onMatch: "allow",
+            },
+          },
+        },
+      });
+      const dindDocument = documentWithScopes({
+        registry: {
+          targets: [`${targetHost}:${targetPort}`],
+          rules: {
+            read: {
+              match: { methods: ["GET"], paths: ["/v2/**"] },
+              onMatch: "allow",
+              expect: [{ kind: "emptyBody" }],
+            },
+          },
+        },
+      });
+      try {
+        fixture = await setupAddonFixture(
+          "nas-addon-dind-identity-",
+          document,
+          {},
+          {
+            dindDocument,
+            agentCredentials: [
+              {
+                injectsInto: () => true,
+                removeHeaders: [],
+                isHostOwnedRefresh: () => false,
+                headers: () => [
+                  {
+                    name: "Authorization",
+                    value: "Bearer AGENT-ONLY-CREDENTIAL",
+                  },
+                ],
+                close: async () => {},
+              },
+            ],
+          },
+        );
+        const proxyPort = await startProtocolContainers(
+          resources,
+          fixture,
+          targetHost,
+          targetPort,
+          rawEchoServerScript(targetPort),
+        );
+        const credentials = `${fixture.sessionId}:${fixture.dindToken}`;
+        const send = (
+          requestPath: string,
+          options: ProxyRequestOptions = {},
+        ) =>
+          mode === "forward"
+            ? sendProxyRequest(
+                proxyPort,
+                `http://${targetHost}:${targetPort}${requestPath}`,
+                credentials,
+                options,
+              )
+            : sendPlaintextInConnect(
+                proxyPort,
+                `${targetHost}:${targetPort}`,
+                credentials,
+                requestPath,
+                options,
+              );
+        // A client-controlled role header cannot switch the verified token's policy.
+        expect(
+          await send("/agent-only", {
+            headers: { "x-nas-principal": "agent" },
+          }),
+        ).toContain(" 403 ");
+        expect(
+          await send("/v2/images/manifests/latest", { method: "POST" }),
+        ).toContain(" 403 ");
+        // Both documents call this rule registry.read, but only DinD refuses a body.
+        expect(
+          await send("/v2/images/manifests/latest", {
+            body: "unexpected-body",
+          }),
+        ).toContain(" 403 ");
+        expect(await send("/v2/images/manifests/latest")).toContain("200 OK");
+        const upstreamLogs = await waitForContainerLog(
+          resources.targetName,
+          "GET /v2/images/manifests/latest",
+        );
+        expect(upstreamLogs).not.toContain("AGENT-ONLY-CREDENTIAL");
+        expect(upstreamLogs).not.toContain("/agent-only");
+        expect(upstreamLogs).not.toContain("unexpected-body");
+        const audit = await queryAuditLogs(
+          { domain: "network" },
+          fixture.auditDir,
+        );
+        expect(audit.length).toBeGreaterThan(0);
+        expect(audit.every((entry) => entry.principal === "dind")).toBe(true);
+        expect(
+          audit.some(
+            (entry) =>
+              entry.requestPolicyResult === "block" && entry.route === "/v2/**",
+          ),
+        ).toBe(true);
+        expect(
+          audit.every(
+            (entry) =>
+              entry.injectedHeaders === undefined ||
+              entry.injectedHeaders.length === 0,
+          ),
+        ).toBe(true);
+        expect(await fixture.broker.listPending()).toEqual([]);
+        await rm(authzDocumentPath(fixture.paths, fixture.sessionId, "dind"));
+        expect(await send("/v2/images/manifests/latest")).toContain(" 403 ");
+      } finally {
+        await cleanupProtocolResources(resources);
+        await teardownFixture(fixture);
+      }
+    },
+    60_000,
+  );
+}

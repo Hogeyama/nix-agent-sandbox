@@ -490,3 +490,42 @@ test("computeAddonHash: an empty vendor dir fails instead of hashing nothing", a
     await rm(assetDir, { recursive: true, force: true });
   }
 });
+
+test("NetworkRuntimeService: DinD policies use a separate sanitized file and independent cleanup", async () => {
+  const fsFake = makeFsServiceFake();
+  const p = paths();
+  const live = makeLiveLayer(fsFake);
+  const agent = documentWithScopes({
+    agent: { targets: ["agent.example.com"], fallback: "allow" },
+  });
+  const dind = resolvedDocument({
+    network: {
+      scopes: {
+        registry: {
+          targets: ["registry.example.com"],
+          fallback: "allow",
+          inject: [{ name: "Authorization", value: "literal:credential" }],
+        },
+      },
+    },
+  });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* NetworkRuntimeService;
+      yield* service.writeAuthzDocument(p, "sess-roles", agent);
+      yield* service.writeAuthzDocument(p, "sess-roles", dind, "dind");
+      expect(fsFake.store.has(`${p.authzDir}/sess-roles.json`)).toBe(true);
+      expect(
+        fsFake.store.get(`${p.authzDir}/sess-roles.dind.json`)
+          ?.content as string,
+      ).not.toContain("credential");
+      yield* service.removeAuthzDocument(p, "sess-roles", "dind");
+      expect(fsFake.store.has(`${p.authzDir}/sess-roles.json`)).toBe(true);
+      expect(fsFake.store.has(`${p.authzDir}/sess-roles.dind.json`)).toBe(
+        false,
+      );
+      yield* service.removeAuthzDocument(p, "sess-roles");
+      expect(fsFake.store.has(`${p.authzDir}/sess-roles.json`)).toBe(false);
+    }).pipe(Effect.provide(live)),
+  );
+});

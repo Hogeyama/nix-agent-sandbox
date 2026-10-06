@@ -140,7 +140,8 @@ function makeStageState(
   };
   const proxy = overrides.proxy ?? {
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
-    proxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
+    proxyEndpoint: "http://test-session-1234:agent-tok@nas-proxy:8080",
+    dindProxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
     caCertPath: "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.pem",
   };
   return {
@@ -723,4 +724,22 @@ test("buildDindSidecarEnv: bypasses the proxy for the active registry mirror", (
   expect(env.no_proxy).toBe(
     "localhost,127.0.0.1,nas-registry-mirror-session-a",
   );
+});
+
+test("DindStage: refuses an enabled sidecar with no DinD endpoint and never falls back to the agent", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const input = { ...makeSharedInput(profile), ...makeStageState() };
+  delete input.proxy.dindProxyEndpoint;
+  expect(() => planDind(input)).toThrow("DinD requires its own proxy endpoint");
+});
+
+test("DindStage: gives only the dedicated endpoint to the sidecar and mirror plan", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const input = { ...makeSharedInput(profile), ...makeStageState() };
+  input.proxy = {
+    ...input.proxy,
+    proxyEndpoint: "http://session:agent-token@nas-proxy:8080",
+    dindProxyEndpoint: "http://session:dind-token@nas-proxy:8080",
+  };
+  expect(planDind(input)?.proxyEndpoint).toBe(input.proxy.dindProxyEndpoint);
 });

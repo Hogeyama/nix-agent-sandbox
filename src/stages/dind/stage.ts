@@ -131,7 +131,10 @@ export function planDind(
   // network instead of a private DinD-owned bridge, so its egress is
   // funnelled through the proxy.
   const networkName = input.network.networkName;
-  const proxyEndpoint = input.proxy.proxyEndpoint;
+  const proxyEndpoint = input.proxy.dindProxyEndpoint;
+  if (!proxyEndpoint) {
+    throw new Error("[nas] DinD requires its own proxy endpoint");
+  }
   const caCertPath = input.proxy.caCertPath;
 
   // Truncating to a handful of hex digits (as this used to) leaves too few
