@@ -87,6 +87,50 @@ export async function gatewayRequest(path, request) {
   }
 }
 
+// An upgrade request's body (exec start sends JSON) must go upstream with
+// the request: Docker answers only after reading all of it, and the rest is
+// the hijacked stream. Node leaves the body in `head` and on the socket;
+// Bun leaves `head` empty and delivers the body through `req`.
+export async function splitUpgradeBody(req, socket, head) {
+  const length = Number(req.headers["content-length"] ?? 0);
+  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_FRAME)
+    throw new Error("invalid upgrade request body");
+  let buffered = head;
+  if (buffered.length < length)
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => done(new Error("upgrade request body timed out")),
+        TIMEOUT,
+      );
+      const done = (error) => {
+        clearTimeout(timer);
+        for (const source of [req, socket]) {
+          source.off("data", data);
+          source.off("error", done);
+        }
+        socket.off("end", ended);
+        socket.pause();
+        if (error) reject(error);
+        else resolve();
+      };
+      const data = (chunk) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        if (buffered.length >= length) done();
+      };
+      const ended = () => done(new Error("upgrade request body truncated"));
+      for (const source of [req, socket]) {
+        source.on("data", data);
+        source.once("error", done);
+      }
+      socket.once("end", ended);
+      socket.resume();
+    });
+  return {
+    body: buffered.subarray(0, length),
+    rest: buffered.subarray(length),
+  };
+}
+
 export function pipeSockets(a, b) {
   let timer;
   const ended = new Set();

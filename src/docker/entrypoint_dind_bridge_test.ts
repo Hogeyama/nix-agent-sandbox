@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +24,19 @@ async function shell(script: string, env: Record<string, string>) {
   ]);
   return { code, stdout, stderr };
 }
+
+// Inside a nas sandbox namespace the bash on PATH is nas's own wrapper, which
+// bridges the session's real DinD; copying it would test the live installation.
+function bashInterposed(bash: string): boolean {
+  const probe = Bun.spawnSync([bash, "-c", 'printf %s "$DOCKER_HOST"'], {
+    env: { ...process.env, DOCKER_HOST: "nas-test-probe" },
+    stderr: "pipe",
+  });
+  return (
+    probe.stdout.toString() !== "nas-test-probe" || probe.stderr.length > 0
+  );
+}
+const wrapperTest = test.skipIf(bashInterposed(Bun.which("bash")!));
 
 // Execute the shipped installer, relocating its image paths into a fixture.
 async function wrapperFixture(
@@ -54,13 +68,20 @@ async function wrapperFixture(
         "/usr/local/bin/bun /usr/local/lib/nas/dind-bridge.mjs",
         `"${root}/bridge"`,
       )
-      .replaceAll("readlink /proc/self/ns/net", 'printf %s "$NAS_TEST_NETNS"')
+      // Keep the real readlink, so the wrapper's PATH handling is exercised.
+      .replaceAll(
+        "readlink /proc/self/ns/net",
+        `readlink "${root}/netns/$NAS_TEST_NETNS"`,
+      )
       // Model the fake mask broker's availability without live sockets.
       // Real socket checks and masking are covered by mask_filter_integration_test.
       .replaceAll(
         '[ ! -S "$nas_mask_socket_path" ]',
         '[ ! -f "$nas_mask_socket_path" ]',
       );
+    await mkdir(path.join(root, "netns"));
+    for (const name of ["net:[base]", "net:[inner]", "net:[deeper]"])
+      await symlink(name, path.join(root, "netns", name));
     const marker = path.join(root, "calls");
     await writeFile(
       path.join(root, "bridge"),
@@ -121,101 +142,185 @@ exec -a "$argv0" "$program" "$@"
 
 for (const masked of [false, true]) {
   for (const bridged of [false, true]) {
-    test(`Bash keeps argv and exit status: mask=${masked}, DinD=${bridged}`, async () => {
-      await wrapperFixture(masked, bridged, async (root, wrapper, env) => {
-        const result = await shell(
-          '"$NAS_TEST_WRAPPER" -c \'printf "%s|%s|%s" "$0" "$1" "$2"; exit 37\' requested-argv0 "space arg" \'$(false)\'',
-          { ...env, NAS_TEST_WRAPPER: wrapper },
-        );
-        expect(result).toMatchObject({
-          code: 37,
-          stdout: "requested-argv0|space arg|$(false)",
+    wrapperTest(
+      `Bash keeps argv and exit status: mask=${masked}, DinD=${bridged}`,
+      async () => {
+        await wrapperFixture(masked, bridged, async (root, wrapper, env) => {
+          const result = await shell(
+            '"$NAS_TEST_WRAPPER" -c \'printf "%s|%s|%s" "$0" "$1" "$2"; exit 37\' requested-argv0 "space arg" \'$(false)\'',
+            { ...env, NAS_TEST_WRAPPER: wrapper },
+          );
+          expect(result).toMatchObject({
+            code: 37,
+            stdout: "requested-argv0|space arg|$(false)",
+          });
+          expect(
+            await readFile(path.join(root, "calls"), "utf8").catch(() => ""),
+          ).toBe(masked ? "mask\n" : "");
         });
-        expect(
-          await readFile(path.join(root, "calls"), "utf8").catch(() => ""),
-        ).toBe(masked ? "mask\n" : "");
-      });
-    });
+      },
+    );
   }
 }
 
 for (const masked of [false, true]) {
   for (const supervised of [false, true]) {
-    test(`namespace change starts bridge inside existing masking: mask=${masked}, supervised=${supervised}`, async () => {
-      await wrapperFixture(masked, true, async (root, wrapper, env) => {
-        const result = await shell(
-          '"$NAS_TEST_WRAPPER" -c \'"$NAS_TEST_WRAPPER" -c "printf nested"; exit 23\'',
-          {
-            ...env,
-            NAS_TEST_NETNS: "net:[inner]",
-            SUMI_SUPERVISED: supervised ? "1" : "",
-            NAS_TEST_WRAPPER: wrapper,
-          },
-        );
-        expect(result).toMatchObject({ code: 23, stdout: "nested" });
-        const shouldMask = masked && !supervised;
-        const inherited = shouldMask || supervised ? "1" : "";
-        expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-          `${shouldMask ? "mask\n" : ""}bridge:${inherited}\nbridge:${inherited}\n`,
-        );
-      });
-    });
+    wrapperTest(
+      `namespace change starts bridge inside existing masking: mask=${masked}, supervised=${supervised}`,
+      async () => {
+        await wrapperFixture(masked, true, async (root, wrapper, env) => {
+          const result = await shell(
+            '"$NAS_TEST_WRAPPER" -c \'"$NAS_TEST_WRAPPER" -c "printf nested"; exit 23\'',
+            {
+              ...env,
+              NAS_TEST_NETNS: "net:[inner]",
+              SUMI_SUPERVISED: supervised ? "1" : "",
+              NAS_TEST_WRAPPER: wrapper,
+            },
+          );
+          expect(result).toMatchObject({ code: 23, stdout: "nested" });
+          const shouldMask = masked && !supervised;
+          const inherited = shouldMask || supervised ? "1" : "";
+          expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
+            `${shouldMask ? "mask\n" : ""}bridge:${inherited}\nbridge:${inherited}\n`,
+          );
+        });
+      },
+    );
   }
 }
 
-test("a further namespace change starts another bridge even under inherited sumi", async () => {
-  await wrapperFixture(true, true, async (root, wrapper, env) => {
-    const result = await shell(
-      '"$NAS_TEST_WRAPPER" -c \'NAS_TEST_NETNS="net:[deeper]" "$NAS_TEST_WRAPPER" -c "printf deeper"\'',
-      { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
-    );
-    expect(result).toMatchObject({ code: 0, stdout: "deeper" });
-    expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-      "mask\nbridge:1\nbridge:1\n",
-    );
-  });
-});
-
-test("installed bridge remains active when inherited activation variables are cleared", async () => {
-  await wrapperFixture(false, true, async (root, wrapper, env) => {
-    const result = await shell(
-      'unset NAS_DIND_BRIDGE NAS_DIND_BASE_NETNS; "$NAS_TEST_WRAPPER" -c "printf bridged"',
-      { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
-    );
-    expect(result).toMatchObject({ code: 0, stdout: "bridged" });
-    expect(await readFile(path.join(root, "calls"), "utf8")).toBe("bridge:\n");
-  });
-});
-
-test("a diagnostic inherited marker cannot bypass relay validation", async () => {
-  await wrapperFixture(false, true, async (root, wrapper, env) => {
-    const result = await shell('"$NAS_TEST_WRAPPER" -c \'printf "%s" "$0"\'', {
-      ...env,
-      NAS_TEST_NETNS: "net:[inner]",
-      NAS_DIND_BRIDGE_NETNS: "net:[inner]",
-      NAS_TEST_WRAPPER: wrapper,
+wrapperTest(
+  "a further namespace change starts another bridge even under inherited sumi",
+  async () => {
+    await wrapperFixture(true, true, async (root, wrapper, env) => {
+      const result = await shell(
+        '"$NAS_TEST_WRAPPER" -c \'NAS_TEST_NETNS="net:[deeper]" "$NAS_TEST_WRAPPER" -c "printf deeper"\'',
+        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+      );
+      expect(result).toMatchObject({ code: 0, stdout: "deeper" });
+      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
+        "mask\nbridge:1\nbridge:1\n",
+      );
     });
-    expect(result).toMatchObject({ code: 0, stdout: wrapper });
-    expect(await readFile(path.join(root, "calls"), "utf8")).toBe("bridge:\n");
-  });
-});
+  },
+);
 
-test("relay initialization failure returns its failure without running Bash", async () => {
-  await wrapperFixture(false, true, async (root, wrapper, env) => {
-    await writeFile(path.join(root, "bridge"), "#!/bin/bash\nexit 53\n", {
-      mode: 0o755,
+wrapperTest(
+  "installed bridge remains active when inherited activation variables are cleared",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      const result = await shell(
+        'unset NAS_DIND_BRIDGE NAS_DIND_BASE_NETNS; "$NAS_TEST_WRAPPER" -c "printf bridged"',
+        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+      );
+      expect(result).toMatchObject({ code: 0, stdout: "bridged" });
+      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
+        "bridge:\n",
+      );
     });
-    const result = await shell(
-      '"$NAS_TEST_WRAPPER" -c "printf should-not-run"',
-      {
-        ...env,
-        NAS_TEST_NETNS: "net:[inner]",
-        NAS_TEST_WRAPPER: wrapper,
-      },
-    );
-    expect(result).toMatchObject({ code: 53, stdout: "" });
-  });
-});
+  },
+);
+
+wrapperTest(
+  "a diagnostic inherited marker cannot bypass relay validation",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      const result = await shell(
+        '"$NAS_TEST_WRAPPER" -c \'printf "%s" "$0"\'',
+        {
+          ...env,
+          NAS_TEST_NETNS: "net:[inner]",
+          NAS_DIND_BRIDGE_NETNS: "net:[inner]",
+          NAS_TEST_WRAPPER: wrapper,
+        },
+      );
+      expect(result).toMatchObject({ code: 0, stdout: wrapper });
+      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
+        "bridge:\n",
+      );
+    });
+  },
+);
+
+wrapperTest(
+  "a caller PATH without readlink still runs bridged Bash",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      const result = await shell(
+        'PATH=/nonexistent "$NAS_TEST_WRAPPER" -c \'printf "%s" "$0"; exit 9\' kept',
+        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+      );
+      expect(result).toMatchObject({ code: 9, stdout: "kept", stderr: "" });
+      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
+        "bridge:\n",
+      );
+    });
+  },
+);
+
+wrapperTest(
+  "an unidentifiable namespace runs Bash without the bridge",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      const result = await shell(
+        '"$NAS_TEST_WRAPPER" -c \'printf "%s" "$0"; exit 9\' kept',
+        { ...env, NAS_TEST_NETNS: "", NAS_TEST_WRAPPER: wrapper },
+      );
+      expect(result).toMatchObject({ code: 9, stdout: "kept" });
+      expect(result.stderr).toContain("running without Docker access");
+      expect(
+        await readFile(path.join(root, "calls"), "utf8").catch(() => ""),
+      ).toBe("");
+    });
+  },
+);
+
+wrapperTest(
+  "namespace bridge receives the descriptors handed to Bash",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      await writeFile(
+        path.join(root, "bridge"),
+        `#!${Bun.which("bash")}
+while [ "$1" != -- ]; do
+  if [ "$1" = --fds ]; then printf '%s' "$2" > "$NAS_TEST_CALLS"; fi
+  shift
+done
+`,
+        { mode: 0o755 },
+      );
+      const result = await shell(
+        'exec 3>/dev/null 7>/dev/null 12</dev/null; exec 7>&-; "$NAS_TEST_WRAPPER" -c :',
+        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+      );
+      expect(result.code).toBe(0);
+      expect(
+        (await readFile(path.join(root, "calls"), "utf8")).split(",").sort(),
+      ).toEqual(["12", "3"]);
+    });
+  },
+);
+
+wrapperTest(
+  "relay initialization failure returns its failure without running Bash",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      await writeFile(path.join(root, "bridge"), "#!/bin/bash\nexit 53\n", {
+        mode: 0o755,
+      });
+      const result = await shell(
+        '"$NAS_TEST_WRAPPER" -c "printf should-not-run"',
+        {
+          ...env,
+          NAS_TEST_NETNS: "net:[inner]",
+          NAS_TEST_WRAPPER: wrapper,
+        },
+      );
+      expect(result).toMatchObject({ code: 53, stdout: "" });
+    });
+  },
+);
 
 async function gatewayStartup(
   mode: string,

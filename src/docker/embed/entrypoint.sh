@@ -489,17 +489,37 @@ fi
 nas_bash_command=(/tmp/nas-bash-override/bash.real "$@")
 nas_bash_bridge=false
 if [ -n "${nas_dind_bridge_socket_path:-}" ]; then
-  nas_bash_netns="$(readlink /proc/self/ns/net)" || {
-    echo '[nas] Cannot identify the Bash network namespace' >&2
-    exit 1
-  }
+  # The caller's PATH need not contain readlink; command -p uses the default.
+  nas_bash_netns="$(command -p readlink /proc/self/ns/net 2>/dev/null)" ||
+    nas_bash_netns=
   # An inherited marker is diagnostic, not proof that a relay is still live.
   # The helper checks its namespace's control socket and reuses the listener.
-  if [ "$nas_bash_netns" != "$nas_dind_bridge_base_netns" ]; then
+  if [ -z "$nas_bash_netns" ]; then
+    # Losing the bridge costs Docker access only; still run the command.
+    echo '[nas] Cannot identify the Bash network namespace; running without Docker access' >&2
+  elif [ "$nas_bash_netns" != "$nas_dind_bridge_base_netns" ]; then
     nas_bash_bridge=true
+    # Bun marks inherited descriptors close-on-exec at startup and cannot tell
+    # them from its own, so name the ones the caller handed to this Bash.
+    nas_bash_fds=
+    for nas_bash_fd in /proc/self/fd/*; do
+      nas_bash_fd=${nas_bash_fd##*/}
+      case "$nas_bash_fd" in ''|*[!0-9]*|0|1|2) continue ;; esac
+      [ -e "/proc/self/fdinfo/$nas_bash_fd" ] || continue
+      nas_bash_flags=
+      while read -r nas_bash_key nas_bash_value; do
+        if [ "$nas_bash_key" = flags: ]; then
+          nas_bash_flags=$nas_bash_value
+          break
+        fi
+      done < "/proc/self/fdinfo/$nas_bash_fd"
+      # Skip this script's own close-on-exec descriptors.
+      [ -n "$nas_bash_flags" ] && (( (8#$nas_bash_flags & 8#2000000) == 0 )) || continue
+      nas_bash_fds+=${nas_bash_fds:+,}$nas_bash_fd
+    done
     nas_bash_command=(/usr/local/bin/bun /usr/local/lib/nas/dind-bridge.mjs run
       --socket "$nas_dind_bridge_socket_path" --base-netns "$nas_dind_bridge_base_netns"
-      --argv0 "$0" -- "${nas_bash_command[@]}")
+      --argv0 "$0" --fds "$nas_bash_fds" -- "${nas_bash_command[@]}")
   fi
 fi
 if [ -n "${SUMI_SUPERVISED:-}" ] || [ -z "$nas_mask_filter_path" ] || [ -z "$nas_mask_socket_path" ]; then

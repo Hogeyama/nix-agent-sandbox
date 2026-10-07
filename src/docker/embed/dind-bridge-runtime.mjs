@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { chmod, mkdir, readlink, rm } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { chmod, lstat, mkdir, readlink, rm } from "node:fs/promises";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer } from "node:net";
 import { constants } from "node:os";
@@ -11,6 +11,7 @@ import {
   listen,
   pipeSockets,
   readFrame,
+  splitUpgradeBody,
   trackServer,
   writeFrame,
 } from "./dind-bridge-protocol.mjs";
@@ -22,36 +23,28 @@ function rawHeaders(res) {
   return `${value}\r\n`;
 }
 
+// Relay problems only degrade Docker access. They must never terminate the
+// command, which may not use Docker at all.
 export async function startRelay({
   socketPath,
   apiPath,
-  onFailure = () => {},
+  onWarning = () => {},
   bindHost = "127.0.0.1",
 }) {
   const sockets = new Set();
   const listeners = new Map();
+  const conflicts = new Set();
   let closed = false;
   let syncing;
-  let failed;
-  const fail = (error) => {
-    if (failed || closed) return;
-    failed = error;
-    for (const socket of sockets) socket.destroy();
-    for (const entry of listeners.values()) {
-      entry.server.close();
-      for (const socket of entry.sockets) socket.destroy();
-    }
-    listeners.clear();
-    onFailure(error);
-  };
+  let lastSyncError;
   const sync = () => {
-    if (failed) return Promise.reject(failed);
     if (syncing) return syncing;
     syncing = (async () => {
       const { socket, response } = await gatewayRequest(socketPath, {
         kind: "maps",
       });
       socket.destroy();
+      lastSyncError = undefined;
       const desired = new Map(
         response.mappings.map((mapping) => [mapping.port, mapping]),
       );
@@ -77,7 +70,7 @@ export async function startRelay({
             ({ socket: upstream }) => {
               clients.add(upstream);
               upstream.once("close", () => clients.delete(upstream));
-              if (client.destroyed || closed || failed) {
+              if (client.destroyed || closed) {
                 upstream.destroy();
                 return;
               }
@@ -92,15 +85,28 @@ export async function startRelay({
         try {
           await listen(server, { host: bindHost, port });
         } catch (error) {
-          throw new Error(
-            `cannot mirror Docker TCP port ${port}: ${error.message}`,
-          );
+          // Never connect a client to whatever already holds the port. Leave
+          // it unmirrored and retry on the next poll.
+          if (!conflicts.has(port))
+            onWarning(
+              new Error(
+                `cannot mirror Docker TCP port ${port}: ${error.message}`,
+              ),
+            );
+          conflicts.add(port);
+          continue;
         }
+        conflicts.delete(port);
         listeners.set(port, { server, sockets: clients, mapping });
       }
+      for (const port of conflicts)
+        if (!desired.has(port)) conflicts.delete(port);
     })()
       .catch((error) => {
-        fail(error);
+        // Keep existing listeners: every connection is revalidated by the
+        // gateway, so a failed poll cannot widen what they reach.
+        if (error.message !== lastSyncError?.message) onWarning(error);
+        lastSyncError = error;
         throw error;
       })
       .finally(() => {
@@ -110,9 +116,10 @@ export async function startRelay({
   };
 
   // A response must not join a poll that began before its Docker operation.
+  // A failed poll still releases the response; the next poll catches up.
   const syncFresh = async () => {
-    await syncing;
-    await sync();
+    await syncing?.catch(() => {});
+    await sync().catch(() => {});
   };
 
   const proxy = async (req, response, head) => {
@@ -132,7 +139,11 @@ export async function startRelay({
       } else response.destroy();
     };
     try {
-      if (response.destroyed || closed || failed) return;
+      if (response.destroyed || closed) return;
+      const { body, rest } = raw
+        ? await splitUpgradeBody(req, response, head)
+        : {};
+      if (response.destroyed || closed) return;
       upstream = request({
         socketPath: `${socketPath}.api`,
         method: req.method,
@@ -159,9 +170,12 @@ export async function startRelay({
             // Docker's legacy attach responds 200 and then hijacks the socket.
             res.pipe(response);
             response.pipe(dockerSocket);
-            if (head.length) dockerSocket.write(head);
+            if (rest.length) dockerSocket.write(rest);
           } else {
             response.writeHead(res.statusCode, res.rawHeaders);
+            // Docker flushes headers before a long-poll body (container
+            // wait); the CLI waits for them before starting the container.
+            response.flushHeaders();
             res.pipe(response);
           }
           res.resume();
@@ -174,7 +188,7 @@ export async function startRelay({
             if (!raw) throw new Error("unexpected Docker HTTP upgrade");
             response.write(rawHeaders(res));
             if (upstreamHead.length) response.write(upstreamHead);
-            if (head.length) socket.write(head);
+            if (rest.length) socket.write(rest);
             pipeSockets(response, socket);
           })
           .catch(report);
@@ -183,7 +197,7 @@ export async function startRelay({
       response.on("close", () => {
         if (raw || !response.writableFinished) upstream.destroy();
       });
-      if (raw) upstream.end();
+      if (raw) upstream.end(body);
       else req.pipe(upstream);
     } catch (error) {
       report(error);
@@ -209,7 +223,7 @@ export async function startRelay({
     await rm(apiPath, { force: true });
   };
   try {
-    await sync();
+    await sync().catch(() => {});
     await listen(server, apiPath);
     await chmod(apiPath, 0o600);
     timer = setInterval(() => void sync().catch(() => {}), 500);
@@ -220,19 +234,32 @@ export async function startRelay({
   return { close, sync };
 }
 
-async function acquireNamespace(socketPath, namespace) {
+async function privateDirectory(directory, create = true) {
+  if (create)
+    await mkdir(directory, { mode: 0o700 }).catch((error) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+  const info = await lstat(directory);
+  if (
+    !info.isDirectory() ||
+    info.uid !== process.getuid() ||
+    (info.mode & 0o077) !== 0
+  )
+    throw new Error(`${directory} is not a private directory`);
+}
+
+async function acquireNamespace(socketPath, namespace, onWarning) {
   const key = createHash("sha256")
     .update(`${socketPath}\0${namespace}`)
     .digest("hex")
     .slice(0, 24);
   const directory = `/tmp/nas-dind-${process.getuid()}-${key}`;
-  const controlPath = `${directory}/control.sock`;
+  // An abstract socket belongs to the network namespace and disappears with
+  // its owner, so a killed owner cannot leave a name that blocks a later
+  // namespace reusing the same inode number.
+  const controlPath = `\0nas-dind-${process.getuid()}-${key}`;
   const apiPath = `${directory}/docker.sock`;
-  await mkdir(directory, { mode: 0o700 }).catch((error) => {
-    if (error.code !== "EEXIST") throw error;
-  });
   let relay;
-  let failure;
   const leases = new Set();
   const control = createServer({ allowHalfOpen: true }, (client) => {
     client.on("error", () => {});
@@ -241,7 +268,6 @@ async function acquireNamespace(socketPath, namespace) {
         if (frame.kind !== "lease" || frame.namespace !== namespace)
           throw new Error("wrong bridge namespace");
         await ready;
-        if (failure) throw failure;
         leases.add(client);
         client.once("close", () => {
           leases.delete(client);
@@ -266,28 +292,28 @@ async function acquireNamespace(socketPath, namespace) {
   let ready;
   let finished;
   let finish;
+  let ownsDirectory = false;
   const closeOwner = async () => {
     if (!owner || finished) return;
     finished = true;
     for (const lease of leases) lease.destroy();
     await relay?.close();
+    // Remove files while still holding the name: a successor's files must
+    // not be deleted by this owner's late cleanup.
+    if (ownsDirectory) await rm(directory, { recursive: true, force: true });
     await closeServer(control);
-    await rm(directory, { recursive: true, force: true });
     finish?.();
   };
   try {
     await listen(control, controlPath);
     owner = true;
-    ready = startRelay({
-      socketPath,
-      apiPath,
-      onFailure: (error) => {
-        failure = error;
-        for (const lease of leases) lease.destroy();
-      },
-    }).then((value) => {
-      relay = value;
-    });
+    ready = (async () => {
+      await privateDirectory(directory);
+      ownsDirectory = true;
+      // Holding the name proves no live owner uses these files.
+      await rm(apiPath, { force: true });
+      relay = await startRelay({ socketPath, apiPath, onWarning });
+    })();
     await ready;
   } catch (error) {
     if (owner) {
@@ -310,9 +336,13 @@ async function acquireNamespace(socketPath, namespace) {
       connected.response.apiPath !== apiPath
     )
       throw new Error("namespace bridge identity mismatch");
+    // Anyone in this namespace can answer on the abstract name; only trust
+    // the API path if the directory holding it is ours.
+    if (!owner) await privateDirectory(directory, false);
     lease.on("end", () => lease.destroy());
     lease.resume();
   } catch (error) {
+    lease?.destroy();
     await closeOwner();
     throw new Error(`namespace bridge unavailable: ${error.message}`);
   }
@@ -334,17 +364,48 @@ async function acquireNamespace(socketPath, namespace) {
   };
 }
 
-export async function runCommand({ socketPath, baseNetns, argv0, command }) {
+export async function runCommand({
+  socketPath,
+  baseNetns,
+  argv0,
+  fds = [],
+  command,
+}) {
   const namespace = await readlink("/proc/self/ns/net");
-  const bridge =
-    namespace === baseNetns
-      ? undefined
-      : await acquireNamespace(socketPath, namespace);
+  // Bun has marked these close-on-exec, so execve would drop them. Only a
+  // spawned child gets them back, at their original numbers.
+  const passed = fds.filter(
+    (fd) => fd > 2 && existsSync(`/proc/self/fd/${fd}`),
+  );
+  const execve = () => {
+    process.execve(command[0], [argv0, ...command.slice(1)], env);
+    throw new Error("execve returned unexpectedly");
+  };
+  const warn = (error) =>
+    console.error(`nas DinD bridge: ${error.message ?? error}`);
   const env = { ...process.env };
+  let bridge;
+  // An unusable bridge costs this command its Docker access, not its run.
+  // The command stays in its namespace; nothing falls back to a wider one.
+  if (
+    namespace !== baseNetns &&
+    env.NAS_DIND_BRIDGE_UNAVAILABLE !== namespace
+  ) {
+    try {
+      bridge = await acquireNamespace(socketPath, namespace, warn);
+    } catch (error) {
+      warn(`${error.message}; continuing without Docker access`);
+      // Nested Bash in this namespace would fail the same way; skip the retry
+      // and the repeated warning. The marker can only disable the bridge.
+      env.NAS_DIND_BRIDGE_UNAVAILABLE = namespace;
+    }
+  }
+  if (!bridge && passed.length === 0) execve();
   if (bridge) {
     env.DOCKER_HOST = `unix://${bridge.apiPath}`;
     env.TESTCONTAINERS_HOST_OVERRIDE = "127.0.0.1";
     env.NAS_DIND_BRIDGE_NETNS = namespace;
+    delete env.NAS_DIND_BRIDGE_UNAVAILABLE;
     delete env.DOCKER_TLS_VERIFY;
     delete env.DOCKER_CERT_PATH;
     delete env.DOCKER_CONTEXT;
@@ -365,14 +426,12 @@ export async function runCommand({ socketPath, baseNetns, argv0, command }) {
     }
     return false;
   };
-  if (bridge && !bridge.owner && inheritedOwner()) {
+  if (bridge && !bridge.owner && passed.length === 0 && inheritedOwner()) {
     // The inherited owner's lease keeps the listeners alive. Validate it before
     // replacing ourselves so ordinary nested Bash adds no resident supervisor.
     await bridge.close();
-    process.execve(command[0], [argv0, ...command.slice(1)], env);
-    throw new Error("execve returned unexpectedly");
+    execve();
   }
-  let failed = false;
   let child;
   const ownGroup =
     !process.stdin.isTTY && !process.stdout.isTTY && !process.stderr.isTTY;
@@ -439,18 +498,40 @@ export async function runCommand({ socketPath, baseNetns, argv0, command }) {
   const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"];
   const handlers = new Map();
   try {
-    child = spawn(command[0], command.slice(1), {
-      argv0,
-      stdio: "inherit",
-      detached: ownGroup,
-      env,
-    });
-    const disconnected = () => {
-      failed = true;
-      console.error("nas DinD bridge: namespace relay disconnected");
-      signalChildren("SIGTERM");
-      killTimer = setTimeout(() => signalChildren("SIGKILL"), 2000);
-    };
+    const stdio = ["inherit", "inherit", "inherit"];
+    for (const fd of passed) stdio[fd] = fd;
+    for (let fd = 3; fd < stdio.length; fd++) stdio[fd] ??= "ignore";
+    // Without a parent-death signal, killing this supervisor (as callers do
+    // to the Bash they started) would leave Bash running in its own process
+    // group. setpriv cannot set argv[0], so the Bash being run restores it.
+    const setpriv = existsSync("/usr/bin/setpriv")
+      ? "/usr/bin/setpriv"
+      : Bun.which("setpriv");
+    child = setpriv
+      ? spawn(
+          setpriv,
+          [
+            "--pdeathsig",
+            "KILL",
+            "--",
+            command[0],
+            "-c",
+            'exec -a "$0" "$@"',
+            argv0,
+            ...command,
+          ],
+          { stdio, detached: ownGroup, env },
+        )
+      : spawn(command[0], command.slice(1), {
+          argv0,
+          stdio,
+          detached: ownGroup,
+          env,
+        });
+    // The relay's sockets and listeners go with it, so nothing remains to
+    // forward through; the command itself keeps running.
+    const disconnected = () =>
+      warn("namespace relay disconnected; Docker access is unavailable");
     bridge?.lease.once("close", disconnected);
     for (const signal of signals) {
       const handler = () => {
@@ -472,8 +553,7 @@ export async function runCommand({ socketPath, baseNetns, argv0, command }) {
     await bridge?.close();
     for (const [signal, handler] of handlers) process.off(signal, handler);
     handlers.clear();
-    if (failed) process.exitCode = 125;
-    else if (result.signal) {
+    if (result.signal) {
       process.exitCode = 128 + constants.signals[result.signal];
       process.kill(process.pid, result.signal);
     } else process.exitCode = result.code ?? 125;
