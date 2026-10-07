@@ -88,11 +88,15 @@ async function fixture(fn: (ctx: any) => Promise<void>) {
   const publishedPort = await freePort(publishHost);
   let running = false;
   let publishIp = publishHost;
+  let listStatus = 200;
   const extraPorts: unknown[] = [];
   const docker = httpServer(async (req, res) => {
     res.setHeader("content-type", "application/json");
     const path = req.url?.replace(/^\/v[0-9.]+/, "");
-    if (path === "/containers/json")
+    if (path === "/containers/json" && listStatus !== 200) {
+      res.writeHead(listStatus);
+      res.end("{}");
+    } else if (path === "/containers/json")
       res.end(
         JSON.stringify([
           {
@@ -182,6 +186,9 @@ async function fixture(fn: (ctx: any) => Promise<void>) {
       setPublishIp(value: string) {
         publishIp = value;
       },
+      setListStatus(value: number) {
+        listStatus = value;
+      },
       addPort(value: unknown) {
         extraPorts.push(value);
       },
@@ -251,6 +258,20 @@ test("start response waits for its published port; a poll drops it after stop", 
     await expect(
       openSocket({ host: bindHost, port: ctx.publishedPort }),
     ).rejects.toThrow();
+  });
+});
+
+test("a start whose ports cannot be synchronized reports it", async () => {
+  await fixture(async (ctx) => {
+    await ctx.relay();
+    ctx.setListStatus(500);
+    const started = await http(
+      ctx.apiPath,
+      `/containers/${id}/start`,
+      Buffer.alloc(0),
+    );
+    expect(started.status).toBe(502);
+    expect(started.body.toString()).toContain("HTTP 500");
   });
 });
 

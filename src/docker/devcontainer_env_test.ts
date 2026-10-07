@@ -75,6 +75,46 @@ async function shell(script: string, env: Record<string, string> = {}) {
   return { code, stdout, stderr };
 }
 
+for (const sameNamespace of [true, false]) {
+  bashTest(
+    `a login shell keeps its namespace's Docker relay: same namespace=${sameNamespace}`,
+    async () => {
+      await fixture(async (root, library) => {
+        const relay = "unix:///tmp/nas-dind-1000-session-7/docker.sock";
+        const result = await shell(
+          `set -euo pipefail
+source "$LIBRARY"
+nas_devcontainer_capture '' '' claude
+export DOCKER_HOST="$NAS_TEST_RELAY" TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
+if [ "$NAS_TEST_SAME" = true ]; then
+  export NAS_DIND_RELAY_NETNS="$(readlink /proc/self/ns/net)"
+else
+  export NAS_DIND_RELAY_NETNS="net:[0]"
+fi
+nas_devcontainer_apply
+printf '%s' "$DOCKER_HOST"
+`,
+          {
+            DOCKER_HOST: "unix:///run/nas-dind-bridge/docker.sock",
+            NAS_TEST_RELAY: relay,
+            NAS_TEST_SAME: String(sameNamespace),
+            LIBRARY: library,
+            NAS_REAL_BASH: "/bin/bash",
+            NAS_DIRENV_ENABLED: "false",
+            WORKSPACE: root,
+          },
+        );
+        expect(result).toMatchObject({
+          code: 0,
+          stdout: sameNamespace
+            ? relay
+            : "unix:///run/nas-dind-bridge/docker.sock",
+        });
+      });
+    },
+  );
+}
+
 bashTest(
   "IDE baseline preserves the built-in DinD and Testcontainers environment",
   async () => {

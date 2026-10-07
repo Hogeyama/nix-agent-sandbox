@@ -253,7 +253,7 @@ wrapperTest(
       );
       expect(result).toMatchObject({
         code: 9,
-        stdout: "tcp://127.0.0.1:2375|",
+        stdout: "unix:///run/nas-dind-relay-unavailable/docker.sock|127.0.0.1",
       });
       expect(result.stderr).toContain("running without Docker access");
       expect(await calls(root)).toBe("ensure:\n");
@@ -277,7 +277,7 @@ wrapperTest(
       });
       expect(result).toMatchObject({
         code: 0,
-        stdout: "tcp://127.0.0.1:2375|",
+        stdout: "unix:///run/nas-dind-relay-unavailable/docker.sock|127.0.0.1",
       });
       expect(await calls(root)).toBe("");
     });

@@ -164,14 +164,12 @@ export async function startRelay({
       });
     return syncing;
   };
-  // A start response must not join a poll that began before the start.
-  const syncFresh = async () => {
-    await syncing?.catch(() => {});
-    await sync().catch(() => {});
-  };
-  // Mirror a started container's ports, or say which of them cannot be.
+  // Mirror a started container's ports, or say why they are not. The sync
+  // must not be a poll that began before the start, and unlike a poll its
+  // failure reaches the client: the ports may be unmirrored.
   const mirrorStarted = async (reference) => {
-    await syncFresh();
+    await syncing?.catch(() => {});
+    await sync();
     const matches = published.filter(
       (entry) =>
         entry.names.includes(reference) || entry.id.startsWith(reference),

@@ -520,11 +520,18 @@ if [ -n "${nas_dind_bridge_socket_path:-}" ]; then
       fi
     fi
     # The relay creates its directory private; never trust one it did not.
+    # Without a relay, the inherited endpoint would reach the API but none of
+    # the published ports; fail Docker clearly instead.
     if [ "$nas_bash_live" = true ] && [ -O "/tmp/$nas_bash_relay" ]; then
       export DOCKER_HOST="unix:///tmp/$nas_bash_relay/docker.sock"
-      export TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
-      unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONTEXT
+    else
+      export DOCKER_HOST="unix:///run/nas-dind-relay-unavailable/docker.sock"
     fi
+    export TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
+    # Login shells restore the session baseline; this keeps the namespace's
+    # endpoint (see nas_devcontainer_apply).
+    export NAS_DIND_RELAY_NETNS="$nas_bash_netns"
+    unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONTEXT
   fi
 fi
 if [ -n "${SUMI_SUPERVISED:-}" ] || [ -z "$nas_mask_filter_path" ] || [ -z "$nas_mask_socket_path" ]; then
