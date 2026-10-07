@@ -51,6 +51,7 @@ fi
           NAS_TEST_MARKER: marker,
           NAS_TEST_MODE: mode,
           NAS_PORT_RELAY_STARTUP: enabled ? "1" : "",
+          NAS_DIND_BRIDGE: "",
           NAS_SHELL_MODE: String(shell),
         },
         stdout: "pipe",

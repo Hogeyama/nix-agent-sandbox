@@ -51,29 +51,45 @@ test("notify-send-wsl: emits notification ID then wsl-notify-only on stdout", as
   });
 });
 
-test("notify-send-wsl: exec replaces shell process with powershell.exe", async () => {
-  // The fake powershell.exe writes $$ (its own PID) to a file.
-  // With `exec`, the fake script runs in the same process as the original
-  // bash shell, so $$ == child.pid.  Without `exec`, bash would fork a
-  // child process and $$ would differ from child.pid.
-  await withFakePs("", async (dir) => {
-    const pidFile = `${dir}/ps-pid.txt`;
-    await writeFile(
-      `${dir}/powershell.exe`,
-      `#!/usr/bin/env bash\nprintf '%s\\n' "$$" > "${pidFile}"\nprintf 'wsl-notify-only\\n'\n`,
-    );
-    await chmod(`${dir}/powershell.exe`, 0o755);
-
-    const child = Bun.spawn([SCRIPT, "--print-id", "Title", "Body"], {
-      stdout: "pipe",
-      stderr: "ignore",
-      env: process.env,
-    });
-    const childPid = child.pid;
-    await new Response(child.stdout).text();
-    await child.exited;
-
-    const psPid = parseInt((await readFile(pidFile, "utf8")).trim(), 10);
-    expect(psPid).toEqual(childPid);
+// Inside a nas sandbox namespace the bash on PATH is nas's own wrapper, which
+// runs Bash under a DinD bridge supervisor, so the script's PID is not the
+// spawned process's PID.
+function bashInterposed(): boolean {
+  const probe = Bun.spawnSync(["bash", "-c", 'printf %s "$DOCKER_HOST"'], {
+    env: { ...process.env, DOCKER_HOST: "nas-test-probe" },
+    stderr: "pipe",
   });
-});
+  return (
+    probe.stdout.toString() !== "nas-test-probe" || probe.stderr.length > 0
+  );
+}
+
+test.skipIf(bashInterposed())(
+  "notify-send-wsl: exec replaces shell process with powershell.exe",
+  async () => {
+    // The fake powershell.exe writes $$ (its own PID) to a file.
+    // With `exec`, the fake script runs in the same process as the original
+    // bash shell, so $$ == child.pid.  Without `exec`, bash would fork a
+    // child process and $$ would differ from child.pid.
+    await withFakePs("", async (dir) => {
+      const pidFile = `${dir}/ps-pid.txt`;
+      await writeFile(
+        `${dir}/powershell.exe`,
+        `#!/usr/bin/env bash\nprintf '%s\\n' "$$" > "${pidFile}"\nprintf 'wsl-notify-only\\n'\n`,
+      );
+      await chmod(`${dir}/powershell.exe`, 0o755);
+
+      const child = Bun.spawn([SCRIPT, "--print-id", "Title", "Body"], {
+        stdout: "pipe",
+        stderr: "ignore",
+        env: process.env,
+      });
+      const childPid = child.pid;
+      await new Response(child.stdout).text();
+      await child.exited;
+
+      const psPid = parseInt((await readFile(pidFile, "utf8")).trim(), 10);
+      expect(psPid).toEqual(childPid);
+    });
+  },
+);
