@@ -13,6 +13,7 @@ const {
   gatewayRequest,
   listen,
   openSocket,
+  pipeSockets,
   readFrame,
   splitUpgradeBody,
   trackServer,
@@ -305,6 +306,47 @@ test("Docker API preserves binary request bodies and chunked streamed responses"
       "first\nlast\n",
     );
   });
+});
+
+test("a half-closed stream keeps carrying the other direction", async () => {
+  // Compress any long timer so a half-close timeout would fire during the test.
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void, ms?: number, ...args: unknown[]) =>
+    realSetTimeout(
+      fn,
+      (ms ?? 0) >= 10_000 ? 50 : ms,
+      ...args,
+    )) as typeof setTimeout;
+  const sockets = new Set<Socket>();
+  const pair = async () => {
+    const server = createServer({ allowHalfOpen: true });
+    trackServer(server, sockets);
+    await listen(server, { host: "127.0.0.1", port: 0 });
+    const accepted = new Promise<Socket>((resolve) =>
+      server.once("connection", resolve),
+    );
+    const client = await openSocket({ host: "127.0.0.1", port: port(server) });
+    sockets.add(client);
+    return { server, client, peer: await accepted };
+  };
+  const front = await pair();
+  const back = await pair();
+  try {
+    pipeSockets(front.peer, back.client);
+    const received = readAll(front.client);
+    back.peer.once("end", () =>
+      realSetTimeout(() => back.peer.end("late tail"), 200),
+    );
+    back.peer.resume();
+    // Like the Docker CLI without stdin: close the write side at once.
+    front.client.end();
+    expect((await received).toString()).toBe("late tail");
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    for (const socket of sockets) socket.destroy();
+    await closeServer(front.server);
+    await closeServer(back.server);
+  }
 });
 
 test("long-poll response headers reach the client before its body", async () => {
@@ -1220,6 +1262,46 @@ for (const boundary of ["inspect", "listeners"]) {
     });
   });
 }
+
+test("an unrelated container start does not fail a connection being validated", async () => {
+  await fixture(async (ctx) => {
+    ctx.enableExisting();
+    expect(
+      (
+        await http(
+          `${ctx.socketPath}.api`,
+          `/containers/${id}/start`,
+          Buffer.alloc(0),
+        )
+      ).status,
+    ).toBe(204);
+    const hold = ctx.delayNext("listeners");
+    const connected = gatewayRequest(ctx.socketPath, {
+      kind: "connect",
+      id,
+      port: ctx.publishedPort,
+    });
+    try {
+      await hold.entered;
+      const other = http(
+        `${ctx.socketPath}.api`,
+        `/containers/${otherId}/start`,
+        Buffer.alloc(0),
+      );
+      await Bun.sleep(50);
+      hold.release();
+      expect((await other).status).toBe(200);
+    } finally {
+      hold.release();
+    }
+    const forwarded = await connected;
+    const echoed = readAll(forwarded.socket);
+    forwarded.socket.end("validated across an unrelated start");
+    expect((await echoed).toString()).toBe(
+      "validated across an unrelated start",
+    );
+  });
+});
 
 test("container removal between list and inspect does not fail the namespace relay", async () => {
   await fixture(async (ctx) => {

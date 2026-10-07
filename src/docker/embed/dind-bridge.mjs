@@ -216,14 +216,23 @@ export async function startGateway({
   const key = (mapping) => `${mapping.id}:${mapping.port}`;
   const checkMapping = async (mapping) => {
     const name = key(mapping);
-    const pinned = authorized.get(name);
-    const observedGeneration = generation;
     const identity = JSON.stringify(mapping);
-    const snapshot = await readListeners();
-    // The metadata may predate a restart, or a new grant may have arrived
-    // during the listener read. Neither observation can revoke that new grant.
-    if (observedGeneration !== generation || authorized.get(name) !== pinned)
-      throw new Error("Docker mapping changed during validation");
+    let pinned;
+    let snapshot;
+    for (let attempt = 0; ; attempt++) {
+      pinned = authorized.get(name);
+      const observedGeneration = generation;
+      snapshot = await readListeners();
+      if (observedGeneration === generation && authorized.get(name) === pinned)
+        break;
+      // A start during the listener read may concern another container, so
+      // judge again once starts settle. The grants they leave decide: stale
+      // metadata of a restarted container no longer matches its new grant,
+      // and this observation can never revoke that grant.
+      if (attempt === 2)
+        throw new Error("Docker mapping changed during validation");
+      await Promise.all([...starting]);
+    }
     let inode;
     let listenerError;
     try {

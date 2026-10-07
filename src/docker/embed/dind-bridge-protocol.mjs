@@ -131,24 +131,18 @@ export async function splitUpgradeBody(req, socket, head) {
   };
 }
 
+// A half-close is an ordinary state, not a sign of a dead peer: the Docker
+// CLI closes its write side as soon as it has no stdin, and the container
+// keeps writing until it exits. Only an error or an abrupt close ends both.
 export function pipeSockets(a, b) {
-  let timer;
-  const ended = new Set();
   const destroy = () => {
-    clearTimeout(timer);
     a.destroy();
     b.destroy();
   };
   for (const socket of [a, b]) {
     socket.on("error", destroy);
-    socket.on("end", () => {
-      ended.add(socket);
-      if (ended.size === 2) clearTimeout(timer);
-      else timer = setTimeout(destroy, TIMEOUT);
-    });
     socket.on("close", () => {
       if (!socket.readableEnded || !socket.writableFinished) destroy();
-      if (a.destroyed && b.destroyed) clearTimeout(timer);
     });
   }
   a.pipe(b);
