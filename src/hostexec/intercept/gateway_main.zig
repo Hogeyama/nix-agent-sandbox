@@ -1467,6 +1467,12 @@ const GatewayIntegration = struct {
 
     fn waitForHandlerPid(self: *const GatewayIntegration) !posix.pid_t {
         const gateway_pid = self.gateway_pid orelse return error.IntegrationProcessGone;
+        // A sandbox can run in its own PID namespace while showing another
+        // namespace's /proc, where this PID names some other process.
+        var self_buf: [32]u8 = undefined;
+        const self_target = posix.readlink("/proc/self", &self_buf) catch return error.SkipZigTest;
+        const self_pid = std.fmt.parseInt(posix.pid_t, self_target, 10) catch return error.SkipZigTest;
+        if (self_pid != std.c.getpid()) return error.SkipZigTest;
         var path_buf: [128]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "/proc/{d}/task/{d}/children", .{ gateway_pid, gateway_pid });
         var timer = try std.time.Timer.start();

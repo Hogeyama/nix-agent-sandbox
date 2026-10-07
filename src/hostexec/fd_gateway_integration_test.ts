@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { readlinkSync } from "node:fs";
 import {
   chmod,
   readdir,
@@ -54,7 +55,17 @@ const interceptedGatewayAvailable =
   prerequisiteAvailability.dd &&
   prerequisiteAvailability.gateway &&
   prerequisiteAvailability.interceptor;
-const bareBackpressureAvailable = bareGatewayAvailable && setsidAvailable;
+// A sandbox can run in its own PID namespace while showing another
+// namespace's /proc, where these tests' PIDs name other processes.
+const procMatchesPid = (() => {
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+})();
+const bareBackpressureAvailable =
+  bareGatewayAvailable && setsidAvailable && procMatchesPid;
 
 type GatewayHarness = Awaited<ReturnType<typeof startGatewayTestHarness>>;
 

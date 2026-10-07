@@ -919,7 +919,17 @@ fn testFailingRestore(saved_stdin: ?SavedStdin, replaced_stdin: bool) anyerror!v
     return error.TestRestoreFailure;
 }
 
+/// A sandbox can run in its own PID namespace while showing another
+/// namespace's /proc. Tests that find processes by PID there cannot run.
+fn testRequireOwnProc() !void {
+    var buffer: [32]u8 = undefined;
+    const target = posix.readlink("/proc/self", &buffer) catch return error.SkipZigTest;
+    const pid = std.fmt.parseInt(pid_t, target, 10) catch return error.SkipZigTest;
+    if (pid != c.getpid()) return error.SkipZigTest;
+}
+
 fn testChildrenSnapshot(allocator: Allocator) ![]u8 {
+    try testRequireOwnProc();
     const path = try std.fmt.allocPrint(allocator, "/proc/self/task/{d}/children", .{c.getpid()});
     defer allocator.free(path);
     return std.fs.cwd().readFileAlloc(allocator, path, 4096);
@@ -984,6 +994,7 @@ test "wait observes exit but leaves group cleanup for deinit" {
 }
 
 test "terminateGroup kills a descendant that ignores SIGTERM" {
+    try testRequireOwnProc();
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1113,6 +1124,7 @@ test "terminateGroup kills a same-group descendant after the leader exits on TER
 }
 
 test "wait leaves a lingering same-group child for later cleanup" {
+    try testRequireOwnProc();
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1165,6 +1177,7 @@ test "wait leaves final stdout and stderr bytes available to drain" {
 }
 
 test "rollback cleanup emits TERM then KILL" {
+    try testRequireOwnProc();
     const allocator = std.testing.allocator;
     const argv = [_][]const u8{
         test_paths.executable("sh"),

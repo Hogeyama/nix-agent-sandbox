@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readlinkSync } from "node:fs";
 import { chmod, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExternalExecuteRequestV2 } from "./gateway_protocol.ts";
@@ -197,6 +198,16 @@ async function signalOwnedProcessGroup(
   }
 }
 
+// A sandbox can run in its own PID namespace while showing another
+// namespace's /proc, where these tests' PIDs name other processes.
+const procMatchesPid = (() => {
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+})();
+
 test.skipIf(!interceptGatewayAvailable)(
   "intercept .so: gateway runs without the standalone client artifact",
   async () => {
@@ -325,7 +336,7 @@ test.skipIf(!interceptGatewayAvailable)(
   },
 );
 
-test.skipIf(!interceptGatewayAvailable)(
+test.skipIf(!interceptGatewayAvailable || !procMatchesPid)(
   "intercept .so: external disconnect kills a SIGTERM-ignoring host descendant",
   async () => {
     let harness!: GatewayTestHarness;
