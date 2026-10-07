@@ -648,6 +648,8 @@ test("buildDindDaemonArgs: points only at the session mirror", () => {
     "dockerd",
     "--host=unix:///run/user/1000/docker.sock",
     "--host=tcp://127.0.0.1:2375",
+    "--ip=127.0.0.77",
+    "--default-network-opt=bridge=com.docker.network.bridge.host_binding_ipv4=127.0.0.77",
     "--registry-mirror=http://nas-registry-mirror-session-a:5000",
     "--insecure-registry=nas-registry-mirror-session-a:5000",
   ]);
@@ -658,7 +660,22 @@ test("buildDindDaemonArgs: direct fallback has no mirror flags", () => {
     "dockerd",
     "--host=unix:///run/user/1000/docker.sock",
     "--host=tcp://127.0.0.1:2375",
+    "--ip=127.0.0.77",
+    "--default-network-opt=bridge=com.docker.network.bridge.host_binding_ipv4=127.0.0.77",
   ]);
+});
+
+test("buildDindDaemonArgs: publishes ports on the address the bridge forwards to", async () => {
+  const { PUBLISH_HOST } = await import(
+    new URL("../../docker/embed/dind-bridge-protocol.mjs", import.meta.url).href
+  );
+  for (const mirror of [null, "nas-registry-mirror-session-a"])
+    expect(buildDindDaemonArgs(mirror)).toEqual(
+      expect.arrayContaining([
+        `--ip=${PUBLISH_HOST}`,
+        `--default-network-opt=bridge=com.docker.network.bridge.host_binding_ipv4=${PUBLISH_HOST}`,
+      ]),
+    );
 });
 
 test("buildDindDaemonArgs: never listens on a non-loopback TCP address", () => {

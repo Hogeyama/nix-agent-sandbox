@@ -84,6 +84,17 @@ export function buildDindSidecarMounts(caCertPath: string): ProxyCaCertMount[] {
 export const DIND_ROOTLESSKIT_PORT_FLAGS = `-p 127.0.0.1:${DIND_INTERNAL_PORT}:${DIND_INTERNAL_PORT}/tcp`;
 
 /**
+ * Loopback address dockerd publishes container ports on by default, on the
+ * default bridge and on bridge networks created afterwards.
+ *
+ * Nothing else in nas listens there, so the DinD bridge can forward a
+ * sandboxed Bash's connections to any port on it without proving which
+ * container owns the port. Ports published explicitly elsewhere are not
+ * forwarded. Keep in sync with PUBLISH_HOST in embed/dind-bridge-protocol.mjs.
+ */
+export const DIND_PUBLISH_IP = "127.0.0.77";
+
+/**
  * Build the sidecar's command: a full `dockerd` invocation.
  *
  * Starting the command with `dockerd` keeps the image entrypoint from adding
@@ -102,6 +113,10 @@ export function buildDindDaemonArgs(
     "dockerd",
     `--host=unix://${DIND_ROOTLESS_SOCKET_PATH}`,
     `--host=tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+    `--ip=${DIND_PUBLISH_IP}`,
+    // --ip covers only the default bridge; networks created later (Compose,
+    // Testcontainers networks) take their default from this option.
+    `--default-network-opt=bridge=com.docker.network.bridge.host_binding_ipv4=${DIND_PUBLISH_IP}`,
   ];
   if (registryMirrorName === null) return args;
   const url = registryMirrorUrl(registryMirrorName);

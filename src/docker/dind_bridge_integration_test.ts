@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bwrapSeccompProfile } from "../stages/bwrap/seccomp_profile.ts";
 import { agentPrivilegeRunArgs } from "../stages/launch/hardening.ts";
+import { DIND_PUBLISH_IP } from "./dind.ts";
 
 const sandboxImage =
   process.env.NAS_DIND_BRIDGE_TEST_IMAGE ?? "nas-sandbox:latest";
@@ -97,13 +98,13 @@ function api(method, path, body) {
     req.on("error", reject); req.end(body && JSON.stringify(body));
   });
 }
-const created = await api("POST", "/containers/create", {
+const service = (hostConfig) => api("POST", "/containers/create", {
   Image: "busybox:1.37", Cmd: ["sh", "-c", "mkdir -p /www; printf bridged > /www/index.html; exec httpd -f -p 80 -h /www"],
-  ExposedPorts: { "80/tcp": {} }, HostConfig: { PortBindings: { "80/tcp": [{ HostIp: "127.0.0.1", HostPort: "0" }] } }
+  ExposedPorts: { "80/tcp": {} }, HostConfig: { PortBindings: { "80/tcp": [{ HostPort: "0" }] }, ...hostConfig }
 });
-try {
-  await api("POST", "/containers/" + created.Id + "/start");
-  const info = await api("GET", "/containers/" + created.Id + "/json");
+async function serve(id) {
+  await api("POST", "/containers/" + id + "/start");
+  const info = await api("GET", "/containers/" + id + "/json");
   const port = info.NetworkSettings.Ports["80/tcp"][0].HostPort;
   let result;
   for (let i = 0; i < 50; i++) {
@@ -111,7 +112,22 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   if (result !== "bridged") throw new Error("published HTTP port did not reach its container");
+  return port;
+}
+const created = await service({});
+try {
+  const port = await serve(created.Id);
   console.log("PASS isolated mapped HTTP port " + port);
+  if (!process.env.NAS_TEST_OUTER_NETNS) {
+    // Compose and Testcontainers networks are user-defined bridges.
+    const network = await api("POST", "/networks/create", { Name: "probe-" + process.pid + "-" + Date.now() });
+    const attached = await service({ NetworkMode: network.Id });
+    try { console.log("PASS user-defined network port " + await serve(attached.Id)); }
+    finally {
+      await api("DELETE", "/containers/" + attached.Id + "?force=true");
+      await api("DELETE", "/networks/" + network.Id);
+    }
+  }
   if (!process.env.NAS_TEST_OUTER_NETNS) {
     const nested = Bun.spawn(["bwrap", "--unshare-user", "--unshare-net", "--bind", "/", "/", "--dev-bind", "/dev", "/dev", "--", "/bin/bash", "-c", "/usr/local/bin/bun /probe/probe.mjs"], {
       env: { ...process.env, NAS_TEST_OUTER_NETNS: currentNamespace, NAS_TEST_OUTER_DOCKER_HOST: process.env.DOCKER_HOST, NAS_TEST_OUTER_PORT: String(port) },
@@ -150,6 +166,7 @@ test.skipIf(Boolean(skipReason))(
         `set -eu
 /usr/local/bin/bun -e 'const r=await fetch("http://127.0.0.1:2375/_ping"); if(await r.text()!=="OK")process.exit(1);console.log("PASS outer API")'
 bwrap --unshare-user --unshare-net --bind / / --dev-bind /dev /dev -- /usr/local/bin/bun -e 'try {await fetch("http://127.0.0.1:2375/_ping");process.exit(1)}catch{console.log("PASS direct isolated API refused")}'
+/bin/bash -c '/usr/local/bin/bun /probe/probe.mjs' | sed 's/^/BASE /'
 bwrap --unshare-user --unshare-net --bind / / --dev-bind /dev /dev -- /bin/bash -c '/usr/local/bin/bun /probe/probe.mjs'
 `,
       );
@@ -177,6 +194,8 @@ bwrap --unshare-user --unshare-net --bind / / --dev-bind /dev /dev -- /bin/bash 
         "dockerd",
         "--host=unix:///run/user/1000/docker.sock",
         "--host=tcp://127.0.0.1:2375",
+        `--ip=${DIND_PUBLISH_IP}`,
+        `--default-network-opt=bridge=com.docker.network.bridge.host_binding_ipv4=${DIND_PUBLISH_IP}`,
       ]);
       expect(dind.code, dind.stderr).toBe(0);
       let ready = false;
@@ -275,7 +294,10 @@ bwrap --unshare-user --unshare-net --bind / / --dev-bind /dev /dev -- /bin/bash 
       const result = await run(args);
       expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout).toContain("PASS direct isolated API refused");
+      // The gateway's namespace sees published ports on 127.0.0.1 too.
+      expect(result.stdout).toContain("BASE PASS isolated mapped HTTP port");
       expect(result.stdout).toContain("PASS isolated mapped HTTP port");
+      expect(result.stdout).toContain("PASS user-defined network port");
       expect(result.stdout).toContain("PASS stopped forwarding closed");
       expect(result.stdout).toContain(
         "PASS nested actual network namespace with independent relay",

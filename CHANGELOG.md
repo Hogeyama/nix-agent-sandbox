@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Docker in sandboxed Bash**: nas's Bash wrapper automatically bridges the session's DinD API and published IPv4 TCP ports into an isolated network namespace, allowing Docker and Testcontainers to run without command exclusions or prefixes. The generated `/nas-sandbox` guide explains connection diagnostics and Docker's separate network permissions. UDP and connections from containers back to the isolated test process are not supported.
+- **Docker in sandboxed Bash**: nas's Bash wrapper automatically bridges the session's DinD API and published IPv4 TCP ports into an isolated network namespace, allowing Docker and Testcontainers to run without command exclusions or prefixes. The generated `/nas-sandbox` guide explains connection diagnostics and Docker's separate network permissions. Ports published with an explicit host address such as `0.0.0.0` are not forwarded. UDP and connections from containers back to the isolated test process are not supported.
 
 ## [0.20.0] - 2026-10-07
 

@@ -1,20 +1,28 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { chmod, lstat, mkdir, readlink, rm } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readlink,
+  rm,
+} from "node:fs/promises";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer } from "node:net";
-import { constants } from "node:os";
 import {
   closeServer,
   gatewayRequest,
   listen,
+  PUBLISH_HOST,
   pipeSockets,
-  readFrame,
   splitUpgradeBody,
   trackServer,
   writeFrame,
 } from "./dind-bridge-protocol.mjs";
+
+const START =
+  /^\/(?:v[0-9.]+\/)?containers\/([^/?]+)\/(?:start|restart)(?:\?|$)/;
 
 function rawHeaders(res) {
   let value = `HTTP/1.1 ${res.statusCode} ${res.statusMessage}\r\n`;
@@ -23,70 +31,116 @@ function rawHeaders(res) {
   return `${value}\r\n`;
 }
 
-// Relay problems only degrade Docker access. They must never terminate the
-// command, which may not use Docker at all.
+function dockerJson(socketPath, path) {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath, path, agent: false }, (res) => {
+      const chunks = [];
+      let size = 0;
+      res.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 8 * 1024 * 1024)
+          res.destroy(new Error("Docker metadata exceeds limit"));
+        else chunks.push(chunk);
+      });
+      res.on("error", reject);
+      res.on("end", () => {
+        if (res.statusCode !== 200)
+          return reject(new Error(`Docker ${path}: HTTP ${res.statusCode}`));
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString()));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.setTimeout(10_000, () => req.destroy(new Error("Docker timed out")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+/**
+ * Inside an isolated network namespace, mirror the session's Docker API on a
+ * Unix socket and every port dockerd published on `publishHost` on
+ * `bindHost`. Each mirrored connection goes through the gateway, which can
+ * only reach `publishHost`.
+ *
+ * A start or restart response is held until the ports it created are
+ * mirrored, so a client never sees a mapped port it cannot connect to yet.
+ * Everything else streams straight through.
+ */
 export async function startRelay({
   socketPath,
   apiPath,
-  onWarning = () => {},
+  publishHost = PUBLISH_HOST,
   bindHost = "127.0.0.1",
+  pollMs = 1000,
+  onWarning = () => {},
 }) {
+  const dockerApi = `${socketPath}.api`;
   const sockets = new Set();
   const listeners = new Map();
   const conflicts = new Set();
+  // Each running container's mirrored ports, as of the latest poll.
+  let published = [];
   let closed = false;
   let syncing;
   let lastSyncError;
   const sync = () => {
     if (syncing) return syncing;
     syncing = (async () => {
-      const { socket, response } = await gatewayRequest(socketPath, {
-        kind: "maps",
-      });
-      socket.destroy();
+      const containers = await dockerJson(dockerApi, "/containers/json");
       lastSyncError = undefined;
-      const desired = new Map(
-        response.mappings.map((mapping) => [mapping.port, mapping]),
-      );
-      for (const [port, entry] of listeners) {
-        if (
-          JSON.stringify(desired.get(port)) !== JSON.stringify(entry.mapping)
-        ) {
-          for (const client of entry.sockets) client.destroy();
-          await closeServer(entry.server);
-          listeners.delete(port);
-        }
+      const desired = new Set();
+      published = [];
+      for (const container of Array.isArray(containers) ? containers : []) {
+        const ports = (container.Ports ?? [])
+          .filter(
+            (port) =>
+              port.IP === publishHost &&
+              port.Type === "tcp" &&
+              Number.isInteger(port.PublicPort),
+          )
+          .map((port) => port.PublicPort);
+        for (const port of ports) desired.add(port);
+        published.push({
+          id: String(container.Id ?? ""),
+          names: (container.Names ?? []).map((name) =>
+            String(name).replace(/^\//, ""),
+          ),
+          ports,
+        });
       }
-      for (const [port, mapping] of desired) {
-        if (listeners.has(port)) continue;
+      for (const [port, entry] of listeners) {
+        if (desired.has(port)) continue;
+        for (const client of entry.clients) client.destroy();
+        listeners.delete(port);
+        await closeServer(entry.server);
+      }
+      for (const port of conflicts)
+        if (!desired.has(port)) conflicts.delete(port);
+      for (const port of desired) {
+        if (listeners.has(port) || closed) continue;
         const clients = new Set();
         const server = createServer({ allowHalfOpen: true }, (client) => {
           client.pause();
-          void gatewayRequest(socketPath, {
-            kind: "connect",
-            id: mapping.id,
-            port,
-          }).then(
+          void gatewayRequest(socketPath, { kind: "connect", port }).then(
             ({ socket: upstream }) => {
               clients.add(upstream);
               upstream.once("close", () => clients.delete(upstream));
-              if (client.destroyed || closed) {
-                upstream.destroy();
-                return;
-              }
-              pipeSockets(client, upstream);
+              if (client.destroyed || closed) upstream.destroy();
+              else pipeSockets(client, upstream);
             },
-            () => {
-              client.destroy();
-            },
+            () => client.destroy(),
           );
         });
         trackServer(server, clients);
         try {
           await listen(server, { host: bindHost, port });
         } catch (error) {
-          // Never connect a client to whatever already holds the port. Leave
-          // it unmirrored and retry on the next poll.
+          // Leave it unmirrored and retry on the next poll. A client may
+          // still reach whatever holds the port, so a start that created it
+          // reports the conflict instead of success.
           if (!conflicts.has(port))
             onWarning(
               new Error(
@@ -97,14 +151,10 @@ export async function startRelay({
           continue;
         }
         conflicts.delete(port);
-        listeners.set(port, { server, sockets: clients, mapping });
+        listeners.set(port, { server, clients });
       }
-      for (const port of conflicts)
-        if (!desired.has(port)) conflicts.delete(port);
     })()
       .catch((error) => {
-        // Keep existing listeners: every connection is revalidated by the
-        // gateway, so a failed poll cannot widen what they reach.
         if (error.message !== lastSyncError?.message) onWarning(error);
         lastSyncError = error;
         throw error;
@@ -114,12 +164,24 @@ export async function startRelay({
       });
     return syncing;
   };
-
-  // A response must not join a poll that began before its Docker operation.
-  // A failed poll still releases the response; the next poll catches up.
+  // A start response must not join a poll that began before the start.
   const syncFresh = async () => {
     await syncing?.catch(() => {});
     await sync().catch(() => {});
+  };
+  // Mirror a started container's ports, or say which of them cannot be.
+  const mirrorStarted = async (reference) => {
+    await syncFresh();
+    const matches = published.filter(
+      (entry) =>
+        entry.names.includes(reference) || entry.id.startsWith(reference),
+    );
+    const container = matches.length === 1 ? matches[0] : undefined;
+    const taken = container?.ports.filter((port) => conflicts.has(port));
+    if (taken?.length)
+      throw new Error(
+        `the container started, but its published TCP port ${taken.join(", ")} is already in use in this network namespace and is not forwarded`,
+      );
   };
 
   const proxy = async (req, response, head) => {
@@ -139,13 +201,14 @@ export async function startRelay({
       } else response.destroy();
     };
     try {
-      if (response.destroyed || closed) return;
       const { body, rest } = raw
         ? await splitUpgradeBody(req, response, head)
         : {};
       if (response.destroyed || closed) return;
+      const started =
+        req.method === "POST" ? START.exec(req.url)?.[1] : undefined;
       upstream = request({
-        socketPath: `${socketPath}.api`,
+        socketPath: dockerApi,
         method: req.method,
         path: req.url,
         headers: req.headers,
@@ -160,7 +223,11 @@ export async function startRelay({
       upstream.on("response", (res) => {
         res.pause();
         res.on("error", report);
-        void syncFresh().then(() => {
+        const ready =
+          started !== undefined && res.statusCode >= 200 && res.statusCode < 300
+            ? mirrorStarted(decodeURIComponent(started))
+            : Promise.resolve();
+        void ready.then(() => {
           if (response.destroyed) {
             res.destroy();
             return;
@@ -182,16 +249,15 @@ export async function startRelay({
         }, report);
       });
       upstream.on("upgrade", (res, socket, upstreamHead) => {
-        socket.pause();
-        void syncFresh()
-          .then(() => {
-            if (!raw) throw new Error("unexpected Docker HTTP upgrade");
-            response.write(rawHeaders(res));
-            if (upstreamHead.length) response.write(upstreamHead);
-            if (rest.length) socket.write(rest);
-            pipeSockets(response, socket);
-          })
-          .catch(report);
+        if (!raw) {
+          socket.destroy();
+          report(new Error("unexpected Docker HTTP upgrade"));
+          return;
+        }
+        response.write(rawHeaders(res));
+        if (upstreamHead.length) response.write(upstreamHead);
+        if (rest.length) socket.write(rest);
+        pipeSockets(response, socket);
       });
       req.on("aborted", () => upstream.destroy());
       response.on("close", () => {
@@ -215,7 +281,7 @@ export async function startRelay({
     await syncing?.catch(() => {});
     for (const socket of sockets) socket.destroy();
     for (const entry of listeners.values()) {
-      for (const socket of entry.sockets) socket.destroy();
+      for (const client of entry.clients) client.destroy();
       await closeServer(entry.server);
     }
     listeners.clear();
@@ -226,19 +292,47 @@ export async function startRelay({
     await sync().catch(() => {});
     await listen(server, apiPath);
     await chmod(apiPath, 0o600);
-    timer = setInterval(() => void sync().catch(() => {}), 500);
+    timer = setInterval(() => void sync().catch(() => {}), pollMs);
   } catch (error) {
     await close();
     throw error;
   }
-  return { close, sync };
+  return {
+    close,
+    sync,
+    /** No open API or mirrored connection. */
+    idle() {
+      let open = sockets.size;
+      for (const entry of listeners.values()) open += entry.clients.size;
+      return open === 0;
+    },
+  };
 }
 
-async function privateDirectory(directory, create = true) {
-  if (create)
-    await mkdir(directory, { mode: 0o700 }).catch((error) => {
-      if (error.code !== "EEXIST") throw error;
-    });
+/**
+ * Where one namespace's relay lives. The abstract socket belongs to the
+ * network namespace and vanishes with its owner, so it both names the live
+ * relay and keeps a second one from starting. The Bash wrapper derives the
+ * same names without starting a process.
+ */
+export function relayPaths(instance, namespace) {
+  const id = /^net:\[([0-9]+)\]$/.exec(namespace)?.[1];
+  if (!id || !/^[A-Za-z0-9_-]{1,32}$/.test(instance))
+    throw new Error("invalid DinD relay identity");
+  const base = `nas-dind-${process.getuid()}-${instance}-${id}`;
+  const directory = `/tmp/${base}`;
+  return {
+    name: `\0${base}`,
+    lock: `\0${base}-lock`,
+    directory,
+    apiPath: `${directory}/docker.sock`,
+  };
+}
+
+async function privateDirectory(directory) {
+  await mkdir(directory, { mode: 0o700 }).catch((error) => {
+    if (error.code !== "EEXIST") throw error;
+  });
   const info = await lstat(directory);
   if (
     !info.isDirectory() ||
@@ -248,318 +342,156 @@ async function privateDirectory(directory, create = true) {
     throw new Error(`${directory} is not a private directory`);
 }
 
-async function acquireNamespace(socketPath, namespace, onWarning) {
-  const key = createHash("sha256")
-    .update(`${socketPath}\0${namespace}`)
-    .digest("hex")
-    .slice(0, 24);
-  const directory = `/tmp/nas-dind-${process.getuid()}-${key}`;
-  // An abstract socket belongs to the network namespace and disappears with
-  // its owner, so a killed owner cannot leave a name that blocks a later
-  // namespace reusing the same inode number.
-  const controlPath = `\0nas-dind-${process.getuid()}-${key}`;
-  const apiPath = `${directory}/docker.sock`;
-  let relay;
-  const leases = new Set();
-  const control = createServer({ allowHalfOpen: true }, (client) => {
-    client.on("error", () => {});
-    void readFrame(client, 8192)
-      .then(async (frame) => {
-        if (frame.kind !== "lease" || frame.namespace !== namespace)
-          throw new Error("wrong bridge namespace");
-        await ready;
-        leases.add(client);
-        client.once("close", () => {
-          leases.delete(client);
-          if (ownerDone && leases.size === 0) void closeOwner();
-        });
-        client.on("end", () => client.destroy());
-        writeFrame(client, {
-          ok: true,
-          namespace,
-          apiPath,
-          ownerPid: process.pid,
-        });
-        client.resume();
-      })
-      .catch((error) => {
-        writeFrame(client, { ok: false, error: error.message });
-        client.end();
-      });
-  });
-  let owner = false;
-  let ownerDone = false;
-  let ready;
-  let finished;
-  let finish;
-  let ownsDirectory = false;
-  const closeOwner = async () => {
-    if (!owner || finished) return;
-    finished = true;
-    for (const lease of leases) lease.destroy();
-    await relay?.close();
-    // Remove files while still holding the name: a successor's files must
-    // not be deleted by this owner's late cleanup.
-    if (ownsDirectory) await rm(directory, { recursive: true, force: true });
-    await closeServer(control);
-    finish?.();
-  };
+/**
+ * Whether no other process shares this network namespace. A sandbox in its
+ * own PID namespace may show another namespace's /proc; there the answer is
+ * unknowable, and the sandbox's PID namespace takes the relay with it anyway.
+ */
+export async function namespaceAlone(namespace) {
   try {
-    await listen(control, controlPath);
-    owner = true;
-    ready = (async () => {
-      await privateDirectory(directory);
-      ownsDirectory = true;
-      // Holding the name proves no live owner uses these files.
-      await rm(apiPath, { force: true });
-      relay = await startRelay({ socketPath, apiPath, onWarning });
-    })();
-    await ready;
-  } catch (error) {
-    if (owner) {
-      await closeOwner();
-      throw error;
+    if ((await readlink("/proc/self")) !== String(process.pid)) return false;
+    for (const entry of await readdir("/proc")) {
+      if (!/^[0-9]+$/.test(entry) || Number(entry) === process.pid) continue;
+      try {
+        if ((await readlink(`/proc/${entry}/ns/net`)) === namespace)
+          return false;
+      } catch {}
     }
-    if (error.code !== "EADDRINUSE") throw error;
+    return true;
+  } catch {
+    return false;
   }
-  let lease;
-  let ownerPid;
-  try {
-    const connected = await gatewayRequest(controlPath, {
-      kind: "lease",
-      namespace,
-    });
-    lease = connected.socket;
-    ownerPid = connected.response.ownerPid;
-    if (
-      connected.response.namespace !== namespace ||
-      connected.response.apiPath !== apiPath
-    )
-      throw new Error("namespace bridge identity mismatch");
-    // Anyone in this namespace can answer on the abstract name; only trust
-    // the API path if the directory holding it is ours.
-    if (!owner) await privateDirectory(directory, false);
-    lease.on("end", () => lease.destroy());
-    lease.resume();
-  } catch (error) {
-    lease?.destroy();
-    await closeOwner();
-    throw new Error(`namespace bridge unavailable: ${error.message}`);
-  }
-  return {
-    apiPath,
-    lease,
-    owner,
-    ownerPid,
-    async close() {
-      lease.destroy();
-      if (!owner) return;
-      ownerDone = true;
-      if (leases.size === 0) await closeOwner();
-      else if (!finished)
-        await new Promise((resolve) => {
-          finish = resolve;
-        });
-    },
-  };
 }
 
-export async function runCommand({
+/**
+ * Run this namespace's relay until no other process is left in the namespace.
+ *
+ * The lock name keeps a second relay from starting; the public name, which
+ * the Bash wrapper looks for, appears only once the API socket is ready, so
+ * no Bash is pointed at a relay that cannot answer yet. Both are abstract
+ * sockets: they belong to the namespace and vanish with their owner.
+ */
+export async function runRelay({
   socketPath,
-  baseNetns,
-  argv0,
-  fds = [],
-  command,
+  instance,
+  alone = namespaceAlone,
+  checkMs = 30_000,
+  start = startRelay,
+  handleSignals = true,
 }) {
   const namespace = await readlink("/proc/self/ns/net");
-  // Bun has marked these close-on-exec, so execve would drop them. Only a
-  // spawned child gets them back, at their original numbers.
-  const passed = fds.filter(
-    (fd) => fd > 2 && existsSync(`/proc/self/fd/${fd}`),
-  );
-  const execve = () => {
-    process.execve(command[0], [argv0, ...command.slice(1)], env);
-    throw new Error("execve returned unexpectedly");
+  const { name, lock, directory, apiPath } = relayPaths(instance, namespace);
+  const lockServer = createServer((client) => client.destroy());
+  try {
+    await listen(lockServer, lock);
+  } catch (error) {
+    if (error.code === "EADDRINUSE") return { stopped: Promise.resolve() };
+    throw error;
+  }
+  const log = (error) =>
+    void appendFile(
+      `${directory}/relay.log`,
+      `${new Date().toISOString()} ${error.message}\n`,
+    ).catch(() => {});
+  const control = createServer((client) => {
+    client.on("error", () => {});
+    writeFrame(client, { ok: true, apiPath, pid: process.pid });
+    client.end();
+  });
+  // Bun can keep the server side of an ended connection open after its peer
+  // is gone; close() would then wait for it forever.
+  const controlSockets = new Set();
+  trackServer(control, controlSockets);
+  let relay;
+  try {
+    await privateDirectory(directory);
+    // Holding the lock proves no live relay uses these files.
+    await rm(apiPath, { force: true });
+    relay = await start({ socketPath, apiPath, onWarning: log });
+    await listen(control, name);
+  } catch (error) {
+    await relay?.close();
+    await closeServer(lockServer);
+    throw error;
+  }
+  let timer;
+  let finish;
+  const stopped = new Promise((resolve) => {
+    finish = resolve;
+  });
+  let stopping;
+  const stop = () => {
+    stopping ??= (async () => {
+      clearInterval(timer);
+      // Withdraw the public name first so no new Bash is pointed here, and
+      // remove files while still holding the lock, so a successor's files
+      // cannot be deleted by this relay's late cleanup.
+      for (const socket of controlSockets) socket.destroy();
+      await closeServer(control);
+      await relay.close();
+      await rm(directory, { recursive: true, force: true });
+      await closeServer(lockServer);
+      finish();
+    })();
+    return stopping;
   };
-  const warn = (error) =>
-    console.error(`nas DinD bridge: ${error.message ?? error}`);
-  const env = { ...process.env };
-  let bridge;
-  // An unusable bridge costs this command its Docker access, not its run.
-  // The command stays in its namespace; nothing falls back to a wider one.
-  if (
-    namespace !== baseNetns &&
-    env.NAS_DIND_BRIDGE_UNAVAILABLE !== namespace
-  ) {
+  if (handleSignals)
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"])
+      process.once(signal, () => void stop());
+  timer = setInterval(() => {
+    void (async () => {
+      if (relay.idle() && (await alone(namespace))) await stop();
+    })();
+  }, checkMs);
+  return { stop, stopped };
+}
+
+/** Return the API socket of this namespace's relay, starting it if needed. */
+export async function ensureRelay({ socketPath, instance, script }) {
+  const namespace = await readlink("/proc/self/ns/net");
+  const { name } = relayPaths(instance, namespace);
+  const probe = async () => {
     try {
-      bridge = await acquireNamespace(socketPath, namespace, warn);
-    } catch (error) {
-      warn(`${error.message}; continuing without Docker access`);
-      // Nested Bash in this namespace would fail the same way; skip the retry
-      // and the repeated warning. The marker can only disable the bridge.
-      env.NAS_DIND_BRIDGE_UNAVAILABLE = namespace;
-    }
-  }
-  if (!bridge && passed.length === 0) execve();
-  if (bridge) {
-    env.DOCKER_HOST = `unix://${bridge.apiPath}`;
-    env.TESTCONTAINERS_HOST_OVERRIDE = "127.0.0.1";
-    env.NAS_DIND_BRIDGE_NETNS = namespace;
-    delete env.NAS_DIND_BRIDGE_UNAVAILABLE;
-    delete env.DOCKER_TLS_VERIFY;
-    delete env.DOCKER_CERT_PATH;
-    delete env.DOCKER_CONTEXT;
-  }
-  const inheritedOwner = () => {
-    let pid = process.ppid;
-    for (let depth = 0; pid > 1 && depth < 256; depth++) {
-      if (pid === bridge?.ownerPid) return true;
-      try {
-        pid = Number(
-          readFileSync(`/proc/${pid}/stat`, "utf8")
-            .split(") ")[1]
-            .split(" ")[1],
-        );
-      } catch {
-        return false;
-      }
-    }
-    return false;
-  };
-  if (bridge && !bridge.owner && passed.length === 0 && inheritedOwner()) {
-    // The inherited owner's lease keeps the listeners alive. Validate it before
-    // replacing ourselves so ordinary nested Bash adds no resident supervisor.
-    await bridge.close();
-    execve();
-  }
-  let child;
-  const ownGroup =
-    !process.stdin.isTTY && !process.stdout.isTTY && !process.stderr.isTTY;
-  const descendants = new Map();
-  const startTime = (pid) => {
-    try {
-      return readFileSync(`/proc/${pid}/stat`, "utf8")
-        .split(") ")[1]
-        .split(" ")[19];
+      const { socket, response } = await gatewayRequest(name, {
+        kind: "status",
+      });
+      socket.destroy();
+      return response.apiPath;
     } catch {
       return undefined;
     }
   };
-  const signalChildren = (signal) => {
-    if (!child?.pid) return;
-    if (ownGroup) {
-      try {
-        process.kill(-child.pid, signal);
-      } catch {}
-      return;
-    }
-    // A TTY child stays in the caller's session so Bash job control continues
-    // to work. Signal its process tree without killing the caller's group.
-    const visit = (pid) => {
-      try {
-        for (const value of readFileSync(
-          `/proc/${pid}/task/${pid}/children`,
-          "utf8",
-        )
-          .trim()
-          .split(/\s+/)) {
-          const next = Number(value);
-          if (!next) continue;
-          descendants.set(next, startTime(next));
-          visit(next);
-        }
-      } catch {}
-    };
-    visit(child.pid);
-    for (const [pid, born] of descendants) {
-      if (born && startTime(pid) === born) {
-        try {
-          process.kill(pid, signal);
-        } catch {}
-      }
-    }
-    child.kill(signal);
-  };
-  const cleanupChildren = async () => {
-    signalChildren("SIGTERM");
-    if (ownGroup) {
-      for (let attempt = 0; attempt < 20; attempt++) {
-        try {
-          process.kill(-child.pid, 0);
-        } catch {
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
-    signalChildren("SIGKILL");
-  };
-  let killTimer;
-  const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"];
-  const handlers = new Map();
+  let apiPath = await probe();
+  if (apiPath) return apiPath;
+  // Detached from the caller's session and output, so the relay neither holds
+  // the command's pipes open nor dies with its process group.
+  const relay = spawn(
+    process.execPath,
+    [script, "relay", "--socket", socketPath, "--instance", instance],
+    { detached: true, stdio: ["ignore", "ignore", "pipe"] },
+  );
+  let failed;
+  let stderr = "";
+  relay.stderr.on("data", (chunk) => {
+    if (stderr.length < 4096) stderr += chunk;
+  });
+  // A relay that lost the race for the name exits 0; keep waiting for the
+  // winner. Any other exit means this namespace cannot get one now.
+  relay.once("exit", (code) => {
+    if (code !== 0) failed = stderr.trim() || `exit ${code}`;
+  });
   try {
-    const stdio = ["inherit", "inherit", "inherit"];
-    for (const fd of passed) stdio[fd] = fd;
-    for (let fd = 3; fd < stdio.length; fd++) stdio[fd] ??= "ignore";
-    // Without a parent-death signal, killing this supervisor (as callers do
-    // to the Bash they started) would leave Bash running in its own process
-    // group. setpriv cannot set argv[0], so the Bash being run restores it.
-    const setpriv = existsSync("/usr/bin/setpriv")
-      ? "/usr/bin/setpriv"
-      : Bun.which("setpriv");
-    child = setpriv
-      ? spawn(
-          setpriv,
-          [
-            "--pdeathsig",
-            "KILL",
-            "--",
-            command[0],
-            "-c",
-            'exec -a "$0" "$@"',
-            argv0,
-            ...command,
-          ],
-          { stdio, detached: ownGroup, env },
-        )
-      : spawn(command[0], command.slice(1), {
-          argv0,
-          stdio,
-          detached: ownGroup,
-          env,
-        });
-    // The relay's sockets and listeners go with it, so nothing remains to
-    // forward through; the command itself keeps running.
-    const disconnected = () =>
-      warn("namespace relay disconnected; Docker access is unavailable");
-    bridge?.lease.once("close", disconnected);
-    for (const signal of signals) {
-      const handler = () => {
-        signalChildren(signal);
-        killTimer ??= setTimeout(() => signalChildren("SIGKILL"), 2000);
-      };
-      handlers.set(signal, handler);
-      process.on(signal, handler);
+    for (let attempt = 0; attempt < 100 && !apiPath && !failed; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      apiPath = await probe();
     }
-    const result = await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    });
-    clearTimeout(killTimer);
-    // Interactive Bash owns its ordinary background-job lifetime. Only our
-    // non-TTY process group is subject to normal-exit descendant cleanup.
-    if (ownGroup) await cleanupChildren();
-    bridge?.lease.off("close", disconnected);
-    await bridge?.close();
-    for (const [signal, handler] of handlers) process.off(signal, handler);
-    handlers.clear();
-    if (result.signal) {
-      process.exitCode = 128 + constants.signals[result.signal];
-      process.kill(process.pid, result.signal);
-    } else process.exitCode = result.code ?? 125;
   } finally {
-    clearTimeout(killTimer);
-    for (const [signal, handler] of handlers) process.off(signal, handler);
-    await bridge?.close();
+    relay.stderr.destroy();
+    relay.unref();
   }
+  if (!apiPath)
+    throw new Error(
+      `namespace relay did not start${failed ? `: ${failed}` : ""}`,
+    );
+  return apiPath;
 }

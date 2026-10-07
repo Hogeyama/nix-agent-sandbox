@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 
 // Inside a nas sandbox namespace the bash on PATH is nas's own wrapper, which
-// runs Bash under a DinD bridge supervisor and rewrites DOCKER_HOST.
+// points DOCKER_HOST at that namespace's DinD relay.
 function bashInterposed(): boolean {
   const probe = Bun.spawnSync(["bash", "-c", 'printf %s "$DOCKER_HOST"'], {
     env: { ...process.env, DOCKER_HOST: "nas-test-probe" },

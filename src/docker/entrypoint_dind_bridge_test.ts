@@ -39,6 +39,8 @@ function bashInterposed(bash: string): boolean {
 const wrapperTest = test.skipIf(bashInterposed(Bun.which("bash")!));
 
 // Execute the shipped installer, relocating its image paths into a fixture.
+// The fake bridge's `ensure` stands in for a relay that starts: it registers
+// the relay's abstract name and creates its private directory.
 async function wrapperFixture(
   masked: boolean,
   bridged: boolean,
@@ -73,6 +75,8 @@ async function wrapperFixture(
         "readlink /proc/self/ns/net",
         `readlink "${root}/netns/$NAS_TEST_NETNS"`,
       )
+      .replaceAll("/proc/self/net/unix", `${root}/unix`)
+      .replaceAll("/tmp/$nas_bash_relay", `${root}/tmp/$nas_bash_relay`)
       // Model the fake mask broker's availability without live sockets.
       // Real socket checks and masking are covered by mask_filter_integration_test.
       .replaceAll(
@@ -80,22 +84,25 @@ async function wrapperFixture(
         '[ ! -f "$nas_mask_socket_path" ]',
       );
     await mkdir(path.join(root, "netns"));
-    for (const name of ["net:[base]", "net:[inner]", "net:[deeper]"])
+    for (const name of ["net:[1]", "net:[2]", "net:[3]"])
       await symlink(name, path.join(root, "netns", name));
+    await mkdir(path.join(root, "tmp"));
+    await writeFile(
+      path.join(root, "unix"),
+      "Num       RefCount Protocol Flags    Type St Inode Path\n",
+    );
     const marker = path.join(root, "calls");
     await writeFile(
       path.join(root, "bridge"),
       `#!${realBash}
-printf 'bridge:%s\\n' "$SUMI_SUPERVISED" >> "$NAS_TEST_CALLS"
-shift
-while [ "$1" != -- ]; do
-  if [ "$1" = --argv0 ]; then argv0=$2; fi
-  shift 2
-done
-shift
-export NAS_DIND_BRIDGE_NETNS="$NAS_TEST_NETNS"
-program=$1; shift
-exec -a "$argv0" "$program" "$@"
+printf '%s:%s\\n' "$1" "$SUMI_SUPERVISED" >> "$NAS_TEST_CALLS"
+if [ "\${NAS_TEST_ENSURE:-ok}" != ok ]; then
+  echo 'nas DinD bridge: namespace relay did not start' >&2
+  exit 1
+fi
+name="nas-dind-$UID-session-\${NAS_TEST_NETNS//[!0-9]/}"
+command -p mkdir -m 700 "${root}/tmp/$name"
+printf '0: 00000002 0 10000 0001 01 1 @%s\\n' "$name" >> "${root}/unix"
 `,
       { mode: 0o755 },
     );
@@ -120,16 +127,17 @@ exec -a "$argv0" "$program" "$@"
       await writeFile(socket, "fake mask broker available");
     }
     const env = {
-      NAS_TEST_NETNS: "net:[base]",
+      NAS_TEST_NETNS: "net:[1]",
       NAS_TEST_CALLS: marker,
       NAS_MASK_FILTER: masked ? path.join(root, "filter") : "",
       NAS_MASK_SOCKET: masked ? socket : "",
       NAS_DIND_BRIDGE: bridged ? "1" : "",
-      NAS_DIND_BASE_NETNS: "net:[base]",
+      NAS_DIND_BASE_NETNS: "net:[1]",
       NAS_ENV_OPS_FILE: path.join(root, "ops"),
       HOSTEXEC_PATH_PREFIX: "",
       SUMI_SUPERVISED: "",
-      NAS_DIND_BRIDGE_NETNS: "",
+      DOCKER_HOST: "tcp://127.0.0.1:2375",
+      TESTCONTAINERS_HOST_OVERRIDE: "",
     };
     expect(
       await shell(`set -euo pipefail\nnas_debug() { :; }\n${block}`, env),
@@ -139,24 +147,28 @@ exec -a "$argv0" "$program" "$@"
     await rm(root, { recursive: true, force: true });
   }
 }
+const calls = async (root: string) =>
+  readFile(path.join(root, "calls"), "utf8").catch(() => "");
+const relayHost = (root: string, netns: string) =>
+  `unix://${root}/tmp/nas-dind-${process.getuid!()}-session-${netns}/docker.sock`;
+const showDocker =
+  'printf "%s|%s" "$DOCKER_HOST" "$TESTCONTAINERS_HOST_OVERRIDE"';
 
 for (const masked of [false, true]) {
   for (const bridged of [false, true]) {
     wrapperTest(
-      `Bash keeps argv and exit status: mask=${masked}, DinD=${bridged}`,
+      `Bash in the base namespace keeps argv, exit status and Docker: mask=${masked}, DinD=${bridged}`,
       async () => {
         await wrapperFixture(masked, bridged, async (root, wrapper, env) => {
           const result = await shell(
-            '"$NAS_TEST_WRAPPER" -c \'printf "%s|%s|%s" "$0" "$1" "$2"; exit 37\' requested-argv0 "space arg" \'$(false)\'',
+            '"$NAS_TEST_WRAPPER" -c \'printf "%s|%s|%s|%s" "$0" "$1" "$2" "$DOCKER_HOST"; exit 37\' requested-argv0 "space arg" \'$(false)\'',
             { ...env, NAS_TEST_WRAPPER: wrapper },
           );
           expect(result).toMatchObject({
             code: 37,
-            stdout: "requested-argv0|space arg|$(false)",
+            stdout: "requested-argv0|space arg|$(false)|tcp://127.0.0.1:2375",
           });
-          expect(
-            await readFile(path.join(root, "calls"), "utf8").catch(() => ""),
-          ).toBe(masked ? "mask\n" : "");
+          expect(await calls(root)).toBe(masked ? "mask\n" : "");
         });
       },
     );
@@ -166,23 +178,25 @@ for (const masked of [false, true]) {
 for (const masked of [false, true]) {
   for (const supervised of [false, true]) {
     wrapperTest(
-      `namespace change starts bridge inside existing masking: mask=${masked}, supervised=${supervised}`,
+      `the first Bash in a namespace starts its relay; nested Bash finds it: mask=${masked}, supervised=${supervised}`,
       async () => {
         await wrapperFixture(masked, true, async (root, wrapper, env) => {
           const result = await shell(
-            '"$NAS_TEST_WRAPPER" -c \'"$NAS_TEST_WRAPPER" -c "printf nested"; exit 23\'',
+            `"$NAS_TEST_WRAPPER" -c '"$NAS_TEST_WRAPPER" -c '"'"'${showDocker}'"'"'; exit 23'`,
             {
               ...env,
-              NAS_TEST_NETNS: "net:[inner]",
+              NAS_TEST_NETNS: "net:[2]",
               SUMI_SUPERVISED: supervised ? "1" : "",
               NAS_TEST_WRAPPER: wrapper,
             },
           );
-          expect(result).toMatchObject({ code: 23, stdout: "nested" });
+          expect(result).toMatchObject({
+            code: 23,
+            stdout: `${relayHost(root, "2")}|127.0.0.1`,
+          });
           const shouldMask = masked && !supervised;
-          const inherited = shouldMask || supervised ? "1" : "";
-          expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-            `${shouldMask ? "mask\n" : ""}bridge:${inherited}\nbridge:${inherited}\n`,
+          expect(await calls(root)).toBe(
+            `ensure:${supervised ? "1" : ""}\n${shouldMask ? "mask\n" : ""}`,
           );
         });
       },
@@ -191,17 +205,18 @@ for (const masked of [false, true]) {
 }
 
 wrapperTest(
-  "a further namespace change starts another bridge even under inherited sumi",
+  "a further namespace change starts that namespace's relay",
   async () => {
-    await wrapperFixture(true, true, async (root, wrapper, env) => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
       const result = await shell(
-        '"$NAS_TEST_WRAPPER" -c \'NAS_TEST_NETNS="net:[deeper]" "$NAS_TEST_WRAPPER" -c "printf deeper"\'',
-        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+        `"$NAS_TEST_WRAPPER" -c 'NAS_TEST_NETNS="net:[3]" "$NAS_TEST_WRAPPER" -c '"'"'${showDocker}'"'"''`,
+        { ...env, NAS_TEST_NETNS: "net:[2]", NAS_TEST_WRAPPER: wrapper },
       );
-      expect(result).toMatchObject({ code: 0, stdout: "deeper" });
-      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-        "mask\nbridge:1\nbridge:1\n",
-      );
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: `${relayHost(root, "3")}|127.0.0.1`,
+      });
+      expect(await calls(root)).toBe("ensure:\nensure:\n");
     });
   },
 );
@@ -211,34 +226,60 @@ wrapperTest(
   async () => {
     await wrapperFixture(false, true, async (root, wrapper, env) => {
       const result = await shell(
-        'unset NAS_DIND_BRIDGE NAS_DIND_BASE_NETNS; "$NAS_TEST_WRAPPER" -c "printf bridged"',
-        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+        `unset NAS_DIND_BRIDGE NAS_DIND_BASE_NETNS; "$NAS_TEST_WRAPPER" -c '${showDocker}'`,
+        { ...env, NAS_TEST_NETNS: "net:[2]", NAS_TEST_WRAPPER: wrapper },
       );
-      expect(result).toMatchObject({ code: 0, stdout: "bridged" });
-      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-        "bridge:\n",
-      );
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: `${relayHost(root, "2")}|127.0.0.1`,
+      });
+      expect(await calls(root)).toBe("ensure:\n");
     });
   },
 );
 
 wrapperTest(
-  "a diagnostic inherited marker cannot bypass relay validation",
+  "an unavailable relay costs Docker access only; the command still runs",
   async () => {
     await wrapperFixture(false, true, async (root, wrapper, env) => {
       const result = await shell(
-        '"$NAS_TEST_WRAPPER" -c \'printf "%s" "$0"\'',
+        `"$NAS_TEST_WRAPPER" -c '${showDocker}; exit 9'`,
         {
           ...env,
-          NAS_TEST_NETNS: "net:[inner]",
-          NAS_DIND_BRIDGE_NETNS: "net:[inner]",
+          NAS_TEST_NETNS: "net:[2]",
+          NAS_TEST_ENSURE: "fail",
           NAS_TEST_WRAPPER: wrapper,
         },
       );
-      expect(result).toMatchObject({ code: 0, stdout: wrapper });
-      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-        "bridge:\n",
+      expect(result).toMatchObject({
+        code: 9,
+        stdout: "tcp://127.0.0.1:2375|",
+      });
+      expect(result.stderr).toContain("running without Docker access");
+      expect(await calls(root)).toBe("ensure:\n");
+    });
+  },
+);
+
+wrapperTest(
+  "a relay name without a private directory of ours is not trusted",
+  async () => {
+    await wrapperFixture(false, true, async (root, wrapper, env) => {
+      await writeFile(
+        path.join(root, "unix"),
+        `0: 00000002 0 10000 0001 01 1 @nas-dind-${process.getuid!()}-session-2\n`,
+        { flag: "a" },
       );
+      const result = await shell(`"$NAS_TEST_WRAPPER" -c '${showDocker}'`, {
+        ...env,
+        NAS_TEST_NETNS: "net:[2]",
+        NAS_TEST_WRAPPER: wrapper,
+      });
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: "tcp://127.0.0.1:2375|",
+      });
+      expect(await calls(root)).toBe("");
     });
   },
 );
@@ -248,13 +289,14 @@ wrapperTest(
   async () => {
     await wrapperFixture(false, true, async (root, wrapper, env) => {
       const result = await shell(
-        'PATH=/nonexistent "$NAS_TEST_WRAPPER" -c \'printf "%s" "$0"; exit 9\' kept',
-        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
+        `PATH=/nonexistent "$NAS_TEST_WRAPPER" -c '${showDocker}; exit 9'`,
+        { ...env, NAS_TEST_NETNS: "net:[2]", NAS_TEST_WRAPPER: wrapper },
       );
-      expect(result).toMatchObject({ code: 9, stdout: "kept", stderr: "" });
-      expect(await readFile(path.join(root, "calls"), "utf8")).toBe(
-        "bridge:\n",
-      );
+      expect(result).toMatchObject({
+        code: 9,
+        stdout: `${relayHost(root, "2")}|127.0.0.1`,
+        stderr: "",
+      });
     });
   },
 );
@@ -268,59 +310,22 @@ wrapperTest(
         { ...env, NAS_TEST_NETNS: "", NAS_TEST_WRAPPER: wrapper },
       );
       expect(result).toMatchObject({ code: 9, stdout: "kept" });
-      expect(result.stderr).toContain("running without Docker access");
-      expect(
-        await readFile(path.join(root, "calls"), "utf8").catch(() => ""),
-      ).toBe("");
+      expect(await calls(root)).toBe("");
     });
   },
 );
 
-wrapperTest(
-  "namespace bridge receives the descriptors handed to Bash",
-  async () => {
-    await wrapperFixture(false, true, async (root, wrapper, env) => {
-      await writeFile(
-        path.join(root, "bridge"),
-        `#!${Bun.which("bash")}
-while [ "$1" != -- ]; do
-  if [ "$1" = --fds ]; then printf '%s' "$2" > "$NAS_TEST_CALLS"; fi
-  shift
-done
-`,
-        { mode: 0o755 },
-      );
-      const result = await shell(
-        'exec 3>/dev/null 7>/dev/null 12</dev/null; exec 7>&-; "$NAS_TEST_WRAPPER" -c :',
-        { ...env, NAS_TEST_NETNS: "net:[inner]", NAS_TEST_WRAPPER: wrapper },
-      );
-      expect(result.code).toBe(0);
-      expect(
-        (await readFile(path.join(root, "calls"), "utf8")).split(",").sort(),
-      ).toEqual(["12", "3"]);
-    });
-  },
-);
-
-wrapperTest(
-  "relay initialization failure returns its failure without running Bash",
-  async () => {
-    await wrapperFixture(false, true, async (root, wrapper, env) => {
-      await writeFile(path.join(root, "bridge"), "#!/bin/bash\nexit 53\n", {
-        mode: 0o755,
-      });
-      const result = await shell(
-        '"$NAS_TEST_WRAPPER" -c "printf should-not-run"',
-        {
-          ...env,
-          NAS_TEST_NETNS: "net:[inner]",
-          NAS_TEST_WRAPPER: wrapper,
-        },
-      );
-      expect(result).toMatchObject({ code: 53, stdout: "" });
-    });
-  },
-);
+wrapperTest("descriptors handed to bridged Bash stay open", async () => {
+  await wrapperFixture(false, true, async (root, wrapper, env) => {
+    const out = path.join(root, "fd9");
+    const result = await shell(
+      `"$NAS_TEST_WRAPPER" -c 'printf via-fd9 >&9' 9>"${out}"`,
+      { ...env, NAS_TEST_NETNS: "net:[2]", NAS_TEST_WRAPPER: wrapper },
+    );
+    expect(result.code).toBe(0);
+    expect(await readFile(out, "utf8")).toBe("via-fd9");
+  });
+});
 
 async function gatewayStartup(
   mode: string,

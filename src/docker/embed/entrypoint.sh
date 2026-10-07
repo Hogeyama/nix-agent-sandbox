@@ -367,7 +367,8 @@ if [ "${NAS_DIND_BRIDGE:-}" = 1 ]; then
     chmod 644 /run/nas-dind-bridge-netns
     install -d -m 700 -o "$NAS_UID" -g "$NAS_GID" /run/nas-dind-bridge
     # A restart reuses the container filesystem after all old processes died.
-    rm -f /run/nas-dind-bridge/bridge.sock /run/nas-dind-bridge/bridge.sock.api
+    rm -f /run/nas-dind-bridge/bridge.sock /run/nas-dind-bridge/bridge.sock.api \
+      /run/nas-dind-bridge/docker.sock
     # A separate FIFO avoids a second Bash coprocess when port-relay is active.
     NAS_DIND_GATEWAY_READY_DIR="$(mktemp -d /run/nas-dind-bridge-start.XXXXXX)"
     if ! mkfifo -m 600 "$NAS_DIND_GATEWAY_READY_DIR/ready"; then
@@ -395,6 +396,9 @@ if [ "${NAS_DIND_BRIDGE:-}" = 1 ]; then
       exit 1
     fi
   fi
+  # dockerd publishes ports on a dedicated address; the gateway's relay
+  # mirrors them on this namespace's 127.0.0.1 for clients of its API.
+  export DOCKER_HOST=unix:///run/nas-dind-bridge/docker.sock
 fi
 
 # --- エージェントコマンド ---
@@ -471,6 +475,7 @@ MASK_WRAPPER_HEADER
     printf 'readonly nas_mask_socket_path=%q\n' "${NAS_MASK_SOCKET:-}"
     printf 'readonly nas_dind_bridge_base_netns=%q\n' "${NAS_DIND_BASE_NETNS:-}"
     printf 'readonly nas_dind_bridge_socket_path=%q\n' "$([ "${NAS_DIND_BRIDGE:-}" != 1 ] || printf '%s' /run/nas-dind-bridge/bridge.sock)"
+    printf 'readonly nas_dind_bridge_instance=%q\n' session
     cat << 'MASK_WRAPPER_BODY'
 if [ "${1:-}" = "/entrypoint.sh" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
@@ -486,46 +491,43 @@ if [ "$#" -eq 2 ] && { [ "$1" = -c ] || [ "$1" = -lc ]; }; then
       ;;
   esac
 fi
-nas_bash_command=(/tmp/nas-bash-override/bash.real "$@")
-nas_bash_bridge=false
 if [ -n "${nas_dind_bridge_socket_path:-}" ]; then
   # The caller's PATH need not contain readlink; command -p uses the default.
   nas_bash_netns="$(command -p readlink /proc/self/ns/net 2>/dev/null)" ||
     nas_bash_netns=
-  # An inherited marker is diagnostic, not proof that a relay is still live.
-  # The helper checks its namespace's control socket and reuses the listener.
-  if [ -z "$nas_bash_netns" ]; then
-    # Losing the bridge costs Docker access only; still run the command.
-    echo '[nas] Cannot identify the Bash network namespace; running without Docker access' >&2
-  elif [ "$nas_bash_netns" != "$nas_dind_bridge_base_netns" ]; then
-    nas_bash_bridge=true
-    # Bun marks inherited descriptors close-on-exec at startup and cannot tell
-    # them from its own, so name the ones the caller handed to this Bash.
-    nas_bash_fds=
-    for nas_bash_fd in /proc/self/fd/*; do
-      nas_bash_fd=${nas_bash_fd##*/}
-      case "$nas_bash_fd" in ''|*[!0-9]*|0|1|2) continue ;; esac
-      [ -e "/proc/self/fdinfo/$nas_bash_fd" ] || continue
-      nas_bash_flags=
-      while read -r nas_bash_key nas_bash_value; do
-        if [ "$nas_bash_key" = flags: ]; then
-          nas_bash_flags=$nas_bash_value
+  if [ -n "$nas_bash_netns" ] && [ "$nas_bash_netns" != "$nas_dind_bridge_base_netns" ]; then
+    # An isolated namespace reaches Docker through its own relay daemon, named
+    # by an abstract socket that exists only while the relay lives. Finding it
+    # starts no process; only the first Bash in a namespace starts the relay.
+    # A relay problem costs Docker access only; the command still runs.
+    nas_bash_relay="nas-dind-$UID-$nas_dind_bridge_instance-${nas_bash_netns//[!0-9]/}"
+    nas_bash_live=false
+    if [ -r /proc/self/net/unix ]; then
+      while read -r _ _ _ _ _ _ _ nas_bash_path; do
+        if [ "$nas_bash_path" = "@$nas_bash_relay" ]; then
+          nas_bash_live=true
           break
         fi
-      done < "/proc/self/fdinfo/$nas_bash_fd"
-      # Skip this script's own close-on-exec descriptors.
-      [ -n "$nas_bash_flags" ] && (( (8#$nas_bash_flags & 8#2000000) == 0 )) || continue
-      nas_bash_fds+=${nas_bash_fds:+,}$nas_bash_fd
-    done
-    nas_bash_command=(/usr/local/bin/bun /usr/local/lib/nas/dind-bridge.mjs run
-      --socket "$nas_dind_bridge_socket_path" --base-netns "$nas_dind_bridge_base_netns"
-      --argv0 "$0" --fds "$nas_bash_fds" -- "${nas_bash_command[@]}")
+      done < /proc/self/net/unix
+    fi
+    if [ "$nas_bash_live" = false ]; then
+      if /usr/local/bin/bun /usr/local/lib/nas/dind-bridge.mjs ensure \
+          --socket "$nas_dind_bridge_socket_path" \
+          --instance "$nas_dind_bridge_instance" >/dev/null; then
+        nas_bash_live=true
+      else
+        echo '[nas] DinD relay unavailable; running without Docker access' >&2
+      fi
+    fi
+    # The relay creates its directory private; never trust one it did not.
+    if [ "$nas_bash_live" = true ] && [ -O "/tmp/$nas_bash_relay" ]; then
+      export DOCKER_HOST="unix:///tmp/$nas_bash_relay/docker.sock"
+      export TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
+      unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONTEXT
+    fi
   fi
 fi
 if [ -n "${SUMI_SUPERVISED:-}" ] || [ -z "$nas_mask_filter_path" ] || [ -z "$nas_mask_socket_path" ]; then
-  if [ "$nas_bash_bridge" = true ]; then
-    exec "${nas_bash_command[@]}"
-  fi
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
 if [ ! -S "$nas_mask_socket_path" ]; then
@@ -533,7 +535,7 @@ if [ ! -S "$nas_mask_socket_path" ]; then
 fi
 exec "$nas_mask_filter_path" run --server "$nas_mask_socket_path" \
   --argv0 "$0" -- \
-  "${nas_bash_command[@]}"
+  /tmp/nas-bash-override/bash.real "$@"
 MASK_WRAPPER_BODY
   } > "$BASH_WRAPPER_TMP"
   chmod +x "$BASH_WRAPPER_TMP"

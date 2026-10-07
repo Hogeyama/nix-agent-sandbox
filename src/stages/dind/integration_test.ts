@@ -43,6 +43,7 @@ import {
   buildDindSidecarArgs,
   buildDindSidecarEnv,
   DIND_IMAGE,
+  DIND_PUBLISH_IP,
 } from "../../docker/dind.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
@@ -832,13 +833,14 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER || !innerImageReady)(
 
       // The property the design turns on: rootlesskit publishes the inner
       // container's port into the sidecar's namespace, and a joiner shares
-      // that namespace, so the port is on the joiner's own loopback.
+      // that namespace, so the port is on the joiner's own loopback -- at
+      // dockerd's default publish address, which the DinD bridge forwards.
       // `docker run -d` returns once the container starts, not once `nc` is
       // listening, so a single wget races the listener. Retry for ten seconds.
       const result = await joinerRun(
         containerName,
         INNER_IMAGE,
-        "for i in $(seq 1 20); do wget -qO- -T 3 http://127.0.0.1:18081/ && exit 0; sleep 0.5; done; exit 1",
+        `for i in $(seq 1 20); do wget -qO- -T 3 http://${DIND_PUBLISH_IP}:18081/ && exit 0; sleep 0.5; done; exit 1`,
       );
       expect(
         result.exitCode,

@@ -1,6 +1,9 @@
 import { connect } from "node:net";
 
 export const TIMEOUT = 10_000;
+// dockerd's default address for published ports (its --ip). Keep in sync
+// with DIND_PUBLISH_IP in dind.ts.
+export const PUBLISH_HOST = "127.0.0.77";
 export const MAX_FRAME = 1024 * 1024;
 
 export function readFrame(socket, limit = MAX_FRAME) {
