@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readlinkSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -261,6 +262,17 @@ function expectNoTerminalBrokerFrames(
   }
   expect(messages).toEqual([]);
 }
+
+// A sandbox can run in its own PID namespace while showing another
+// namespace's /proc. These tests identify processes through /proc/<pid>.
+const procMatchesPid = (() => {
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+})();
+const procTest = test.skipIf(!procMatchesPid);
 
 test("RawLineReader enforces the 4 MiB limit before a delimiter arrives", async () => {
   const harness = await openGatewayHarness();
@@ -594,98 +606,105 @@ test("runGatewayExecution kills a spawned command when the gateway cancels", asy
   }
 });
 
-test("runGatewayExecution escalates a TERM-ignoring filter to SIGKILL", async () => {
-  const tempDir = await mkdtemp(
-    path.join(tmpdir(), "nas-gateway-term-filter-"),
-  );
-  const filterPath = path.join(tempDir, "term-filter");
-  const filterPidPath = path.join(tempDir, "term-filter.pid");
-  await writeFile(
-    filterPath,
-    `#!${process.execPath}
+procTest(
+  "runGatewayExecution escalates a TERM-ignoring filter to SIGKILL",
+  async () => {
+    const tempDir = await mkdtemp(
+      path.join(tmpdir(), "nas-gateway-term-filter-"),
+    );
+    const filterPath = path.join(tempDir, "term-filter");
+    const filterPidPath = path.join(tempDir, "term-filter.pid");
+    await writeFile(
+      filterPath,
+      `#!${process.execPath}
 import { appendFile } from "node:fs/promises";
 await appendFile(${JSON.stringify(filterPidPath)}, String(process.pid) + "\\n");
 process.on("SIGTERM", () => {});
 process.stdout.write("ready");
 for await (const _chunk of Bun.stdin.stream()) await Bun.sleep(100);
 `,
-  );
-  await chmod(filterPath, 0o700);
+    );
+    await chmod(filterPath, 0o700);
 
-  const harness = await openGatewayHarness();
-  let run: Promise<void> | undefined;
-  let filterIdentities: FilterProcessIdentity[] = [];
-  let cleanupArmed = true;
-  let primaryError: unknown;
-  let cleanupError: unknown;
-  try {
-    run = runGatewayExecution({
-      ...startOptions(harness.client),
-      maskFilter: {
-        binaryPath: filterPath,
-        secretsFramePath: path.join(tempDir, "secrets.frame"),
-      },
-    });
-    const rejected = expectFailure(run);
-    await harness.readLine();
-    await writeSocketLine(
-      harness.gateway,
-      line({ type: "spawned", requestId: "r1", pid: process.pid }),
-    );
-    expect(await harness.readLine()).toMatchObject({
-      type: "masked_chunk",
-      requestId: "r1",
-    });
-    expect(await harness.readLine()).toMatchObject({
-      type: "masked_chunk",
-      requestId: "r1",
-    });
-    const filterPids = await waitForRecordedFilterPids(filterPidPath);
-    expect(filterPids).toHaveLength(2);
-    expect(new Set(filterPids).size).toBe(2);
-    filterIdentities = await captureFilterProcessIdentities(filterPids);
-    await writeSocketLine(
-      harness.gateway,
-      line({ type: "cancelled", requestId: "r1", reason: "client closed" }),
-    );
-    expect(await harness.readLine()).toMatchObject({
-      type: "kill",
-      requestId: "r1",
-      signal: "SIGTERM",
-    });
-    const result = await Promise.race([
-      rejected,
-      new Promise<Error>((_, reject) =>
-        setTimeout(() => reject(new Error("filter cleanup timed out")), 2_000),
-      ),
-    ]);
-    expect(result.message).toContain("gateway cancelled request");
-    await waitForFilterProcessesGone(filterIdentities);
-    for (const identity of filterIdentities) {
-      expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
-    }
-    filterIdentities = [];
-    cleanupArmed = false;
-  } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
-    harness.gateway.destroy();
-    if (run) {
-      await Promise.race([run.catch(() => {}), Bun.sleep(2_000)]);
-    }
-    if (cleanupArmed && filterIdentities.length > 0) {
-      try {
-        await forceFilterProcessesGone(filterIdentities);
-      } catch (error) {
-        cleanupError = error;
+    const harness = await openGatewayHarness();
+    let run: Promise<void> | undefined;
+    let filterIdentities: FilterProcessIdentity[] = [];
+    let cleanupArmed = true;
+    let primaryError: unknown;
+    let cleanupError: unknown;
+    try {
+      run = runGatewayExecution({
+        ...startOptions(harness.client),
+        maskFilter: {
+          binaryPath: filterPath,
+          secretsFramePath: path.join(tempDir, "secrets.frame"),
+        },
+      });
+      const rejected = expectFailure(run);
+      await harness.readLine();
+      await writeSocketLine(
+        harness.gateway,
+        line({ type: "spawned", requestId: "r1", pid: process.pid }),
+      );
+      expect(await harness.readLine()).toMatchObject({
+        type: "masked_chunk",
+        requestId: "r1",
+      });
+      expect(await harness.readLine()).toMatchObject({
+        type: "masked_chunk",
+        requestId: "r1",
+      });
+      const filterPids = await waitForRecordedFilterPids(filterPidPath);
+      expect(filterPids).toHaveLength(2);
+      expect(new Set(filterPids).size).toBe(2);
+      filterIdentities = await captureFilterProcessIdentities(filterPids);
+      await writeSocketLine(
+        harness.gateway,
+        line({ type: "cancelled", requestId: "r1", reason: "client closed" }),
+      );
+      expect(await harness.readLine()).toMatchObject({
+        type: "kill",
+        requestId: "r1",
+        signal: "SIGTERM",
+      });
+      const result = await Promise.race([
+        rejected,
+        new Promise<Error>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("filter cleanup timed out")),
+            2_000,
+          ),
+        ),
+      ]);
+      expect(result.message).toContain("gateway cancelled request");
+      await waitForFilterProcessesGone(filterIdentities);
+      for (const identity of filterIdentities) {
+        expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
       }
+      filterIdentities = [];
+      cleanupArmed = false;
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally {
+      harness.gateway.destroy();
+      if (run) {
+        await Promise.race([run.catch(() => {}), Bun.sleep(2_000)]);
+      }
+      if (cleanupArmed && filterIdentities.length > 0) {
+        try {
+          await forceFilterProcessesGone(filterIdentities);
+        } catch (error) {
+          cleanupError = error;
+        }
+      }
+      await harness.close();
+      await rm(tempDir, { recursive: true, force: true });
     }
-    await harness.close();
-    await rm(tempDir, { recursive: true, force: true });
-  }
-  if (!primaryError && cleanupError) throw cleanupError;
-}, 30_000);
+    if (!primaryError && cleanupError) throw cleanupError;
+  },
+  30_000,
+);
 
 test("runGatewayExecution kills after start for every pre-spawn failure", async () => {
   const cases: Array<{ message: unknown; error: string }> = [
@@ -858,79 +877,83 @@ test("runGatewayExecution fails closed for missing or corrupt mask frames even w
   }
 });
 
-test("runGatewayExecution interrupts post-exit filters when cancellation wins", async () => {
-  const tempDir = await mkdtemp(
-    path.join(tmpdir(), "nas-gateway-post-eof-cancellation-"),
-  );
-  const { filterPath, pidPath, eofPath } =
-    await createPostEofStallFilter(tempDir);
-  const harness = await openGatewayHarness();
-  const cancellation = new AbortController();
-  let run: Promise<void> | undefined;
-  let filterIdentities: FilterProcessIdentity[] = [];
-  let cleanupArmed = true;
-  let primaryError: unknown;
-  let cleanupError: unknown;
-  try {
-    run = runGatewayExecution({
-      ...startOptions(harness.client),
-      maskFilter: {
-        binaryPath: filterPath,
-        secretsFramePath: path.join(tempDir, "secrets.frame"),
-      },
-      cancellation: cancellation.signal,
-    });
-    const rejected = expectFailure(run);
-    await harness.readLine();
-    await writeSocketLine(
-      harness.gateway,
-      line({ type: "spawned", requestId: "r1", pid: process.pid }),
+procTest(
+  "runGatewayExecution interrupts post-exit filters when cancellation wins",
+  async () => {
+    const tempDir = await mkdtemp(
+      path.join(tmpdir(), "nas-gateway-post-eof-cancellation-"),
     );
-    const filterPids = await waitForRecordedFilterPids(pidPath);
-    filterIdentities = await captureFilterProcessIdentities(filterPids);
-    await writeSocketLine(
-      harness.gateway,
-      line({ type: "process_exit", requestId: "r1", exitCode: 0 }),
-    );
-    await waitForRecordedFilterPids(eofPath);
+    const { filterPath, pidPath, eofPath } =
+      await createPostEofStallFilter(tempDir);
+    const harness = await openGatewayHarness();
+    const cancellation = new AbortController();
+    let run: Promise<void> | undefined;
+    let filterIdentities: FilterProcessIdentity[] = [];
+    let cleanupArmed = true;
+    let primaryError: unknown;
+    let cleanupError: unknown;
+    try {
+      run = runGatewayExecution({
+        ...startOptions(harness.client),
+        maskFilter: {
+          binaryPath: filterPath,
+          secretsFramePath: path.join(tempDir, "secrets.frame"),
+        },
+        cancellation: cancellation.signal,
+      });
+      const rejected = expectFailure(run);
+      await harness.readLine();
+      await writeSocketLine(
+        harness.gateway,
+        line({ type: "spawned", requestId: "r1", pid: process.pid }),
+      );
+      const filterPids = await waitForRecordedFilterPids(pidPath);
+      filterIdentities = await captureFilterProcessIdentities(filterPids);
+      await writeSocketLine(
+        harness.gateway,
+        line({ type: "process_exit", requestId: "r1", exitCode: 0 }),
+      );
+      await waitForRecordedFilterPids(eofPath);
 
-    cancellation.abort(new Error("gateway disconnected"));
-    const error = await Promise.race([
-      rejected,
-      new Promise<Error>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("post-exit filter cleanup timed out")),
-          2_000,
+      cancellation.abort(new Error("gateway disconnected"));
+      const error = await Promise.race([
+        rejected,
+        new Promise<Error>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("post-exit filter cleanup timed out")),
+            2_000,
+          ),
         ),
-      ),
-    ]);
-    expect(error.message).toContain("gateway disconnected");
-    await waitForFilterProcessesGone(filterIdentities);
-    for (const identity of filterIdentities) {
-      expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
-    }
-    filterIdentities = [];
-    cleanupArmed = false;
-  } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
-    harness.gateway.destroy();
-    if (run) {
-      await Promise.race([run.catch(() => {}), Bun.sleep(2_000)]);
-    }
-    if (cleanupArmed && filterIdentities.length > 0) {
-      try {
-        await forceFilterProcessesGone(filterIdentities);
-      } catch (error) {
-        cleanupError = error;
+      ]);
+      expect(error.message).toContain("gateway disconnected");
+      await waitForFilterProcessesGone(filterIdentities);
+      for (const identity of filterIdentities) {
+        expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
       }
+      filterIdentities = [];
+      cleanupArmed = false;
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally {
+      harness.gateway.destroy();
+      if (run) {
+        await Promise.race([run.catch(() => {}), Bun.sleep(2_000)]);
+      }
+      if (cleanupArmed && filterIdentities.length > 0) {
+        try {
+          await forceFilterProcessesGone(filterIdentities);
+        } catch (error) {
+          cleanupError = error;
+        }
+      }
+      await harness.close();
+      await rm(tempDir, { recursive: true, force: true });
     }
-    await harness.close();
-    await rm(tempDir, { recursive: true, force: true });
-  }
-  if (!primaryError && cleanupError) throw cleanupError;
-}, 30_000);
+    if (!primaryError && cleanupError) throw cleanupError;
+  },
+  30_000,
+);
 
 test("runGatewayExecution kills when a mask filter cannot spawn", async () => {
   const harness = await openGatewayHarness();
@@ -1028,15 +1051,17 @@ test("runGatewayExecution fails fast when a filter exits during a silent command
   }
 });
 
-test("runGatewayExecution stops when filtered output loses its gateway", async () => {
-  const tempDir = await mkdtemp(
-    path.join(tmpdir(), "nas-gateway-output-failure-"),
-  );
-  const filterPath = path.join(tempDir, "output-filter");
-  const filterPidPath = path.join(tempDir, "output-filter.pid");
-  await writeFile(
-    filterPath,
-    `#!${process.execPath}
+procTest(
+  "runGatewayExecution stops when filtered output loses its gateway",
+  async () => {
+    const tempDir = await mkdtemp(
+      path.join(tmpdir(), "nas-gateway-output-failure-"),
+    );
+    const filterPath = path.join(tempDir, "output-filter");
+    const filterPidPath = path.join(tempDir, "output-filter.pid");
+    await writeFile(
+      filterPath,
+      `#!${process.execPath}
 import { appendFile } from "node:fs/promises";
 await appendFile(${JSON.stringify(filterPidPath)}, String(process.pid) + "\\n");
 for await (const _chunk of Bun.stdin.stream()) {
@@ -1044,71 +1069,73 @@ for await (const _chunk of Bun.stdin.stream()) {
   await Bun.sleep(100);
 }
 `,
-  );
-  await chmod(filterPath, 0o700);
+    );
+    await chmod(filterPath, 0o700);
 
-  const harness = await openGatewayHarness();
-  let run: Promise<void> | undefined;
-  let filterIdentities: FilterProcessIdentity[] = [];
-  let cleanupArmed = true;
-  let primaryError: unknown;
-  let cleanupError: unknown;
-  try {
-    run = runGatewayExecution({
-      ...startOptions(harness.client),
-      maskFilter: {
-        binaryPath: filterPath,
-        secretsFramePath: path.join(tempDir, "secrets.frame"),
-      },
-    });
-    await harness.readLine();
-    await writeSocketLine(
-      harness.gateway,
-      line({ type: "spawned", requestId: "r1", pid: process.pid }),
-    );
-    await writeSocketLine(
-      harness.gateway,
-      line({
-        type: "raw_chunk",
-        requestId: "r1",
-        fd: 1,
-        data: Buffer.from("trigger").toString("base64"),
-      }),
-    );
-    const filterPids = await waitForRecordedFilterPids(filterPidPath);
-    expect(filterPids).toHaveLength(2);
-    expect(new Set(filterPids).size).toBe(2);
-    filterIdentities = await captureFilterProcessIdentities(filterPids);
-    harness.gateway.destroy();
-    expect((await expectFailure(run)).message).toContain(
-      "gateway disconnected",
-    );
-    await waitForFilterProcessesGone(filterIdentities);
-    for (const identity of filterIdentities) {
-      expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
-    }
-    filterIdentities = [];
-    cleanupArmed = false;
-  } catch (error) {
-    primaryError = error;
-    throw error;
-  } finally {
-    harness.gateway.destroy();
-    if (run) {
-      await Promise.race([run.catch(() => {}), Bun.sleep(2_000)]);
-    }
-    if (cleanupArmed && filterIdentities.length > 0) {
-      try {
-        await forceFilterProcessesGone(filterIdentities);
-      } catch (error) {
-        cleanupError = error;
+    const harness = await openGatewayHarness();
+    let run: Promise<void> | undefined;
+    let filterIdentities: FilterProcessIdentity[] = [];
+    let cleanupArmed = true;
+    let primaryError: unknown;
+    let cleanupError: unknown;
+    try {
+      run = runGatewayExecution({
+        ...startOptions(harness.client),
+        maskFilter: {
+          binaryPath: filterPath,
+          secretsFramePath: path.join(tempDir, "secrets.frame"),
+        },
+      });
+      await harness.readLine();
+      await writeSocketLine(
+        harness.gateway,
+        line({ type: "spawned", requestId: "r1", pid: process.pid }),
+      );
+      await writeSocketLine(
+        harness.gateway,
+        line({
+          type: "raw_chunk",
+          requestId: "r1",
+          fd: 1,
+          data: Buffer.from("trigger").toString("base64"),
+        }),
+      );
+      const filterPids = await waitForRecordedFilterPids(filterPidPath);
+      expect(filterPids).toHaveLength(2);
+      expect(new Set(filterPids).size).toBe(2);
+      filterIdentities = await captureFilterProcessIdentities(filterPids);
+      harness.gateway.destroy();
+      expect((await expectFailure(run)).message).toContain(
+        "gateway disconnected",
+      );
+      await waitForFilterProcessesGone(filterIdentities);
+      for (const identity of filterIdentities) {
+        expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
       }
+      filterIdentities = [];
+      cleanupArmed = false;
+    } catch (error) {
+      primaryError = error;
+      throw error;
+    } finally {
+      harness.gateway.destroy();
+      if (run) {
+        await Promise.race([run.catch(() => {}), Bun.sleep(2_000)]);
+      }
+      if (cleanupArmed && filterIdentities.length > 0) {
+        try {
+          await forceFilterProcessesGone(filterIdentities);
+        } catch (error) {
+          cleanupError = error;
+        }
+      }
+      await harness.close();
+      await rm(tempDir, { recursive: true, force: true });
     }
-    await harness.close();
-    await rm(tempDir, { recursive: true, force: true });
-  }
-  if (!primaryError && cleanupError) throw cleanupError;
-}, 30_000);
+    if (!primaryError && cleanupError) throw cleanupError;
+  },
+  30_000,
+);
 
 test("runGatewayExecution fails closed when the gateway disconnects before terminal state", async () => {
   const harness = await openGatewayHarness();

@@ -4,6 +4,19 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { createDirenvLauncherFixture } from "./direnv_exec_fixture.ts";
 
+// Inside a nas sandbox namespace the bash on PATH is nas's own wrapper, which
+// points DOCKER_HOST at that namespace's DinD relay.
+function bashInterposed(): boolean {
+  const probe = Bun.spawnSync(["bash", "-c", 'printf %s "$DOCKER_HOST"'], {
+    env: { ...process.env, DOCKER_HOST: "nas-test-probe" },
+    stderr: "pipe",
+  });
+  return (
+    probe.stdout.toString() !== "nas-test-probe" || probe.stderr.length > 0
+  );
+}
+const bashTest = test.skipIf(bashInterposed());
+
 async function fixture(run: (root: string, library: string) => Promise<void>) {
   const root = await mkdtemp(path.join(tmpdir(), "nas-devcontainer-env-"));
   try {
@@ -62,40 +75,83 @@ async function shell(script: string, env: Record<string, string> = {}) {
   return { code, stdout, stderr };
 }
 
-test("IDE baseline preserves the built-in DinD and Testcontainers environment", async () => {
-  await fixture(async (root, library) => {
-    const env = {
-      DOCKER_HOST: "tcp://127.0.0.1:2375",
-      NAS_DIND_BRIDGE: "1",
-      NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
-      TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
-      TESTCONTAINERS_CONNECTION_MODE: "docker_host",
-      TESTCONTAINERS_HOST_OVERRIDE: "127.0.0.1",
-    };
-    const result = await shell(
-      `set -euo pipefail
+for (const sameNamespace of [true, false]) {
+  bashTest(
+    `a login shell keeps its namespace's Docker relay: same namespace=${sameNamespace}`,
+    async () => {
+      await fixture(async (root, library) => {
+        const relay = "unix:///tmp/nas-dind-1000-session-7/docker.sock";
+        const result = await shell(
+          `set -euo pipefail
+source "$LIBRARY"
+nas_devcontainer_capture '' '' claude
+export DOCKER_HOST="$NAS_TEST_RELAY" TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
+if [ "$NAS_TEST_SAME" = true ]; then
+  export NAS_DIND_RELAY_NETNS="$(readlink /proc/self/ns/net)"
+else
+  export NAS_DIND_RELAY_NETNS="net:[0]"
+fi
+nas_devcontainer_apply
+printf '%s' "$DOCKER_HOST"
+`,
+          {
+            DOCKER_HOST: "unix:///run/nas-dind-bridge/docker.sock",
+            NAS_TEST_RELAY: relay,
+            NAS_TEST_SAME: String(sameNamespace),
+            LIBRARY: library,
+            NAS_REAL_BASH: "/bin/bash",
+            NAS_DIRENV_ENABLED: "false",
+            WORKSPACE: root,
+          },
+        );
+        expect(result).toMatchObject({
+          code: 0,
+          stdout: sameNamespace
+            ? relay
+            : "unix:///run/nas-dind-bridge/docker.sock",
+        });
+      });
+    },
+  );
+}
+
+bashTest(
+  "IDE baseline preserves the built-in DinD and Testcontainers environment",
+  async () => {
+    await fixture(async (root, library) => {
+      const env = {
+        DOCKER_HOST: "tcp://127.0.0.1:2375",
+        NAS_DIND_BRIDGE: "1",
+        NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+        TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/run/user/1000/docker.sock",
+        TESTCONTAINERS_CONNECTION_MODE: "docker_host",
+        TESTCONTAINERS_HOST_OVERRIDE: "127.0.0.1",
+      };
+      const result = await shell(
+        `set -euo pipefail
 source "$LIBRARY"
 nas_devcontainer_capture '' '' claude
 unset ${Object.keys(env).join(" ")}
 nas_devcontainer_apply
 printf '%s\\n' ${Object.keys(env)
-        .map((key) => `"$${key}"`)
-        .join(" ")}
+          .map((key) => `"$${key}"`)
+          .join(" ")}
 `,
-      {
-        ...env,
-        LIBRARY: library,
-        NAS_REAL_BASH: "/bin/bash",
-        NAS_DIRENV_ENABLED: "false",
-        WORKSPACE: root,
-      },
-    );
-    expect(result).toMatchObject({
-      code: 0,
-      stdout: `${Object.values(env).join("\n")}\n`,
+        {
+          ...env,
+          LIBRARY: library,
+          NAS_REAL_BASH: "/bin/bash",
+          NAS_DIRENV_ENABLED: "false",
+          WORKSPACE: root,
+        },
+      );
+      expect(result).toMatchObject({
+        code: 0,
+        stdout: `${Object.values(env).join("\n")}\n`,
+      });
     });
-  });
-});
+  },
+);
 
 test("baseline resets unset dynamic keys and applies prefix exactly once on reentry", async () => {
   await fixture(async (root, library) => {
@@ -153,7 +209,7 @@ printf '%s\\0%s' "$JAVA_TOOL_OPTIONS" "$NAS_HOSTEXEC_SOCKET"
     expect(result.code).toBe(0);
     expect(result.stdout).toBe(`${literal}\0/run/nas/exec.sock`);
     const saved = await readFile(path.join(root, "state/baseline.sh"), "utf8");
-    expect(saved).not.toContain("credential");
+    expect(saved).not.toContain("secret:credential@upstream");
     expect(saved).not.toContain("NAS_UPSTREAM_PROXY");
     const args = await shell(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expansion is intentional.

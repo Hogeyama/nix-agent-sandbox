@@ -287,9 +287,11 @@ function buildContainerState(
   },
 ): ContainerPlan {
   // The agent joins the sidecar's network namespace, so the daemon answers on
-  // loopback and every port an inner container publishes lands on the agent's
-  // own 127.0.0.1 -- what a locally installed Docker would do. `no_proxy`
-  // needs no addition: ProxyStage's baseline already carries 127.0.0.1.
+  // loopback. Inner containers publish on DIND_PUBLISH_IP; the entrypoint's
+  // DinD bridge mirrors those ports on 127.0.0.1 and points DOCKER_HOST at
+  // its relay -- what a locally installed Docker would look like. This TCP
+  // endpoint is what the bridge itself connects to. `no_proxy` needs no
+  // addition: ProxyStage's baseline already carries 127.0.0.1.
   const staticEnv: Record<string, string> = {
     DOCKER_HOST: `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
     NAS_DIND_BRIDGE: "1",

@@ -70,7 +70,10 @@ const binaryPath = await resolveMaskFilterBinPath();
 const sumiPath = await resolveSumiBinPath();
 const hasBrokerAndSumi = binaryPath !== null && sumiPath !== null;
 const hasPython3 = Bun.which("python3") !== null;
-const hasProcStatus = fs.existsSync("/proc/self/status");
+// The status is read by PID; a sandbox can show another PID namespace's /proc.
+const hasProcStatus =
+  fs.existsSync("/proc/self/status") &&
+  fs.readlinkSync("/proc/self") === String(process.pid);
 
 let tmpDir: string;
 

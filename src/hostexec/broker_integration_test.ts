@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readlinkSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -494,13 +495,30 @@ async function assertPostExitDisconnectStopsFilters(
   if (!primaryError && cleanupError) throw cleanupError;
 }
 
-test("HostExecBroker: disconnect after process_exit stops post-EOF filters for immediate allow", async () => {
-  await assertPostExitDisconnectStopsFilters("allow");
-});
+// A sandbox can run in its own PID namespace while showing another
+// namespace's /proc, where these tests' PIDs name other processes.
+const procMatchesPid = (() => {
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+})();
+const procTest = test.skipIf(!procMatchesPid);
 
-test("HostExecBroker: disconnect after process_exit stops post-EOF filters after approval", async () => {
-  await assertPostExitDisconnectStopsFilters("prompt");
-});
+procTest(
+  "HostExecBroker: disconnect after process_exit stops post-EOF filters for immediate allow",
+  async () => {
+    await assertPostExitDisconnectStopsFilters("allow");
+  },
+);
+
+procTest(
+  "HostExecBroker: disconnect after process_exit stops post-EOF filters after approval",
+  async () => {
+    await assertPostExitDisconnectStopsFilters("prompt");
+  },
+);
 
 test("HostExecBroker: falls back when no rule matches", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
@@ -777,75 +795,81 @@ test("HostExecBroker: rejects duplicate request IDs across approval groups", asy
   }
 });
 
-test("HostExecBroker: records command process lifecycle diagnostics", async () => {
-  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
-  const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await mkdtemp(
-    path.join(tmpdir(), "nas-hostexec-workspace-"),
-  );
-  const broker = new HostExecBroker({
-    paths,
-    sessionId: "sess_diagnostics",
-    profileName: "test",
-    notify: "off",
-    workspaceRoot: workspace,
-    sessionTmpDir: `${runtimeDir}/tmp`,
-    hostexec: makeConfig({
-      rules: [
-        {
-          id: "node-any",
-          match: { argv0: "node" },
-          cwd: { mode: "workspace-only", allow: [] },
-          env: {},
-          inheritEnv: { mode: "minimal", keys: [] },
-          approval: "allow",
-        },
-      ],
-    }),
-  });
-  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_diagnostics");
-  const execSocketPath = hostExecExecSocketPath(paths, "sess_diagnostics");
-  await broker.start(execSocketPath, controlSocketPath);
-  try {
-    const result = await sendStreamingRequest(
-      execSocketPath,
-      request(
-        ["-e", "process.stdout.write('ok')"],
-        workspace,
-        "req_diagnostics",
-      ),
+procTest(
+  "HostExecBroker: records command process lifecycle diagnostics",
+  async () => {
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+    const paths = await resolveHostExecRuntimePaths(runtimeDir);
+    const workspace = await mkdtemp(
+      path.join(tmpdir(), "nas-hostexec-workspace-"),
     );
-    expect(result.exitCode).toBe(0);
+    const broker = new HostExecBroker({
+      paths,
+      sessionId: "sess_diagnostics",
+      profileName: "test",
+      notify: "off",
+      workspaceRoot: workspace,
+      sessionTmpDir: `${runtimeDir}/tmp`,
+      hostexec: makeConfig({
+        rules: [
+          {
+            id: "node-any",
+            match: { argv0: "node" },
+            cwd: { mode: "workspace-only", allow: [] },
+            env: {},
+            inheritEnv: { mode: "minimal", keys: [] },
+            approval: "allow",
+          },
+        ],
+      }),
+    });
+    const controlSocketPath = hostExecBrokerSocketPath(
+      paths,
+      "sess_diagnostics",
+    );
+    const execSocketPath = hostExecExecSocketPath(paths, "sess_diagnostics");
+    await broker.start(execSocketPath, controlSocketPath);
+    try {
+      const result = await sendStreamingRequest(
+        execSocketPath,
+        request(
+          ["-e", "process.stdout.write('ok')"],
+          workspace,
+          "req_diagnostics",
+        ),
+      );
+      expect(result.exitCode).toBe(0);
 
-    const contents = await readFile(
-      path.join(runtimeDir, "diagnostics", "sess_diagnostics.jsonl"),
-      "utf8",
-    );
-    const events = contents
-      .trimEnd()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const spawned = events.find(
-      (event) =>
-        event.event === "command_spawned" &&
-        event.requestId === "req_diagnostics",
-    );
-    const exited = events.find(
-      (event) =>
-        event.event === "command_exited" &&
-        event.requestId === "req_diagnostics",
-    );
-    expect(spawned.process.pid).toBeGreaterThan(0);
-    expect(spawned.process.processGroupId).toBeGreaterThan(0);
-    expect(spawned.command).toBe("node");
-    expect(spawned.argumentCount).toBe(2);
-    expect(exited.exitCode).toBe(0);
-  } finally {
-    await broker.close();
-    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
-    await rm(workspace, { recursive: true, force: true }).catch(() => {});
-  }
-});
+      const contents = await readFile(
+        path.join(runtimeDir, "diagnostics", "sess_diagnostics.jsonl"),
+        "utf8",
+      );
+      const events = contents
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const spawned = events.find(
+        (event) =>
+          event.event === "command_spawned" &&
+          event.requestId === "req_diagnostics",
+      );
+      const exited = events.find(
+        (event) =>
+          event.event === "command_exited" &&
+          event.requestId === "req_diagnostics",
+      );
+      expect(spawned.process.pid).toBeGreaterThan(0);
+      expect(spawned.process.processGroupId).toBeGreaterThan(0);
+      expect(spawned.command).toBe("node");
+      expect(spawned.argumentCount).toBe(2);
+      expect(exited.exitCode).toBe(0);
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    }
+  },
+);
 
 test("HostExecBroker: records command exit even when process identity is unavailable", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));

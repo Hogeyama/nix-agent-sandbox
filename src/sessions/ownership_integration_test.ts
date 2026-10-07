@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -20,6 +21,9 @@ function hasFlock(): boolean {
 
 function hasProcStartTime(): boolean {
   try {
+    // A sandbox can run in its own PID namespace while showing another
+    // namespace's /proc, where this PID's stat belongs to another process.
+    if (readlinkSync("/proc/self") !== String(process.pid)) return false;
     return readFileSync(`/proc/${process.pid}/stat`, "utf8").length > 0;
   } catch {
     return false;

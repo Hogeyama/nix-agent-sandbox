@@ -63,7 +63,13 @@ nas_devcontainer_capture() {
 }
 
 nas_devcontainer_apply() {
-  local nas_key nas_exports
+  local nas_key nas_exports nas_relay_host=
+  # The baseline holds the outer namespace's Docker endpoint. A Bash in an
+  # isolated namespace was already pointed at that namespace's relay.
+  if [ -n "${NAS_DIND_RELAY_NETNS:-}" ] &&
+     [ "$NAS_DIND_RELAY_NETNS" = "$(command -p readlink /proc/self/ns/net 2>/dev/null)" ]; then
+    nas_relay_host=${DOCKER_HOST:-}
+  fi
   # Old Git entries and direnv reverse-diffs describe the previous session.
   while IFS= read -r nas_key; do unset "$nas_key"; done < <(compgen -e GIT_CONFIG_)
   unset DIRENV_DIFF DIRENV_DIR DIRENV_FILE DIRENV_WATCHES DIRENV_LAYOUT_DIR NAS_UPSTREAM_PROXY
@@ -71,5 +77,9 @@ nas_devcontainer_apply() {
   nas_exports=$("$NAS_REAL_BASH" /usr/local/bin/nas-direnv-exec \
     "$WORKSPACE" /usr/local/lib/nas/devcontainer/env-ops.sh \
     "$NAS_DEVCONTAINER_PATH_PREFIX" --export) || return
-  eval "$nas_exports"
+  eval "$nas_exports" || return
+  if [ -n "$nas_relay_host" ]; then
+    export DOCKER_HOST="$nas_relay_host" TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1
+    unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONTEXT
+  fi
 }
