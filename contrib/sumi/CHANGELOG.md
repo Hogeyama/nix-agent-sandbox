@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.5.0] - 2026-10-08
+
 ### Added
 
 - `sumi serve --secrets-file FILE --listen ADDR` runs a mask broker on the host, so hooks and `run` in another environment, such as a Dev Container, can mask without the secrets file being mounted there. ADDR is a Unix socket path or `unix:///path`. When the secrets file changes, connections that start afterward use the new values; if the new contents cannot be read, `sumi serve` keeps the previous values and prints a warning.
