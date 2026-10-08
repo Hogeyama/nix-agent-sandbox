@@ -22,18 +22,22 @@ nas の bridge の gateway、relay、ensure をそのまま使い、次の点を
 - relay が `/containers/json` から公開ポートを選ぶときのアドレスを `--publish-ip` で指定できるようにする。nas では gateway の接続先と同じ値だが、Dev Container では dockerd が報告する `0.0.0.0` と sidecar の hostname が別の値になる。
 - relay が Docker API を `--api tcp://127.0.0.1:PORT` で提供できるようにする。nas の relay は `/tmp` の下に directory と UNIX socket を作るが、Dev Container の sandbox はそこへの書き込みを許さない。TCP なら file を書かずに済み、`DOCKER_HOST` を compose に固定で書ける。namespace の loopback には、その namespace の中からしか接続できない。
 - `--api` が TCP のとき、relay は `/tmp` に directory を作らず、`relay.log` も書かない。sandbox の relay は警告を捨てる。公開ポートの衝突は警告とは別に、start の応答のエラーとして利用者に届くので、警告を捨てても失敗は見える。serve の中の relay は今と同じく、socket と同じ directory の `relay.log` に書く。
-- serve も `--api` を受け付け、serve の中で動かす relay（serve 自身の namespace の relay）に渡す。`DOCKER_HOST` は sandbox の外でも同じ値が使われるが、`bash-env` の snippet は serve と同じ namespace では何もしない。serve の relay が同じ TCP アドレスで待ち受けないと、sandbox の外の `docker` は繋がらない。
+- serve も `--api` を受け付け、serve の中で動かす relay（serve 自身の namespace の relay）に渡す。`DOCKER_HOST` は sandbox の外でも同じ値が使われるが、`env-file` の snippet は serve と同じ namespace では何もしない。serve の relay が同じ TCP アドレスで待ち受けないと、sandbox の外の `docker` は繋がらない。
 - API のポートと、relay が転送する公開ポートは同じ `127.0.0.1` を使う。API は relay の起動時に待ち受けるので、後から同じ番号を公開したコンテナのポートは転送しない。この衝突は既存の衝突と同じく start の応答のエラーになる。README の例では `tcp://127.0.0.1:2375` を使う。Docker client が平文の TCP に期待する番号で、コンテナの公開ポートとして選ばれることは少ない。
-- relay の abstract socket の名前の prefix を `--name-prefix` で指定できるようにする。nas の既定値は今の `nas-dind`、`contrib/dind-bridge` の既定値は `dind-bridge` にする。`bash-env` の snippet も同じ prefix から名前を作る。
+- relay の abstract socket の名前の prefix を `--name-prefix` で指定できるようにする。nas の既定値は今の `nas-dind`、`contrib/dind-bridge` の既定値は `dind-bridge` にする。`env-file` の snippet も同じ prefix から名前を作る。
 
 `dind-bridge.mjs` は entry だけにし、gateway と引数の処理を別の module に移す。1 file に bundle すると、全 module の `import.meta.url` が bundle 自身を指す。そのため、entry かどうかを `import.meta.url` で判定している今の作りでは、nas の entry が bundle の中でも起動してしまう。
 
 `contrib/dind-bridge` の CLI は nas の bridge の CLI に次を足す。
 
 - `--version`: `dind-bridge X.Y.Z` を出力する。
-- `bash-env`: `BASH_ENV` で読む snippet を出力する。snippet は、serve が記録した namespace と現在の namespace が違い、relay の abstract socket の名前が `/proc/self/net/unix` に無いときだけ `ensure` を呼ぶ。`ensure` が失敗したら警告を出し、コマンドは続ける。Dockerfile で一度だけ生成し、引数はその時点の値を snippet に書き込む。`--api` を必須にする。
-  - `BASH_ENV` は sandbox の外も含め、container の中の非対話 bash がすべて読む。VS Code server のスクリプトや git hook もその対象になる。snippet は、namespace の比較が済むまで process を起動しない。sandbox の外では file の読み込み 2 回で終わる。
-  - Claude Code の sandbox はコマンドごとに netns を作るので、sandbox の中では Bash ツールのコマンドごとに `ensure` と relay の起動が走る。docker を使わないコマンドもこの時間を払う。`ensure` は relay の応答を最大 5 秒待つ。普段の所要時間は検証で計り、README に書く。
+- `env-file`: Claude Code の `CLAUDE_ENV_FILE` に指定する snippet を出力する。snippet は、serve が記録した namespace と現在の namespace が違い、relay の abstract socket の名前が `/proc/self/net/unix` に無いときだけ `ensure` を呼ぶ。`ensure` が失敗したら警告を出し、コマンドは続ける。Dockerfile で一度だけ生成し、引数はその時点の値を snippet に書き込む。`--api` を必須にする。
+  - Claude Code は `CLAUDE_ENV_FILE` の中身を、Bash ツールのコマンドを走らせる直前に、同じ shell process の中で実行する。README の構成では、`CLAUDE_ENV_FILE` を `.claude/settings.json` の `env` に書く。
+  - `BASH_ENV` を採らない理由は 2 つある。1 つ目に、Claude Code が zsh を使う構成では読まれない。Claude Code は `$SHELL` が bash か zsh ならそれを使い、それ以外なら zsh を優先して探す。2 つ目に、`BASH_ENV` は container の中の非対話 bash がすべて読むので、VS Code server のスクリプトや git hook にまで影響が及ぶ。`CLAUDE_ENV_FILE` は Claude Code の Bash ツールのコマンドにしか効かない。
+  - snippet は bash と zsh の両方で読まれるので、POSIX sh の構文だけで書く。`set -u` や zsh の `nomatch` が有効でも壊れないようにする。
+  - `CLAUDE_CODE_SHELL_PREFIX` は採らない。Bash ツールだけでなく hook や MCP server の起動コマンドも包むので、効く範囲が広すぎる。
+  - 前提が 2 つあり、検証で最初に確かめる。1 つ目は、`CLAUDE_ENV_FILE` が sandbox の内側の shell で実行されること。外側で実行されると、relay は外の netns に立ち、この設計は成り立たない。2 つ目は、hook との共存である。SessionStart などの hook も `CLAUDE_ENV_FILE` の file に書き込むので、利用者がこの変数を自分で設定したときに、生成した snippet が上書きされたり、書き込みがエラーになったりしないかを確かめる。共存できなければ、SessionStart hook が snippet を `CLAUDE_ENV_FILE` に書き足す形に切り替える。
+  - Claude Code の sandbox はコマンドごとに netns を作るので、sandbox の中では Bash ツールのコマンドごとに `ensure` と relay の起動が走る。docker を使わないコマンドもこの時間を払う。`ensure` は relay の応答を最大 5 秒待つ。普段の所要時間は検証で計り、README に書く。netns の中で待ち受けられるのはその中で動く process だけなので、この起動は仕込む場所を変えても無くならない。
 - `serve` の前処理: socket ごとの abstract lock で多重起動を防ぐ。lock を取れたら、前回の serve が残した socket を消し、自分の namespace を socket と同じ directory の `base-netns` に書く。container を再起動すると process は消えるが、`/run` の file は残ることがある。
 
 serve は agent container の entrypoint から起動する。entrypoint は serve を background で起動し、`ready` を読んでから元の command を `exec` する。entrypoint は container を起動するたびに走るので、再起動しても serve が起動する。devcontainer の `postStartCommand` は使わない。background に残した process がコマンドの終了と一緒に止められることがあり、起動の順序も image の外で決まるからである。serve が落ちても起動し直す仕組みは持たない。そのときは `ensure` が失敗して警告が出るので、利用者が container を再起動する。README にこの手順を書く。
@@ -54,19 +58,21 @@ release は sumi と同じ形にする。`dind-bridge-vX.Y.Z` の tag で workfl
 - Testcontainers も同じ制約を受ける。README に次の 2 点を書く。
   - ryuk の image も事前に `docker load` するか、`TESTCONTAINERS_RYUK_DISABLED=true` で ryuk を使わない。
   - ryuk は daemon の socket を bind mount する。そのため、`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` に、sidecar の中で dockerd が待ち受ける path を渡す。
-- nas の bash wrapper に埋め込まれた hook は `bash-env` と共通化しない。wrapper はマスクと一体で動いており、変更すると nas の既存の挙動を壊す危険がある。
+- nas の bash wrapper に埋め込まれた hook は `env-file` の snippet と共通化しない。wrapper はマスクと一体で動いており、変更すると nas の既存の挙動を壊す危険がある。
 - この repository には、特定の利用者の repository や組織の名前を残さない。
 
 ## 検証
 
 nas の bridge の unit test に、UNIX socket の Docker 接続先、公開 IP と接続先を分けたときのポートの再現、TCP の API、未知の引数の拒否を足す。TCP の API については、relay が `/tmp` に何も作らないこと、serve の relay も同じアドレスで待ち受けること、API と同じ番号の公開ポートが start の応答のエラーになることを確かめる。既存の test は既定値のまま通す。
 
-`contrib/dind-bridge` の unit test で、`--version`、`bash-env` の snippet の分岐（marker が無い、同じ namespace、relay が生存、`ensure` の失敗、`set -u` の shell）、serve の多重起動防止と残った socket の扱いを確かめる。bundle を Node.js で動かし、serve と ensure を通す test も置く。nix の devShell に Node.js を足し、この test が黙って skip しないようにする。
+`contrib/dind-bridge` の unit test で、`--version`、`env-file` の snippet の分岐（marker が無い、同じ namespace、relay が生存、`ensure` の失敗、`set -u` の shell）と、bash と zsh の両方で読めること、serve の多重起動防止と残った socket の扱いを確かめる。bundle を Node.js で動かし、serve と ensure を通す test も置く。nix の devShell に Node.js を足し、この test が黙って skip しないようにする。
 
 integration test では、internal network の rootless DinD と、socket を volume で共有した別の agent コンテナを立てる。bwrap で作った namespace から、公開ポートへの接続と停止後の切断を確かめる。
 
 最後に、README の構成の Dev Container をホストで立て、次を確かめる。
-- Claude Code の sandbox が `BASH_ENV` をコマンドに渡すこと。この設計の前提なので最初に確かめる。
+- `CLAUDE_ENV_FILE` が sandbox の内側の shell で実行されること。この設計の前提なので最初に確かめる。
+- 利用者が設定した `CLAUDE_ENV_FILE` と、SessionStart などの hook の書き込みが共存すること。
+- Claude Code の shell が bash でも zsh でも、sandbox の中から docker が使えること。
 - sandbox の中から `docker run -p` と Testcontainers が動くこと。
 - sandbox の外でも同じ `DOCKER_HOST` で `docker` が動くこと。
 - コマンドが終わると relay が終わること。
