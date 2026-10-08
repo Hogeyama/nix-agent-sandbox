@@ -76,9 +76,7 @@
     },
     "filesystem": {
       "allowWrite": ["./.local/tmp"],
-      "denyWrite": [
-        "~/.claude",
-        "~/.claude.json",
+      "denyWrite": [ // 作業領域内で保護するもの。作業領域外は allowWrite に無いので書けない
         "/srv/project/.claude-state/settings.json",
         "/srv/project/.claude-state/settings.local.json",
         "/srv/project/.claude"
@@ -126,7 +124,7 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の�
 claude --permission-mode auto
 ```
 
-`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。元のホスト側の `~/.claude` と `~/.claude.json` は、`denyWrite` で Bash からの書込みを禁止する。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
+`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。Bash が書き込めるのは作業領域と `allowWrite` だけなので、元のホスト側の `~/.claude` と `~/.claude.json` には `denyWrite` を書かなくても書き込めない。作業領域をホーム自体やその親にすると、これが成り立たなくなる。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
 
 本体の Edit・Write・NotebookEdit はツールごと除去する。エージェントによるファイルの書込みは sandbox 内の Bash だけになり、`allowWrite` と `denyWrite` がそのすべてに適用される。編集は `sed` 等のコマンドで行うことになる。
 
