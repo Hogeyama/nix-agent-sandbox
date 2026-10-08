@@ -102,29 +102,26 @@ ENTRYPOINT ["/usr/local/bin/dind-bridge-entrypoint.sh"]
 
 ### `.devcontainer/dind-bridge-entrypoint.sh`
 
-serve はコンテナの起動のたびに entrypoint から起動する。Docker の `/_ping` が成功するまで最大 30 秒待ち、その後に bridge の待ち受けを開始して `ready` を出力する。entrypoint は `ready` を読んでから元のコマンドを実行し、起動に失敗したら終了する。Compose の `depends_on` だけでは dockerd の準備完了を待たないため、serve 自身が待つ。
+entrypoint は Dev Container の起動時に実行されるスクリプト。serve をバックグラウンドで起動し、`ready` を待たずに元のコマンドを実行する。serve の失敗でも本体の起動は止めない。
+
+serve の `ready` はローカルの bridge が待ち受けを開始したことだけを表し、Docker の準備完了は表さない。各 relay の最初の Docker API リクエストが `/_ping` の成功を最大 30 秒待ってから中継される。待機に失敗すると、そのリクエストにエラーを返し、次のリクエストで再試行する。
 
 ```sh
 #!/bin/sh
 set -eu
-fifo=$(mktemp -u /run/dind-bridge/ready.XXXXXX)
-mkfifo -m 600 "$fifo"
+# serve 起動前の Bash でも、自分が sandbox 内か判定できるよう記録する。
+readlink /proc/self/ns/net > /run/dind-bridge/base-netns
 dind-bridge serve \
   --socket /run/dind-bridge/bridge.sock \
   --docker-host unix:///var/run/dind/docker.sock \
   --publish-host dind \
   --publish-ip 0.0.0.0 \
-  --api tcp://127.0.0.1:2375 > "$fifo" &
-read -r ready < "$fifo" || ready=
-rm -f "$fifo"
-if [ "$ready" != ready ]; then
-  echo 'dind-bridge: serve did not start; Docker is unavailable' >&2
-  exit 1
-fi
+  --api tcp://127.0.0.1:2375 \
+  </dev/null >>/run/dind-bridge/serve.log 2>&1 &
 exec "$@"
 ```
 
-`/run/dind-bridge` は dind-bridge 専用の directory にする。serve は起動時に、そこに前回の serve が残した socket を消す。serve が落ちても起動し直す仕組みは持たない。起動後に Docker API の接続が失敗するようになったら serve のログを確認し、コンテナを再起動する。relay の待ち受けだけが起動できる場合には `relay unavailable` の警告が出ないこともある。
+`/run/dind-bridge` は dind-bridge 専用の directory にする。serve は起動時に、そこに前回の serve が残した socket を消す。serve が落ちても起動し直す仕組みは持たない。起動後に Docker API の接続が失敗するようになったら `/run/dind-bridge/serve.log` と `relay.log` を確認し、コンテナを再起動する。relay の待ち受けだけが起動できる場合には `relay unavailable` の警告が出ないこともある。
 
 ### `.claude/settings.json`
 
@@ -144,7 +141,7 @@ exec "$@"
 
 `CLAUDE_ENV_FILE` は Claude Code の Bash ツールのコマンドにだけ効く。Claude Code が bash と zsh のどちらを使っても読まれる。SessionStart などの hook には別のファイルが渡されるので、hook が環境変数を書き出す設定とも共存できる。
 
-sandbox の中では、Bash ツールのコマンドごとに network namespace が新しくなるので、コマンドごとに relay の起動が走る。Docker を使わないコマンドもこの時間を払う。
+sandbox の中では、Bash ツールのコマンドごとに network namespace が新しくなるので、コマンドごとに relay の起動が走る。Docker を使わないコマンドも relay 自体の起動時間は払うが、Docker の準備完了や最初のポート同期は待たない。
 
 実際の Claude Code でのコマンドごとの追加時間は、この README ではまだ実測値を示していない。
 

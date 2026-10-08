@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Wait up to 30 seconds for a successful Docker ping before `serve` starts the bridge and reports readiness. The example entrypoint now exits on startup failure.
+- Start the Dev Container and its relays without waiting for Docker. Only Docker API requests wait for daemon readiness (up to 30 seconds, retrying on the next request after failure); `ready` now denotes local listeners only. The example entrypoint starts serve in the background without a readiness barrier.
 
 ### Added
 

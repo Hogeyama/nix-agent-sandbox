@@ -81,15 +81,18 @@ async function main(args) {
     );
     return;
   }
+  const opts = parseOptions(command, rest, DEFAULTS);
   if (command === "serve") {
-    const opts = parseOptions("serve", rest);
-    // Compose's short depends_on only orders startup. Do not announce ready
-    // while the sidecar is still starting, or leave a namespace marker behind
-    // when Docker never comes up.
-    await waitForDocker(opts["docker-host"]);
     await prepareServe({ socket: opts.socket, api: opts.api });
   }
-  await runCli(args, { script: process.argv[1], defaults: DEFAULTS });
+  await runCli(args, {
+    script: process.argv[1],
+    defaults: DEFAULTS,
+    waitForInitialSync: false,
+    // Probe the raw gateway API: this also tolerates serve still starting.
+    // The local listener (and an ordinary Bash command) never waits here.
+    beforeFirstRequest: () => waitForDocker(`unix://${opts.socket}.api`),
+  });
 }
 
 main(process.argv.slice(2)).catch((error) => {

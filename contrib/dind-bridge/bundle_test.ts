@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
-import { createServer as httpServer, request } from "node:http";
+import {
+  createServer as httpServer,
+  request,
+  type ServerResponse,
+} from "node:http";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,40 +121,69 @@ test("env-file rejects an API address off the loopback", async () => {
   expect(result.stderr).toContain("must be tcp://127.0.0.1:PORT");
 });
 
-test("serve waits for Docker before printing ready or recording its namespace", async () => {
+test("serve and ensure start before Docker; only API requests wait for readiness", async () => {
   const work = await mkdtemp(join(tmpdir(), "nas-dind-bridge-startup-"));
   let healthy = false;
   let requested: () => void = () => {};
   const pinged = new Promise<void>((resolve) => {
     requested = resolve;
   });
+  const pendingMetadata = new Set<ServerResponse>();
   const docker = httpServer((req, res) => {
     if (req.url === "/_ping") {
       res.writeHead(healthy ? 200 : 503);
       res.end(healthy ? "OK" : "starting");
       requested();
+    } else if (!healthy) {
+      pendingMetadata.add(res);
+      res.on("close", () => pendingMetadata.delete(res));
     } else {
       res.setHeader("content-type", "application/json");
       res.end("[]");
     }
   });
   let serve: ReturnType<typeof startServe> | undefined;
+  let relayPid: number | undefined;
   try {
     await listen(docker, { host: "127.0.0.1", port: 0 });
     const apiPort = await freePort();
     serve = startServe(join(work, "bridge.sock"), port(docker), apiPort);
-    let ready = false;
-    void serve.ready.then(() => {
-      ready = true;
+    expect(await serve.ready).toBe("ready\n");
+    expect(existsSync(join(work, "base-netns"))).toBe(true);
+    const relayApi = await freePort();
+    const instance = `t${crypto.randomUUID().slice(0, 8)}`;
+    const ensured = await run([
+      "ensure",
+      "--socket",
+      join(work, "bridge.sock"),
+      "--instance",
+      instance,
+      "--api",
+      `tcp://127.0.0.1:${relayApi}`,
+    ]);
+    expect(ensured.code).toBe(0);
+    const ns = (await readlink("/proc/self/ns/net")).replace(/[^0-9]/g, "");
+    const { socket: status, response: relayStatus } = await gatewayRequest(
+      `\0dind-bridge-${process.getuid?.()}-${instance}-${ns}`,
+      { kind: "status" },
+    );
+    status.destroy();
+    relayPid = relayStatus.pid;
+    let answered = false;
+    const response = ping(relayApi).then((body) => {
+      answered = true;
+      return body;
     });
     await pinged;
     await Bun.sleep(50);
-    expect(ready).toBe(false);
-    expect(existsSync(join(work, "base-netns"))).toBe(false);
+    expect(answered).toBe(false);
     healthy = true;
-    expect(await serve.ready).toBe("ready\n");
+    for (const res of pendingMetadata) res.end("[]");
+    expect(await response).toBe("OK");
     expect(await ping(apiPort)).toBe("OK");
   } finally {
+    for (const res of pendingMetadata) res.end("[]");
+    if (relayPid) process.kill(relayPid, "SIGTERM");
     serve?.proc.kill("SIGTERM");
     await serve?.proc.exited;
     await closeServer(docker);
@@ -161,7 +194,9 @@ test("serve waits for Docker before printing ready or recording its namespace", 
 test("under Node.js, serve and ensure carry the Docker API end to end", async () => {
   const work = await mkdtemp(join(tmpdir(), "nas-dind-bridge-e2e-"));
   const socket = join(work, "bridge.sock");
-  const docker = httpServer((_req, res) => res.end("OK"));
+  const docker = httpServer((req, res) => {
+    res.end(req.url === "/containers/json" ? "[]" : "OK");
+  });
   let serve: ReturnType<typeof startServe> | undefined;
   let relayPid: number | undefined;
   try {

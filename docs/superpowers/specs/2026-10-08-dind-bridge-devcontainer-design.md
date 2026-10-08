@@ -45,7 +45,7 @@ nas の bridge の gateway、relay、ensure をそのまま使い、次の点を
   - Claude Code の sandbox はコマンドごとに netns を作るので、sandbox の中では Bash ツールのコマンドごとに `ensure` と relay の起動が走る。docker を使わないコマンドもこの時間を払う。`ensure` は relay の応答を最大 5 秒待つ。普段の所要時間は検証で計り、README に書く。netns の中で待ち受けられるのはその中で動く process だけなので、この起動は仕込む場所を変えても無くならない。
 - `serve` の前処理: socket ごとの abstract lock で多重起動を防ぐ。lock を取れたら、前回の serve が残した socket を消し、自分の namespace を socket と同じ directory の `base-netns` に書く。container を再起動すると process は消えるが、`/run` の file は残ることがある。
 
-serve は agent container の entrypoint から起動する。entrypoint は serve を background で起動し、`ready` を読んでから元の command を `exec` する。entrypoint は container を起動するたびに走るので、再起動しても serve が起動する。devcontainer の `postStartCommand` は使わない。background に残した process がコマンドの終了と一緒に止められることがあり、起動の順序も image の外で決まるからである。serve が落ちても起動し直す仕組みは持たない。そのときは `ensure` が失敗して警告が出るので、利用者が container を再起動する。README にこの手順を書く。
+serve は agent container の entrypoint から起動する。entrypoint は serve を background で起動し、`ready` を待たずに元の command を `exec` する。serve の `ready` は local listener の準備完了だけを示す。standalone の relay は初回の port sync を background で行い、Docker API の初回リクエストだけが daemon の ping 成功と port sync を待つ。ping の待機は最大 30 秒で、失敗すると当該リクエストへエラーを返し、次のリクエストで再試行する。entrypoint は container を起動するたびに走るので、再起動しても serve が起動する。devcontainer の `postStartCommand` は使わない。background に残した process がコマンドの終了と一緒に止められることがあり、起動の順序も image の外で決まるからである。serve が落ちても起動し直す仕組みは持たない。そのときは Docker API のリクエストが失敗するので、利用者が serve のログを確認し container を再起動する。README にこの手順を書く。
 
 ## 配布
 

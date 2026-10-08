@@ -174,7 +174,10 @@ function relayOptions(opts) {
  * Run one bridge command. `script` is the file a detached relay is started
  * from; `defaults` fills options the caller did not give.
  */
-export async function runCli(args, { script, defaults = {} }) {
+export async function runCli(
+  args,
+  { script, defaults = {}, waitForInitialSync = true, beforeFirstRequest },
+) {
   const [mode, ...rest] = args;
   const opts = parseOptions(mode, rest, defaults);
   if (mode === "serve") {
@@ -196,6 +199,8 @@ export async function runCli(args, { script, defaults = {} }) {
         socketPath: opts.socket,
         apiPath: `${directory}/docker.sock`,
         api,
+        waitForInitialSync,
+        beforeFirstRequest,
         publishHost: opts["publish-ip"] ?? publishHost,
         onWarning: (error) =>
           void appendFile(
@@ -218,7 +223,11 @@ export async function runCli(args, { script, defaults = {} }) {
     return;
   }
   const runtime = await import("./dind-bridge-runtime.mjs");
-  const options = relayOptions(opts);
+  const options = {
+    ...relayOptions(opts),
+    waitForInitialSync,
+    beforeFirstRequest,
+  };
   if (mode === "relay") {
     await (await runtime.runRelay(options)).stopped;
     process.exit(0);

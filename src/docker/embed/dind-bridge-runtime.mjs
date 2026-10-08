@@ -78,6 +78,8 @@ export async function startRelay({
   bindHost = "127.0.0.1",
   pollMs = 1000,
   onWarning = () => {},
+  waitForInitialSync = true,
+  beforeFirstRequest,
 }) {
   const dockerApi = `${socketPath}.api`;
   const sockets = new Set();
@@ -184,6 +186,20 @@ export async function startRelay({
       );
   };
 
+  // Standalone relays can listen immediately, leaving daemon readiness and
+  // the initial port snapshot to Docker clients rather than every Bash tool.
+  let apiReady;
+  const prepareApi = () => {
+    apiReady ??= (async () => {
+      await beforeFirstRequest();
+      await syncing?.catch(() => {});
+      await sync();
+    })().catch((error) => {
+      apiReady = undefined;
+      throw error;
+    });
+    return apiReady;
+  };
   const proxy = async (req, response, head) => {
     let upstream;
     let dockerSocket;
@@ -205,6 +221,10 @@ export async function startRelay({
         ? await splitUpgradeBody(req, response, head)
         : {};
       if (response.destroyed || closed) return;
+      if (beforeFirstRequest) {
+        await prepareApi();
+        if (response.destroyed || closed) return;
+      }
       const started =
         req.method === "POST" ? START.exec(req.url)?.[1] : undefined;
       upstream = request({
@@ -293,7 +313,8 @@ export async function startRelay({
     // publishing the same port is the one reported as a conflict.
     await listen(server, api ?? apiPath);
     if (!api) await chmod(apiPath, 0o600);
-    await sync().catch(() => {});
+    const initialSync = sync().catch(() => {});
+    if (waitForInitialSync) await initialSync;
     timer = setInterval(() => void sync().catch(() => {}), pollMs);
   } catch (error) {
     await close();
@@ -388,6 +409,8 @@ export async function runRelay({
   api,
   publishHost,
   namePrefix,
+  waitForInitialSync = true,
+  beforeFirstRequest,
   alone = namespaceAlone,
   checkMs = 30_000,
   start = startRelay,
@@ -431,6 +454,8 @@ export async function runRelay({
       socketPath,
       apiPath: paths.apiPath,
       api,
+      waitForInitialSync,
+      beforeFirstRequest,
       ...(publishHost === undefined ? {} : { publishHost }),
       onWarning: log,
     });
