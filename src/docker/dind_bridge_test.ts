@@ -142,6 +142,12 @@ async function fixture(fn: (ctx: any) => Promise<void>) {
     } else res.end("OK");
   });
   docker.on("upgrade", (req, socket, head) => {
+    if (req.url === "/session") {
+      socket.end(
+        `HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n${JSON.stringify(req.headersDistinct["x-docker-expose-session-grpc-method"])}`,
+      );
+      return;
+    }
     if (req.url === "/exec-start") {
       // Like Docker, answer only once the whole request body has arrived.
       void splitUpgradeBody(req, socket, head).then(
@@ -453,6 +459,30 @@ test("HTTP upgrade preserves Docker hijack bytes in both directions", async () =
       } finally {
         client.destroy();
       }
+    }
+  });
+});
+
+test("a repeated request header reaches Docker as separate lines", async () => {
+  // BuildKit puts each session method it serves on a line of its own, and
+  // Docker takes each line as one method name.
+  const methods = [
+    "/moby.filesync.v1.FileSync/DiffCopy",
+    "/moby.filesync.v1.FileSync/TarStream",
+  ];
+  await fixture(async (ctx) => {
+    await ctx.relay();
+    const client = await openSocket({ path: ctx.apiPath });
+    try {
+      const response = readAll(client);
+      client.write(
+        `POST /session HTTP/1.1\r\nHost: docker\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n${methods.map((method) => `X-Docker-Expose-Session-Grpc-Method: ${method}\r\n`).join("")}\r\n`,
+      );
+      const result = (await response).toString();
+      expect(result).toContain("101 UPGRADED");
+      expect(result).toEndWith(JSON.stringify(methods));
+    } finally {
+      client.destroy();
     }
   });
 });
