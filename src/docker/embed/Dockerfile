@@ -3,7 +3,7 @@
 FROM ubuntu:26.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  git curl ca-certificates bash docker.io docker-compose-v2 \
+  git curl ca-certificates bash docker.io docker-compose-v2 docker-buildx \
   gh ripgrep fd-find python3 python-is-python3 \
   gnupg unzip jq direnv \
   bubblewrap socat \
