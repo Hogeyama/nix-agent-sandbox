@@ -1,6 +1,6 @@
 # dind-bridge
 
-nas を使わずに Dev Container で Claude Code を動かすときに、Claude Code の Bash sandbox の中から rootless DinD の Docker を使えるようにする。Docker API の操作（`docker run` や `docker build`）と、起動したコンテナの公開 TCP ポート（`docker run -p`）への接続が sandbox の中で動く。Testcontainers のように、公開ポートへ `127.0.0.1` で接続するライブラリもそのまま動く。
+nas を使わずに Dev Container で Claude Code を動かすときに、Claude Code の Bash sandbox の中から rootless DinD の Docker を使えるようにする。Docker API の操作と、起動したコンテナの公開 TCP ポート（`docker run -p`）への接続を sandbox の中へ中継する。Testcontainers のように、公開ポートへ `127.0.0.1` で接続するライブラリでの利用も想定している。イメージの事前投入や ryuk の設定が必要で、実際の Claude Code と Testcontainers を組み合わせた一連の動作は、このリポジトリの自動テストでは未検証。
 
 nas の DinD bridge を単体で配布するもので、Node.js 22 以上で動く 1 ファイルの実行ファイルとして配る。
 
@@ -91,7 +91,7 @@ RUN curl -fsSLo /usr/local/bin/dind-bridge \
       > /etc/dind-bridge/env.sh \
  && install -d -m 700 -o node -g node /run/dind-bridge
 
-COPY dind-bridge-entrypoint.sh /usr/local/bin/
+COPY --chmod=755 dind-bridge-entrypoint.sh /usr/local/bin/
 # serve と Claude Code は同じ user で動かす。serve の socket はその user にしか開かない。
 # sidecar の rootless dockerd も uid 1000 なので、Docker socket にもこの user で届く。
 USER node
@@ -102,7 +102,7 @@ ENTRYPOINT ["/usr/local/bin/dind-bridge-entrypoint.sh"]
 
 ### `.devcontainer/dind-bridge-entrypoint.sh`
 
-serve はコンテナの起動のたびに entrypoint から起動する。`ready` を読んでから元のコマンドを実行するので、Dev Container が使い始める時点で Docker が使える。
+serve はコンテナの起動のたびに entrypoint から起動する。Docker の `/_ping` が成功するまで最大 30 秒待ち、その後に bridge の待ち受けを開始して `ready` を出力する。entrypoint は `ready` を読んでから元のコマンドを実行し、起動に失敗したら終了する。Compose の `depends_on` だけでは dockerd の準備完了を待たないため、serve 自身が待つ。
 
 ```sh
 #!/bin/sh
@@ -119,11 +119,12 @@ read -r ready < "$fifo" || ready=
 rm -f "$fifo"
 if [ "$ready" != ready ]; then
   echo 'dind-bridge: serve did not start; Docker is unavailable' >&2
+  exit 1
 fi
 exec "$@"
 ```
 
-`/run/dind-bridge` は dind-bridge 専用の directory にする。serve は起動時に、そこに前回の serve が残した socket を消す。serve が落ちても起動し直す仕組みは持たない。Bash ツールのコマンドが `dind-bridge: relay unavailable` と警告するようになったら、コンテナを再起動する。
+`/run/dind-bridge` は dind-bridge 専用の directory にする。serve は起動時に、そこに前回の serve が残した socket を消す。serve が落ちても起動し直す仕組みは持たない。起動後に Docker API の接続が失敗するようになったら serve のログを確認し、コンテナを再起動する。relay の待ち受けだけが起動できる場合には `relay unavailable` の警告が出ないこともある。
 
 ### `.claude/settings.json`
 
@@ -145,6 +146,8 @@ exec "$@"
 
 sandbox の中では、Bash ツールのコマンドごとに network namespace が新しくなるので、コマンドごとに relay の起動が走る。Docker を使わないコマンドもこの時間を払う。
 
+実際の Claude Code でのコマンドごとの追加時間は、この README ではまだ実測値を示していない。
+
 ## イメージの取得
 
 sidecar は internal network にしかつながっていないので、イメージを取得できない。ホストで取得したイメージを tar にして読み込む。
@@ -156,6 +159,8 @@ docker save -o images.tar postgres:16
 # Dev Container の中で（sandbox の外でも中でもよい）
 docker load -i images.tar
 ```
+
+`docker build` の API も中継するが、build 中の `RUN apt-get` や `npm install` に外向きの通信経路は付かない。ベースイメージの事前投入に加え、ビルドが必要とする依存もオフラインで利用できるようにする必要がある。
 
 ## Testcontainers
 
@@ -195,6 +200,12 @@ dind-bridge --version
 ```sh
 bun contrib/dind-bridge/build.ts --outfile dind-bridge
 ```
+
+## 検証範囲
+
+自動テストは、Node.js で動かした bundle と、実際の rootless DinD に `unshare` で作った namespace から接続する構成を対象にする。後者は Claude Code の代役であり、実際の Dev Container の起動手順や Testcontainers 自体を検証するものではない。
+
+配布前に README の構成で、Claude Code の bash / zsh 双方から Docker と Testcontainers を使い、Dev Container の再起動後にも動くことを確認する。Docker を使わない同じコマンドについても bridge の有無で所要時間を比較する。
 
 ## ライセンス
 

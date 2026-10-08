@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed
+
+- Wait up to 30 seconds for a successful Docker ping before `serve` starts the bridge and reports readiness. The example entrypoint now exits on startup failure.
+
 ### Added
 
 - First release. `dind-bridge serve` connects a rootless DinD sidecar to Claude Code's Bash sandbox in a Dev Container without nas: the Docker API and containers' published TCP ports reach commands in the sandbox on `127.0.0.1`.

@@ -117,6 +117,47 @@ test("env-file rejects an API address off the loopback", async () => {
   expect(result.stderr).toContain("must be tcp://127.0.0.1:PORT");
 });
 
+test("serve waits for Docker before printing ready or recording its namespace", async () => {
+  const work = await mkdtemp(join(tmpdir(), "nas-dind-bridge-startup-"));
+  let healthy = false;
+  let requested: () => void = () => {};
+  const pinged = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  const docker = httpServer((req, res) => {
+    if (req.url === "/_ping") {
+      res.writeHead(healthy ? 200 : 503);
+      res.end(healthy ? "OK" : "starting");
+      requested();
+    } else {
+      res.setHeader("content-type", "application/json");
+      res.end("[]");
+    }
+  });
+  let serve: ReturnType<typeof startServe> | undefined;
+  try {
+    await listen(docker, { host: "127.0.0.1", port: 0 });
+    const apiPort = await freePort();
+    serve = startServe(join(work, "bridge.sock"), port(docker), apiPort);
+    let ready = false;
+    void serve.ready.then(() => {
+      ready = true;
+    });
+    await pinged;
+    await Bun.sleep(50);
+    expect(ready).toBe(false);
+    expect(existsSync(join(work, "base-netns"))).toBe(false);
+    healthy = true;
+    expect(await serve.ready).toBe("ready\n");
+    expect(await ping(apiPort)).toBe("OK");
+  } finally {
+    serve?.proc.kill("SIGTERM");
+    await serve?.proc.exited;
+    await closeServer(docker);
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
 test("under Node.js, serve and ensure carry the Docker API end to end", async () => {
   const work = await mkdtemp(join(tmpdir(), "nas-dind-bridge-e2e-"));
   const socket = join(work, "bridge.sock");

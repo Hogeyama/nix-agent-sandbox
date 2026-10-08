@@ -5,6 +5,7 @@ import {
   runCli,
 } from "../../../src/docker/embed/dind-bridge-gateway.mjs";
 import { loopbackEndpoint } from "../../../src/docker/embed/dind-bridge-protocol.mjs";
+import { waitForDocker } from "./docker_ready.mjs";
 import { renderEnvFile } from "./env_file.mjs";
 import { baseNetnsPath, prepareServe } from "./serve.mjs";
 
@@ -82,6 +83,10 @@ async function main(args) {
   }
   if (command === "serve") {
     const opts = parseOptions("serve", rest);
+    // Compose's short depends_on only orders startup. Do not announce ready
+    // while the sidecar is still starting, or leave a namespace marker behind
+    // when Docker never comes up.
+    await waitForDocker(opts["docker-host"]);
     await prepareServe({ socket: opts.socket, api: opts.api });
   }
   await runCli(args, { script: process.argv[1], defaults: DEFAULTS });
