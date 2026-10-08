@@ -8,8 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
-## [0.1.0]
-
 ### Added
 
 - First release. `dind-bridge serve` connects a rootless DinD sidecar to Claude Code's Bash sandbox in a Dev Container without nas: the Docker API and containers' published TCP ports reach commands in the sandbox on `127.0.0.1`.

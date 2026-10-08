@@ -1,6 +1,6 @@
 ---
 name: release
-description: nas 本体、maskfs、sumi、strait、vscode-nas-approval のリリースを準備・検証し、依頼された範囲でタグを公開して GitHub Actions と配布物を確認する。このリポジトリのリリース作業時に使う。
+description: nas 本体、maskfs、sumi、strait、dind-bridge、vscode-nas-approval のリリースを準備・検証し、依頼された範囲でタグを公開して GitHub Actions と配布物を確認する。このリポジトリのリリース作業時に使う。
 ---
 
 # Release
@@ -17,6 +17,7 @@ description: nas 本体、maskfs、sumi、strait、vscode-nas-approval のリリ
 | maskfs | `contrib/maskfs/VERSION` | `contrib/maskfs/CHANGELOG.md` | `maskfs-vX.Y.Z` | `release-maskfs.yml` |
 | sumi | `contrib/sumi/VERSION` | `contrib/sumi/CHANGELOG.md` | `sumi-vX.Y.Z` | `release-sumi.yml` |
 | strait | `contrib/strait/VERSION` | `contrib/strait/CHANGELOG.md` | `strait-vX.Y.Z` | `release-strait.yml` |
+| dind-bridge | `contrib/dind-bridge/VERSION` | `contrib/dind-bridge/CHANGELOG.md` | `dind-bridge-vX.Y.Z` | `release-dind-bridge.yml` |
 | vscode-nas-approval | `contrib/vscode-nas-approval/VERSION` と同ディレクトリの `package.json` の `version` | `contrib/vscode-nas-approval/CHANGELOG.md` | `vscode-nas-approval-vX.Y.Z` | `release-vscode-nas-approval.yml` |
 
 現行の workflow が受け付けるのは表の数値 3 要素のタグ。プレリリースの依頼は、そのタグで workflow が起動するか先に確認する。
@@ -36,6 +37,7 @@ maskfs のバージョンは `flake.nix` が VERSION から読み、Zig に `-Dv
 | maskfs | `nix build .#maskfs-bundled --out-link result-maskfs --print-build-logs` | `./result-maskfs --version` が `nas-maskfs X.Y.Z` と完全一致すること |
 | sumi | `nix build .#sumi --out-link result-sumi --print-build-logs` | `./result-sumi/bin/sumi --version` が `sumi X.Y.Z` と完全一致すること |
 | strait | `nix build .#strait-bundled --out-link result-strait --print-build-logs` と `nix build .#strait-release-inputs --out-link result-strait-inputs` | `./result-strait --version` が `strait X.Y.Z` と完全一致すること。`contrib/strait/RELEASE-MATERIALS.md` の prepare・`check_strait_bundle.sh`・verify が通ること。配布物の動作は展開したツリーに `STRAIT_DIR` を指定した `contrib/strait/tests/probe.sh` をホストで実行して確認する |
+| dind-bridge | `bun contrib/dind-bridge/build.ts --outfile dind-bridge` | `node dind-bridge --version` が `dind-bridge X.Y.Z` と完全一致すること。Node.js で動く 1 ファイルなので、アーキテクチャごとの成果物はない |
 | vscode-nas-approval | `nix build .#vscode-nas-approval --out-link result-vsix --print-build-logs` | `result-vsix/nas-approval-X.Y.Z.vsix` が存在し、内包する拡張機能のバージョンが一致すること |
 
 `result-maskfs` と `result-nas` は実行ファイルへのリンク。カレントディレクトリは通常 PATH にないので、実行には `./` を付ける。maskfs の FUSE 動作確認には `/dev/fuse` とホストの setuid 付き `fusermount3` が必要。配布バンドルは `fusermount3` を同梱しない。
@@ -65,6 +67,7 @@ git push "$remote" "refs/tags/$tag"
 | maskfs | `maskfs-x86_64-linux`、`maskfs-aarch64-linux` | `maskfs-latest` / 同じファイル名 |
 | sumi | `sumi-x86_64-linux`、`sumi-aarch64-linux` | `sumi-latest` / 同じファイル名 |
 | strait | アーキテクチャごとに `strait-vX.Y.Z_<system>.tar.gz`、`…-sources.tar.gz`、`…-components.json`、`…-sha256.txt` | `strait-latest` / `strait_<system>.tar.gz`、`strait_<system>-sources.tar.gz`、`strait_<system>-components.json`、`strait-sha256.txt` |
+| dind-bridge | `dind-bridge`、`dind-bridge.sha256` | `dind-bridge-latest` / 同じファイル名 |
 | vscode-nas-approval | `nas-approval-X.Y.Z.vsix` | `vscode-nas-approval-latest` / `nas-approval.vsix` |
 
 contrib の Release は `--latest=false` で作成し、nas 用の `/releases/latest` を奪わない。README の rolling ダウンロード URL はバージョン更新のたびに書き換えない。
