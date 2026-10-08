@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Start the Dev Container and its relays without waiting for Docker. Only Docker API requests wait for daemon readiness (up to 30 seconds, retrying on the next request after failure); `ready` now denotes local listeners only. The example entrypoint starts serve in the background without a readiness barrier.
+- Forward a repeated request header to Docker as separate lines. BuildKit builds, including `docker compose build`, failed with `no local sources enabled`, because Docker read the session methods BuildKit lists one per line as a single method name.
 
 ### Added
 

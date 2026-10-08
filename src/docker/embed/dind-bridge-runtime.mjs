@@ -31,6 +31,19 @@ function rawHeaders(res) {
   return `${value}\r\n`;
 }
 
+// `req.headers` joins a repeated header into one comma-separated value, but
+// Docker reads some headers line by line, such as the session methods
+// BuildKit announces. Only a repeated header becomes an array: http.request
+// rejects an array for Host.
+function requestHeaders(req) {
+  return Object.fromEntries(
+    Object.entries(req.headersDistinct).map(([name, values]) => [
+      name,
+      values.length === 1 ? values[0] : values,
+    ]),
+  );
+}
+
 function dockerJson(socketPath, path) {
   return new Promise((resolve, reject) => {
     const req = request({ socketPath, path, agent: false }, (res) => {
@@ -231,7 +244,7 @@ export async function startRelay({
         socketPath: dockerApi,
         method: req.method,
         path: req.url,
-        headers: req.headers,
+        headers: requestHeaders(req),
         agent: false,
       });
       upstream.on("socket", (socket) => {

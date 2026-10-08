@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed
+
+- **Docker in sandboxed Bash**: BuildKit builds through the relay, including `docker compose build`, failed with `no local sources enabled`. The relay joined a repeated request header into one line, so Docker read the session methods BuildKit lists one per line as a single method name.
+
 ## [0.21.0] - 2026-10-08
 
 ### Added
