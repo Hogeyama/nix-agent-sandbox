@@ -16,7 +16,8 @@
     "src/**/*.tsx",
     "main.ts",
     "scripts/**/*.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "contrib/dind-bridge/**/*.ts"
   ],
   "exclude": [
     "node_modules",

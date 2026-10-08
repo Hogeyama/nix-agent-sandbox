@@ -23,3 +23,6 @@ src/docker/mitmproxy/vendor/
 # Local standalone build and its retained dependency materials.
 /nas
 /.release/
+
+# contrib/dind-bridge build output.
+contrib/dind-bridge/dist/

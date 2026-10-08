@@ -726,6 +726,8 @@
             pkgs.direnv
             pkgs.jq
             pkgs.nodejs
+            # contrib/dind-bridge tests source its env file under both shells.
+            pkgs.zsh
             pkgs.pnpm
             pkgs.chromium
             pkgs.dtach
