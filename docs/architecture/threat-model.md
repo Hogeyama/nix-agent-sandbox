@@ -82,7 +82,7 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | A1a: 未許可送信先への流出 | ◎ | ◎ | ○ | ○ | ◎ | ◎† |
 | A1b: 許可済みサービス内で、共有を許可していない相手への流出 | ◎ | ○ | ○ | ○ | ◎ | ○ |
-| B2a: ホストのファイルや実行設定の破壊・改変 | ◎ | ○ | ◎ | ○ | ◎‡ | ◎ |
+| B2a: ホストのファイルや実行設定の破壊・改変 | ◎ | ◎§ | ◎ | ○ | ◎‡ | ◎ |
 | A2-Y: 正規連携先への不要な secret 混入 | ○以上 | ○ | ○ | ○ | ○ | ○ |
 | A3-Y: secret の意図しない保存 | ○以上 | ○ | ○ | ○ | ○ | ○ |
 | B2b-Y: 作業ファイル・履歴・memory の破壊・汚染 | ○以上 | ○ | ○ | ○ | ○ | ○ |
@@ -90,6 +90,8 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 `†` Docker Sandbox の A1a は、`api.anthropic.com` を経由した第三者への送信（[Anthropic の server tool](#anthropic-の-server-tool)）を塞ぐことが条件となる。提示構成には未反映である。
 
 `‡` nas の B2a は、既存設定を保護対象のパスに置くことが条件となる。履歴や memory のように書込みを許可するデータへの被害は B2b で評価する。
+
+`§` settings.json の B2a は、本体のファイル書込みツール（Edit・Write・NotebookEdit）を除去し、sandbox の外で実行される hook 等の設定と参照先を、起動前から Bash の書込み禁止の対象にすることが条件となる。
 
 | 予防的要求 | 必要水準 | 系統1 | 系統2 | 系統3 | 系統4 | 系統5 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -101,7 +103,7 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 
 | 構成 | 保護範囲と成立条件・負担 |
 | --- | --- |
-| **系統1: settings.json** | Bash を内蔵 sandbox で隔離する。履歴・memory は専用の保存先に分ける。本体によるその他のホストファイルへの書込みには追加の対策が必要。読み込まれる設定ファイルをすべて書込み禁止の対象にする |
+| **系統1: settings.json** | Bash を内蔵 sandbox で隔離し、本体のファイル書込みツールを除去して、書込みを sandbox 内の Bash に限る。履歴・memory は専用の保存先に分ける。読み込まれる設定ファイルと hook の参照先をすべて書込み禁止の対象にする。本体の読取り制限は OS の境界ではなく Claude Code 内のパス判定に依存する。Claude Code v2.1.257 以降が必要 |
 | **系統2: srt** | 本体を含め OS sandbox で隔離する。本体のために許可する `api.anthropic.com` から第三者へ送信できる。A1b・P1 のためにサービス内の読み書き先を制限するには、srt の変更が必要になる。srt 0.0.77 の検査関数 `filterRequest` は SOCKS 等の経路で迂回できる |
 | **系統3: Dev Container** | 既存 container 運用に載せやすい。DNS の問合せを使った情報送信を防ぎ、共有作業領域にある設定や hook への書込みを制限する追加対策が必要 |
 | **系統4: nas** | 提示条件では A1a・A1b・B2a と GitHub の P1 を強制する。API ごとに許可する操作を設定・保守し、ホストと共有する設定を保護する必要がある。履歴や memory はホストと共有する |
@@ -189,16 +191,19 @@ index や履歴に本物を含む場合は、`git show` や `git diff --cached` 
 
 ### 系統1: settings.json
 
-Claude Code 本体はホストで動かし、内蔵 sandbox で Bash と子プロセスを隔離する。本体側の Read / Write / Edit 等には `permissions` を適用する。[設定例](threat-model-configurations.md#系統1)
+Claude Code 本体はホストで動かし、内蔵 sandbox で Bash と子プロセスを隔離する。本体のファイル書込みツール（Edit・Write・NotebookEdit）は除去し、エージェントによるファイルの書込みを sandbox 内の Bash に限る。本体の Read・Grep・Glob には `permissions` を適用する。Claude Code v2.1.257 以降を前提とする。[設定例](threat-model-configurations.md#系統1)
 
-- **A1a: ◎** — sandbox 内の Bash の通信先を制限し、WebFetch ツールと MCP server も無効にする。Bash の通信先には `api.anthropic.com` を含めない（[Anthropic の server tool](#anthropic-の-server-tool)）。`excludedCommands` による sandbox 外での実行を防ぐため、起動前に例外を除去し、managed settings で Edit／Write と Bash の両方から設定ファイルへの書込みを禁止する。[公式仕様](https://code.claude.com/docs/en/sandboxing#keep-developers-from-widening-the-policy)
+- **A1a: ◎** — sandbox 内の Bash の通信先を制限し、WebFetch ツールと MCP server も無効にする。Bash の通信先には `api.anthropic.com` を含めない（[Anthropic の server tool](#anthropic-の-server-tool)）。`excludedCommands` による sandbox 外での実行を防ぐため、起動前に例外を除去し、Bash から設定ファイルへの書込みを禁止する。本体の書込みツールは除去しているので、設定ファイルを書き換える経路は Bash だけになる。[公式仕様](https://code.claude.com/docs/en/sandboxing#keep-developers-from-widening-the-policy)
 - **A1b: ○** — 許可した hostname 内の認証主体・endpoint を限定していない。利用者の token をマスクして権限を絞っても、隔離環境内のプログラムは攻撃者の用意した別の token を使って通信できる。
-- **B2a: ○** — Bash の作業領域外への write は制限できるが、本体は OS sandbox の外にいる。本体の Edit／Write は permission ルールで制限するが、ルールは deny、ask、allow の順に評価され、deny の中を allow で開け直せない（[公式仕様](https://code.claude.com/docs/en/permissions)）。そのため、全体を deny して作業領域だけを許可する書き方はできない。読取りの `blockReadsOutsideWorkingDirectories` に当たる、書込み用の設定もない。個別のパスを `Edit(path)` で deny することはできるが、作業領域外への書込みを一律には拒否できず、その判断は auto mode の classifier に依存する。
-- **A2-Y・A3-Y: ○** — sandbox 内の `GH_TOKEN` と `API_PASSWORD` はダミー値とし、許可先への通信時に本物へ置換する。本体の Read には `.env` の deny を置く。不要な secret は Bash と本体の両方で読取拒否し、ツールの出力に残るシークレットは sumi でマスクし、auto mode の操作審査で誤保存を減らす。
+- **B2a: ◎§** — 本体は OS sandbox の外にいるが、ファイル書込みツールを除去するので、エージェントが書けるのは sandbox 内の Bash からだけになる。permission ルールでは deny の中を allow で開け直せず、作業領域外への書込みを一律に拒否する設定もないため（[公式仕様](https://code.claude.com/docs/en/permissions)）、ツールを残すと判断が auto mode の classifier に依存する。Bash の書込みは作業領域に限り、作業領域内の `.claude` と `CLAUDE_CONFIG_DIR` の設定ファイルを `denyWrite` で保護する。`allowUnsandboxedCommands` を無効にして sandbox 外での再試行も禁止する。hook は sandbox の外で実行されるため、hook を定義する設定と、hook が実行するスクリプトをすべて `denyWrite` の対象にする。Linux の内蔵 sandbox も srt と同じ bubblewrap を使うため、保護するパスは起動前に作っておく。存在しないパスを新規作成され、次回の起動で設定として読み込まれることを防ぐためである。
+- **A2-Y・A3-Y: ○** — sandbox 内の `GH_TOKEN` と `API_PASSWORD` はダミー値とし、許可先への通信時に本物へ置換する。`blockReadsOutsideWorkingDirectories` で、本体の Read・Grep・Glob と sandbox 内の Bash から、作業領域外のホームディレクトリ等を読めなくする。作業領域内の `.env` は本体の Read を deny し、Bash ではマスクする。ツールの出力に残るシークレットは sumi でマスクし、auto mode の操作審査で誤保存を減らす。
+- **B2b-Y: ○** — 共通条件の auto mode による審査は変わらない。ただし Edit ツールを除去するので、編集は `sed` やヒアドキュメント等のコマンドで行うことになる。文字列が一致しなければ失敗する Edit ツールと比べ、誤った置換や上書きは起きやすくなる。
 
-履歴や memory は `CLAUDE_CONFIG_DIR` で作業領域内の `.claude-state` に保存し、同じ制限を適用する実行でだけ再利用する。元のホスト側の保存先は、managed settings で Edit／Write と Bash の両方から書込みを禁止する。専用の保存先でも、履歴や memory の改変は次の実行へ引き継がれる。
+`blockReadsOutsideWorkingDirectories` は、sandbox 内の Bash からは `/home`・`/root`・`/mnt`・`/srv` 等のユーザーデータの置き場所を読めなくし、作業領域等だけを読めるように戻す。`/etc`・`/opt`・`/tmp` 等は対象外なので、必要に応じて `denyRead` を併用する。global の Git 設定（`~/.gitconfig` とその `include` 先）は読めるように戻されるので、token を含むなら `denyRead` に加える。`sandbox.filesystem.allowManagedReadPathsOnly` を設定した場合などは Bash に適用されない。[公式仕様](https://code.claude.com/docs/en/settings-reference#sandboxed-commands-under-the-block)
 
-Claude Code 単体で構成でき、導入コストは小さい。設定ファイルへの書込みは制限するが、Claude Code 本体によるそれ以外のホストファイルへの書込みには追加の対策が必要となる。
+履歴や memory は `CLAUDE_CONFIG_DIR` で作業領域内の `.claude-state` に保存し、同じ制限を適用する実行でだけ再利用する。元のホスト側の保存先は作業領域外にあり、Bash から書けない。専用の保存先でも、履歴や memory の改変は次の実行へ引き継がれる。
+
+Claude Code 単体で構成でき、導入コストは小さい。系統2と比べると、Bash の通信先から `api.anthropic.com` を除けるので、A1a は系統1が上回る。一方、本体の読取りを止めるのは Claude Code 内のパス判定であり、srt のように OS の境界が本体の Read も制限する構成より、判定の不具合で読まれる余地が大きい。
 
 ### 系統2: srt
 

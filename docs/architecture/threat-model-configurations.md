@@ -44,19 +44,16 @@
   "permissions": {
     "defaultMode": "auto",
     "disableBypassPermissionsMode": "disable",
+    // 本体の Read・Grep・Glob と sandbox 内の Bash から、作業領域外のホーム等を読めなくする
+    // （v2.1.257 以降）
+    "blockReadsOutsideWorkingDirectories": true,
     "deny": [
       "WebFetch", // bare 指定でツール自体を除去する
       "WebSearch", // 共通条件
-      "Read(~/.ssh/**)", // 実行に使用しない秘密は Read ツールでも拒否する
-      "Read(~/.aws/**)",
-      "Read(~/.config/gh/**)", // gh auth login の保存先
-      "Read(//tmp/**)",
-      "Read(./.env)", // mask は Bash 側だけ。本体の Read は deny で拒否する
-      "Edit(~/.claude/**)", // 元のホスト側の設定・履歴・memory を保護する
-      "Edit(~/.claude.json)",
-      "Edit(//srv/project/.claude-state/settings.json)",
-      "Edit(//srv/project/.claude-state/settings.local.json)",
-      "Edit(//srv/project/.claude/**)" // Write ツールによる変更も拒否する
+      "Edit", // 本体のファイル書込みツールを除去し、書込みを sandbox 内の Bash に限る
+      "Write",
+      "NotebookEdit",
+      "Read(./.env)" // mask は Bash 側だけ。本体の Read は deny で拒否する
     ]
   },
   "sandbox": {
@@ -86,12 +83,15 @@
         "/srv/project/.claude-state/settings.local.json",
         "/srv/project/.claude"
       ],
-      "denyRead": [ // Bash 側の読取拒否
-        "/tmp",
+      // allowManagedReadPathsOnly は設定しない（設定すると blockReadsOutsideWorkingDirectories が Bash に効かない）
+      "denyRead": [ // Bash 側の読取拒否。ホーム配下は block と重複するが、block が外れた場合に備えて残す
+        "/tmp", // block の対象外
         "~/.ssh",
         "~/.aws",
         "~/.config/gh"
-      ]
+      ],
+      // sandbox 内の Bash が proxy へつなぐ socket。/tmp の denyRead の例外にする
+      "allowRead": ["/tmp/claude-http-*.sock"]
     },
     "credentials": {
       "envVars": [
@@ -117,20 +117,33 @@
 
 ```sh
 export CLAUDE_CONFIG_DIR="$PWD/.claude-state"
-mkdir -p "$CLAUDE_CONFIG_DIR"
+mkdir -p "$CLAUDE_CONFIG_DIR" .claude
+# denyWrite の対象は起動前に作る（存在しないパスを新規作成されないように）
+for f in "$CLAUDE_CONFIG_DIR/settings.json" "$CLAUDE_CONFIG_DIR/settings.local.json"; do
+  [ -e "$f" ] || echo '{}' > "$f"
+done
 sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の保護でシークレットを隠せない場合のみ
 claude --permission-mode auto
 ```
 
-`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。元のホスト側の `~/.claude` と `~/.claude.json` は Edit／Write と Bash の両方で書込みを禁止する。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
+`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。元のホスト側の `~/.claude` と `~/.claude.json` は、`denyWrite` で Bash からの書込みを禁止する。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
+
+本体の Edit・Write・NotebookEdit はツールごと除去する。エージェントによるファイルの書込みは sandbox 内の Bash だけになり、`allowWrite` と `denyWrite` がそのすべてに適用される。編集は `sed` 等のコマンドで行うことになる。
+
+`blockReadsOutsideWorkingDirectories` は、本体の Read・Grep・Glob・LSP に加え、sandbox 内の Bash からも `/home`・`/root`・`/mnt`・`/srv` 等を読めなくし、作業領域と session の temp directory 等だけを読めるように戻す。`/etc`・`/opt`・`/tmp` 等は対象外なので `/tmp` の `denyRead` は残す。global の Git 設定（`~/.gitconfig`、`~/.config/git/config` と、それらが `include` するファイル）は Git が動くように読めるように戻される。ただし Claude Code 2.1.294 では、これらが home-manager 等の作ったシンボリックリンクだと sandbox 内に現れず、作者情報と global の ignore が読めなかった（[実測](experiments/settings-block-reads/README.md#21294-での追加確認)）。その場合は `allowRead` に `~/.config/git` をディレクトリごと加える。リンクがそのまま現れ、リンク先の `/nix/store` は block の対象外なので読める。同じディレクトリの他のファイルも読めるようになる。`http.extraHeader` 等で token を書いている場合は、そのファイルを `denyRead` に加える。`sandbox.filesystem.allowManagedReadPathsOnly` を設定すると Bash には適用されなくなるため、この構成では設定しない。[公式仕様](https://code.claude.com/docs/en/settings-reference#sandboxed-commands-under-the-block)
 
 Bash 側は credential masking、本体の Read は `.env` の deny で保護する。このマスク処理の対象は利用者が渡した token であり、プログラムが攻撃者の用意した別の token を使って通信する操作は残る。[系統1の評価](threat-model.md#系統1-settingsjson)
 
-`excludedCommands` は各設定ファイルの指定が合算されるため、管理者側で空にするだけでは例外の追加を防げない。この例では、`Edit` の拒否ルールで Edit／Write ツールからの設定変更を、`denyWrite` で Bash とその子プロセスからの設定変更を禁止する。上記と異なる `CLAUDE_CONFIG_DIR` や追加の設定ファイルを使う場合は、保護対象のパスも合わせる。[Edit の仕様](https://code.claude.com/docs/en/permissions#read-and-edit)、[sandbox の仕様](https://code.claude.com/docs/en/sandboxing#configure-the-sandbox)
+`excludedCommands` は各設定ファイルの指定が合算されるため、管理者側で空にするだけでは例外の追加を防げない。この例では書込みツールを除去したうえで、`denyWrite` で Bash とその子プロセスからの設定変更を禁止する。hook は sandbox の外で実行されるため、hook を定義する設定に加え、hook が実行するスクリプトも `denyWrite` の対象にする。上記と異なる `CLAUDE_CONFIG_DIR` や追加の設定ファイルを使う場合は、保護対象のパスも合わせる。保護対象は起動前に作っておく。[sandbox の仕様](https://code.claude.com/docs/en/sandboxing#configure-the-sandbox)
 
 Bash の通信先には `api.anthropic.com` を含めず、`deniedDomains` でも拒否する。Messages API は、要求の本文に書いた MCP server へ Anthropic 側から接続する機能を持つため、Bash から送れると第三者への送信経路になる（[実測](experiments/anthropic-mcp-connector/README.md)）。
 
-この構成の A1a は、上記の仕様に基づいて ◎ と評価する。追加した書込み禁止ルールの動作は実測していない。`deniedDomains` により Bash から `api.anthropic.com` への接続が拒否されることは、Claude Code 2.1.291 で[実測](experiments/anthropic-mcp-connector/README.md#bash-だけを内蔵-sandbox-で塞ぐ構成)した。
+この構成の A1a と B2a は、上記の仕様と実測に基づいて ◎ と評価する。Claude Code 2.1.291 で、書込みツールの除去、Bash の読取り・書込み制限、本体の Read の拒否、通信先の制限、`GH_TOKEN` の代理注入を[実測](experiments/settings-block-reads/README.md)した。`deniedDomains` により Bash から `api.anthropic.com` への接続が拒否されることは、Claude Code 2.1.291 で[実測](experiments/anthropic-mcp-connector/README.md#bash-だけを内蔵-sandbox-で塞ぐ構成)した。2.1.291 の実測は `/tmp` の `denyRead` を外した状態で行った。2.1.294 では、`/tmp` の `denyRead` に proxy 用 socket の `allowRead` を加えた状態で、許可先へ接続でき、許可外が拒否されることを確認した。起動時に存在しない `denyWrite` の対象は、sandbox 内で `/dev/null` に置き換えられ、ホストには作られなかった。そこへの書込みが拒否されることと、hook の参照先の保護は確認していない。
+
+実測では次の2点が成立条件となった。
+
+- この設定は managed settings に置くか、既存の設定ファイルを置き換えて使う。`--settings` で重ねると既存の設定と合算され、`sandbox.filesystem.disabled` や `allowedDomains` の `*` が残って制限が外れた。
+- Linux では、sandbox が使う `socat` をホーム外の PATH から見える場所に置く。`~/.nix-profile` 等のホーム配下にあると `blockReadsOutsideWorkingDirectories` が隠し、Bash の通信が宛先にかかわらず接続不能になる。拒否と見分けにくいので、許可先へ接続できることを先に確かめる。
 
 ## 系統2
 
