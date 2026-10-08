@@ -723,6 +723,8 @@
           packages = [
             pkgs.bun
             b2n
+            pkgs.bubblewrap
+            pkgs.socat
             pkgs.direnv
             pkgs.jq
             pkgs.nodejs
