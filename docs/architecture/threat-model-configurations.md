@@ -34,7 +34,7 @@
 
 ## 系統1
 
-[settings.json 構成の評価と成立条件](threat-model.md#系統1-settingsjson)を確認し、共通設定と次の設定を同じ managed settings にマージする。以下の `/srv/project` は、対象リポジトリの絶対パスに置き換える。設定ファイルは起動前に確認し、すべての `excludedCommands` を空にする。
+[settings.json 構成の評価と成立条件](threat-model.md#系統1-settingsjson)を確認し、共通設定と次の設定を同じ managed settings にマージする。managed settings はマシン全体に効くので、特定のリポジトリのパスは書かない。設定ファイルは起動前に確認し、すべての `excludedCommands` を空にする。
 
 ```jsonc
 // /etc/claude-code/managed-settings.json
@@ -75,12 +75,7 @@
       "tlsTerminate": {} // TLS inspection を行う（ダミー値の置換に必要）
     },
     "filesystem": {
-      "allowWrite": ["./.local/tmp"],
-      "denyWrite": [ // 作業領域内で保護するもの。作業領域外は allowWrite に無いので書けない
-        "/srv/project/.claude-state/settings.json",
-        "/srv/project/.claude-state/settings.local.json",
-        "/srv/project/.claude"
-      ],
+      // 書込みは作業領域と CLAUDE_CODE_TMPDIR だけ。作業領域の .claude の設定等は自動で denyWrite になる
       // allowManagedReadPathsOnly は設定しない（設定すると blockReadsOutsideWorkingDirectories が Bash に効かない）
       "denyRead": [ // Bash 側の読取拒否。ホーム配下は block と重複するが、block が外れた場合に備えて残す
         "/tmp", // block の対象外
@@ -124,7 +119,7 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt # 既存の�
 claude --permission-mode auto
 ```
 
-`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。Bash が書き込めるのは作業領域と `allowWrite` だけなので、元のホスト側の `~/.claude` と `~/.claude.json` には `denyWrite` を書かなくても書き込めない。作業領域をホーム自体やその親にすると、これが成り立たなくなる。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
+`.claude-state` はこの構成専用の保存先とし、Git 管理から除外する。普段のホスト上の Claude Code とは履歴や memory を共有せず、同じ managed settings を適用する実行でだけ再利用する。Bash が書き込めるのは作業領域と `CLAUDE_CODE_TMPDIR` だけなので、元のホスト側の `~/.claude` と `~/.claude.json` には `denyWrite` を書かなくても書き込めない。作業領域をホーム自体やその親にすると、これが成り立たなくなる。専用の保存先では履歴や memory への書込みを許し、`settings.json` と `settings.local.json` への書込みを禁止する。
 
 本体の Edit・Write・NotebookEdit はツールごと除去する。エージェントによるファイルの書込みは sandbox 内の Bash だけになり、`allowWrite` と `denyWrite` がそのすべてに適用される。編集は `sed` 等のコマンドで行うことになる。
 
@@ -132,7 +127,7 @@ claude --permission-mode auto
 
 Bash 側は credential masking、本体の Read は `.env` の deny で保護する。このマスク処理の対象は利用者が渡した token であり、プログラムが攻撃者の用意した別の token を使って通信する操作は残る。[系統1の評価](threat-model.md#系統1-settingsjson)
 
-`excludedCommands` は各設定ファイルの指定が合算されるため、管理者側で空にするだけでは例外の追加を防げない。この例では書込みツールを除去したうえで、`denyWrite` で Bash とその子プロセスからの設定変更を禁止する。hook は sandbox の外で実行されるため、hook を定義する設定に加え、hook が実行するスクリプトも `denyWrite` の対象にする。上記と異なる `CLAUDE_CONFIG_DIR` や追加の設定ファイルを使う場合は、保護対象のパスも合わせる。保護対象は起動前に作っておく。[sandbox の仕様](https://code.claude.com/docs/en/sandboxing#configure-the-sandbox)
+`excludedCommands` は各設定ファイルの指定が合算されるため、管理者側で空にするだけでは例外の追加を防げない。この例では書込みツールを除去したうえで、Bash とその子プロセスからの設定変更を `denyWrite` で禁止する。Claude Code 2.1.294 は、作業領域の `.claude/settings.json`・`.claude/settings.local.json`・`.claude/hooks` 等と、設定ディレクトリ（既定の `~/.claude`）の `settings.json`・`hooks` 等を、設定しなくても `denyWrite` に加えていた。`CLAUDE_CONFIG_DIR` を `.claude-state` に変えた場合に同じく保護されるかは確かめていない。managed settings にはリポジトリのパスを書けないので、`.claude-state` の `settings.json` と `settings.local.json`、および自動で保護されない場所にある hook のスクリプトは、作業領域の `.claude/settings.json`（自動で保護される）の `denyWrite` に加える。hook は sandbox の外で実行されるため、hook が実行するスクリプトも保護の対象になる。保護対象は起動前に作っておく。[sandbox の仕様](https://code.claude.com/docs/en/sandboxing#configure-the-sandbox)
 
 Bash の通信先には `api.anthropic.com` を含めず、`deniedDomains` でも拒否する。Messages API は、要求の本文に書いた MCP server へ Anthropic 側から接続する機能を持つため、Bash から送れると第三者への送信経路になる（[実測](experiments/anthropic-mcp-connector/README.md)）。
 
