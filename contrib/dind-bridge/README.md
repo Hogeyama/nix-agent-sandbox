@@ -59,7 +59,12 @@ networks:
     internal: true
 
 volumes:
+  # rootless dockerd の uid 1000 が書ける tmpfs。socket しか置かないので、再起動で消えてよい。
   dind-run:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=1000,gid=1000,mode=0700
   dind-data:
 ```
 
