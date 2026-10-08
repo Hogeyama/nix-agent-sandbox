@@ -35,7 +35,7 @@ COPY direnv-bootstrap.sh /usr/local/libexec/nas-direnv-bootstrap
 COPY direnv-lib.sh nix-direnv.sh /usr/local/share/nas/
 COPY nix-direnv.LICENSE /usr/local/share/licenses/nix-direnv/LICENSE
 COPY local-proxy.mjs /usr/local/bin/local-proxy.mjs
-COPY dind-bridge.mjs dind-bridge-protocol.mjs dind-bridge-runtime.mjs /usr/local/lib/nas/
+COPY dind-bridge.mjs dind-bridge-gateway.mjs dind-bridge-protocol.mjs dind-bridge-runtime.mjs /usr/local/lib/nas/
 RUN printf '%s  %s\n' \
       '856e8d0b5247b9edc88d9377b8333a97a2363cc69abaa7760fb857609d597ebe' \
       '/usr/local/share/nas/nix-direnv.sh' | sha256sum -c - \

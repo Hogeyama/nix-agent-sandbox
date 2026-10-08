@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { startGateway } = await import(
-  join(import.meta.dir, "embed/dind-bridge.mjs")
+  join(import.meta.dir, "embed/dind-bridge-gateway.mjs")
 );
 const {
   closeServer,
@@ -40,6 +40,33 @@ async function http(
     const req = request(
       {
         socketPath: path,
+        path: url,
+        method: body ? "POST" : "GET",
+        agent: false,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () =>
+          resolve({ status: res.statusCode!, body: Buffer.concat(chunks) }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+async function tcpHttp(
+  port: number,
+  url: string,
+  body?: Buffer,
+): Promise<{ status: number; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: bindHost,
+        port,
         path: url,
         method: body ? "POST" : "GET",
         agent: false,
@@ -192,7 +219,7 @@ async function fixture(fn: (ctx: any) => Promise<void>) {
       addPort(value: unknown) {
         extraPorts.push(value);
       },
-      async relay(pollMs = 60_000) {
+      async relay(pollMs = 60_000, options: Record<string, unknown> = {}) {
         relay = await startRelay({
           socketPath,
           apiPath,
@@ -200,6 +227,7 @@ async function fixture(fn: (ctx: any) => Promise<void>) {
           bindHost,
           pollMs,
           onWarning: (error: Error) => warnings.push(error),
+          ...options,
         });
         return relay;
       },
@@ -561,6 +589,181 @@ test("a half-closed stream keeps carrying the other direction", async () => {
   }
 });
 
+test("the gateway reaches Docker through a Unix socket endpoint", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nas-dind-bridge-test-"));
+  const docker = httpServer((_req, res) => res.end("OK"));
+  let gateway: any;
+  try {
+    await listen(docker, join(dir, "docker.sock"));
+    gateway = await startGateway({
+      socketPath: join(dir, "gateway.sock"),
+      dockerHost: `unix://${join(dir, "docker.sock")}`,
+      publishHost,
+    });
+    expect(
+      (await http(join(dir, "gateway.sock.api"), "/_ping")).body.toString(),
+    ).toBe("OK");
+  } finally {
+    await gateway?.close();
+    await closeServer(docker);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the gateway takes only loopback TCP or an absolute Unix path for Docker", async () => {
+  for (const dockerHost of [
+    "tcp://10.0.0.1:2375",
+    "tcp://localhost:2375",
+    "unix://relative/docker.sock",
+    "http://127.0.0.1:2375",
+  ])
+    await expect(
+      startGateway({ socketPath: "/nonexistent/gateway.sock", dockerHost }),
+    ).rejects.toThrow("Docker endpoint must be");
+});
+
+test("ports reported on another address reach the gateway's publish host", async () => {
+  // In a Dev Container dockerd reports 0.0.0.0 while the gateway connects to
+  // the sidecar's hostname; the relay selects by the former only.
+  await fixture(async (ctx) => {
+    ctx.setPublishIp("0.0.0.0");
+    await ctx.relay(60_000, { publishHost: "0.0.0.0" });
+    expect(
+      (await http(ctx.apiPath, `/containers/${id}/start`, Buffer.alloc(0)))
+        .status,
+    ).toBe(204);
+    const client = await openSocket({
+      host: bindHost,
+      port: ctx.publishedPort,
+    });
+    const echoed = readAll(client);
+    client.end("through 0.0.0.0");
+    expect((await echoed).toString()).toBe("through 0.0.0.0");
+  });
+});
+
+test("a relay can serve the Docker API on loopback TCP instead of a socket file", async () => {
+  await fixture(async (ctx) => {
+    const apiPort = await freePort(bindHost);
+    await ctx.relay(60_000, { api: { host: bindHost, port: apiPort } });
+    expect((await tcpHttp(apiPort, "/_ping")).body.toString()).toBe("OK");
+    expect(
+      (await tcpHttp(apiPort, `/containers/${id}/start`, Buffer.alloc(0)))
+        .status,
+    ).toBe(204);
+    const client = await openSocket({
+      host: bindHost,
+      port: ctx.publishedPort,
+    });
+    const echoed = readAll(client);
+    client.end("over tcp");
+    expect((await echoed).toString()).toBe("over tcp");
+    expect(require("node:fs").existsSync(ctx.apiPath)).toBe(false);
+  });
+});
+
+test("a container publishing the API's port is reported, and the API keeps it", async () => {
+  await fixture(async (ctx) => {
+    await ctx.relay(60_000, {
+      api: { host: bindHost, port: ctx.publishedPort },
+    });
+    const started = await tcpHttp(
+      ctx.publishedPort,
+      `/containers/${id}/start`,
+      Buffer.alloc(0),
+    );
+    expect(started.status).toBe(502);
+    expect(started.body.toString()).toContain(
+      `published TCP port ${ctx.publishedPort} is already in use`,
+    );
+    expect((await tcpHttp(ctx.publishedPort, "/_ping")).body.toString()).toBe(
+      "OK",
+    );
+  });
+});
+
+test("the CLI rejects options its mode does not take", async () => {
+  for (const args of [
+    ["ensure", "--socket", "/x", "--instance", "a", "--bogus", "1"],
+    [
+      "serve",
+      "--socket",
+      "/x",
+      "--docker-host",
+      "tcp://127.0.0.1:1",
+      "--instance",
+      "a",
+    ],
+    ["relay", "--socket", "/x", "--instance", "a", "--instance", "b"],
+    [
+      "ensure",
+      "--socket",
+      "/x",
+      "--instance",
+      "a",
+      "--api",
+      "tcp://0.0.0.0:2375",
+    ],
+  ]) {
+    const proc = Bun.spawn([process.execPath, script, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [code, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stderr).text(),
+    ]);
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(/unknown option|given twice|must be tcp/);
+  }
+});
+
+test("serve with --api answers Docker on that address in its own namespace", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nas-dind-bridge-test-"));
+  const docker = httpServer((_req, res) => res.end("OK"));
+  let proc: ReturnType<typeof Bun.spawn> | undefined;
+  try {
+    await listen(docker, { host: "127.0.0.1", port: 0 });
+    const apiPort = await freePort("127.0.0.1");
+    proc = Bun.spawn(
+      [
+        process.execPath,
+        script,
+        "serve",
+        "--socket",
+        join(dir, "bridge.sock"),
+        "--docker-host",
+        `tcp://127.0.0.1:${port(docker)}`,
+        "--api",
+        `tcp://127.0.0.1:${apiPort}`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+    const { value } = await reader.read();
+    expect(new TextDecoder().decode(value)).toBe("ready\n");
+    const response = await new Promise<string>((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port: apiPort, path: "/_ping", agent: false },
+        (res) => {
+          let text = "";
+          res.on("data", (chunk) => (text += chunk));
+          res.on("end", () => resolve(text));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(response).toBe("OK");
+    expect(require("node:fs").existsSync(join(dir, "docker.sock"))).toBe(false);
+  } finally {
+    proc?.kill("SIGTERM");
+    await proc?.exited;
+    await closeServer(docker);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // --- the per-namespace relay daemon -------------------------------------
 
 async function relayStatus(name: string) {
@@ -724,6 +927,36 @@ test("a relay stays while its namespace has other processes, then cleans up", as
     await relay.stopped;
     await expect(relayStatus(paths.name)).rejects.toThrow();
     expect(await Bun.file(paths.apiPath).exists()).toBe(false);
+  });
+});
+
+test("a relay with a TCP API creates no files and answers with its address", async () => {
+  const instance = `test${crypto.randomUUID().slice(0, 8)}`;
+  const paths = relayPaths(
+    instance,
+    await readlink("/proc/self/ns/net"),
+    "dind-test",
+  );
+  await fixture(async (ctx) => {
+    const apiPort = await freePort("127.0.0.1");
+    const relay = await runRelay({
+      socketPath: ctx.socketPath,
+      instance,
+      namePrefix: "dind-test",
+      api: { host: "127.0.0.1", port: apiPort },
+      handleSignals: false,
+      checkMs: 60_000,
+    });
+    try {
+      expect(paths.name).toContain("dind-test-");
+      expect((await relayStatus(paths.name)).apiPath).toBe(
+        `tcp://127.0.0.1:${apiPort}`,
+      );
+      expect(require("node:fs").existsSync(paths.directory)).toBe(false);
+    } finally {
+      await relay.stop();
+    }
+    expect(require("node:fs").existsSync(paths.directory)).toBe(false);
   });
 });
 

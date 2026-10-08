@@ -271,6 +271,7 @@ bwrap --unshare-user --unshare-net --bind / / --dev-bind /dev /dev -- /bin/bash 
       for (const file of [
         "entrypoint.sh",
         "dind-bridge.mjs",
+        "dind-bridge-gateway.mjs",
         "dind-bridge-runtime.mjs",
         "dind-bridge-protocol.mjs",
       ]) {

@@ -6,6 +6,32 @@ export const TIMEOUT = 10_000;
 export const PUBLISH_HOST = "127.0.0.77";
 export const MAX_FRAME = 1024 * 1024;
 
+/**
+ * Parse a `tcp://127.0.0.1:PORT` address. Only the IPv4 loopback is accepted:
+ * these endpoints carry the Docker API unauthenticated, so they must never be
+ * reachable from outside the namespace that listens on them.
+ */
+export function loopbackEndpoint(value, what) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${what} must be tcp://127.0.0.1:PORT`);
+  }
+  if (
+    url.protocol !== "tcp:" ||
+    url.hostname !== "127.0.0.1" ||
+    !url.port ||
+    url.username ||
+    url.password ||
+    url.pathname ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(`${what} must be tcp://127.0.0.1:PORT`);
+  return { host: "127.0.0.1", port: Number(url.port) };
+}
+
 export function readFrame(socket, limit = MAX_FRAME) {
   return new Promise((resolve, reject) => {
     let buffered = Buffer.alloc(0);

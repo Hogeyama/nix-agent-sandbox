@@ -61,9 +61,10 @@ function dockerJson(socketPath, path) {
 
 /**
  * Inside an isolated network namespace, mirror the session's Docker API on a
- * Unix socket and every port dockerd published on `publishHost` on
- * `bindHost`. Each mirrored connection goes through the gateway, which can
- * only reach `publishHost`.
+ * Unix socket (`apiPath`) or a loopback TCP address (`api`), and every port
+ * dockerd published on `publishHost` on `bindHost`. Each mirrored connection
+ * goes through the gateway, which can only reach its own publish host:
+ * `publishHost` here is only the address dockerd reports for a port.
  *
  * A start or restart response is held until the ports it created are
  * mirrored, so a client never sees a mapped port it cannot connect to yet.
@@ -72,6 +73,7 @@ function dockerJson(socketPath, path) {
 export async function startRelay({
   socketPath,
   apiPath,
+  api,
   publishHost = PUBLISH_HOST,
   bindHost = "127.0.0.1",
   pollMs = 1000,
@@ -284,12 +286,14 @@ export async function startRelay({
     }
     listeners.clear();
     await closeServer(server);
-    await rm(apiPath, { force: true });
+    if (!api) await rm(apiPath, { force: true });
   };
   try {
+    // The API takes its address before any port is mirrored, so a container
+    // publishing the same port is the one reported as a conflict.
+    await listen(server, api ?? apiPath);
+    if (!api) await chmod(apiPath, 0o600);
     await sync().catch(() => {});
-    await listen(server, apiPath);
-    await chmod(apiPath, 0o600);
     timer = setInterval(() => void sync().catch(() => {}), pollMs);
   } catch (error) {
     await close();
@@ -313,11 +317,15 @@ export async function startRelay({
  * relay and keeps a second one from starting. The Bash wrapper derives the
  * same names without starting a process.
  */
-export function relayPaths(instance, namespace) {
+export function relayPaths(instance, namespace, prefix = "nas-dind") {
   const id = /^net:\[([0-9]+)\]$/.exec(namespace)?.[1];
-  if (!id || !/^[A-Za-z0-9_-]{1,32}$/.test(instance))
+  if (
+    !id ||
+    !/^[A-Za-z0-9_-]{1,32}$/.test(instance) ||
+    !/^[A-Za-z0-9_-]{1,32}$/.test(prefix)
+  )
     throw new Error("invalid DinD relay identity");
-  const base = `nas-dind-${process.getuid()}-${instance}-${id}`;
+  const base = `${prefix}-${process.getuid()}-${instance}-${id}`;
   const directory = `/tmp/${base}`;
   return {
     name: `\0${base}`,
@@ -368,17 +376,27 @@ export async function namespaceAlone(namespace) {
  * the Bash wrapper looks for, appears only once the API socket is ready, so
  * no Bash is pointed at a relay that cannot answer yet. Both are abstract
  * sockets: they belong to the namespace and vanish with their owner.
+ *
+ * With `api`, the relay serves Docker on that loopback address and touches no
+ * file at all: a sandbox may allow no writes where the directory would go.
+ * Its warnings are then dropped; a port it cannot mirror still reaches the
+ * client as the start response's error.
  */
 export async function runRelay({
   socketPath,
   instance,
+  api,
+  publishHost,
+  namePrefix,
   alone = namespaceAlone,
   checkMs = 30_000,
   start = startRelay,
   handleSignals = true,
 }) {
   const namespace = await readlink("/proc/self/ns/net");
-  const { name, lock, directory, apiPath } = relayPaths(instance, namespace);
+  const paths = relayPaths(instance, namespace, namePrefix);
+  const { name, lock, directory } = paths;
+  const apiPath = api ? `tcp://${api.host}:${api.port}` : paths.apiPath;
   const lockServer = createServer((client) => client.destroy());
   try {
     await listen(lockServer, lock);
@@ -386,11 +404,13 @@ export async function runRelay({
     if (error.code === "EADDRINUSE") return { stopped: Promise.resolve() };
     throw error;
   }
-  const log = (error) =>
-    void appendFile(
-      `${directory}/relay.log`,
-      `${new Date().toISOString()} ${error.message}\n`,
-    ).catch(() => {});
+  const log = api
+    ? () => {}
+    : (error) =>
+        void appendFile(
+          `${directory}/relay.log`,
+          `${new Date().toISOString()} ${error.message}\n`,
+        ).catch(() => {});
   const control = createServer((client) => {
     client.on("error", () => {});
     writeFrame(client, { ok: true, apiPath, pid: process.pid });
@@ -402,10 +422,18 @@ export async function runRelay({
   trackServer(control, controlSockets);
   let relay;
   try {
-    await privateDirectory(directory);
-    // Holding the lock proves no live relay uses these files.
-    await rm(apiPath, { force: true });
-    relay = await start({ socketPath, apiPath, onWarning: log });
+    if (!api) {
+      await privateDirectory(directory);
+      // Holding the lock proves no live relay uses these files.
+      await rm(apiPath, { force: true });
+    }
+    relay = await start({
+      socketPath,
+      apiPath: paths.apiPath,
+      api,
+      ...(publishHost === undefined ? {} : { publishHost }),
+      onWarning: log,
+    });
     await listen(control, name);
   } catch (error) {
     await relay?.close();
@@ -427,7 +455,7 @@ export async function runRelay({
       for (const socket of controlSockets) socket.destroy();
       await closeServer(control);
       await relay.close();
-      await rm(directory, { recursive: true, force: true });
+      if (!api) await rm(directory, { recursive: true, force: true });
       await closeServer(lockServer);
       finish();
     })();
@@ -444,10 +472,19 @@ export async function runRelay({
   return { stop, stopped };
 }
 
-/** Return the API socket of this namespace's relay, starting it if needed. */
-export async function ensureRelay({ socketPath, instance, script }) {
+/**
+ * Return the API endpoint of this namespace's relay, starting it if needed.
+ * `relayArgs` are the options a started relay needs beyond its identity.
+ */
+export async function ensureRelay({
+  socketPath,
+  instance,
+  namePrefix,
+  script,
+  relayArgs = [],
+}) {
   const namespace = await readlink("/proc/self/ns/net");
-  const { name } = relayPaths(instance, namespace);
+  const { name } = relayPaths(instance, namespace, namePrefix);
   const probe = async () => {
     try {
       const { socket, response } = await gatewayRequest(name, {
@@ -465,7 +502,15 @@ export async function ensureRelay({ socketPath, instance, script }) {
   // the command's pipes open nor dies with its process group.
   const relay = spawn(
     process.execPath,
-    [script, "relay", "--socket", socketPath, "--instance", instance],
+    [
+      script,
+      "relay",
+      "--socket",
+      socketPath,
+      "--instance",
+      instance,
+      ...relayArgs,
+    ],
     { detached: true, stdio: ["ignore", "ignore", "pipe"] },
   );
   let failed;
