@@ -724,6 +724,7 @@
             pkgs.bun
             b2n
             pkgs.bubblewrap
+            pkgs.ripgrep
             pkgs.socat
             pkgs.direnv
             pkgs.jq
