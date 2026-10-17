@@ -97,7 +97,7 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | P1: 未信頼情報源の無人取り込み低減 | ○以上 | ○ | ○ | ○ | ◎（GitHub の指定経路） | ○ |
 
-系統1〜3では、隔離環境内のプログラムが攻撃者の token を使い、接続を許可したサービス上の攻撃者の repo などへ情報を書き込める。系統2は srt の検査関数を組み込んでも、SOCKS 等の経路で検査を[迂回できる](experiments/srt-filter-bypass/README.md)。系統5でも、proxy による認証情報の上書きを通らず、プログラムが指定した token を GitHub に[送れる](experiments/sbx-a1b/README.md)。いずれも提示構成は ○ とし、必要な追加制御を各方式の節で示す。
+系統1〜3では、隔離環境内のプログラムが攻撃者の token を使い、接続を許可したサービス上の攻撃者の repo などへ情報を書き込める。系統2は srt の検査関数を組み込んでも、SOCKS 等の経路で検査を[迂回できる](experiments/srt-filter-bypass/README.md)。系統5でも、proxy による認証情報の上書きを通らず、プログラムが指定した token を GitHub に[送れる](experiments/sbx-a1b/README.md)。`sbx v0.48.0` では HTTP ルールでこの経路を閉じられるが、認証主体を固定しても GraphQL の書込み先は限定できない。いずれも提示構成は ○ とし、必要な追加制御を各方式の節で示す。
 
 ### 選定時に残る条件と負担
 
@@ -107,7 +107,7 @@ B1 は方式毎で差が出ないため、共通する[導入条件](#本番変�
 | **系統2: srt** | 本体を含め OS sandbox で隔離する。本体のために許可する `api.anthropic.com` から第三者へ送信できる。A1b・P1 のためにサービス内の読み書き先を制限するには、srt の変更が必要になる。srt 0.0.77 の検査関数 `filterRequest` は SOCKS 等の経路で迂回できる |
 | **系統3: Dev Container** | 既存 container 運用に載せやすい。DNS の問合せを使った情報送信を防ぎ、共有作業領域にある設定や hook への書込みを制限する追加対策が必要 |
 | **系統4: nas** | 提示条件では A1a・A1b・B2a と GitHub の P1 を強制する。API ごとに許可する操作を設定・保守し、ホストと共有する設定を保護する必要がある。履歴や memory はホストと共有する |
-| **系統5: Docker Sandbox** | VM 内の専用 clone で作業し、ホストの作業ツリーを保護する。提示した v2 構成には A1b の対策が必要。v3 の HTTP 制限を使う構成は今後の検証候補 |
+| **系統5: Docker Sandbox** | VM 内の専用 clone で作業し、ホストの作業ツリーを保護する。提示した構成には A1b の対策が必要。`sbx v0.48.0` の HTTP ルールで認証注入の迂回は閉じられるが、GraphQL の書込み先は method/path で限定できない |
 
 nas の proxy は、サービス内のどの repo 等を読み書きできるかを制限する。履歴や memory はホストと共有する。この組合せを受け入れられるかが選定上の判断となる。
 
@@ -255,7 +255,7 @@ Claude Code 単体で構成でき、導入コストは小さい。系統2と比�
 [Docker Sandbox](https://www.docker.com/products/docker-sandboxes/) の microVM に Claude Code を隔離し、ホスト側 proxy で接続先を制限し、要求に認証情報を付ける。提示例は hostname 単位で許可する。[設定例](threat-model-configurations.md#系統5)
 
 - **A1a: ◎†** — VM 外の network policy / proxy が未許可先への通信を阻止する。default kit の不要な network allow rule を削除し、許可先を共通条件の4つの hostname の TCP 443 に限る。`sbx v0.45.1` の[実測](experiments/sbx-shared-ip/README.md)では、proxy を通らない接続も IP ではなく SNI や Host header の名前で判定され、上流への接続先もその名前から解決し直された。そのため、許可先と IP を共有する別の hostname へは接続できなかった。ただし `api.anthropic.com` を経由した[第三者への送信](#anthropic-の-server-tool)は hostname の制限では防げない。VM の中で Bash を内蔵 sandbox で隔離し、Bash から `api.anthropic.com` を拒否することが条件となる。`sbx v0.45.1` の VM では内蔵 sandbox が追加の設定なしに動き、この要求を拒否した（[実測](experiments/anthropic-mcp-connector/README.md#bash-だけを内蔵-sandbox-で塞ぐ構成)）。
-- **A1b: ○** — `sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では、GitHub への通常の proxy 通信は偽の Authorization header もホストの認証値へ上書きした。一方、`curl --noproxy '*'` は GitHub の公開証明書で TLS 接続し、指定した偽 token に対して `Bad credentials` が返った。ログは認証注入のない `transparent` 経路を示す。接続先のホスト名は制限されるが、この方法ではプログラムが指定した token が GitHub へ届く。実測した範囲は、偽の token に対する GitHub の認証エラーが返るところまでである。
+- **A1b: ○** — `sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では、GitHub への通常の proxy 通信は偽の Authorization header もホストの認証値へ上書きした。一方、`curl --noproxy '*'` は GitHub の公開証明書で TLS 接続し、指定した偽 token に対して `Bad credentials` が返った。ログは認証注入のない `transparent` 経路を示す。接続先のホスト名は制限されるが、この方法ではプログラムが指定した token が GitHub へ届く。実測した範囲は、偽の token に対する GitHub の認証エラーが返るところまでである。`sbx v0.48.0` の[再測定](experiments/sbx-a1b/README.md#v0480-での再測定と-http-ルール)でも hostname の許可だけでは同じだった。その host に `--method` / `--path` の HTTP ルールを加えると、直接接続は `l7 enforcement unavailable` で拒否され、proxy 経由の偽 token はホストの認証値へ上書きされた。それでも、固定された利用者の認証主体で公開 repo 等へ書き込める。比較条件で許可する `POST /graphql` は本文で対象を指定するため、method/path では書込み先を限定できない。HTTP ルールを加えても ○ とする。
 - **B2a: ◎** — clone mode で VM 内に作業用の clone を作り、ホスト repo は `/run/sandbox/source` に read-only mount する。shared skills と SSH agent forwarding も無効にする。
 - **A2-Y・A3-Y: ○** — secret store と代理注入を使う。ただし、ホスト repo の mount には untracked / `.gitignore` 対象も含まれ、`.env` 等の secret は VM 内から読める。代理注入だけでは隠せないため、[設定例](threat-model-configurations.md#系統5)の secret の移動・読取拒否・sumi 併用と auto mode を組み合わせる。
 - **B2b-Y: ○** — auto mode の審査に加え、作業は VM 内の clone で行うため、誤った削除や上書きがホストの作業ツリーに及ばない。
@@ -266,9 +266,9 @@ Claude Code 単体で構成でき、導入コストは小さい。系統2と比�
 
 **今後の見通し**
 
-Docker Sandbox は、今後の対応次第で A1b を満たす構成を作れると期待している。v3 kit の [`network-policy@2`](https://github.com/docker/sandbox-kit-spec/blob/main/docs/spec/capabilities/com.docker.sandbox/network-policy%402.md) には HTTP method/path の制限があり、検査できない接続は拒否する仕様である。これが実装どおり働けば、proxy を通らない直接接続を拒否し、REST・Git の操作先を必要な非公開 repo に限定する道がある。ただし、他の kit や policy に hostname 全体の allow が残ると、狭い allow を追加しても制限にはならない。
+Docker Sandbox は、今後の対応次第で A1b を満たす構成を作れると期待している。`sbx v0.48.0` では、組込み Claude の sandbox にも `sbx policy allow network --method ... --path ...` で HTTP ルールを追加できる。[実測](experiments/sbx-a1b/README.md#v0480-での再測定と-http-ルール)では、HTTP ルールを持つ host への直接接続は、同じ host に hostname 全体の allow が残っていても拒否された。proxy 経由の method/path の制限は、hostname 全体の allow と和で効くため、その allow を残すと狭まらない。これで、proxy を通らない直接接続を拒否し、REST・Git の操作先を必要な非公開 repo に限定する道がある。
 
-参照した組込み `claude` は v2 kit で、v3 mixin を追加できない。[公式の互換性説明](https://docs.docker.com/ai/sandboxes/customize/#version-compatibility)では、workload と mixin をすべて v3 に揃える必要がある。したがって、組込み Claude の対応を待つか、Claude を動かす v3 workload を自分で用意することになる。公式対応の時期は不明で、v3 構成の HTTP 制限も本稿では未実測である。比較表は現在の提示構成の評価とし、この見込みでは加点しない。GraphQL 本文による対象・操作の判別は、method/path 制限だけでは解決しない。
+残る問題は GraphQL である。本文による対象・操作の判別は、method/path 制限だけでは解決しない。`github.com` の HTTP ルールでの Git 操作、REST の repo 単位の path 制限、Claude kit が追加する hostname ルールとの関係も未実測である。比較表は現在の提示構成の評価とし、この見込みでは加点しない。v3 kit の [`network-policy@2`](https://github.com/docker/sandbox-kit-spec/blob/main/docs/spec/capabilities/com.docker.sandbox/network-policy%402.md) も検査できない接続を拒否する仕様だが、組込み `claude` は v2 kit で v3 mixin と[併用できない](https://docs.docker.com/ai/sandboxes/customize/#version-compatibility)。
 
 ## 追加調査: nono と OpenShell
 

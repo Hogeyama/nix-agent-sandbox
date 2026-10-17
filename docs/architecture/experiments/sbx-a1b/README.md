@@ -4,6 +4,8 @@
 
 **通常の proxy 経由では認証 header が上書きされたが、`curl --noproxy '*'` で認証注入を通らず GitHub に到達できた。** この構成の認証注入は、許可 hostname 上の認証主体を固定する強制境界にはならない。
 
+`v0.48.0` で[再測定](#v0480-での再測定と-http-ルール)した。hostname の許可だけでは同じ結果だったが、その host に HTTP ルール（`--method` / `--path`）を1つでも加えると、直接接続は sbx が拒否した。
+
 ## 構成と正常系の対照
 
 未初期化だった global network policy を `deny-all` に設定した。検証専用の Claude sandbox を workspace mount なし、`--skills off` で作り、sandbox 単位で `api.github.com:443` と `github.com:443` を許可した。ホストの `gh auth token` を command secret として登録し、GitHub の `GET /user` だけを測定した。token の値は出力・記録していない。
@@ -59,6 +61,56 @@ field capabilities not found in type spec.SpecFile
 
 このエラーは従来の `spec.yaml` 入口での拒否であり、正しい v3 artifact のロードや、v3 workload と mixin の組合せを試した結果ではない。次の検証では全体を v3 に揃え、通常の許可 request、未許可 method/path、直接接続の3つを対照にする必要がある。組込み Claude の今後の対応も検討対象とし、対応時期や成功は既定としない。
 
+## v0.48.0 での再測定と HTTP ルール
+
+観測日は 2026-10-17、ホストは Linux、`sbx` は `v0.48.0`（`5caf923e0587d376848f6f388eca3e0f5ca00e2d`）。この版の `sbx policy allow network` は `--method` と `--path` を受け付け、ローカルの policy に HTTP ルールを追加できる。v3 kit を使わず、組込み Claude の sandbox に直接適用した。
+
+ホストの global network policy は `api.anthropic.com`・`github.com`・`api.github.com`・`api.example.com` を port 指定なしで許可しており、これを変更しなかった。検証用の Claude sandbox は workspace mount なし、`--skills off` で作り、HTTP ルールは sandbox 単位で追加した。
+
+### 対照: 未許可 host の HTTP ルール
+
+まず secret なしの sandbox で、global policy にない `httpbin.org` に `GET httpbin.org:443/get` の HTTP ルールだけを加えた。
+
+| 経路 | 要求 | 結果 |
+| --- | --- | --- |
+| proxy | `GET /get` | 200。leaf 証明書は `Docker Sandboxes Proxy CA` 発行 |
+| proxy | `POST /post`・`GET /anything`・`POST /get` | 403。log は `No matching allow rule (default deny)` |
+| `--noproxy '*'` | `GET /get` を含む全要求 | TLS handshake 中に切断（curl 35）。log は `transparent` で `HTTP policy requires L7 enforcement, which is unavailable for transparent connections` |
+
+続けて同じ sandbox に hostname ルール `httpbin.org:443` を加えると、proxy 経由の `POST /post` は 200 になった。直接接続は切断されたままだった。HTTP ルールと hostname ルールは proxy 経路では和として働き、直接接続の拒否は HTTP ルールの存在だけで決まる。
+
+### GitHub の認証注入と直接接続
+
+global secret `github` を `gh auth token` の command で登録し、新規作成した sandbox で測定した。今回は最初の sandbox で正常系が成立した。前半は global の hostname ルールだけ、後半は sandbox 単位で `GET api.github.com:443/user` の HTTP ルールを加えた状態である。
+
+| 経路 | sandbox 内で指定した認証 | hostname ルールのみ | HTTP ルール追加後 |
+| --- | --- | --- | --- |
+| proxy `GET /user` | 認証 header なし | 200・ホストのアカウント | 200・ホストのアカウント |
+| proxy `GET /user` | 偽の Bearer token | 200・ホストのアカウント | 200・ホストのアカウント |
+| proxy `GET /rate_limit` | 偽の Bearer token | 200 | 200 |
+| `--noproxy '*'` `GET /user` | 認証 header なし | 401 `Requires authentication` | 切断（curl 35） |
+| `--noproxy '*'` `GET /user` | 偽の Bearer token | 401 `Bad credentials` | 切断（curl 35） |
+
+前半は `v0.43.0` と同じで、直接接続は認証注入を通らず、プログラムが指定した token が GitHub に届いた。後半は直接接続が `l7 enforcement unavailable` で拒否され、proxy 経由では偽の token もホストの認証値へ上書きされた。proxy 経路の leaf 証明書は両方とも `Docker Sandboxes Proxy CA` 発行だった。
+
+`GET /rate_limit` が後半も通ったのは、global の hostname ルールが HTTP ルールと和で効くためである。直接接続を塞ぐには HTTP ルールを加えるだけでよい。proxy 経由の method/path を絞るには、その host の hostname ルールを除いて HTTP ルールだけにする必要がある。
+
+secret なしで同じ HTTP ルールを加えた対照でも、直接接続は拒否された。HTTP ルールのない `github.com` には、同じ sandbox から `--noproxy '*'` で 200 が返った。直接接続の拒否は host ごとに決まるため、使う host すべてに HTTP ルールが要る。
+
+### 判定と残る問題
+
+`v0.48.0` では、使う GitHub の host をすべて HTTP ルールで許可すれば、プログラムが指定した token を GitHub に届ける上の経路は閉じる。認証主体はホストの認証値に固定される。
+
+それでも系統5の A1b は ○ のままとする。認証主体を固定しても、その主体で書き込める先が残るからである。公開 repo への issue・comment、gist、利用者自身の新規 repo がその例である。REST は path で repo を限定できる。一方、比較条件で許可する `POST /graphql` は本文で対象を指定するため、method/path では限定できない。提示構成にこの HTTP ルールを加えて ◎ とするには、GraphQL の扱いを別に決める必要がある。
+
+次の点は確認していない。
+
+- `github.com` の HTTP ルールと、その条件での Git over HTTPS の clone / push。
+- repo を限定する REST の path ルールでの、許可・拒否の対照。
+- Claude kit が追加する hostname ルールと HTTP ルールの関係。kit のルールは既定のまま残した。
+- port 80 の平文 HTTP、QUIC、IPv6 の IP を直接指定した接続。HTTP ルールは `:443` に付けたので、port を書かない hostname ルールが許可する port 80 は別に扱われる可能性がある。
+- 有効な攻撃者 token による書込み。直接接続は拒否まで、proxy 経由は偽 token の上書きまでを確かめた。
+
 ## 再確認するコマンド
 
 既存の policy や secret を変更せず、検証用の環境で実行する。NAS 内からは `exec hostexec sbx "$@"` を内容とする wrapper を使った。以下はホスト上のコマンド表記で、`SBX_PROBE` は新規 sandbox 名とする。
@@ -82,4 +134,14 @@ sbx exec "$SBX_PROBE" curl -sS --max-time 20 -w '\n%{http_code}\n' \
 sbx policy log "$SBX_PROBE" --json
 ```
 
-実際の測定では応答 JSON から `login` と `message` だけを抽出し、status と curl 終了コードを記録した。検証後、今回追加した global / sandbox 限定 secret と2つの検証用 sandbox を削除し、`sbx ls` と `sbx secret ls` がともに空であることを確認した。既存のホスト側 `gh` 認証情報は変更していない。初期化した global policy の `deny-all` と取得済み template image は残している。
+`v0.48.0` の再測定では、上の直接接続の比較に続けて、次のように HTTP ルールを加えて同じ要求を繰り返した。
+
+```sh
+sbx policy allow network --sandbox "$SBX_PROBE" api.github.com:443 \
+  --method GET --path '/user'
+sbx exec "$SBX_PROBE" curl -sS --max-time 20 -w '\n%{http_code} %{exitcode}\n' \
+  --noproxy '*' -H 'Authorization: Bearer nas-a1b-invalid' https://api.github.com/user
+sbx policy log "$SBX_PROBE" --format json
+```
+
+実際の測定では応答 JSON から `login` と `message` だけを抽出し、status と curl 終了コードを記録した。`v0.48.0` の再測定後も、追加した global secret と検証用 sandbox を削除し、`sbx ls` と `sbx secret ls` がともに空で、global policy が測定前と同じ4件の network allow であることを確認した。sandbox 単位の HTTP ルールは sandbox の削除とともに消えた。検証後、今回追加した global / sandbox 限定 secret と2つの検証用 sandbox を削除し、`sbx ls` と `sbx secret ls` がともに空であることを確認した。既存のホスト側 `gh` 認証情報は変更していない。初期化した global policy の `deny-all` と取得済み template image は残している。

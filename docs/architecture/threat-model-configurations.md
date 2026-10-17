@@ -463,9 +463,9 @@ Claude のログイン情報は container へ共有せず、既定の `agentStat
 
 [Docker Sandbox 構成の評価と成立条件](threat-model.md#系統5-docker-sandbox)に対応する。hostname 単位の network policy と credential injection を設定する。
 
-以下は組込み Claude（v2 kit）の設定例である。v3 kit の HTTP method/path 制限はこの構成に追加できないため含めない。今後の対応、または自前の v3 workload による改善の見通しは[本体ページ](threat-model.md#系統5-docker-sandbox)に示す。
+以下は組込み Claude（v2 kit）の設定例である。`sbx v0.48.0` で追加できる HTTP ルールは、GitHub での検証が一部にとどまるため含めない。改善の見通しは[本体ページ](threat-model.md#系統5-docker-sandbox)に示す。
 
-`secret set` による認証 header の上書きと、hostname の許可を組み合わせる。ただし、`sbx v0.43.0` の[実測](experiments/sbx-a1b/README.md)では `curl --noproxy '*'` で認証注入を通らず GitHub に接続できたため、この提示構成の A1b は ○ で、必須の ◎ に届かない。業務 API の `set-custom` は placeholder の置換であり、認証主体を固定する機能としては評価しない。
+`secret set` による認証 header の上書きと、hostname の許可を組み合わせる。ただし、`sbx v0.43.0` と `v0.48.0` の[実測](experiments/sbx-a1b/README.md)では `curl --noproxy '*'` で認証注入を通らず GitHub に接続できたため、この提示構成の A1b は ○ で、必須の ◎ に届かない。`v0.48.0` ではその host に HTTP ルールを加えるとこの直接接続は拒否されたが、GraphQL の書込み先は method/path で限定できないため、加えても ○ のままである。業務 API の `set-custom` は placeholder の置換であり、認証主体を固定する機能としては評価しない。
 
 ```sh
 sbx policy init deny-all
