@@ -461,17 +461,22 @@ Claude のログイン情報は container へ共有せず、既定の `agentStat
 
 ## 系統5
 
-[Docker Sandbox 構成の評価と成立条件](threat-model.md#系統5-docker-sandbox)に対応する。hostname 単位の network policy と credential injection を設定する。
+[Docker Sandbox 構成の評価と成立条件](threat-model.md#系統5-docker-sandbox)に対応する。`sbx v0.48.0` 以降の HTTP ルールと credential injection を設定する。
 
-以下は組込み Claude（v2 kit）の設定例である。`sbx v0.48.0` で追加できる HTTP ルールは、GitHub での検証が一部にとどまるため含めない。改善の見通しは[本体ページ](threat-model.md#系統5-docker-sandbox)に示す。
-
-`secret set` による認証 header の上書きと、hostname の許可を組み合わせる。ただし、`sbx v0.43.0` と `v0.48.0` の[実測](experiments/sbx-a1b/README.md)では `curl --noproxy '*'` で認証注入を通らず GitHub に接続できたため、この提示構成の A1b は ○ で、必須の ◎ に届かない。`v0.48.0` ではその host に HTTP ルールを加えるとこの直接接続は拒否されたが、GraphQL の書込み先は method/path で限定できないため、加えても ○ のままである。業務 API の `set-custom` は placeholder の置換であり、認証主体を固定する機能としては評価しない。
+以下は組込み Claude（v2 kit）の設定例である。GitHub は hostname ルールを置かず、`my-org/private-repo` への Git と REST、`POST /graphql` だけを HTTP ルールで許可する。HTTP ルールを持つ host への接続は proxy の TLS 終端を通るため、`secret set` の認証値が必ず上書きされる。hostname ルールでは `curl --noproxy '*'` で認証注入を通らずに接続できた（[実測](experiments/sbx-a1b/README.md)）。同じ host に hostname ルールを足すと、proxy 経由の path 制限が無効になる。業務 API の `set-custom` は placeholder の置換であり、認証主体を固定する機能としては評価しない。
 
 ```sh
 sbx policy init deny-all
 
-sbx policy allow network \
-  "api.anthropic.com:443,github.com:443,api.github.com:443,devapi.example.com:443"
+R=my-org/private-repo
+sbx policy allow network api.anthropic.com:443 --method ANY --path '/**'
+sbx policy allow network github.com:443 --method GET --path "/$R.git/info/refs"
+sbx policy allow network github.com:443 --method POST --path "/$R.git/git-upload-pack"
+sbx policy allow network github.com:443 --method POST --path "/$R.git/git-receive-pack"
+sbx policy allow network api.github.com:443 --method ANY --path "/repos/$R"
+sbx policy allow network api.github.com:443 --method ANY --path "/repos/$R/**"
+sbx policy allow network api.github.com:443 --method POST --path /graphql
+sbx policy allow network devapi.example.com:443
 
 sbx secret set anthropic
 sbx secret set github --command 'gh auth token'
@@ -489,9 +494,14 @@ sbx create \
   --clone \
   --skills off \
   claude .
+
+sbx policy deny network --sandbox coding \
+  platform.claude.com:443,downloads.claude.ai:443,claude.com:443,code.claude.com:443,mcp-proxy.anthropic.com:443,bridge.claudeusercontent.com:443
 ```
 
-default kit が追加する不要な network allow rule を削除し、許可先を `api.anthropic.com:443`、`github.com:443`、`api.github.com:443`、`devapi.example.com:443` だけにする。
+Claude kit は `api.anthropic.com:443` と上の6つの host の hostname ルールを sandbox ごとに追加し、`sbx policy rm` では削除できない。不要な6つは sandbox 単位の `deny` で無効にする。`api.anthropic.com` は kit の hostname ルールが残るので、HTTP ルールは直接接続を閉じるためだけに置く。Anthropic への認証 header は kit の proxy が除去する。
+
+Git の remote は `https://github.com/my-org/private-repo.git` のように `.git` 付きで指定する。`.git` なしの URL と、`/repos/my-org/private-repo/**` と GraphQL 以外を使う `gh` のコマンドは拒否される。許可外の要求は `sbx policy approval ls` に承認待ちとして並ぶ。
 
 clone mode は VM 内に private clone を作り、ホスト repo も `/run/sandbox/source` に read-only で mount する。untracked file や `.gitignore` 対象も含むため、secret を含む `.env` 等は VM 内から読める。Git root 外へ移せる secret は移して secret store に登録し、VM 内の `.env` はダミー値で作る。移せず読取拒否もできない場合は sumi を併用する。
 

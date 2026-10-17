@@ -4,7 +4,7 @@
 
 **通常の proxy 経由では認証 header が上書きされたが、`curl --noproxy '*'` で認証注入を通らず GitHub に到達できた。** この構成の認証注入は、許可 hostname 上の認証主体を固定する強制境界にはならない。
 
-`v0.48.0` で[再測定](#v0480-での再測定と-http-ルール)した。hostname の許可だけでは同じ結果だったが、その host に HTTP ルール（`--method` / `--path`）を1つでも加えると、直接接続は sbx が拒否した。
+`v0.48.0` で[再測定](#v0480-での再測定と-http-ルール)した。hostname の許可だけでは同じ結果だった。その host に HTTP ルール（`--method` / `--path`）を1つでも加えると、直接接続は sbx が拒否した。GitHub の host を repo 単位の HTTP ルールだけで許可した構成では、試したすべての認証指定がホストの認証値へ上書きされた。許可外の repo・web 画面・port 22/80 も拒否された。Anthropic への認証 header は Claude kit の proxy が除去した。共通条件の fine-grained token と組み合わせれば、**系統5の A1b は ◎** と判定する。
 
 ## 構成と正常系の対照
 
@@ -97,19 +97,91 @@ global secret `github` を `gh auth token` の command で登録し、新規作�
 
 secret なしで同じ HTTP ルールを加えた対照でも、直接接続は拒否された。HTTP ルールのない `github.com` には、同じ sandbox から `--noproxy '*'` で 200 が返った。直接接続の拒否は host ごとに決まるため、使う host すべてに HTTP ルールが要る。
 
+### repo 単位の HTTP ルールだけで GitHub を許可する
+
+proxy 経由の method/path も絞るため、global の `github.com`・`api.github.com` の hostname ルールを測定中だけ削除し、測定後に同じ内容で戻した。許可先は、検証用に作った private repo（以下 `R`）に限った。sandbox 単位で次の HTTP ルールだけを加え、[l7-probe.sh](l7-probe.sh) を sandbox 内で実行した。
+
+| host | method | path |
+| --- | --- | --- |
+| `github.com:443` | `GET` | `/R.git/info/refs` |
+| `github.com:443` | `POST` | `/R.git/git-upload-pack`・`/R.git/git-receive-pack` |
+| `api.github.com:443` | `ANY` | `/repos/R`・`/repos/R/**` |
+| `api.github.com:443` | `POST` | `/graphql` |
+
+Claude kit が sandbox に追加する hostname ルールは `api.anthropic.com`・`platform.claude.com`・`downloads.claude.ai`・`claude.com`・`code.claude.com`・`mcp-proxy.anthropic.com`・`bridge.claudeusercontent.com` の各 `:443` で、GitHub の host を含まない。
+
+| 区分 | 要求 | 結果 |
+| --- | --- | --- |
+| 許可 | `GET /repos/R`・`/repos/R/contents/README.md`（偽 token 付き） | 200。private repo の内容が返り、ホストの認証値が使われた |
+| 許可外の REST | `GET /repos/cli/cli`・`GET /user`・`POST /user/repos`・`POST /gists`・`POST /repos/cli/cli/issues` | すべて 403（`Approval required`）。GitHub へは届かない |
+| path の細工 | `R/../../cli/cli`・`%2e%2e`・`..%2f`・`R;x/../..` | 403。log は `http endpoint path must not contain ".." segments` |
+| path の細工 | `//repos/cli/cli`・`/REPOS/cli/cli`・大小文字を変えた `R` | 403（default deny）。照合は大小文字を区別し、正規化しない側に倒れる |
+| Host の差替え | `api.github.com` への接続に `Host: uploads.github.com` | 403。log は `host header mismatch` |
+| GraphQL | `repository(owner:"cli",name:"cli")` の取得 | 200。本文の対象は検査されない |
+| GraphQL | 存在しない ID への `addComment` mutation | 200 で GitHub の `NOT_FOUND`。mutation も GitHub まで届く |
+| 直接接続 | `--noproxy '*'` で `api.github.com`・`github.com` | 切断（curl 35）。`l7 enforcement unavailable` |
+| 他の port | `api.github.com:80`（proxy・直接）、`github.com:22` | 拒否（default deny） |
+| 他の経路 | UDP 443 | 拒否（`Direct UDP connections not allowed`）。sandbox 内の `ip -6 route` は空で、curl は HTTP/3 非対応 |
+| Git | `R.git` の clone、commit の push | 成功。push した branch がホストから見えた |
+| Git | `.git` なしの `R` の clone、`cli/cli` の clone、`cli/cli` への `push --dry-run` | 失敗（403）。path が規則と一致しない |
+| Git | `https://nas:<偽 token>@github.com/R.git` の `ls-remote` | 成功。Basic 認証もホストの認証値へ上書きされた |
+| Git | proxy の環境変数を外した `ls-remote` | TLS handshake で失敗 |
+
+許可外の要求は即座に 403 になり、同時に `sbx policy approval ls` に承認待ちとして並んだ。要求は承認を待たずに 403 で返った。承認した場合に追加されるルールの範囲は測定していない。
+
+### 認証の指定方法と上書き
+
+同じ HTTP ルールの sandbox で、[l7-auth-probe.sh](l7-auth-probe.sh) により認証の指定方法を変えた。`R` は private repo なので、偽の認証値が GitHub に届けば 404 か 401 になる。
+
+| 指定方法 | 結果 |
+| --- | --- |
+| なし、`Bearer`、`token`、Basic（`-u`）、大小文字を変えた2つの `Authorization`、小文字の header 名、query の `access_token`、Cookie の `user_session` | すべて 200 で `R` の内容 |
+| HTTP/1.0、HTTP/2 での偽 `Bearer` | 200 |
+| GraphQL の `viewer` を偽 `Bearer` で | ホストのアカウント |
+| `github.com` の `info/refs`（upload-pack・receive-pack）に偽 `Bearer`・偽 Basic | 200 で ref 一覧 |
+| `github.com` の web 画面、偽 Cookie 付きの `POST /gists` | 403（HTTP ルールに一致しない） |
+
+GitHub の web 画面は Cookie のセッションで認証し、`Authorization` header の注入では上書きされない。`github.com` を `/**` で許可すると、攻撃者のセッション Cookie による web 操作が残る。Git の3つの path に限れば、この経路も閉じる。
+
+### Anthropic
+
+Claude kit の `api.anthropic.com:443` は kit が管理するルールで、`sbx policy rm` は `managed by a kit and is recreated at sandbox create` として削除を拒否した。sandbox 単位の `sbx policy deny network` は kit の許可より優先し、`code.claude.com:443` への要求は `Denied by local rule` で拒否された。
+
+secret を登録していない sandbox で、`api.anthropic.com` に偽の認証値を送った。`x-api-key`、大小文字を変えた `X-Api-Key`、2つの `x-api-key`、OAuth 形式の `Authorization: Bearer` のいずれも、Anthropic の応答は `x-api-key header is required` だった。proxy が認証 header を除去したことになり、偽の key は Anthropic に届かなかった。`api.anthropic.com:443` に `ANY /**` の HTTP ルールを加えると、直接接続も `l7 enforcement unavailable` で拒否された。kit の hostname ルールが残るので、proxy 経由の path はこのルールでは絞れない。
+
+### 提案構成の通し確認
+
+次節の判定に使う構成を、global の HTTP ルールと sandbox 単位の deny で組み、[e2e-probe.sh](e2e-probe.sh) で確認した。global の `github.com`・`api.github.com`・`api.anthropic.com` の hostname ルールは測定中だけ外し、測定後に戻した。
+
+```sh
+R=my-org/private-repo
+sbx policy allow network api.anthropic.com:443 --method ANY --path '/**'
+sbx policy allow network github.com:443 --method GET --path "/$R.git/info/refs"
+sbx policy allow network github.com:443 --method POST --path "/$R.git/git-upload-pack"
+sbx policy allow network github.com:443 --method POST --path "/$R.git/git-receive-pack"
+sbx policy allow network api.github.com:443 --method ANY --path "/repos/$R"
+sbx policy allow network api.github.com:443 --method ANY --path "/repos/$R/**"
+sbx policy allow network api.github.com:443 --method POST --path /graphql
+sbx secret set github --command 'gh auth token'
+sbx create --name "$SBX_PROBE" --skills off claude
+sbx policy deny network --sandbox "$SBX_PROBE" \
+  platform.claude.com:443,downloads.claude.ai:443,claude.com:443,code.claude.com:443,mcp-proxy.anthropic.com:443,bridge.claudeusercontent.com:443
+```
+
+`R` への REST・GraphQL は偽 token のまま 200 でホストの認証値が使われ、`R.git` の clone と `push --dry-run` も通った。`cli/cli` の REST と clone、`POST /gists`、`github.com` の web 画面は 403 だった。3つの host への直接接続は切断された。deny した kit の6つの host は proxy 経由で 403、直接接続も切断された。Anthropic への偽 key は除去され、`x-api-key header is required` が返った。
+
 ### 判定と残る問題
 
-`v0.48.0` では、使う GitHub の host をすべて HTTP ルールで許可すれば、プログラムが指定した token を GitHub に届ける上の経路は閉じる。認証主体はホストの認証値に固定される。
+`v0.48.0` で GitHub の host を repo 単位の HTTP ルールだけで許可すると、sandbox から GitHub に届く要求はすべて proxy の TLS 終端を通る。そこで認証値はホストのものに上書きされる。試した範囲では、上書きを逃れる認証の指定方法も、TLS 終端を通らない経路も見つからなかった。Anthropic への認証 header は kit の proxy が除去し、直接接続は HTTP ルールで閉じる。
 
-それでも系統5の A1b は ○ のままとする。認証主体を固定しても、その主体で書き込める先が残るからである。公開 repo への issue・comment、gist、利用者自身の新規 repo がその例である。REST は path で repo を限定できる。一方、比較条件で許可する `POST /graphql` は本文で対象を指定するため、method/path では限定できない。提示構成にこの HTTP ルールを加えて ◎ とするには、GraphQL の扱いを別に決める必要がある。
+GraphQL の本文は検査されないため、mutation は任意の repo を対象にできる。ただし実行される認証主体はホストの token に固定される。共通条件ではその token を自組織の必要な非公開 repo と最小限の permission に限るので、攻撃者が自分の credential を持ち込んで別の repo へ書き込む A1b-X の経路は残らない。この観測と共通条件から、**この構成の系統5-A1b は ◎** と判定する。GraphQL で公開 repo を読めることは P1 の問題として残る。
 
 次の点は確認していない。
 
-- `github.com` の HTTP ルールと、その条件での Git over HTTPS の clone / push。
-- repo を限定する REST の path ルールでの、許可・拒否の対照。
-- Claude kit が追加する hostname ルールと HTTP ルールの関係。kit のルールは既定のまま残した。
-- port 80 の平文 HTTP、QUIC、IPv6 の IP を直接指定した接続。HTTP ルールは `:443` に付けたので、port を書かない hostname ルールが許可する port 80 は別に扱われる可能性がある。
-- 有効な攻撃者 token による書込み。直接接続は拒否まで、proxy 経由は偽 token の上書きまでを確かめた。
+- 本物の Claude Code のセッション。`sbx secret set anthropic` の key の注入と、kit の6つの host を deny した状態での起動・応答は試していない。
+- `gh` の各コマンドが、上の HTTP ルールの範囲で動くか。REST の `/repos/R/**` と GraphQL 以外を使うコマンドは拒否される。
+- 承認待ちを承認したときに追加されるルールの範囲。
+- 有効な攻撃者 token による書込み。上書きは偽 token で確かめた。fine-grained token の権限制限は GitHub 側の仕様に依存する。
 
 ## 再確認するコマンド
 
@@ -144,4 +216,15 @@ sbx exec "$SBX_PROBE" curl -sS --max-time 20 -w '\n%{http_code} %{exitcode}\n' \
 sbx policy log "$SBX_PROBE" --format json
 ```
 
-実際の測定では応答 JSON から `login` と `message` だけを抽出し、status と curl 終了コードを記録した。`v0.48.0` の再測定後も、追加した global secret と検証用 sandbox を削除し、`sbx ls` と `sbx secret ls` がともに空で、global policy が測定前と同じ4件の network allow であることを確認した。sandbox 単位の HTTP ルールは sandbox の削除とともに消えた。検証後、今回追加した global / sandbox 限定 secret と2つの検証用 sandbox を削除し、`sbx ls` と `sbx secret ls` がともに空であることを確認した。既存のホスト側 `gh` 認証情報は変更していない。初期化した global policy の `deny-all` と取得済み template image は残している。
+repo 単位の HTTP ルール以降の測定は、上の各節のルールを加えた sandbox に probe を `sbx cp` で入れて実行した。引数は、注入される token で読める private repo である。
+
+```sh
+sbx cp l7-probe.sh "$SBX_PROBE":/tmp/l7-probe.sh
+sbx exec "$SBX_PROBE" bash /tmp/l7-probe.sh my-org/private-repo
+sbx policy log "$SBX_PROBE" --format json
+sbx policy approval ls
+```
+
+実際の測定では応答 JSON から `login` と `message` だけを抽出し、status と curl 終了コードを記録した。`v0.43.0` の検証後、追加した global / sandbox 限定 secret と2つの検証用 sandbox を削除し、`sbx ls` と `sbx secret ls` がともに空であることを確認した。既存のホスト側 `gh` 認証情報は変更していない。初期化した global policy の `deny-all` と取得済み template image は残している。
+
+`v0.48.0` の各測定後も、追加した global secret と検証用 sandbox を削除した。一時的に外した global の hostname ルールは同じ内容で戻した。`sbx ls`・`sbx secret ls`・`sbx policy approval ls` が空で、global policy が rule ID を除いて測定前と同じであることを確認した。sandbox 単位のルールと承認待ちは、sandbox の削除とともに消えた。検証用の private repo は測定後も残っている。
