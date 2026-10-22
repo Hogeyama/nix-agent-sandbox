@@ -1,6 +1,6 @@
 //! sumi: 列挙した値をエージェントに見せない単一バイナリ。
 //!
-//!   sumi init   --agent claude SOURCE [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
+//!   sumi init   --agent claude SOURCE [--prompt-hook [--root DIR]... [--deny-path P]...] [--settings FILE] [--shell PATH]
 //!   sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
 //!   sumi hook   --agent claude|codex|copilot post-tool SOURCE
 //!   sumi hook   --agent claude|codex prompt SOURCE [--root DIR]... [--deny-path P]...
@@ -46,7 +46,7 @@ pub const PROG: []const u8 = "sumi";
 pub const MARKER_ENV: [:0]const u8 = "SUMI_SUPERVISED=1";
 
 const usage_text =
-    \\usage: sumi init   --agent claude SOURCE [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]
+    \\usage: sumi init   --agent claude SOURCE [--prompt-hook [--root DIR]... [--deny-path P]...] [--settings FILE] [--shell PATH]
     \\       sumi scan   --agent claude --secrets-file F [--root DIR] [--settings FILE]
     \\       sumi hook   --agent claude|codex|copilot post-tool SOURCE
     \\       sumi hook   --agent claude|codex prompt SOURCE [--root DIR]... [--deny-path P]...

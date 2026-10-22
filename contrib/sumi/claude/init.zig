@@ -8,7 +8,8 @@ const cli = @import("../main.zig");
 
 pub const HOOK_TIMEOUT: i64 = 20;
 pub const ExecCommand = struct { command: []const u8, args: []const []const u8 };
-pub const HookEntries = struct { post_tool: ExecCommand, prompt: ExecCommand };
+/// prompt は `--prompt-hook` を指定したときだけ入れる。null なら既存の sumi の UserPromptSubmit hook を外す。
+pub const HookEntries = struct { post_tool: ExecCommand, prompt: ?ExecCommand };
 
 pub fn formatTimestamp(buf: *[14]u8, secs: u64) []const u8 {
     const es = std.time.epoch.EpochSeconds{ .secs = secs };
@@ -68,7 +69,7 @@ fn validateSettings(settings: std.json.Value) !void {
     }
 }
 
-fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_name: []const u8, self_path: []const u8, command: ExecCommand, matcher: ?[]const u8) !usize {
+fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_name: []const u8, self_path: []const u8, command: ?ExecCommand, matcher: ?[]const u8) !usize {
     var entries = std.json.Array.init(allocator);
     var removed: usize = 0;
     if (hooks.get(event_name)) |event| for (event.array.items) |original| {
@@ -86,8 +87,10 @@ fn mergeEvent(allocator: std.mem.Allocator, hooks: *std.json.ObjectMap, event_na
             try entries.append(entry);
         }
     };
-    try entries.append(try makeEntry(allocator, command, matcher));
-    try hooks.put(event_name, .{ .array = entries });
+    if (command) |value| try entries.append(try makeEntry(allocator, value, matcher));
+    if (entries.items.len == 0) {
+        _ = hooks.orderedRemove(event_name);
+    } else try hooks.put(event_name, .{ .array = entries });
     return removed;
 }
 
@@ -112,10 +115,11 @@ pub fn sourceArgs(source: masker.Source) [2][]const u8 {
     };
 }
 
-pub fn buildCommands(allocator: std.mem.Allocator, self_path: []const u8, source: masker.Source, roots: []const []const u8, deny_paths: []const []const u8) !HookEntries {
+pub fn buildCommands(allocator: std.mem.Allocator, self_path: []const u8, source: masker.Source, prompt_hook: bool, roots: []const []const u8, deny_paths: []const []const u8) !HookEntries {
     const src = sourceArgs(source);
     const post_args = try allocator.dupe([]const u8, &.{ "hook", "--agent", "claude", "post-tool", src[0], src[1] });
     errdefer allocator.free(post_args);
+    if (!prompt_hook) return .{ .post_tool = .{ .command = self_path, .args = post_args }, .prompt = null };
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
     try argv.appendSlice(allocator, &.{ "hook", "--agent", "claude", "prompt", src[0], src[1] });
@@ -140,11 +144,15 @@ fn validateEnvironment(settings: std.json.Value, expected_prefix: []const u8) !v
     if (prefix.string.len != 0 and !std.mem.eql(u8, prefix.string, expected_prefix)) return error.ForeignShellPrefix;
 }
 
-fn installEnvironment(allocator: std.mem.Allocator, settings: *std.json.Value, shell_path: []const u8, prefix: []const u8) !void {
+fn installEnvironment(allocator: std.mem.Allocator, settings: *std.json.Value, shell_path: []const u8, prefix: []const u8, prompt_hook: bool) !void {
     if (settings.object.get("env") == null) try settings.object.put("env", .{ .object = std.json.ObjectMap.init(allocator) });
     const env = &settings.object.getPtr("env").?.object;
     try env.put("CLAUDE_CODE_SHELL", .{ .string = shell_path });
     try env.put("CLAUDE_CODE_SHELL_PREFIX", .{ .string = prefix });
+    // `@` 添付の内容は hook を通らない。prompt hook で検査しないなら、Claude Code
+    // 組み込みの設定で添付そのものを無効にする。prompt hook を入れるときは、
+    // 利用者が自分で書いた値かもしれないので触らない。
+    if (!prompt_hook) try env.put("DISABLE_FILE_MENTIONS", .{ .string = "1" });
 }
 
 fn isSupportedClaudeShell(path: []const u8) bool {
@@ -204,7 +212,7 @@ fn fail(message: []const u8) u8 {
 
 fn usage(message: []const u8) u8 {
     std.debug.print(
-        "sumi: {s}\nusage: sumi init --agent claude (--secrets-file F | --server ADDR) [--root DIR]... [--deny-path P]... [--settings FILE] [--shell PATH]\n",
+        "sumi: {s}\nusage: sumi init --agent claude (--secrets-file F | --server ADDR) [--prompt-hook [--root DIR]... [--deny-path P]...] [--settings FILE] [--shell PATH]\n",
         .{message},
     );
     return cli.EXIT_USAGE;
@@ -306,11 +314,13 @@ fn selfCheckServer(allocator: std.mem.Allocator, commands: HookEntries, self_pat
         unreachable_seen = true;
     } else if (ran.code != 3 or !std.mem.eql(u8, ran.stdout, SOCKET_PROBE)) return error.WrappedCommandCheckFailed;
 
-    const prompt = try runCommand(allocator, commands.prompt, "{\"prompt\":\"" ++ SOCKET_PROBE ++ "\",\"cwd\":\"/\"}", &env);
-    if (prompt.code != 0) return error.PromptCheckFailed;
-    if (prompt.stdout.len != 0) {
-        if (!isUnreachableNotice(allocator, prompt.stdout, null, "reason")) return error.PromptCheckFailed;
-        unreachable_seen = true;
+    if (commands.prompt) |command| {
+        const prompt = try runCommand(allocator, command, "{\"prompt\":\"" ++ SOCKET_PROBE ++ "\",\"cwd\":\"/\"}", &env);
+        if (prompt.code != 0) return error.PromptCheckFailed;
+        if (prompt.stdout.len != 0) {
+            if (!isUnreachableNotice(allocator, prompt.stdout, null, "reason")) return error.PromptCheckFailed;
+            unreachable_seen = true;
+        }
     }
     return unreachable_seen;
 }
@@ -351,12 +361,15 @@ fn selfCheck(allocator: std.mem.Allocator, commands: HookEntries, self_path: []c
     const encoded_probe = try octalLine(allocator, probe);
     const ran = try runCommand(allocator, .{ .command = shell_path, .args = &run_args }, encoded_probe, &env);
     if (ran.code != 3 or ran.stdout.len != probe.len or !std.mem.allEqual(u8, ran.stdout, '*')) return error.WrappedCommandCheckFailed;
-    const prompt = try runCommand(allocator, commands.prompt, "{\"prompt\":\"\",\"cwd\":\"/\"}", &env);
-    if (prompt.code != 0 or prompt.stdout.len != 0) return error.PromptCheckFailed;
+    if (commands.prompt) |command| {
+        const prompt = try runCommand(allocator, command, "{\"prompt\":\"\",\"cwd\":\"/\"}", &env);
+        if (prompt.code != 0 or prompt.stdout.len != 0) return error.PromptCheckFailed;
+    }
 }
 
 const InitArgs = struct {
     source: masker.Source,
+    prompt_hook: bool,
     roots: []const []const u8,
     deny_paths: []const []const u8,
     settings: ?[]const u8,
@@ -368,12 +381,22 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !InitArgs {
     var settings: ?[]const u8 = null;
     var shell_path: ?[]const u8 = null;
     var roots: std.ArrayList([]const u8) = .empty;
+    errdefer roots.deinit(allocator);
     var deny_paths: std.ArrayList([]const u8) = .empty;
+    errdefer deny_paths.deinit(allocator);
+    var prompt_hook = false;
     var i: usize = 0;
-    while (i < args.len) : (i += 2) {
+    while (i < args.len) {
         const name = args[i];
+        if (std.mem.eql(u8, name, "--prompt-hook")) {
+            if (prompt_hook) return error.DuplicateOption;
+            prompt_hook = true;
+            i += 1;
+            continue;
+        }
         if (i + 1 == args.len or std.mem.startsWith(u8, args[i + 1], "--")) return error.MissingOptionValue;
         const value = args[i + 1];
+        i += 2;
         if (masker.SourceOption.isName(name)) {
             try source.take(name, value);
         } else if (std.mem.eql(u8, name, "--root")) {
@@ -388,8 +411,12 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !InitArgs {
             shell_path = value;
         } else return error.UnknownOption;
     }
+    // --root と --deny-path は prompt hook にだけ渡す。hook を入れないのに受け付けると、
+    // 利用者は @ 添付が検査されると誤解する。
+    if (!prompt_hook and (roots.items.len != 0 or deny_paths.items.len != 0)) return error.PromptOptionWithoutHook;
     return .{
         .source = try source.finish(),
+        .prompt_hook = prompt_hook,
         .roots = try roots.toOwnedSlice(allocator),
         .deny_paths = try deny_paths.toOwnedSlice(allocator),
         .settings = settings,
@@ -448,9 +475,9 @@ pub fn main(allocator: std.mem.Allocator, args: []const []const u8, self_path: [
     validateSettings(parsed.value) catch return fail("the settings file has an incompatible hooks structure");
     const prefix = try formatShellPrefix(allocator, self_path, source, shell_path);
     validateEnvironment(parsed.value, prefix) catch return fail("CLAUDE_CODE_SHELL_PREFIX is already set by another tool; remove it or choose which prefix to keep");
-    const commands = try buildCommands(allocator, self_path, source, parsed_args.roots, parsed_args.deny_paths);
+    const commands = try buildCommands(allocator, self_path, source, parsed_args.prompt_hook, parsed_args.roots, parsed_args.deny_paths);
     const removed = try mergeHooks(parsed.arena.allocator(), &parsed.value, self_path, commands);
-    try installEnvironment(parsed.arena.allocator(), &parsed.value, shell_path, prefix);
+    try installEnvironment(parsed.arena.allocator(), &parsed.value, shell_path, prefix, parsed_args.prompt_hook);
     var backup_path: ?[]u8 = null;
     if (existing) |data| {
         var ts: [14]u8 = undefined;
@@ -526,6 +553,21 @@ test "mergeHooks: keeps foreign hooks in mixed groups and is idempotent" {
     try testing.expect(std.mem.indexOf(u8, out, "\"matcher\":\"foreign\"") != null);
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out, "\"command\":\"/new/sumi\""));
 }
+test "mergeHooks: without a prompt command, an installed sumi prompt hook is removed" {
+    var parsed = try jsonio.parse(testing.allocator, "{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/new/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"prompt\"]}]},{\"hooks\":[{\"command\":\"foreign-prompt\"}]}]}}");
+    defer parsed.deinit();
+    const post_args = [_][]const u8{ "hook", "--agent", "claude", "post-tool" };
+    const commands = HookEntries{ .post_tool = .{ .command = "/new/sumi", .args = &post_args }, .prompt = null };
+    try testing.expectEqual(@as(usize, 1), try mergeHooks(parsed.arena.allocator(), &parsed.value, "/new/sumi", commands));
+    const prompt = parsed.value.object.get("hooks").?.object.get("UserPromptSubmit").?.array.items;
+    try testing.expectEqual(@as(usize, 1), prompt.len);
+    try testing.expectEqualStrings("foreign-prompt", prompt[0].object.get("hooks").?.array.items[0].object.get("command").?.string);
+
+    var only_own = try jsonio.parse(testing.allocator, "{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/new/sumi\",\"args\":[\"hook\",\"--agent\",\"claude\",\"prompt\"]}]}]}}");
+    defer only_own.deinit();
+    try testing.expectEqual(@as(usize, 1), try mergeHooks(only_own.arena.allocator(), &only_own.value, "/new/sumi", commands));
+    try testing.expect(only_own.value.object.get("hooks").?.object.get("UserPromptSubmit") == null);
+}
 test "mergeHooks: incompatible input is unchanged" {
     var parsed = try jsonio.parse(testing.allocator, "{\"theme\":\"dark\",\"hooks\":[]}");
     defer parsed.deinit();
@@ -535,23 +577,28 @@ test "mergeHooks: incompatible input is unchanged" {
     try testing.expectEqualStrings("dark", parsed.value.object.get("theme").?.string);
 }
 test "buildCommands: creates exec-form argv with the absolute secrets path" {
-    const got = try buildCommands(testing.allocator, "/opt/s/sumi", .{ .secrets_file = "/secret path/list" }, &.{"/extra dir"}, &.{"app.properties"});
+    const got = try buildCommands(testing.allocator, "/opt/s/sumi", .{ .secrets_file = "/secret path/list" }, true, &.{"/extra dir"}, &.{"app.properties"});
     defer testing.allocator.free(got.post_tool.args);
-    defer testing.allocator.free(got.prompt.args);
+    defer testing.allocator.free(got.prompt.?.args);
     try testing.expectEqualStrings("/opt/s/sumi", got.post_tool.command);
     try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--secrets-file", "/secret path/list" }, got.post_tool.args);
-    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", "/secret path/list", "--root", "/extra dir", "--deny-path", "app.properties" }, got.prompt.args);
+    try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--secrets-file", "/secret path/list", "--root", "/extra dir", "--deny-path", "app.properties" }, got.prompt.?.args);
+}
+test "buildCommands: the prompt hook is left out unless requested" {
+    const got = try buildCommands(testing.allocator, "/opt/s/sumi", .{ .secrets_file = "/s" }, false, &.{}, &.{});
+    defer testing.allocator.free(got.post_tool.args);
+    try testing.expect(got.prompt == null);
 }
 test "buildCommands: a server source is written into both hooks as given" {
     inline for (&.{ "/run/mask.sock", "unix:///run/mask.sock", "tcp://127.0.0.1:47321" }) |text| {
         var option = masker.SourceOption{};
         try option.take("--server", text);
         const source = try option.finish();
-        const got = try buildCommands(testing.allocator, "/opt/s/sumi", source, &.{}, &.{});
+        const got = try buildCommands(testing.allocator, "/opt/s/sumi", source, true, &.{}, &.{});
         defer testing.allocator.free(got.post_tool.args);
-        defer testing.allocator.free(got.prompt.args);
+        defer testing.allocator.free(got.prompt.?.args);
         try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "post-tool", "--server", text }, got.post_tool.args);
-        try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--server", text }, got.prompt.args);
+        try testing.expectEqualSlices([]const u8, &.{ "hook", "--agent", "claude", "prompt", "--server", text }, got.prompt.?.args);
         const prefix = try formatShellPrefix(testing.allocator, "/opt/sumi", source, "/bin/bash");
         defer testing.allocator.free(prefix);
         try testing.expect(std.mem.indexOf(u8, prefix, "'run' '--server' '" ++ text ++ "'") != null);
@@ -561,12 +608,24 @@ test "environment install preserves unrelated keys and sets one supported shell"
     var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"KEEP\":\"yes\",\"CLAUDE_CODE_SHELL_PREFIX\":\"/old/sumi run --secrets-file /s --shell /bin/zsh\"},\"permissions\":{\"deny\":[\"Bash(git:*)\"]}}");
     defer parsed.deinit();
     try validateEnvironment(parsed.value, "/old/sumi run --secrets-file /s --shell /bin/zsh");
-    try installEnvironment(parsed.arena.allocator(), &parsed.value, "/bin/zsh", "'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh");
+    try installEnvironment(parsed.arena.allocator(), &parsed.value, "/bin/zsh", "'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh", false);
     const env = parsed.value.object.get("env").?.object;
     try testing.expectEqualStrings("yes", env.get("KEEP").?.string);
+    try testing.expectEqualStrings("1", env.get("DISABLE_FILE_MENTIONS").?.string);
     try testing.expectEqualStrings("/bin/zsh", env.get("CLAUDE_CODE_SHELL").?.string);
     try testing.expectEqualStrings("'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh", env.get("CLAUDE_CODE_SHELL_PREFIX").?.string);
     try testing.expectEqualStrings("Bash(git:*)", parsed.value.object.get("permissions").?.object.get("deny").?.array.items[0].string);
+}
+test "environment install leaves DISABLE_FILE_MENTIONS alone with the prompt hook" {
+    var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"DISABLE_FILE_MENTIONS\":\"0\"}}");
+    defer parsed.deinit();
+    try installEnvironment(parsed.arena.allocator(), &parsed.value, "/bin/bash", "/bin/bash -c x", true);
+    try testing.expectEqualStrings("0", parsed.value.object.get("env").?.object.get("DISABLE_FILE_MENTIONS").?.string);
+
+    var fresh = try jsonio.parse(testing.allocator, "{}");
+    defer fresh.deinit();
+    try installEnvironment(fresh.arena.allocator(), &fresh.value, "/bin/bash", "/bin/bash -c x", true);
+    try testing.expect(fresh.value.object.get("env").?.object.get("DISABLE_FILE_MENTIONS") == null);
 }
 test "environment validation rejects malformed env and foreign prefixes" {
     var malformed = try jsonio.parse(testing.allocator, "{\"env\":[]}");
@@ -615,10 +674,11 @@ test "defaultSettingsPath: config directory or home" {
     try testing.expectEqualStrings("/home/u/.claude/settings.json", b);
 }
 test "parseArgs: accepts and collects every init option" {
-    const got = try parseArgs(testing.allocator, &.{ "--root", "/a", "--secrets-file", "/s", "--deny-path", "x", "--root", "/b", "--settings", "/cfg", "--shell", "/bin/sh" });
+    const got = try parseArgs(testing.allocator, &.{ "--root", "/a", "--secrets-file", "/s", "--prompt-hook", "--deny-path", "x", "--root", "/b", "--settings", "/cfg", "--shell", "/bin/sh" });
     defer testing.allocator.free(got.roots);
     defer testing.allocator.free(got.deny_paths);
     try testing.expectEqualStrings("/s", got.source.secrets_file);
+    try testing.expect(got.prompt_hook);
     try testing.expectEqualSlices([]const u8, &.{ "/a", "/b" }, got.roots);
     try testing.expectEqualSlices([]const u8, &.{"x"}, got.deny_paths);
 }
@@ -633,6 +693,15 @@ test "parseArgs: rejects missing values and unknown options" {
     try testing.expectError(error.MissingOptionValue, parseArgs(testing.allocator, &.{ "--secrets-file", "--root", "/x" }));
     try testing.expectError(error.UnknownOption, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "--wat", "x" }));
     try testing.expectError(error.UnknownOption, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "stray", "x" }));
+    try testing.expectError(error.DuplicateOption, parseArgs(testing.allocator, &.{ "--prompt-hook", "--secrets-file", "/s", "--prompt-hook" }));
+}
+test "parseArgs: the prompt hook is opt-in and owns --root and --deny-path" {
+    const got = try parseArgs(testing.allocator, &.{ "--secrets-file", "/s" });
+    defer testing.allocator.free(got.roots);
+    defer testing.allocator.free(got.deny_paths);
+    try testing.expect(!got.prompt_hook);
+    try testing.expectError(error.PromptOptionWithoutHook, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "--root", "/a" }));
+    try testing.expectError(error.PromptOptionWithoutHook, parseArgs(testing.allocator, &.{ "--secrets-file", "/s", "--deny-path", "x" }));
 }
 test "selectProbe: prefers a value whose masking changes bytes" {
     try testing.expectEqualStrings("secret", selectProbe(&.{ "***", "secret", "*****" }));

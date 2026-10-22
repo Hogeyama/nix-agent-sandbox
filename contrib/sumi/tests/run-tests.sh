@@ -395,7 +395,7 @@ stop_proxy() {
 }
 
 tcp_settings="$work/tcp-settings.json"
-"$sumi" init --agent claude --server "$tcp_server" --settings "$tcp_settings" --shell /bin/bash >/dev/null 2>"$work/tcp-init.err"
+"$sumi" init --agent claude --server "$tcp_server" --prompt-hook --settings "$tcp_settings" --shell /bin/bash >/dev/null 2>"$work/tcp-init.err"
 check "init with a TCP server passes its self-check" "0" "$?"
 check "init writes the TCP server address into the hooks as given" "3" \
   "$(jq --arg s "$tcp_server" '[.hooks[][]?.hooks[]? | select(.args[4:6] == ["--server", $s])] | length' "$tcp_settings")"
@@ -406,7 +406,7 @@ check "init writes the TCP server address into the shell prefix" "yes" \
 # warning, not a failed self-check.
 idle_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 idle_settings="$work/idle-settings.json"
-"$sumi" init --agent claude --server "tcp://127.0.0.1:$idle_port" --settings "$idle_settings" --shell /bin/bash >/dev/null 2>"$work/idle-init.err"
+"$sumi" init --agent claude --server "tcp://127.0.0.1:$idle_port" --prompt-hook --settings "$idle_settings" --shell /bin/bash >/dev/null 2>"$work/idle-init.err"
 check "init with a broker that is not listening succeeds" "0" "$?"
 check "init with a broker that is not listening writes the hooks" "3" \
   "$(jq '[.hooks[][]?.hooks[]? | select(.command != null)] | length' "$idle_settings")"
@@ -627,7 +627,7 @@ jq -n '{
     ]}]
   }
 }' > "$settings"
-"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/init.err"
+"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --prompt-hook --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/init.err"
 check "init succeeds" "0" "$?"
 check "init installs exactly three own exec-form hooks" "3" "$(jq --arg exe "$renamed_sumi" '[.hooks[][]?.hooks[]? | select(.type == "command" and .command == $exe and (.args[0:3] == ["hook","--agent","claude"]))] | length' "$settings")"
 check "init preserves foreign PreToolUse" "/bin/foreign-hook" "$(jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.command == "/bin/foreign-hook") | .command' "$settings")"
@@ -638,11 +638,22 @@ check "init stores the selected shell for Claude" "$(readlink -f /bin/bash)" "$(
 expected_prefix="$(readlink -f /bin/bash) -c 'exec \"\$@\"' 'sumi-prefix' '$renamed_sumi' 'run' '--secrets-file' '$init_secrets' '--shell' '$(readlink -f /bin/bash)'"
 check "init encodes the prefix for Claude's executable split" "$expected_prefix" "$(jq -r '.env.CLAUDE_CODE_SHELL_PREFIX' "$settings")"
 check "installed hooks carry the absolute secrets path" "3" "$(jq --arg exe "$renamed_sumi" --arg secrets "$init_secrets" '[.hooks[][]?.hooks[]? | select(.command == $exe and (.args[-2:] == ["--secrets-file",$secrets]) or (.command == $exe and (.args | index("--secrets-file")) != null and (.args[(.args | index("--secrets-file")) + 1] == $secrets)))] | length' "$settings")"
+check "init with --prompt-hook does not disable file mentions" "null" "$(jq -c '.env.DISABLE_FILE_MENTIONS' "$settings")"
 check "installed prompt keeps repeated roots and deny paths" '["hook","--agent","claude","prompt","--secrets-file","'"$init_secrets"'","--root","'"$work/attach"'","--root","'"$work/other"'","--deny-path","app.properties"]' "$(jq -c --arg exe "$renamed_sumi" '.hooks.UserPromptSubmit[]?.hooks[]? | select(.command == $exe) | .args' "$settings")"
 
-"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/reinit.err"
+"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --prompt-hook --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/reinit.err"
 check "repeated init succeeds" "0" "$?"
 check "repeated init remains exactly three own hooks" "3" "$(jq --arg exe "$renamed_sumi" '[.hooks[][]?.hooks[]? | select(.command == $exe)] | length' "$settings")"
+
+# Without --prompt-hook, init leaves UserPromptSubmit alone and removes a sumi
+# prompt hook that an earlier init installed.
+"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash >/dev/null 2>"$work/noprompt-init.err"
+check "init without --prompt-hook succeeds" "0" "$?"
+check "init without --prompt-hook keeps two own hooks" "2" "$(jq --arg exe "$renamed_sumi" '[.hooks[][]?.hooks[]? | select(.command == $exe)] | length' "$settings")"
+check "init without --prompt-hook removes the sumi prompt hook" "null" "$(jq -c '.hooks.UserPromptSubmit' "$settings")"
+check "init without --prompt-hook disables file mentions" '"1"' "$(jq -c '.env.DISABLE_FILE_MENTIONS' "$settings")"
+"$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$work/unused-root-settings.json" --shell /bin/bash --root "$work/attach" >/dev/null 2>&1
+check "init --root without --prompt-hook is a usage error" "2" "$?"
 
 token_settings="$work/token-settings.json"
 "$renamed_sumi" init --agent claude --secrets-file "$work/token.txt" --settings "$token_settings" --shell /bin/bash >/dev/null 2>"$work/token-init.err"

@@ -54,17 +54,22 @@ mYImP0rTaNTpaSS
 条件を満たさない行は、そのまま通常の値として扱います。
 
 > [!WARNING]
-> 偶然この条件を満たす値（例: `dGVzdA==` は `test` の base64）を書くと、復号値も伏せられ、それを含むプロンプトは拒否されます。
+> 偶然この条件を満たす値を書くと、復号した値も伏せられます（例: `dGVzdA==` は `test` の base64 なので `test` が伏せられます）
 
 ### Claude Codeの設定を生成
 
-下記の `sumi init` コマンドを実行すると、`~/.claude/settings.json` にマスク用の hooks と環境変数 `CLAUDE_CODE_SHELL{,_PREFIX}` が追加されます。
+下記の `sumi init` コマンドを実行すると、`~/.claude/settings.json` にマスク用の hooks と環境変数 `CLAUDE_CODE_SHELL{,_PREFIX}`、`DISABLE_FILE_MENTIONS` が追加されます。
 
 ```
 sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 ```
 
 変更前の設定は同ディレクトリ内にバックアップされるようになっています。
+
+> [!NOTE]
+> プロンプトに `@config/app.properties` のように書いて添付したファイルの内容は、hook を通らずにエージェントへ届くため、マスクできません。
+> そのため `sumi init` は、Claude Code 組み込みの環境変数 `DISABLE_FILE_MENTIONS=1` を設定して `@` による添付を無効にします。
+
 設定が完了したら、Claude Code を起動すると、マスクが有効になります。
 
 ## 発展的な使い方
@@ -177,15 +182,6 @@ sumi init --agent claude --server /run/sumi/mask.sock
 
 sumi は下記の限界があります。これが許容できない場合はより強力なシークレット保護を提供する nix-agent-sandbox 本体の利用を検討してみてください。
 
-### マスクの代わりに拒否となるケース
-
-以下の場合、マスクの代わりに拒否されます。
-
-* プロンプト内で `@config/app.properties` のようにシークレットを含むファイルを読もうとしたとき
-  <img src="images/limitation-at.png" />
-* `@` 指定のパスを解決できず、内容を確認できなかったとき
-  * 拡張子の長さや有無にかかわらず拒否します
-
 ### マスクも拒否もできないケース（すり抜けてしまうケース）
 
 * `CLAUDE.md`など hook が使われない経路で読まれる情報にシークレットが含まれるとき
@@ -198,9 +194,9 @@ sumi は下記の限界があります。これが許容できない場合はよ
 
 ## sumi の設定を削除する
 
-Claude Code を終了し、`init` が更新した設定ファイルを編集します。通常は `~/.claude/settings.json`、`CLAUDE_CONFIG_DIR` を設定していた場合はそのディレクトリの `settings.json` です。`--settings` を指定していた場合は指定したファイルを編集します。`hooks` 内の `PostToolUse`、`PostToolUseFailure`、`UserPromptSubmit` から、sumi を実行する hook を削除してください。
+Claude Code を終了し、`init` が更新した設定ファイルを編集します。通常は `~/.claude/settings.json`、`CLAUDE_CONFIG_DIR` を設定していた場合はそのディレクトリの `settings.json` です。`--settings` を指定していた場合は指定したファイルを編集します。`hooks` 内の `PostToolUse`、`PostToolUseFailure` から、sumi を実行する hook を削除してください。
 
-`env` 内の `CLAUDE_CODE_SHELL_PREFIX`、`CLAUDE_CODE_SHELL` も削除します。導入前に値が設定されていた項目は、バックアップにある元の値へ戻してください。
+`env` 内の `CLAUDE_CODE_SHELL_PREFIX`、`CLAUDE_CODE_SHELL`、`DISABLE_FILE_MENTIONS` も削除します。導入前に値が設定されていた項目は、バックアップにある元の値へ戻してください。
 
 ## ライセンス
 

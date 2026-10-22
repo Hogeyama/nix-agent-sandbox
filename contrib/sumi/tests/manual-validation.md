@@ -38,6 +38,7 @@ chmod 600 "$SUMI_MANUAL_DIR/secrets.txt"
 CLAUDE_CONFIG_DIR="$SUMI_MANUAL_DIR/claude-protected" \
   "$SUMI_BIN" init --agent claude \
   --secrets-file "$SUMI_MANUAL_DIR/secrets.txt" \
+  --prompt-hook \
   --settings "$SUMI_MANUAL_DIR/claude-protected/settings.json"
 ```
 
@@ -88,6 +89,7 @@ UserPromptSubmit のペイロードを確認する場合は、隔離設定の `h
 CLAUDE_CONFIG_DIR="$SUMI_MANUAL_DIR/claude-protected" \
   "$SUMI_BIN" init --agent claude \
   --secrets-file "$SUMI_MANUAL_DIR/secrets.txt" \
+  --prompt-hook \
   --settings "$SUMI_MANUAL_DIR/claude-protected/settings.json" \
   --root "$SUMI_MANUAL_DIR/additional-clean" \
   --root "$SUMI_MANUAL_DIR/additional-secret"

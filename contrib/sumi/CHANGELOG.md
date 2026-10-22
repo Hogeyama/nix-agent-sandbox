@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- `sumi init` no longer installs the `UserPromptSubmit` hook unless `--prompt-hook` is given. `--root` and `--deny-path` now require `--prompt-hook`. Rerunning `init` without `--prompt-hook` removes a sumi prompt hook that an earlier `init` installed. Without `--prompt-hook`, `init` instead sets Claude Code's `DISABLE_FILE_MENTIONS=1` in `env`, so `@` attachments, whose contents bypass masking, are disabled. Pass `--prompt-hook` to keep the previous behavior; `DISABLE_FILE_MENTIONS` is then left as it is.
+
 ## [0.5.0] - 2026-10-08
 
 ### Added
