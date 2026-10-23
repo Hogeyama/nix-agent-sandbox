@@ -152,7 +152,7 @@ fn installEnvironment(allocator: std.mem.Allocator, settings: *std.json.Value, s
     // `@` 添付の内容は hook を通らない。prompt hook で検査しないなら、Claude Code
     // 組み込みの設定で添付そのものを無効にする。prompt hook を入れるときは、
     // 利用者が自分で書いた値かもしれないので触らない。
-    if (!prompt_hook) try env.put("DISABLE_FILE_MENTIONS", .{ .string = "1" });
+    if (!prompt_hook) try env.put("CLAUDE_CODE_DISABLE_FILE_MENTIONS", .{ .string = "1" });
 }
 
 fn isSupportedClaudeShell(path: []const u8) bool {
@@ -611,21 +611,21 @@ test "environment install preserves unrelated keys and sets one supported shell"
     try installEnvironment(parsed.arena.allocator(), &parsed.value, "/bin/zsh", "'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh", false);
     const env = parsed.value.object.get("env").?.object;
     try testing.expectEqualStrings("yes", env.get("KEEP").?.string);
-    try testing.expectEqualStrings("1", env.get("DISABLE_FILE_MENTIONS").?.string);
+    try testing.expectEqualStrings("1", env.get("CLAUDE_CODE_DISABLE_FILE_MENTIONS").?.string);
     try testing.expectEqualStrings("/bin/zsh", env.get("CLAUDE_CODE_SHELL").?.string);
     try testing.expectEqualStrings("'/new path/sumi' run --secrets-file '/secret path/list' --shell /bin/zsh", env.get("CLAUDE_CODE_SHELL_PREFIX").?.string);
     try testing.expectEqualStrings("Bash(git:*)", parsed.value.object.get("permissions").?.object.get("deny").?.array.items[0].string);
 }
-test "environment install leaves DISABLE_FILE_MENTIONS alone with the prompt hook" {
-    var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"DISABLE_FILE_MENTIONS\":\"0\"}}");
+test "environment install leaves CLAUDE_CODE_DISABLE_FILE_MENTIONS alone with the prompt hook" {
+    var parsed = try jsonio.parse(testing.allocator, "{\"env\":{\"CLAUDE_CODE_DISABLE_FILE_MENTIONS\":\"0\"}}");
     defer parsed.deinit();
     try installEnvironment(parsed.arena.allocator(), &parsed.value, "/bin/bash", "/bin/bash -c x", true);
-    try testing.expectEqualStrings("0", parsed.value.object.get("env").?.object.get("DISABLE_FILE_MENTIONS").?.string);
+    try testing.expectEqualStrings("0", parsed.value.object.get("env").?.object.get("CLAUDE_CODE_DISABLE_FILE_MENTIONS").?.string);
 
     var fresh = try jsonio.parse(testing.allocator, "{}");
     defer fresh.deinit();
     try installEnvironment(fresh.arena.allocator(), &fresh.value, "/bin/bash", "/bin/bash -c x", true);
-    try testing.expect(fresh.value.object.get("env").?.object.get("DISABLE_FILE_MENTIONS") == null);
+    try testing.expect(fresh.value.object.get("env").?.object.get("CLAUDE_CODE_DISABLE_FILE_MENTIONS") == null);
 }
 test "environment validation rejects malformed env and foreign prefixes" {
     var malformed = try jsonio.parse(testing.allocator, "{\"env\":[]}");

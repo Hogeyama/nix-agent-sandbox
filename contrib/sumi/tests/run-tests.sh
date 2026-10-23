@@ -638,7 +638,7 @@ check "init stores the selected shell for Claude" "$(readlink -f /bin/bash)" "$(
 expected_prefix="$(readlink -f /bin/bash) -c 'exec \"\$@\"' 'sumi-prefix' '$renamed_sumi' 'run' '--secrets-file' '$init_secrets' '--shell' '$(readlink -f /bin/bash)'"
 check "init encodes the prefix for Claude's executable split" "$expected_prefix" "$(jq -r '.env.CLAUDE_CODE_SHELL_PREFIX' "$settings")"
 check "installed hooks carry the absolute secrets path" "3" "$(jq --arg exe "$renamed_sumi" --arg secrets "$init_secrets" '[.hooks[][]?.hooks[]? | select(.command == $exe and (.args[-2:] == ["--secrets-file",$secrets]) or (.command == $exe and (.args | index("--secrets-file")) != null and (.args[(.args | index("--secrets-file")) + 1] == $secrets)))] | length' "$settings")"
-check "init with --prompt-hook does not disable file mentions" "null" "$(jq -c '.env.DISABLE_FILE_MENTIONS' "$settings")"
+check "init with --prompt-hook does not disable file mentions" "null" "$(jq -c '.env.CLAUDE_CODE_DISABLE_FILE_MENTIONS' "$settings")"
 check "installed prompt keeps repeated roots and deny paths" '["hook","--agent","claude","prompt","--secrets-file","'"$init_secrets"'","--root","'"$work/attach"'","--root","'"$work/other"'","--deny-path","app.properties"]' "$(jq -c --arg exe "$renamed_sumi" '.hooks.UserPromptSubmit[]?.hooks[]? | select(.command == $exe) | .args' "$settings")"
 
 "$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$settings" --shell /bin/bash --prompt-hook --root "$work/attach" --root "$work/other" --deny-path app.properties >/dev/null 2>"$work/reinit.err"
@@ -651,7 +651,7 @@ check "repeated init remains exactly three own hooks" "3" "$(jq --arg exe "$rena
 check "init without --prompt-hook succeeds" "0" "$?"
 check "init without --prompt-hook keeps two own hooks" "2" "$(jq --arg exe "$renamed_sumi" '[.hooks[][]?.hooks[]? | select(.command == $exe)] | length' "$settings")"
 check "init without --prompt-hook removes the sumi prompt hook" "null" "$(jq -c '.hooks.UserPromptSubmit' "$settings")"
-check "init without --prompt-hook disables file mentions" '"1"' "$(jq -c '.env.DISABLE_FILE_MENTIONS' "$settings")"
+check "init without --prompt-hook disables file mentions" '"1"' "$(jq -c '.env.CLAUDE_CODE_DISABLE_FILE_MENTIONS' "$settings")"
 "$renamed_sumi" init --agent claude --secrets-file "$init_secrets" --settings "$work/unused-root-settings.json" --shell /bin/bash --root "$work/attach" >/dev/null 2>&1
 check "init --root without --prompt-hook is a usage error" "2" "$?"
 

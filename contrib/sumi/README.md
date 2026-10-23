@@ -58,7 +58,7 @@ mYImP0rTaNTpaSS
 
 ### Claude Codeの設定を生成
 
-下記の `sumi init` コマンドを実行すると、`~/.claude/settings.json` にマスク用の hooks と環境変数 `CLAUDE_CODE_SHELL{,_PREFIX}`、`DISABLE_FILE_MENTIONS` が追加されます。
+下記の `sumi init` コマンドを実行すると、`~/.claude/settings.json` にマスク用の hooks と環境変数 `CLAUDE_CODE_SHELL{,_PREFIX}`、`CLAUDE_CODE_DISABLE_FILE_MENTIONS` が追加されます。
 
 ```
 sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
@@ -68,7 +68,9 @@ sumi init --agent claude --secrets-file ~/.claude/sumi/secrets.txt
 
 > [!NOTE]
 > プロンプトに `@config/app.properties` のように書いて添付したファイルの内容は、hook を通らずにエージェントへ届くため、マスクできません。
-> そのため `sumi init` は、Claude Code 組み込みの環境変数 `DISABLE_FILE_MENTIONS=1` を設定して `@` による添付を無効にします。
+> そのため `sumi init` は、Claude Code 組み込みの環境変数 `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` を設定して `@` による添付を無効にします。
+> このとき Claude には添付の内容ではなくパスだけが渡り、Claude はそれを `Read` などのツールで読むので、マスクされます。
+> この環境変数は Claude Code v2.1.299 以降で有効で、プロジェクト設定 (`.claude/settings.json`、`.claude/settings.local.json`) に書いても無視されます。`--settings` にはユーザー設定を指定してください。
 
 設定が完了したら、Claude Code を起動すると、マスクが有効になります。
 
@@ -196,7 +198,7 @@ sumi は下記の限界があります。これが許容できない場合はよ
 
 Claude Code を終了し、`init` が更新した設定ファイルを編集します。通常は `~/.claude/settings.json`、`CLAUDE_CONFIG_DIR` を設定していた場合はそのディレクトリの `settings.json` です。`--settings` を指定していた場合は指定したファイルを編集します。`hooks` 内の `PostToolUse`、`PostToolUseFailure` から、sumi を実行する hook を削除してください。
 
-`env` 内の `CLAUDE_CODE_SHELL_PREFIX`、`CLAUDE_CODE_SHELL`、`DISABLE_FILE_MENTIONS` も削除します。導入前に値が設定されていた項目は、バックアップにある元の値へ戻してください。
+`env` 内の `CLAUDE_CODE_SHELL_PREFIX`、`CLAUDE_CODE_SHELL`、`CLAUDE_CODE_DISABLE_FILE_MENTIONS` も削除します。導入前に値が設定されていた項目は、バックアップにある元の値へ戻してください。
 
 ## ライセンス
 

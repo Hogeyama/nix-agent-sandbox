@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed
+
+- `sumi init` now writes `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1`, the variable Claude Code actually reads. 0.6.0 wrote `DISABLE_FILE_MENTIONS`, which Claude Code ignores, so `@` attachments were still expanded. Rerun `init` and remove the leftover `DISABLE_FILE_MENTIONS` from `env`. The variable requires Claude Code v2.1.299 or later.
+
 ## [0.6.0] - 2026-10-23
 
 ### Changed
